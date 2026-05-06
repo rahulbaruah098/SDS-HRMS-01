@@ -4,30 +4,93 @@ import { api } from '../api/client';
 export default function PasswordRequests() {
   const [rows, setRows] = useState([]);
   const [message, setMessage] = useState('');
+  const [loadingId, setLoadingId] = useState('');
 
   async function load() {
-    const data = await api('/password-requests');
-    setRows(data.items || []);
+    try {
+      const data = await api('/password-requests');
+      setRows(data.items || []);
+    } catch (error) {
+      setMessage(error.message || 'Unable to load password requests');
+    }
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load();
   }, []);
 
   async function approve(id) {
-    const data = await api(`/password-requests/${id}/approve`, {
-      method: 'POST',
-    });
-    setMessage(data.message);
-    load();
+    if (!id) {
+      setMessage('Password request id not found');
+      return;
+    }
+
+    const ok = window.confirm('Approve this password change request?');
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setLoadingId(id);
+
+      const data = await api(`/password-requests/${id}/approve`, {
+        method: 'POST',
+      });
+
+      setMessage(data.message || 'Password request approved');
+      await load();
+    } catch (error) {
+      setMessage(error.message || 'Unable to approve request');
+    } finally {
+      setLoadingId('');
+    }
   }
 
   async function reject(id) {
-    const data = await api(`/password-requests/${id}/reject`, {
-      method: 'POST',
-    });
-    setMessage(data.message);
-    load();
+    if (!id) {
+      setMessage('Password request id not found');
+      return;
+    }
+
+    const ok = window.confirm('Reject this password change request?');
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setLoadingId(id);
+
+      const data = await api(`/password-requests/${id}/reject`, {
+        method: 'POST',
+      });
+
+      setMessage(data.message || 'Password request rejected');
+      await load();
+    } catch (error) {
+      setMessage(error.message || 'Unable to reject request');
+    } finally {
+      setLoadingId('');
+    }
+  }
+
+  function formatDate(value) {
+    if (!value) {
+      return '';
+    }
+
+    if (typeof value === 'object' && value.$date) {
+      return new Date(value.$date).toLocaleString();
+    }
+
+    const parsed = new Date(value);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleString();
+    }
+
+    return String(value);
   }
 
   return (
@@ -59,21 +122,34 @@ export default function PasswordRequests() {
             <tbody>
               {rows.map((row) => (
                 <tr key={row._id}>
-                  <td>{row.user_name}</td>
-                  <td>{row.user_email}</td>
-                  <td>{row.tenant_id}</td>
-                  <td>{row.status}</td>
-                  <td>{row.created_at}</td>
+                  <td>{row.user_name || row.name || ''}</td>
+                  <td>{row.user_email || row.email || ''}</td>
+                  <td>{row.tenant_id || ''}</td>
+                  <td>{row.status || ''}</td>
+                  <td>{formatDate(row.created_at)}</td>
                   <td>
-                    {row.status === 'pending' && (
+                    {row.status === 'pending' ? (
                       <>
-                        <button className="primary" onClick={() => approve(row._id)}>
-                          Approve
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => approve(row._id)}
+                          disabled={loadingId === row._id}
+                        >
+                          {loadingId === row._id ? 'Approving...' : 'Approve'}
                         </button>
-                        <button className="danger" onClick={() => reject(row._id)}>
-                          Reject
+
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => reject(row._id)}
+                          disabled={loadingId === row._id}
+                        >
+                          {loadingId === row._id ? 'Please wait...' : 'Reject'}
                         </button>
                       </>
+                    ) : (
+                      row.status || ''
                     )}
                   </td>
                 </tr>
@@ -81,7 +157,9 @@ export default function PasswordRequests() {
             </tbody>
           </table>
 
-          {!rows.length && <div className="empty">No pending password requests</div>}
+          {!rows.length && (
+            <div className="empty">No password requests found</div>
+          )}
         </div>
       </section>
     </div>
