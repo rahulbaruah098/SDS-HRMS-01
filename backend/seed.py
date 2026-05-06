@@ -8,12 +8,16 @@ from app.routes.superadmin import seed_company_masters
 
 app = create_app()
 
+
+def now():
+    return datetime.utcnow()
+
+
 with app.app_context():
     db = get_db()
     tenant_id = "sds"
 
-    # Clear existing demo data
-    for c in [
+    collections_to_clear = [
         "tenants",
         "users",
         "employees",
@@ -38,10 +42,12 @@ with app.app_context():
         "documents",
         "system_settings",
         "audit_logs",
-    ]:
-        db[c].delete_many({})
+        "password_requests",
+    ]
 
-    # Tenants / companies
+    for collection in collections_to_clear:
+        db[collection].delete_many({})
+
     db.tenants.insert_one({
         "tenant_id": "sds",
         "name": "Sayanant Development Services",
@@ -49,7 +55,7 @@ with app.app_context():
         "contact_email": "admin@sdshr.in",
         "status": "active",
         "plan": "Internal",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
     db.tenants.insert_one({
@@ -59,13 +65,12 @@ with app.app_context():
         "contact_email": "clientadmin@example.com",
         "status": "active",
         "plan": "Trial",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
     seed_company_masters(db, "sds")
     seed_company_masters(db, "demo-company")
 
-    # Users
     users = [
         (
             "Platform Super Admin",
@@ -85,14 +90,14 @@ with app.app_context():
             "HR Manager",
             "hr@sdshr.in",
             "Hr@123",
-            ["hr_manager", "hr", "reporting_officer"],
+            ["hr_admin", "hr_manager", "hr", "reporting_officer"],
             "sds",
         ),
         (
             "Finance User",
             "finance@sdshr.in",
             "Finance@123",
-            ["accounts_finance"],
+            ["finance", "accounts_finance"],
             "sds",
         ),
         (
@@ -128,13 +133,12 @@ with app.app_context():
             "password_hash": generate_password_hash(password),
             "roles": roles,
             "is_active": True,
-            "created_at": datetime.utcnow(),
+            "created_at": now(),
         })
 
         uids[email] = str(res.inserted_id)
 
-    # Employees
-    rows = [
+    employee_rows = [
         (
             "SDS001",
             "SDS Admin",
@@ -193,7 +197,7 @@ with app.app_context():
 
     eids = {}
 
-    for code, name, email, dept, desig, salary, tenant in rows:
+    for code, name, email, dept, designation, salary, tenant in employee_rows:
         is_team_leader = "true" if email == "manager@sdshr.in" else "false"
         is_reporting_officer = "true" if email == "hr@sdshr.in" else "false"
 
@@ -204,28 +208,24 @@ with app.app_context():
             "name": name,
             "email": email,
             "department": dept,
-            "designation": desig,
+            "designation": designation,
             "job_type": "Regular",
             "project": "SFAC",
             "state": "Assam",
             "doj": "2026-01-01",
             "status": "Active",
             "salary": salary,
-
-            # Team hierarchy fields
             "is_team_leader": is_team_leader,
             "is_reporting_officer": is_reporting_officer,
             "team_leader_id": "",
             "team_leader_name": "",
             "reporting_officer_id": "",
             "reporting_officer_name": "",
-
-            "created_at": datetime.utcnow(),
+            "created_at": now(),
         })
 
         eids[email] = str(res.inserted_id)
 
-    # Assign normal employee under Team Leader and Reporting Officer
     db.employees.update_one(
         {"email": "employee@sdshr.in"},
         {
@@ -234,37 +234,40 @@ with app.app_context():
                 "team_leader_name": "Manager User",
                 "reporting_officer_id": eids.get("hr@sdshr.in", ""),
                 "reporting_officer_name": "HR Manager",
-                "updated_at": datetime.utcnow(),
+                "updated_at": now(),
             }
         },
     )
 
-    # Assign Finance user also under HR as Reporting Officer for demo
     db.employees.update_one(
         {"email": "finance@sdshr.in"},
         {
             "$set": {
+                "team_leader_id": eids.get("manager@sdshr.in", ""),
+                "team_leader_name": "Manager User",
                 "reporting_officer_id": eids.get("hr@sdshr.in", ""),
                 "reporting_officer_name": "HR Manager",
-                "updated_at": datetime.utcnow(),
+                "updated_at": now(),
             }
         },
     )
 
-    # Demo leave request
     db.leave_requests.insert_one({
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
         "employee_name": "Employee User",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
         "leave_type": "Casual Leave",
         "from_date": "2026-05-10",
         "to_date": "2026-05-11",
         "reason": "Personal work",
         "status": "pending",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo expense
     db.expenses.insert_one({
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
@@ -273,23 +276,22 @@ with app.app_context():
         "amount": 850,
         "description": "Field visit travel",
         "status": "pending",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo ticket
     db.tickets.insert_one({
         "tenant_id": tenant_id,
         "raised_by": eids["employee@sdshr.in"],
+        "raised_by_name": "Employee User",
         "title": "Laptop issue",
         "category": "IT",
         "description": "System is slow",
         "priority": "medium",
         "status": "open",
         "comments": [],
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo asset
     db.assets.insert_one({
         "tenant_id": tenant_id,
         "name": "Dell Laptop",
@@ -297,17 +299,16 @@ with app.app_context():
         "serial_no": "SDS-LAP-001",
         "status": "assigned",
         "assigned_to": eids["employee@sdshr.in"],
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo recruitment data
     db.job_openings.insert_one({
         "tenant_id": tenant_id,
         "title": "Field Coordinator",
         "department": "Operations",
         "description": "Project field coordination",
         "status": "open",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
     db.candidates.insert_one({
@@ -316,10 +317,9 @@ with app.app_context():
         "email": "candidate@example.com",
         "phone": "9999999999",
         "status": "shortlisted",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo training data
     db.trainings.insert_one({
         "tenant_id": tenant_id,
         "name": "HRMS Induction",
@@ -327,10 +327,9 @@ with app.app_context():
         "trainer": "HR Team",
         "duration": "1 day",
         "status": "scheduled",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo performance reviews
     db.performance_reviews.insert_one({
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
@@ -345,7 +344,7 @@ with app.app_context():
         "visibility": ["md", "hr", "employee_self"],
         "status": "submitted",
         "created_by": uids["manager@sdshr.in"],
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
     db.performance_reviews.insert_one({
@@ -362,27 +361,25 @@ with app.app_context():
         "visibility": ["md", "hr", "employee_self"],
         "status": "submitted",
         "created_by": uids["hr@sdshr.in"],
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo notification
     db.notifications.insert_one({
         "tenant_id": tenant_id,
         "user_id": uids["employee@sdshr.in"],
         "title": "Welcome to SDS HRMS",
         "body": "Your employee self-service dashboard is active.",
         "read": False,
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
-    # Demo policy
     db.policies.insert_one({
         "tenant_id": tenant_id,
         "title": "Attendance Policy",
         "category": "HR",
         "summary": "Check-in after 09:45 requires a late reason.",
         "status": "published",
-        "created_at": datetime.utcnow(),
+        "created_at": now(),
     })
 
     print("Seed completed")

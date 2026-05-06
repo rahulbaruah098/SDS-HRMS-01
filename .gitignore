@@ -4,11 +4,20 @@ backend/venv/
 venv/
 .venv/
 __pycache__/
+*/__pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.sqlite3
+*.db
+
+# Environment files
 .env
+.env.*
 backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
 
 # Node / React
 frontend/node_modules/
@@ -17,6 +26,13 @@ frontend/dist/
 frontend/build/
 dist/
 build/
+package-lock.json
+
+# Uploads / generated files
+backend/uploads/
+uploads/
+static/uploads/
+frontend/.vite/
 
 # OS / Editor
 .DS_Store
@@ -28,3 +44,15 @@ Thumbs.db
 *.log
 npm-debug.log*
 yarn-debug.log*
+pnpm-debug.log*
+
+# Test / cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Deployment / temporary
+*.pid
+*.sock
+tmp/
+temp/
