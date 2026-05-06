@@ -1,0 +1,30 @@
+# Python / Flask
+backend/.venv/
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+backend/.env
+
+# Node / React
+frontend/node_modules/
+node_modules/
+frontend/dist/
+frontend/build/
+dist/
+build/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*

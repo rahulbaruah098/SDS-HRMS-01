@@ -1,0 +1,41 @@
+from functools import wraps
+from datetime import datetime, timedelta, timezone
+from flask import request, jsonify, g, current_app
+import jwt
+from bson import ObjectId
+from app.extensions import get_db
+
+def issue_token(user):
+    payload={'sub':str(user['_id']),'email':user.get('email'),'roles':user.get('roles',[]),'tenant_id':user.get('tenant_id'),'exp':datetime.now(timezone.utc)+timedelta(hours=12)}
+    return jwt.encode(payload,current_app.config['JWT_SECRET_KEY'],algorithm='HS256')
+
+def current_user_required(fn):
+    @wraps(fn)
+    def wrapper(*args,**kwargs):
+        auth=request.headers.get('Authorization','')
+        if not auth.startswith('Bearer '): return jsonify({'message':'Missing token'}),401
+        try: payload=jwt.decode(auth.replace('Bearer ','').strip(),current_app.config['JWT_SECRET_KEY'],algorithms=['HS256'])
+        except jwt.ExpiredSignatureError: return jsonify({'message':'Token expired'}),401
+        except jwt.InvalidTokenError: return jsonify({'message':'Invalid token'}),401
+        db=get_db(); user=db.users.find_one({'_id':ObjectId(payload['sub']),'is_active':True})
+        if not user: return jsonify({'message':'User not found'}),401
+        g.current_user=user; g.tenant_id=user.get('tenant_id',current_app.config.get('DEFAULT_TENANT_ID','sds'))
+        return fn(*args,**kwargs)
+    return wrapper
+
+def roles_required(*roles):
+    def deco(fn):
+        @wraps(fn)
+        @current_user_required
+        def wrapper(*args,**kwargs):
+            urs=set(g.current_user.get('roles',[]))
+            if 'super_admin' in urs or urs.intersection(set(roles)): return fn(*args,**kwargs)
+            return jsonify({'message':'Forbidden'}),403
+        return wrapper
+    return deco
+
+def audit(action,entity,entity_id=None,meta=None):
+    try:
+        db=get_db(); user=getattr(g,'current_user',{})
+        db.audit_logs.insert_one({'tenant_id':getattr(g,'tenant_id',user.get('tenant_id','sds')),'actor_id':str(user.get('_id','')),'actor_email':user.get('email','system'),'action':action,'entity':entity,'entity_id':str(entity_id) if entity_id else None,'meta':meta or {},'created_at':datetime.utcnow()})
+    except Exception: pass
