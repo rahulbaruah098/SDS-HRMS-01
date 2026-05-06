@@ -15,6 +15,8 @@ import {
   FileText,
   Building2,
   KeyRound,
+  UserCircle,
+  LockKeyhole,
 } from 'lucide-react';
 
 /*
@@ -45,6 +47,15 @@ export const superModules = [
     'Create users, reset passwords, update roles and full employee profiles.',
     ['super_admin'],
   ],
+
+  [
+    'password_requests',
+    'Password Requests',
+    LockKeyhole,
+    'Approve or reject user password change requests.',
+    ['super_admin'],
+  ],
+
 ];
 
 export const coreModules = [
@@ -188,6 +199,28 @@ export const coreModules = [
     'Trace all actions.',
     ['super_admin', 'admin'],
   ],
+
+  [
+    'profile',
+    'My Profile',
+    UserCircle,
+    'View profile and request password change.',
+    [
+      'super_admin',
+      'admin',
+      'hr_admin',
+      'hr_manager',
+      'hr',
+      'finance',
+      'accounts_finance',
+      'manager',
+      'ro',
+      'team_leader',
+      'reporting_officer',
+      'employee',
+    ],
+  ],
+
 ];
 
 export const allModules = [...superModules, ...coreModules];
@@ -228,6 +261,7 @@ export const templates = {
   emp_code: '',
   name: '',
   email: '',
+  password: '',
   department: '',
   designation: '',
   job_type: 'Regular',

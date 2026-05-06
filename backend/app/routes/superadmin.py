@@ -22,6 +22,61 @@ def slugify(value):
     raw = '-'.join([p for p in raw.split('-') if p])
     return raw or 'tenant'
 
+
+def truthy(value):
+    return str(value).lower() in ["true", "yes", "1", "on"]
+
+
+def resolve_employee_name(db, tenant_id, emp_id):
+    if not emp_id:
+        return ""
+
+    try:
+        emp = db.employees.find_one({
+            "_id": ObjectId(emp_id),
+            "tenant_id": tenant_id,
+            "status": {"$ne": "Inactive"},
+        })
+    except Exception:
+        emp = None
+
+    return emp.get("name", "") if emp else ""
+
+
+def sync_employee_roles(db, employee_doc):
+    user_id = employee_doc.get("user_id")
+
+    if not user_id:
+        return
+
+    try:
+        user = db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        return
+
+    if not user:
+        return
+
+    roles = set(user.get("roles", []))
+
+    if truthy(employee_doc.get("is_team_leader")):
+        roles.add("team_leader")
+    else:
+        roles.discard("team_leader")
+
+    if truthy(employee_doc.get("is_reporting_officer")):
+        roles.add("reporting_officer")
+    else:
+        roles.discard("reporting_officer")
+
+    if not roles.intersection({"super_admin", "admin", "hr_manager", "hr", "accounts_finance"}):
+        roles.add("employee")
+
+    db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"roles": list(roles), "updated_at": now()}},
+    )
+
 def seed_company_masters(db, tenant_id):
     for name in DEFAULT_DEPARTMENTS:
         db.departments.update_one({'tenant_id':tenant_id,'name':name},{'$setOnInsert':{'tenant_id':tenant_id,'name':name,'status':'active','created_at':now()}},upsert=True)
@@ -127,12 +182,59 @@ def update_user(user_id):
         if 'email' in user_update: user_update['email']=user_update['email'].strip().lower()
         db.users.update_one({'_id':ObjectId(user_id)},{'$set':user_update})
     emp_update={}
-    for key in ['emp_code','department','designation','job_type','project','state','status','salary','name','email']:
+    for key in [
+    'emp_code',
+    'department',
+    'designation',
+    'job_type',
+    'project',
+    'state',
+    'status',
+    'salary',
+    'name',
+    'email',
+    'is_team_leader',
+    'is_reporting_officer',
+    'team_leader_id',
+    'team_leader_name',
+    'reporting_officer_id',
+    'reporting_officer_name',
+]:
         if key in data: emp_update[key]=data[key]
     if emp_update:
         emp_update['updated_at']=now(); emp_update['updated_by']=str(g.current_user['_id'])
+        tenant_for_lookup = data.get("tenant_id") or g.current_user.get("tenant_id") or "sds"
+
+    if "team_leader_id" in emp_update:
+        emp_update["team_leader_name"] = resolve_employee_name(
+            db,
+            tenant_for_lookup,
+            emp_update.get("team_leader_id"),
+        )
+
+    if "reporting_officer_id" in emp_update:
+        emp_update["reporting_officer_name"] = resolve_employee_name(
+            db,
+            tenant_for_lookup,
+            emp_update.get("reporting_officer_id"),
+        )
         existing=db.employees.find_one({'user_id':user_id})
-        if existing: db.employees.update_one({'user_id':user_id},{'$set':emp_update})
+        if existing:
+            db.employees.update_one({"user_id": user_id}, {"$set": emp_update})
+        updated_emp = db.employees.find_one({"user_id": user_id})
+        if updated_emp:
+            sync_employee_roles(db, updated_emp)
+    else:
+        user = db.users.find_one({"_id": ObjectId(user_id)})
+        emp_update.update({
+            "tenant_id": user.get("tenant_id"),
+            "user_id": user_id,
+            "created_at": now(),
+        })
+        res = db.employees.insert_one(emp_update)
+        updated_emp = db.employees.find_one({"_id": res.inserted_id})
+        if updated_emp:
+            sync_employee_roles(db, updated_emp)
         else:
             user=db.users.find_one({'_id':ObjectId(user_id)})
             emp_update.update({'tenant_id':user.get('tenant_id'),'user_id':user_id,'created_at':now()})

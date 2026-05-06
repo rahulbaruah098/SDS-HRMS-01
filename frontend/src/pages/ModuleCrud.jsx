@@ -12,6 +12,7 @@ export default function ModuleCrud({ collection }) {
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
   const [message, setMessage] = useState('');
+  const [employeeOptions, setEmployeeOptions] = useState([]);
 
   async function load() {
     const params = [];
@@ -20,10 +21,24 @@ export default function ModuleCrud({ collection }) {
     const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
     setRows(data.items || []);
   }
+    function generatePassword() {
+    const namePart = (form.name || form.email || 'User')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .slice(0, 8);
 
+    const pass = `${namePart || 'User'}@123`;
+
+    setForm({ ...form, password: pass });
+  }
   useEffect(() => {
     setForm(template);
     load().catch(console.error);
+
+    if (collection === 'employees') {
+      api('/employees')
+        .then((data) => setEmployeeOptions(data.items || []))
+        .catch(console.error);
+    }
   }, [collection]);
 
   async function submit(e) {
@@ -95,14 +110,34 @@ export default function ModuleCrud({ collection }) {
                     <option value="false">No</option>
                     <option value="true">Yes</option>
                   </select>
+                ) : ['team_leader_id', 'reporting_officer_id'].includes(key) ? (
+                  <select
+                    value={form[key] ?? ''}
+                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                  >
+                    <option value="">Select {key.replaceAll('_', ' ')}</option>
+                    {employeeOptions.map((emp) => (
+                      <option key={emp._id} value={emp._id}>
+                        {emp.name} — {emp.designation || emp.department || emp.email}
+                      </option>
+                    ))}
+                  </select>
                 ) : (
                   <input
+                    type={key === 'password' ? 'password' : 'text'}
                     value={form[key] ?? ''}
                     onChange={(e) => setForm({ ...form, [key]: e.target.value })}
                   />
                 )}
               </label>
             ))}
+
+              {collection === 'employees' && (
+                <button type="button" className="secondary" onClick={generatePassword}>
+                  Auto Generate Password
+                </button>
+              )}
+
             <button className="primary">
               <Plus size={16} /> Create
             </button>

@@ -40,7 +40,7 @@ export default function UserControl() {
 
   async function save() {
     try {
-      const data = await api(`/superadmin/users/${edit._id}`, {
+      const data = await api(`/superadmin/users/${edit.user_id_for_edit}`, {
         method: 'PATCH',
         body: JSON.stringify(edit),
       });
@@ -121,9 +121,32 @@ export default function UserControl() {
                   <td>{user.employee_profile?.designation || ''}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
                   <td>
-                    <button className="secondary" onClick={() => setEdit({ ...user, ...(user.employee_profile || {}), roles: (user.roles || []).join(', ') })}>
-                      Edit
-                    </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      setEdit({
+                        ...(user.employee_profile || {}),
+                        ...user,
+                        user_id_for_edit: user._id,
+                        employee_id_for_edit: user.employee_profile?._id || '',
+                        roles: (user.roles || []).join(', '),
+                        emp_code: user.employee_profile?.emp_code || '',
+                        department: user.employee_profile?.department || '',
+                        designation: user.employee_profile?.designation || '',
+                        job_type: user.employee_profile?.job_type || '',
+                        project: user.employee_profile?.project || '',
+                        state: user.employee_profile?.state || '',
+                        status: user.employee_profile?.status || 'Active',
+                        salary: user.employee_profile?.salary || 0,
+                        is_team_leader: user.employee_profile?.is_team_leader || 'false',
+                        is_reporting_officer: user.employee_profile?.is_reporting_officer || 'false',
+                        team_leader_id: user.employee_profile?.team_leader_id || '',
+                        reporting_officer_id: user.employee_profile?.reporting_officer_id || '',
+                      })
+                    }
+                  >
+                    Edit
+                  </button>
                     <button className="danger" onClick={() => resetPassword(user._id)}>
                       Reset Password
                     </button>
@@ -139,7 +162,26 @@ export default function UserControl() {
         <section className="panel">
           <h3>Edit Complete User Profile</h3>
           <div className="dynamic-form">
-            {['name', 'email', 'tenant_id', 'roles', 'password', 'emp_code', 'department', 'designation', 'job_type', 'project', 'state', 'status', 'salary'].map((key) => (
+            {[
+              'name',
+              'email',
+              'tenant_id',
+              'roles',
+              'password',
+              'emp_code',
+              'department',
+              'designation',
+              'job_type',
+              'project',
+              'state',
+              'status',
+              'salary',
+              'is_team_leader',
+              'is_reporting_officer',
+              'team_leader_id',
+              'reporting_officer_id',
+            ]
+              .map((key) => (
               <label key={key}>
                 {key.replaceAll('_', ' ')}
                 <input value={edit[key] ?? ''} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} />

@@ -9,6 +9,7 @@ from .routes.crud import crud_bp
 from .routes.workflow import workflow_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
+from .routes.password_requests import password_requests_bp
 
 def create_app():
     app=Flask(__name__); app.config.from_object(Config)
@@ -21,6 +22,7 @@ def create_app():
     app.register_blueprint(workflow_bp,url_prefix='/api/v1')
     app.register_blueprint(reports_bp,url_prefix='/api/v1/reports')
     app.register_blueprint(superadmin_bp,url_prefix='/api/v1/superadmin')
+    app.register_blueprint(password_requests_bp,url_prefix='/api/v1')
     @app.get('/')
     def root(): return jsonify({'ok':True,'message':'SDS HRMS API','frontend':'Run React Vite on port 5173'})
     @app.get('/api/v1/health')

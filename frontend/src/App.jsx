@@ -12,6 +12,8 @@ import Attendance from './pages/Attendance';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
+import Profile from './pages/Profile';
+import PasswordRequests from './pages/PasswordRequests';
 
 import './styles.css';
 
@@ -59,6 +61,15 @@ function PageRouter({ page, user }) {
   if (page === 'users') {
     return <UserControl />;
   }
+
+  if (page === 'profile') {
+  return <Profile />;
+}
+
+if (page === 'password_requests') {
+  return <PasswordRequests />;
+}
+
 
   return <ModuleCrud collection={page} />;
 }
