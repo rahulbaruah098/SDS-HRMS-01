@@ -86,6 +86,7 @@ def normalize_roles(value):
 
     return roles or ["employee"]
 
+
 def can_be_reporting_officer(data):
     designation = (data.get("designation") or "").strip().lower()
     return designation in ["managing director", "manager"]
@@ -107,6 +108,30 @@ def resolve_employee_name(db, tenant_id, emp_id):
     })
 
     return emp.get("name", "") if emp else ""
+
+
+def resolve_reporting_officer_name(db, tenant_id, emp_id):
+    if not emp_id:
+        return ""
+
+    emp_obj_id = safe_object_id(emp_id)
+
+    if not emp_obj_id:
+        return ""
+
+    emp = db.employees.find_one({
+        "_id": emp_obj_id,
+        "tenant_id": tenant_id,
+        "status": {"$ne": "Inactive"},
+    })
+
+    if not emp:
+        return ""
+
+    if not can_be_reporting_officer(emp):
+        return None
+
+    return emp.get("name", "")
 
 
 def sync_employee_roles(db, employee_doc):
@@ -354,6 +379,12 @@ def create_company():
             "state": "Assam",
             "status": "Active",
             "salary": 0,
+            "is_team_leader": "false",
+            "is_reporting_officer": "true",
+            "team_leader_id": "",
+            "team_leader_name": "",
+            "reporting_officer_id": "",
+            "reporting_officer_name": "",
             "created_at": now(),
         })
 
@@ -447,7 +478,7 @@ def create_user():
         return jsonify({
             "message": "Only Managing Director or Manager can be Reporting Officer"
         }), 400
-    
+
     if db.users.find_one({"email": email}):
         return jsonify({"message": "Email already exists"}), 409
 
@@ -467,6 +498,17 @@ def create_user():
     team_leader_id = data.get("team_leader_id") or ""
     reporting_officer_id = data.get("reporting_officer_id") or ""
 
+    reporting_officer_name = resolve_reporting_officer_name(
+        db,
+        tenant_id,
+        reporting_officer_id,
+    )
+
+    if reporting_officer_id and reporting_officer_name is None:
+        return jsonify({
+            "message": "Selected Reporting Officer must be Managing Director or Manager"
+        }), 400
+
     emp = {
         "tenant_id": tenant_id,
         "user_id": str(user_res.inserted_id),
@@ -485,7 +527,7 @@ def create_user():
         "team_leader_id": team_leader_id,
         "team_leader_name": resolve_employee_name(db, tenant_id, team_leader_id),
         "reporting_officer_id": reporting_officer_id,
-        "reporting_officer_name": resolve_employee_name(db, tenant_id, reporting_officer_id),
+        "reporting_officer_name": reporting_officer_name or "",
         "created_at": now(),
         "created_by": str(g.current_user["_id"]),
     }
@@ -527,7 +569,6 @@ def update_user(user_id):
     if not existing_user:
         return jsonify({"message": "User not found"}), 404
 
-    
     existing_emp_for_validation = db.employees.find_one({"user_id": user_id}) or {}
     merged_for_role_check = {**existing_emp_for_validation, **data}
 
@@ -535,7 +576,7 @@ def update_user(user_id):
         return jsonify({
             "message": "Only Managing Director or Manager can be Reporting Officer"
         }), 400
-    
+
     user_update = {}
 
     if "name" in data:
@@ -649,11 +690,19 @@ def update_user(user_id):
         )
 
     if "reporting_officer_id" in emp_update:
-        emp_update["reporting_officer_name"] = resolve_employee_name(
+        reporting_officer_id = emp_update.get("reporting_officer_id") or ""
+        reporting_officer_name = resolve_reporting_officer_name(
             db,
             tenant_for_lookup,
-            emp_update.get("reporting_officer_id"),
+            reporting_officer_id,
         )
+
+        if reporting_officer_id and reporting_officer_name is None:
+            return jsonify({
+                "message": "Selected Reporting Officer must be Managing Director or Manager"
+            }), 400
+
+        emp_update["reporting_officer_name"] = reporting_officer_name or ""
 
     existing_emp = db.employees.find_one({"user_id": user_id})
 

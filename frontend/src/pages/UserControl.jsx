@@ -11,6 +11,7 @@ export default function UserControl() {
   const [edit, setEdit] = useState(null);
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
+  const [designationOptions, setDesignationOptions] = useState([]);
   const [resetTarget, setResetTarget] = useState(null);
   const [resetForm, setResetForm] = useState({
     password: '',
@@ -46,7 +47,20 @@ export default function UserControl() {
     const items = data.items || [];
 
     setEmployeeOptions(items);
+    return items;
+  }
 
+  async function loadDesignationOptions(tenantId = '') {
+    const cleanTenant = (tenantId || tenant || '').trim();
+
+    const url = cleanTenant
+      ? `/designations?tenant_id=${encodeURIComponent(cleanTenant)}`
+      : '/designations';
+
+    const data = await api(url);
+    const items = data.items || [];
+
+    setDesignationOptions(items);
     return items;
   }
 
@@ -61,12 +75,14 @@ export default function UserControl() {
     });
 
     loadEmployeeOptions().catch(console.error);
+    loadDesignationOptions().catch(console.error);
   }, []);
 
   async function searchUsers() {
     try {
       await load();
       await loadEmployeeOptions();
+      await loadDesignationOptions();
     } catch (error) {
       setMessage(error.message);
     }
@@ -82,6 +98,9 @@ export default function UserControl() {
 
       const empData = await api('/employees');
       setEmployeeOptions(empData.items || []);
+
+      const desigData = await api('/designations');
+      setDesignationOptions(desigData.items || []);
     } catch (error) {
       setMessage(error.message);
     }
@@ -100,6 +119,7 @@ export default function UserControl() {
       resetCreateForm();
       await load();
       await loadEmployeeOptions(form.tenant_id);
+      await loadDesignationOptions(form.tenant_id);
     } catch (error) {
       setMessage(error.message);
     }
@@ -109,6 +129,7 @@ export default function UserControl() {
     const employee = user.employee_profile || {};
 
     await loadEmployeeOptions(user.tenant_id);
+    await loadDesignationOptions(user.tenant_id);
 
     const editData = {
       ...employee,
@@ -175,6 +196,7 @@ export default function UserControl() {
       setEdit(null);
       await load();
       await loadEmployeeOptions(payload.tenant_id);
+      await loadDesignationOptions(payload.tenant_id);
     } catch (error) {
       setMessage(error.message);
     }
@@ -230,8 +252,120 @@ export default function UserControl() {
     }
   }
 
+  function isReportingOfficerEligible(employee) {
+    const designation = String(employee?.designation || '').trim().toLowerCase();
+    return designation === 'managing director' || designation === 'manager';
+  }
+
+  function renderCreateField(key) {
+    const label = key.replaceAll('_', ' ');
+
+    if (key === 'designation') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={form[key] ?? ''}
+            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          >
+            <option value="">Select designation</option>
+
+            {designationOptions.map((desig) => {
+              const value = desig.title || desig.name || '';
+
+              return (
+                <option key={desig._id || value} value={value}>
+                  {value}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      );
+    }
+
+    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={String(form[key] ?? 'false')}
+            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
+      const filteredEmployees = employeeOptions
+        .filter((emp) => {
+          if (key !== 'reporting_officer_id') {
+            return true;
+          }
+
+          return isReportingOfficerEligible(emp);
+        });
+
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={form[key] ?? ''}
+            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          >
+            <option value="">Select {label}</option>
+
+            {filteredEmployees.map((emp) => (
+              <option key={emp._id} value={emp._id}>
+                {emp.name} — {emp.designation || emp.department || emp.email}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    return (
+      <label key={key}>
+        {label}
+        <input
+          type={key === 'password' ? 'password' : 'text'}
+          value={form[key] ?? ''}
+          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+        />
+      </label>
+    );
+  }
+
   function renderEditField(key) {
     const label = key.replaceAll('_', ' ');
+
+    if (key === 'designation') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={edit[key] ?? ''}
+            onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+          >
+            <option value="">Select designation</option>
+
+            {designationOptions.map((desig) => {
+              const value = desig.title || desig.name || '';
+
+              return (
+                <option key={desig._id || value} value={value}>
+                  {value}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      );
+    }
 
     if (key === 'is_active') {
       return (
@@ -249,26 +383,6 @@ export default function UserControl() {
     }
 
     if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
-      const designation = String(edit.designation || '').trim().toLowerCase();
-      const canBeReportingOfficer = ['managing director', 'manager'].includes(designation);
-
-      if (key === 'is_reporting_officer' && !canBeReportingOfficer) {
-        return (
-          <label key={key}>
-            {label}
-            <select
-              value="false"
-              disabled
-              onChange={() => {}}
-            >
-              <option value="false">
-                No - only Managing Director or Manager can be Reporting Officer
-              </option>
-            </select>
-          </label>
-        );
-      }
-
       return (
         <label key={key}>
           {label}
@@ -284,6 +398,16 @@ export default function UserControl() {
     }
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
+      const filteredEmployees = employeeOptions
+        .filter((emp) => emp._id !== edit.employee_id_for_edit)
+        .filter((emp) => {
+          if (key !== 'reporting_officer_id') {
+            return true;
+          }
+
+          return isReportingOfficerEligible(emp);
+        });
+
       return (
         <label key={key}>
           {label}
@@ -293,19 +417,11 @@ export default function UserControl() {
           >
             <option value="">Select {label}</option>
 
-              {employeeOptions
-                .filter((emp) => emp._id !== edit.employee_id_for_edit)
-                .filter((emp) => {
-                  if (key !== 'reporting_officer_id') return true;
-
-                  const designation = String(emp.designation || '').trim().toLowerCase();
-                  return ['managing director', 'manager'].includes(designation);
-                })
-              .map((emp) => (
-                <option key={emp._id} value={emp._id}>
-                  {emp.name} — {emp.designation || emp.department || emp.email}
-                </option>
-              ))}
+            {filteredEmployees.map((emp) => (
+              <option key={emp._id} value={emp._id}>
+                {emp.name} — {emp.designation || emp.department || emp.email}
+              </option>
+            ))}
           </select>
         </label>
       );
@@ -392,16 +508,7 @@ export default function UserControl() {
         </div>
 
         <form className="dynamic-form" onSubmit={create}>
-          {Object.keys(emptyUser).map((key) => (
-            <label key={key}>
-              {key.replaceAll('_', ' ')}
-              <input
-                type={key === 'password' ? 'password' : 'text'}
-                value={form[key] ?? ''}
-                onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-              />
-            </label>
-          ))}
+          {Object.keys(emptyUser).map((key) => renderCreateField(key))}
 
           <button type="submit" className="primary">
             <Plus size={16} /> Create User
@@ -471,7 +578,10 @@ export default function UserControl() {
           <div className="toolbar">
             <div>
               <h3>Edit Complete User Profile</h3>
-              <p>Update login details, employee profile and reporting hierarchy.</p>
+              <p>
+                Update login details, employee profile, designation and
+                reporting hierarchy.
+              </p>
             </div>
 
             <button

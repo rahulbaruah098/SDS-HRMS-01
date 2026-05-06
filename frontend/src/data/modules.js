@@ -23,13 +23,11 @@ import {
   Module format:
   [key, title, Icon, description, allowedRoles]
 
-  Role notes:
-  super_admin = sees everything
-  admin = company admin modules
-  hr_admin / hr_manager / hr = HR modules
-  finance / accounts_finance = finance modules
-  manager / ro / team_leader / reporting_officer = team/approval modules
-  employee = employee self-service modules
+  Important hierarchy rule:
+  - Team Leader dropdown can show all employees.
+  - Reporting Officer dropdown is filtered in ModuleCrud.jsx/UserControl.jsx.
+  - Only employees with designation "Managing Director" or "Manager"
+    can appear as Reporting Officer.
 */
 
 const ALL_COMMON_ROLES = [
@@ -47,7 +45,13 @@ const ALL_COMMON_ROLES = [
   'employee',
 ];
 
-const HR_ROLES = ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'];
+const HR_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+];
 
 const TEAM_ROLES = [
   'super_admin',
@@ -98,7 +102,7 @@ export const coreModules = [
     'employees',
     'Employee Master',
     Users,
-    'Employee database and lifecycle records.',
+    'Employee database, designation, team leader and reporting officer mapping.',
     HR_ROLES,
   ],
   [
@@ -224,7 +228,7 @@ export const coreModules = [
     'designations',
     'Designations',
     Settings,
-    'Designation master.',
+    'Designation master used in Employee Master and User Control dropdowns.',
     HR_ROLES,
   ],
   [
@@ -313,6 +317,7 @@ export const templates = {
 
     is_team_leader: 'false',
     is_reporting_officer: 'false',
+
     team_leader_id: '',
     team_leader_name: '',
     reporting_officer_id: '',
@@ -499,6 +504,7 @@ export const emptyUser = {
 
   is_team_leader: 'false',
   is_reporting_officer: 'false',
+
   team_leader_id: '',
   reporting_officer_id: '',
 };

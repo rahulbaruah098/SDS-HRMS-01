@@ -9,12 +9,13 @@ export default function ModuleCrud({ collection }) {
   const template = templates[collection] || { title: '', status: 'active' };
 
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState(template);
+  const [form, setForm] = useState({ ...template });
   const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
+  const [designationOptions, setDesignationOptions] = useState([]);
 
   async function load() {
     const params = [];
@@ -42,7 +43,20 @@ export default function ModuleCrud({ collection }) {
     const items = data.items || [];
 
     setEmployeeOptions(items);
+    return items;
+  }
 
+  async function loadDesignationOptions() {
+    const params = [];
+
+    if (isSuperAdmin() && tenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
+    }
+
+    const data = await api(`/designations${params.length ? `?${params.join('&')}` : ''}`);
+    const items = data.items || [];
+
+    setDesignationOptions(items);
     return items;
   }
 
@@ -56,7 +70,6 @@ export default function ModuleCrud({ collection }) {
       .slice(0, 8);
 
     const pass = `${namePart || 'User'}@123`;
-
     setForm({ ...form, password: pass });
   }
 
@@ -73,6 +86,7 @@ export default function ModuleCrud({ collection }) {
 
     if (collection === 'employees') {
       loadEmployeeOptions().catch(console.error);
+      loadDesignationOptions().catch(console.error);
     }
   }, [collection]);
 
@@ -91,6 +105,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         await loadEmployeeOptions();
+        await loadDesignationOptions();
       }
     } catch (error) {
       setMessage(error.message);
@@ -100,6 +115,7 @@ export default function ModuleCrud({ collection }) {
   async function startEdit(row) {
     if (collection === 'employees') {
       await loadEmployeeOptions();
+      await loadDesignationOptions();
     }
 
     const editData = { ...template, ...row };
@@ -143,6 +159,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         await loadEmployeeOptions();
+        await loadDesignationOptions();
       }
     } catch (error) {
       setMessage(error.message);
@@ -166,6 +183,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         await loadEmployeeOptions();
+        await loadDesignationOptions();
       }
     } catch (error) {
       setMessage(error.message);
@@ -194,6 +212,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         await loadEmployeeOptions();
+        await loadDesignationOptions();
       }
     } catch (error) {
       setMessage(error.message);
@@ -212,11 +231,19 @@ export default function ModuleCrud({ collection }) {
         if (collection === 'employees') {
           const empData = await api('/employees');
           setEmployeeOptions(empData.items || []);
+
+          const desigData = await api('/designations');
+          setDesignationOptions(desigData.items || []);
         }
       } catch (error) {
         setMessage(error.message);
       }
     }, 0);
+  }
+
+  function isReportingOfficerEligible(employee) {
+    const designation = String(employee?.designation || '').trim().toLowerCase();
+    return designation === 'managing director' || designation === 'manager';
   }
 
   function renderField(state, setState, key, isEditMode = false) {
@@ -226,42 +253,63 @@ export default function ModuleCrud({ collection }) {
       return null;
     }
 
-        if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
-          const designation = String(state.designation || '').trim().toLowerCase();
-          const canBeReportingOfficer = ['managing director', 'manager'].includes(designation);
+    if (collection === 'employees' && key === 'designation') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => {
+              const nextDesignation = e.target.value;
 
-          if (key === 'is_reporting_officer' && !canBeReportingOfficer) {
-            return (
-              <label key={key}>
-                {label}
-                <select
-                  value="false"
-                  disabled
-                  onChange={() => {}}
-                >
-                  <option value="false">
-                    No - only Managing Director or Manager can be Reporting Officer
-                  </option>
-                </select>
-              </label>
-            );
-          }
+              setState({
+                ...state,
+                designation: nextDesignation,
+              });
+            }}
+          >
+            <option value="">Select designation</option>
 
-          return (
-            <label key={key}>
-              {label}
-              <select
-                value={String(state[key] ?? 'false')}
-                onChange={(e) => setState({ ...state, [key]: e.target.value })}
-              >
-                <option value="false">No</option>
-                <option value="true">Yes</option>
-              </select>
-            </label>
-          );
-        }
+            {designationOptions.map((desig) => {
+              const value = desig.title || desig.name || '';
+
+              return (
+                <option key={desig._id || value} value={value}>
+                  {value}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      );
+    }
+
+    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </label>
+      );
+    }
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
+      const filteredEmployees = employeeOptions
+        .filter((emp) => emp._id !== state._id)
+        .filter((emp) => {
+          if (key !== 'reporting_officer_id') {
+            return true;
+          }
+
+          return isReportingOfficerEligible(emp);
+        });
+
       return (
         <label key={key}>
           {label}
@@ -271,19 +319,11 @@ export default function ModuleCrud({ collection }) {
           >
             <option value="">Select {label}</option>
 
-              {employeeOptions
-                .filter((emp) => emp._id !== state._id)
-                .filter((emp) => {
-                  if (key !== 'reporting_officer_id') return true;
-
-                  const designation = String(emp.designation || '').trim().toLowerCase();
-                  return ['managing director', 'manager'].includes(designation);
-                })
-              .map((emp) => (
-                <option key={emp._id} value={emp._id}>
-                  {emp.name} — {emp.designation || emp.department || emp.email}
-                </option>
-              ))}
+            {filteredEmployees.map((emp) => (
+              <option key={emp._id} value={emp._id}>
+                {emp.name} — {emp.designation || emp.department || emp.email}
+              </option>
+            ))}
           </select>
         </label>
       );
@@ -464,8 +504,8 @@ export default function ModuleCrud({ collection }) {
 
               {collection === 'employees' && (
                 <p>
-                  HR can change employee details, team leader and reporting
-                  officer from here.
+                  HR can change employee details, designation, team leader and
+                  reporting officer from here.
                 </p>
               )}
             </div>

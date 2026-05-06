@@ -2,11 +2,14 @@ from flask import Blueprint, request, jsonify, g
 from bson import ObjectId
 from datetime import datetime
 from werkzeug.security import generate_password_hash
+
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
 
+
 crud_bp = Blueprint("crud", __name__)
+
 
 COLLECTIONS = {
     "employees": ["name", "email", "emp_code", "department", "designation"],
@@ -21,7 +24,13 @@ COLLECTIONS = {
     "job_openings": ["title", "department", "status"],
     "candidates": ["name", "email", "status"],
     "trainings": ["name", "trainer", "venue"],
-    "performance_reviews": ["employee_name", "cycle", "reviewer_name", "reviewer_role", "status"],
+    "performance_reviews": [
+        "employee_name",
+        "cycle",
+        "reviewer_name",
+        "reviewer_role",
+        "status",
+    ],
     "expenses": ["employee_name", "type", "status"],
     "assets": ["name", "type", "serial_no", "status"],
     "tickets": ["title", "category", "status", "priority"],
@@ -42,53 +51,115 @@ COLLECTION_ROLES = {
     "leave_types": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
 
     "leave_requests": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr",
-        "manager", "ro", "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "payroll_runs": {"super_admin", "admin", "finance", "accounts_finance"},
 
     "payslips": {
-        "super_admin", "admin", "finance", "accounts_finance", "employee",
+        "super_admin",
+        "admin",
+        "finance",
+        "accounts_finance",
+        "employee",
     },
 
     "job_openings": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
     "candidates": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
 
     "trainings": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr",
-        "manager", "ro", "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "performance_reviews": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr",
-        "manager", "ro", "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "expenses": {
-        "super_admin", "admin", "finance", "accounts_finance",
-        "manager", "ro", "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "finance",
+        "accounts_finance",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "assets": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
 
     "tickets": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr",
-        "manager", "ro", "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "notifications": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr",
-        "finance", "accounts_finance", "manager", "ro",
-        "team_leader", "reporting_officer", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "finance",
+        "accounts_finance",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
     },
 
     "policies": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "employee",
     },
 
     "documents": {
-        "super_admin", "admin", "hr_admin", "hr_manager", "hr", "employee",
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "employee",
     },
 
     "system_settings": {"super_admin", "admin"},
@@ -110,6 +181,10 @@ def truthy(value):
     return str(value).lower() in ["true", "yes", "1", "on"]
 
 
+def normalize_status(value, default="active"):
+    return (value or default).strip()
+
+
 def generate_default_password(name="", email=""):
     base = (name or email.split("@")[0] or "User").strip().replace(" ", "")
     base = base[:8] if base else "User"
@@ -121,6 +196,11 @@ def safe_object_id(value):
         return ObjectId(value)
     except Exception:
         return None
+
+
+def can_be_reporting_officer(data):
+    designation = (data.get("designation") or "").strip().lower()
+    return designation in ["managing director", "manager"]
 
 
 def resolve_employee_name(db, tenant_id, emp_id):
@@ -141,9 +221,28 @@ def resolve_employee_name(db, tenant_id, emp_id):
     return emp.get("name", "") if emp else ""
 
 
-def can_be_reporting_officer(data):
-    designation = (data.get("designation") or "").strip().lower()
-    return designation in ["managing director", "manager"]
+def resolve_reporting_officer_name(db, tenant_id, emp_id):
+    if not emp_id:
+        return ""
+
+    emp_obj_id = safe_object_id(emp_id)
+
+    if not emp_obj_id:
+        return ""
+
+    emp = db.employees.find_one({
+        "_id": emp_obj_id,
+        "tenant_id": tenant_id,
+        "status": {"$ne": "Inactive"},
+    })
+
+    if not emp:
+        return ""
+
+    if not can_be_reporting_officer(emp):
+        return None
+
+    return emp.get("name", "")
 
 
 def build_employee_roles(data):
@@ -152,19 +251,22 @@ def build_employee_roles(data):
     if truthy(data.get("is_team_leader")):
         roles.append("team_leader")
 
-    if truthy(data.get("is_reporting_officer")):
-        if can_be_reporting_officer(data):
-            roles.append("reporting_officer")
+    if truthy(data.get("is_reporting_officer")) and can_be_reporting_officer(data):
+        roles.append("reporting_officer")
 
     return roles
 
+
 def search(q, fields):
+    if not q:
+        return {}
+
     return {
         "$or": [
             {field: {"$regex": q, "$options": "i"}}
             for field in fields
         ]
-    } if q else {}
+    }
 
 
 def sync_employee_roles(db, employee_doc):
@@ -185,15 +287,12 @@ def sync_employee_roles(db, employee_doc):
 
     roles = set(user.get("roles", []))
 
-    is_team_leader = truthy(employee_doc.get("is_team_leader"))
-    is_reporting_officer = truthy(employee_doc.get("is_reporting_officer"))
-
-    if is_team_leader:
+    if truthy(employee_doc.get("is_team_leader")):
         roles.add("team_leader")
     else:
         roles.discard("team_leader")
 
-    if is_reporting_officer:
+    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
         roles.add("reporting_officer")
     else:
         roles.discard("reporting_officer")
@@ -348,6 +447,7 @@ def create_item(collection):
 
         if not name or not email:
             return jsonify({"message": "Employee name and email are required"}), 400
+
         if truthy(data.get("is_reporting_officer")) and not can_be_reporting_officer(data):
             return jsonify({
                 "message": "Only Managing Director or Manager can be Reporting Officer"
@@ -359,8 +459,19 @@ def create_item(collection):
         team_leader_id = data.get("team_leader_id") or ""
         reporting_officer_id = data.get("reporting_officer_id") or ""
 
+        reporting_officer_name = resolve_reporting_officer_name(
+            db,
+            tenant_id,
+            reporting_officer_id,
+        )
+
+        if reporting_officer_id and reporting_officer_name is None:
+            return jsonify({
+                "message": "Selected Reporting Officer must be Managing Director or Manager"
+            }), 400
+
         data["team_leader_name"] = resolve_employee_name(db, tenant_id, team_leader_id)
-        data["reporting_officer_name"] = resolve_employee_name(db, tenant_id, reporting_officer_id)
+        data["reporting_officer_name"] = reporting_officer_name or ""
 
         employee_roles = build_employee_roles(data)
 
@@ -467,6 +578,7 @@ def update_item(collection, item_id):
             return jsonify({
                 "message": "Only Managing Director or Manager can be Reporting Officer"
             }), 400
+
         if "team_leader_id" in data:
             data["team_leader_name"] = resolve_employee_name(
                 db,
@@ -475,11 +587,19 @@ def update_item(collection, item_id):
             )
 
         if "reporting_officer_id" in data:
-            data["reporting_officer_name"] = resolve_employee_name(
+            reporting_officer_id = data.get("reporting_officer_id") or ""
+            reporting_officer_name = resolve_reporting_officer_name(
                 db,
                 tenant_id,
-                data.get("reporting_officer_id"),
+                reporting_officer_id,
             )
+
+            if reporting_officer_id and reporting_officer_name is None:
+                return jsonify({
+                    "message": "Selected Reporting Officer must be Managing Director or Manager"
+                }), 400
+
+            data["reporting_officer_name"] = reporting_officer_name or ""
 
         if "email" in data:
             email = (data.get("email") or "").strip().lower()
