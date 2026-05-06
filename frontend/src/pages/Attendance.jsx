@@ -8,6 +8,8 @@ export default function Attendance() {
   const [myAttendance, setMyAttendance] = useState([]);
   const [report, setReport] = useState([]);
   const [message, setMessage] = useState('');
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [verifyingId, setVerifyingId] = useState('');
   const [filters, setFilters] = useState({
     employee_id: '',
     department: '',
@@ -44,6 +46,8 @@ export default function Attendance() {
     }
 
     try {
+      setLoadingReport(true);
+
       const params = [];
 
       if (nextFilters.employee_id.trim()) {
@@ -69,23 +73,33 @@ export default function Attendance() {
       setReport(data.items || []);
     } catch (error) {
       setMessage(error.message || 'Unable to load attendance report');
+    } finally {
+      setLoadingReport(false);
+    }
+  }
+
+  async function refreshAttendance() {
+    setMessage('');
+    await loadMyAttendance();
+
+    if (canViewReport) {
+      await loadReport(filters);
     }
   }
 
   useEffect(() => {
-    loadMyAttendance();
-
-    if (canViewReport) {
-      loadReport();
-    }
+    refreshAttendance();
   }, [canViewReport]);
 
   async function searchReport(e) {
     e.preventDefault();
+    setMessage('');
     await loadReport(filters);
   }
 
   async function clearReportFilters() {
+    setMessage('');
+
     const cleared = {
       employee_id: '',
       department: '',
@@ -105,16 +119,27 @@ export default function Attendance() {
       return;
     }
 
+    const ok = window.confirm('Verify this attendance record?');
+
+    if (!ok) {
+      return;
+    }
+
     try {
+      setMessage('');
+      setVerifyingId(attendanceId);
+
       const data = await api(`/attendance/${attendanceId}/verify`, {
         method: 'PATCH',
         body: JSON.stringify({}),
       });
 
       setMessage(data.message || 'Attendance verified');
-      await loadReport();
+      await loadReport(filters);
     } catch (error) {
       setMessage(error.message || 'Unable to verify attendance');
+    } finally {
+      setVerifyingId('');
     }
   }
 
@@ -127,8 +152,9 @@ export default function Attendance() {
         type="button"
         className="secondary"
         onClick={() => verifyAttendance(row)}
+        disabled={verifyingId === row._id}
       >
-        Verify
+        {verifyingId === row._id ? 'Verifying...' : 'Verify'}
       </button>
     ),
   }));
@@ -145,7 +171,7 @@ export default function Attendance() {
           </p>
         </div>
 
-        <AttendanceWidget />
+        <AttendanceWidget onSuccess={refreshAttendance} />
       </section>
 
       {message && <div className="inline-message">{message}</div>}
@@ -205,14 +231,19 @@ export default function Attendance() {
                 />
               </label>
 
-              <button type="submit" className="primary">
-                Search
+              <button
+                type="submit"
+                className="primary"
+                disabled={loadingReport}
+              >
+                {loadingReport ? 'Searching...' : 'Search'}
               </button>
 
               <button
                 type="button"
                 className="secondary"
                 onClick={clearReportFilters}
+                disabled={loadingReport}
               >
                 Clear
               </button>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api/client';
 
-export default function AttendanceWidget() {
+export default function AttendanceWidget({ onSuccess }) {
   const [mode, setMode] = useState('office');
   const [fieldLocation, setFieldLocation] = useState('');
   const [lateReason, setLateReason] = useState('');
@@ -9,6 +9,7 @@ export default function AttendanceWidget() {
   const [loadingType, setLoadingType] = useState('');
 
   const now = new Date();
+
   const isLate =
     now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() > 45);
 
@@ -49,6 +50,10 @@ export default function AttendanceWidget() {
       if (type === 'check-in') {
         setFieldLocation('');
         setLateReason('');
+      }
+
+      if (typeof onSuccess === 'function') {
+        await onSuccess();
       }
     } catch (error) {
       setMessage(error.message || 'Attendance update failed');

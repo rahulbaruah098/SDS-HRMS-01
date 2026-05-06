@@ -32,6 +32,7 @@ def create_index_safe(collection, keys, **kwargs):
 
 
 def ensure_indexes(database):
+    # Tenants
     create_index_safe(
         database.tenants,
         [("tenant_id", ASCENDING)],
@@ -44,6 +45,7 @@ def ensure_indexes(database):
         sparse=True,
     )
 
+    # Users
     create_index_safe(
         database.users,
         [("email", ASCENDING)],
@@ -60,6 +62,7 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("is_active", ASCENDING)],
     )
 
+    # Employees
     create_index_safe(
         database.employees,
         [("tenant_id", ASCENDING), ("emp_code", ASCENDING)],
@@ -74,6 +77,16 @@ def ensure_indexes(database):
 
     create_index_safe(
         database.employees,
+        [("tenant_id", ASCENDING), ("designation", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("department", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.employees,
         [("tenant_id", ASCENDING), ("team_leader_id", ASCENDING)],
     )
 
@@ -83,14 +96,41 @@ def ensure_indexes(database):
     )
 
     create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("is_team_leader", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("is_reporting_officer", ASCENDING)],
+    )
+
+    # Attendance
+    create_index_safe(
         database.attendance_logs,
         [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("date", ASCENDING)],
         unique=True,
     )
 
     create_index_safe(
+        database.attendance_logs,
+        [("tenant_id", ASCENDING), ("date", ASCENDING)],
+    )
+
+    # Leave / expense / tickets
+    create_index_safe(
         database.leave_requests,
         [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.leave_requests,
+        [("tenant_id", ASCENDING), ("team_leader_id", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.leave_requests,
+        [("tenant_id", ASCENDING), ("reporting_officer_id", ASCENDING), ("status", ASCENDING)],
     )
 
     create_index_safe(
@@ -103,6 +143,7 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("raised_by", ASCENDING), ("status", ASCENDING)],
     )
 
+    # Password requests
     create_index_safe(
         database.password_requests,
         [("user_id", ASCENDING), ("status", ASCENDING)],
@@ -113,6 +154,28 @@ def ensure_indexes(database):
         [("created_at", ASCENDING)],
     )
 
+    # Master data duplicate safety
+    create_index_safe(
+        database.departments,
+        [("tenant_id", ASCENDING), ("name", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.designations,
+        [("tenant_id", ASCENDING), ("title", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.projects,
+        [("tenant_id", ASCENDING), ("name", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.states,
+        [("tenant_id", ASCENDING), ("name", ASCENDING)],
+    )
+
+    # Generic tenant/date indexes
     indexed_collections = [
         "departments",
         "designations",
