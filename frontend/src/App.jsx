@@ -28,7 +28,7 @@ function DashboardRouter({ user, setPage }) {
     return <EmployeeDashboard setPage={setPage} />;
   }
 
-  return <AdminDashboard setPage={setPage} />;
+  return <AdminDashboard user={user} setPage={setPage} />;
 }
 
 function UnauthorizedPage() {
@@ -41,7 +41,7 @@ function UnauthorizedPage() {
   );
 }
 
-function PageRouter({ page, user }) {
+function PageRouter({ page, user, setPage }) {
   if (page === 'dashboard') {
     return <DashboardRouter user={user} setPage={setPage} />;
   }
@@ -63,28 +63,38 @@ function PageRouter({ page, user }) {
   }
 
   if (page === 'profile') {
-  return <Profile />;
-}
+    return <Profile />;
+  }
 
-if (page === 'password_requests') {
-  return <PasswordRequests />;
-}
-
+  if (page === 'password_requests') {
+    return <PasswordRequests />;
+  }
 
   return <ModuleCrud collection={page} />;
 }
 
 export default function App() {
-  const [user, setUser] = useState(currentUser().email ? currentUser() : null);
+  const savedUser = currentUser();
+  const [user, setUser] = useState(savedUser?.email ? savedUser : null);
   const [page, setPage] = useState('dashboard');
 
+  function handleSetUser(nextUser) {
+    setUser(nextUser);
+    setPage('dashboard');
+  }
+
   if (!user) {
-    return <Login onLogin={setUser} />;
+    return <Login onLogin={handleSetUser} />;
   }
 
   return (
-    <AppLayout user={user} setUser={setUser} page={page} setPage={setPage}>
-      <PageRouter page={page} user={user} />
+    <AppLayout
+      user={user}
+      setUser={handleSetUser}
+      page={page}
+      setPage={setPage}
+    >
+      <PageRouter page={page} user={user} setPage={setPage} />
     </AppLayout>
   );
 }

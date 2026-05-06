@@ -23,14 +23,51 @@ import {
   Module format:
   [key, title, Icon, description, allowedRoles]
 
-  Roles:
+  Role notes:
   super_admin = sees everything
   admin = company admin modules
   hr_admin / hr_manager / hr = HR modules
   finance / accounts_finance = finance modules
-  manager / ro = team modules
+  manager / ro / team_leader / reporting_officer = team/approval modules
   employee = employee self-service modules
 */
+
+const ALL_COMMON_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+  'employee',
+];
+
+const HR_ROLES = ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'];
+
+const TEAM_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+  'employee',
+];
+
+const FINANCE_ROLES = [
+  'super_admin',
+  'admin',
+  'finance',
+  'accounts_finance',
+];
 
 export const superModules = [
   [
@@ -47,7 +84,6 @@ export const superModules = [
     'Create users, reset passwords, update roles and full employee profiles.',
     ['super_admin'],
   ],
-
   [
     'password_requests',
     'Password Requests',
@@ -55,7 +91,6 @@ export const superModules = [
     'Approve or reject user password change requests.',
     ['super_admin'],
   ],
-
 ];
 
 export const coreModules = [
@@ -64,91 +99,112 @@ export const coreModules = [
     'Employee Master',
     Users,
     'Employee database and lifecycle records.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'attendance',
     'Attendance',
     Clock,
     'Office/field check-in, late reason and reports.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'employee'],
+    [
+      'super_admin',
+      'admin',
+      'hr_admin',
+      'hr_manager',
+      'hr',
+      'manager',
+      'ro',
+      'team_leader',
+      'reporting_officer',
+      'employee',
+    ],
   ],
   [
     'leave_requests',
     'Leave Management',
     CalendarDays,
     'Leave application and approvals.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'manager', 'ro', 'employee'],
+    TEAM_ROLES,
   ],
   [
     'payroll_runs',
     'Payroll Runs',
     Wallet,
     'Payroll processing and control.',
-    ['super_admin', 'admin', 'finance', 'accounts_finance'],
+    FINANCE_ROLES,
   ],
   [
     'payslips',
     'Payslips',
     FileText,
     'Generated employee payslips.',
-    ['super_admin', 'admin', 'finance', 'accounts_finance', 'employee'],
+    [...FINANCE_ROLES, 'employee'],
   ],
   [
     'job_openings',
     'Recruitment Jobs',
     Briefcase,
     'Job openings and pipeline.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'candidates',
     'Candidates',
     Users,
     'Candidate screening and status.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'trainings',
     'Training',
     GraduationCap,
     'Training plan and feedback.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'manager', 'ro', 'employee'],
+    TEAM_ROLES,
   ],
   [
     'performance_reviews',
     'Performance',
     BarChart3,
     'KPI and appraisal records.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'manager', 'ro', 'team_leader', 'reporting_officer', 'employee']
+    TEAM_ROLES,
   ],
   [
     'expenses',
     'Expenses',
     Receipt,
     'Claims and approvals.',
-    ['super_admin', 'admin', 'finance', 'accounts_finance', 'manager', 'ro', 'employee'],
+    [
+      'super_admin',
+      'admin',
+      'finance',
+      'accounts_finance',
+      'manager',
+      'ro',
+      'team_leader',
+      'reporting_officer',
+      'employee',
+    ],
   ],
   [
     'assets',
     'Assets',
     Laptop,
     'Inventory and allocation.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'tickets',
     'Grievance / Tickets',
     MessageSquare,
     'Helpdesk and grievance.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'manager', 'ro', 'employee'],
+    TEAM_ROLES,
   ],
   [
     'notifications',
     'Notifications',
     Bell,
     'Alerts and notification center.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'finance', 'accounts_finance', 'manager', 'ro', 'employee'],
+    ALL_COMMON_ROLES,
   ],
   [
     'policies',
@@ -162,28 +218,28 @@ export const coreModules = [
     'Departments',
     Settings,
     'Department master.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'designations',
     'Designations',
     Settings,
     'Designation master.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'projects',
     'Projects',
     Settings,
     'Project master.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'states',
     'States',
     Settings,
     'Operating states.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'],
+    HR_ROLES,
   ],
   [
     'system_settings',
@@ -199,28 +255,13 @@ export const coreModules = [
     'Trace all actions.',
     ['super_admin', 'admin'],
   ],
-
   [
     'profile',
     'My Profile',
     UserCircle,
     'View profile and request password change.',
-    [
-      'super_admin',
-      'admin',
-      'hr_admin',
-      'hr_manager',
-      'hr',
-      'finance',
-      'accounts_finance',
-      'manager',
-      'ro',
-      'team_leader',
-      'reporting_officer',
-      'employee',
-    ],
+    ALL_COMMON_ROLES,
   ],
-
 ];
 
 export const allModules = [...superModules, ...coreModules];
@@ -257,47 +298,57 @@ export function canAccessModule(user, moduleKey) {
 
 export const templates = {
   employees: {
-  tenant_id: 'sds',
-  emp_code: '',
-  name: '',
-  email: '',
-  password: '',
-  department: '',
-  designation: '',
-  job_type: 'Regular',
-  project: '',
-  state: '',
-  status: 'Active',
-  salary: 30000,
+    tenant_id: 'sds',
+    emp_code: '',
+    name: '',
+    email: '',
+    password: '',
+    department: '',
+    designation: '',
+    job_type: 'Regular',
+    project: '',
+    state: '',
+    status: 'Active',
+    salary: 30000,
 
-  // Team hierarchy fields
-  is_team_leader: 'false',
-  is_reporting_officer: 'false',
-  team_leader_id: '',
-  team_leader_name: '',
-  reporting_officer_id: '',
-  reporting_officer_name: '',
-},
+    is_team_leader: 'false',
+    is_reporting_officer: 'false',
+    team_leader_id: '',
+    team_leader_name: '',
+    reporting_officer_id: '',
+    reporting_officer_name: '',
+  },
+
   departments: {
     tenant_id: 'sds',
     name: '',
     status: 'active',
   },
+
   designations: {
     tenant_id: 'sds',
     title: '',
     status: 'active',
   },
+
   projects: {
     tenant_id: 'sds',
     name: '',
     status: 'active',
   },
+
   states: {
     tenant_id: 'sds',
     name: '',
     status: 'active',
   },
+
+  leave_types: {
+    tenant_id: 'sds',
+    name: '',
+    status: 'active',
+  },
+
   leave_requests: {
     employee_id: '',
     employee_name: '',
@@ -307,11 +358,13 @@ export const templates = {
     reason: '',
     status: 'pending',
   },
+
   payroll_runs: {
     tenant_id: 'sds',
     month: '',
     status: 'draft',
   },
+
   payslips: {
     employee_id: '',
     employee_name: '',
@@ -321,6 +374,7 @@ export const templates = {
     net_pay: 0,
     status: 'generated',
   },
+
   job_openings: {
     tenant_id: 'sds',
     title: '',
@@ -328,6 +382,7 @@ export const templates = {
     description: '',
     status: 'open',
   },
+
   candidates: {
     tenant_id: 'sds',
     name: '',
@@ -335,6 +390,7 @@ export const templates = {
     phone: '',
     status: 'new',
   },
+
   trainings: {
     tenant_id: 'sds',
     name: '',
@@ -343,16 +399,18 @@ export const templates = {
     duration: '',
     status: 'scheduled',
   },
-performance_reviews: {
-  employee_id: '',
-  employee_name: '',
-  cycle: '',
-  rating: 0,
-  comments: '',
-  reviewer_name: '',
-  reviewer_role: '',
-  status: 'submitted',
-},
+
+  performance_reviews: {
+    employee_id: '',
+    employee_name: '',
+    cycle: '',
+    rating: 0,
+    comments: '',
+    reviewer_name: '',
+    reviewer_role: '',
+    status: 'submitted',
+  },
+
   expenses: {
     employee_id: '',
     employee_name: '',
@@ -361,6 +419,7 @@ performance_reviews: {
     description: '',
     status: 'pending',
   },
+
   assets: {
     tenant_id: 'sds',
     name: '',
@@ -369,6 +428,7 @@ performance_reviews: {
     status: 'available',
     assigned_to: '',
   },
+
   tickets: {
     title: '',
     category: 'HR',
@@ -376,12 +436,14 @@ performance_reviews: {
     priority: 'medium',
     status: 'open',
   },
+
   notifications: {
     user_id: '',
     title: '',
     body: '',
     read: false,
   },
+
   policies: {
     tenant_id: 'sds',
     title: '',
@@ -389,6 +451,15 @@ performance_reviews: {
     summary: '',
     status: 'published',
   },
+
+  documents: {
+    tenant_id: 'sds',
+    title: '',
+    doc_type: '',
+    description: '',
+    status: 'active',
+  },
+
   system_settings: {
     tenant_id: 'sds',
     setting_group: '',
@@ -422,7 +493,12 @@ export const emptyUser = {
   job_type: 'Regular',
   project: '',
   state: 'Assam',
-  employee_status: 'Active',
+  status: 'Active',
   salary: 0,
   is_active: true,
+
+  is_team_leader: 'false',
+  is_reporting_officer: 'false',
+  team_leader_id: '',
+  reporting_officer_id: '',
 };

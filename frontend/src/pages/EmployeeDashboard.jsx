@@ -4,7 +4,7 @@ import AttendanceWidget from '../components/AttendanceWidget';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 
-export default function EmployeeDashboard() {
+export default function EmployeeDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [reviewForm, setReviewForm] = useState({
     employee_id: '',
@@ -14,20 +14,52 @@ export default function EmployeeDashboard() {
   });
   const [message, setMessage] = useState('');
 
+  async function loadDashboard() {
+    try {
+      const dashboardData = await api('/dashboard/employee');
+      setData(dashboardData);
+    } catch (error) {
+      console.error(error);
+      setMessage(error.message || 'Unable to load employee dashboard');
+    }
+  }
+
   useEffect(() => {
-    api('/dashboard/employee').then(setData).catch(console.error);
+    loadDashboard();
   }, []);
+
+  function goTo(page) {
+    if (typeof setPage === 'function') {
+      setPage(page);
+    }
+  }
 
   async function submitReview(e) {
     e.preventDefault();
 
+    if (!reviewForm.employee_id) {
+      setMessage('Please select an employee to review');
+      return;
+    }
+
+    const ratingValue = Number(reviewForm.rating);
+
+    if (!ratingValue || ratingValue < 1 || ratingValue > 5) {
+      setMessage('Rating must be between 1 and 5');
+      return;
+    }
+
     try {
       const res = await api('/performance/reviews', {
         method: 'POST',
-        body: JSON.stringify(reviewForm),
+        body: JSON.stringify({
+          ...reviewForm,
+          rating: ratingValue,
+        }),
       });
 
       setMessage(res.message || 'Performance review submitted');
+
       setReviewForm({
         employee_id: '',
         cycle: '',
@@ -35,8 +67,7 @@ export default function EmployeeDashboard() {
         comments: '',
       });
 
-      const fresh = await api('/dashboard/employee');
-      setData(fresh);
+      await loadDashboard();
     } catch (error) {
       setMessage(error.message);
     }
@@ -48,32 +79,82 @@ export default function EmployeeDashboard() {
       ? 'Reporting Officer'
       : 'Employee';
 
-  const reviewableEmployees = [
-    ...(data?.team_members || []),
-    ...(data?.reporting_members || []),
-  ];
+  const reviewableEmployeesMap = new Map();
+
+  [...(data?.team_members || []), ...(data?.reporting_members || [])].forEach((emp) => {
+    if (emp?._id) {
+      reviewableEmployeesMap.set(emp._id, emp);
+    }
+  });
+
+  const reviewableEmployees = Array.from(reviewableEmployeesMap.values());
 
   return (
     <div className="page-grid">
       <section className="hero employee-hero">
         <div>
           <span className="kicker">Employee Self Service</span>
+
           <h1>Welcome, {data?.employee?.name || 'Employee'}</h1>
+
           <p>
             Current Role: <b>{roleLabel}</b>
           </p>
+
           <p>
-            Check attendance, apply leave, view payslips, raise tickets, and track notifications.
+            Check attendance, apply leave, view payslips, raise tickets, and
+            track notifications.
           </p>
+
+          <div className="hero-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => goTo('attendance')}
+            >
+              Attendance
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Apply Leave
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('tickets')}
+            >
+              Raise Ticket
+            </button>
+          </div>
         </div>
+
         <AttendanceWidget />
       </section>
 
+      {message && <div className="inline-message">{message}</div>}
+
       <section className="stats-grid">
         <Stat label="Dashboard Role" value={roleLabel} />
-        <Stat label="Today Status" value={data?.today_attendance?.status || 'Not checked-in'} />
+        <Stat
+          label="Today Status"
+          value={data?.today_attendance?.status || 'Not checked-in'}
+        />
         <Stat label="Team Members" value={data?.team_members?.length || 0} />
-        <Stat label="Reporting Members" value={data?.reporting_members?.length || 0} />
+        <Stat
+          label="Reporting Members"
+          value={data?.reporting_members?.length || 0}
+        />
+
+        {!data && !message && (
+          <div className="panel">
+            <p>Loading dashboard...</p>
+          </div>
+        )}
       </section>
 
       {(data?.is_team_leader || data?.is_reporting_officer) && (
@@ -86,12 +167,18 @@ export default function EmployeeDashboard() {
               Employee
               <select
                 value={reviewForm.employee_id}
-                onChange={(e) => setReviewForm({ ...reviewForm, employee_id: e.target.value })}
+                onChange={(e) =>
+                  setReviewForm({
+                    ...reviewForm,
+                    employee_id: e.target.value,
+                  })
+                }
               >
                 <option value="">Select employee</option>
+
                 {reviewableEmployees.map((emp) => (
                   <option key={emp._id} value={emp._id}>
-                    {emp.name} — {emp.designation}
+                    {emp.name} — {emp.designation || emp.department || emp.email}
                   </option>
                 ))}
               </select>
@@ -102,7 +189,12 @@ export default function EmployeeDashboard() {
               <input
                 value={reviewForm.cycle}
                 placeholder="May 2026"
-                onChange={(e) => setReviewForm({ ...reviewForm, cycle: e.target.value })}
+                onChange={(e) =>
+                  setReviewForm({
+                    ...reviewForm,
+                    cycle: e.target.value,
+                  })
+                }
               />
             </label>
 
@@ -113,7 +205,12 @@ export default function EmployeeDashboard() {
                 min="1"
                 max="5"
                 value={reviewForm.rating}
-                onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+                onChange={(e) =>
+                  setReviewForm({
+                    ...reviewForm,
+                    rating: e.target.value,
+                  })
+                }
               />
             </label>
 
@@ -121,14 +218,19 @@ export default function EmployeeDashboard() {
               Comments
               <input
                 value={reviewForm.comments}
-                onChange={(e) => setReviewForm({ ...reviewForm, comments: e.target.value })}
+                onChange={(e) =>
+                  setReviewForm({
+                    ...reviewForm,
+                    comments: e.target.value,
+                  })
+                }
               />
             </label>
 
-            <button className="primary">Submit Rating</button>
+            <button type="submit" className="primary">
+              Submit Rating
+            </button>
           </form>
-
-          {message && <div className="inline-message">{message}</div>}
         </section>
       )}
 

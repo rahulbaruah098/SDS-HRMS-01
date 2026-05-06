@@ -5,7 +5,7 @@ import { emptyUser } from '../data/modules';
 
 export default function UserControl() {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState(emptyUser);
+  const [form, setForm] = useState({ ...emptyUser });
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
   const [edit, setEdit] = useState(null);
@@ -20,26 +20,72 @@ export default function UserControl() {
   async function load() {
     const params = [];
 
-    if (q) params.push(`q=${encodeURIComponent(q)}`);
-    if (tenant) params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+    if (q.trim()) {
+      params.push(`q=${encodeURIComponent(q.trim())}`);
+    }
 
-    const data = await api(`/superadmin/users${params.length ? `?${params.join('&')}` : ''}`);
+    if (tenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
+    }
+
+    const data = await api(
+      `/superadmin/users${params.length ? `?${params.join('&')}` : ''}`
+    );
+
     setRows(data.items || []);
   }
 
   async function loadEmployeeOptions(tenantId = '') {
-    const url = tenantId
-      ? `/employees?tenant_id=${encodeURIComponent(tenantId)}`
+    const cleanTenant = (tenantId || tenant || '').trim();
+
+    const url = cleanTenant
+      ? `/employees?tenant_id=${encodeURIComponent(cleanTenant)}`
       : '/employees';
 
     const data = await api(url);
-    setEmployeeOptions(data.items || []);
+    const items = data.items || [];
+
+    setEmployeeOptions(items);
+
+    return items;
+  }
+
+  function resetCreateForm() {
+    setForm({ ...emptyUser });
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load().catch((error) => {
+      console.error(error);
+      setMessage(error.message || 'Unable to load users');
+    });
+
     loadEmployeeOptions().catch(console.error);
   }, []);
+
+  async function searchUsers() {
+    try {
+      await load();
+      await loadEmployeeOptions();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function clearSearch() {
+    setQ('');
+    setTenant('');
+
+    try {
+      const data = await api('/superadmin/users');
+      setRows(data.items || []);
+
+      const empData = await api('/employees');
+      setEmployeeOptions(empData.items || []);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
 
   async function create(e) {
     e.preventDefault();
@@ -50,9 +96,10 @@ export default function UserControl() {
         body: JSON.stringify(form),
       });
 
-      setMessage(data.message);
-      setForm(emptyUser);
-      load();
+      setMessage(data.message || 'User created successfully');
+      resetCreateForm();
+      await load();
+      await loadEmployeeOptions(form.tenant_id);
     } catch (error) {
       setMessage(error.message);
     }
@@ -61,12 +108,17 @@ export default function UserControl() {
   async function openEdit(user) {
     const employee = user.employee_profile || {};
 
+    await loadEmployeeOptions(user.tenant_id);
+
     const editData = {
       ...employee,
       ...user,
+
       user_id_for_edit: user._id,
       employee_id_for_edit: employee._id || '',
+
       roles: (user.roles || []).join(', '),
+
       emp_code: employee.emp_code || '',
       department: employee.department || '',
       designation: employee.designation || '',
@@ -75,16 +127,25 @@ export default function UserControl() {
       state: employee.state || '',
       status: employee.status || 'Active',
       salary: employee.salary || 0,
+
       is_team_leader: String(employee.is_team_leader || 'false'),
       is_reporting_officer: String(employee.is_reporting_officer || 'false'),
+
       team_leader_id: employee.team_leader_id || '',
       reporting_officer_id: employee.reporting_officer_id || '',
+
       password: '',
       is_active: String(user.is_active !== false),
     };
 
     setEdit(editData);
-    await loadEmployeeOptions(user.tenant_id);
+
+    setTimeout(() => {
+      document.getElementById('user-edit-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 100);
   }
 
   async function save(e) {
@@ -98,16 +159,22 @@ export default function UserControl() {
       delete payload.employee_profile;
       delete payload.password_hash;
 
-      payload.is_active = payload.is_active === true || payload.is_active === 'true';
+      payload.is_active =
+        payload.is_active === true || payload.is_active === 'true';
+
+      if (!payload.password) {
+        delete payload.password;
+      }
 
       const data = await api(`/superadmin/users/${edit.user_id_for_edit}`, {
         method: 'PATCH',
         body: JSON.stringify(payload),
       });
 
-      setMessage(data.message);
+      setMessage(data.message || 'User/profile updated successfully');
       setEdit(null);
-      load();
+      await load();
+      await loadEmployeeOptions(payload.tenant_id);
     } catch (error) {
       setMessage(error.message);
     }
@@ -119,10 +186,22 @@ export default function UserControl() {
       password: '',
       confirm_password: '',
     });
+
+    setTimeout(() => {
+      document.getElementById('password-reset-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 100);
   }
 
   async function submitReset(e) {
     e.preventDefault();
+
+    if (!resetTarget?._id) {
+      setMessage('No user selected for password reset');
+      return;
+    }
 
     if (!resetForm.password || resetForm.password.length < 6) {
       setMessage('Password must be at least 6 characters');
@@ -140,7 +219,7 @@ export default function UserControl() {
         body: JSON.stringify({ password: resetForm.password }),
       });
 
-      setMessage(data.message);
+      setMessage(data.message || 'Password updated successfully');
       setResetTarget(null);
       setResetForm({
         password: '',
@@ -193,6 +272,7 @@ export default function UserControl() {
             onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
           >
             <option value="">Select {label}</option>
+
             {employeeOptions
               .filter((emp) => emp._id !== edit.employee_id_for_edit)
               .map((emp) => (
@@ -211,7 +291,11 @@ export default function UserControl() {
         <input
           type={key === 'password' ? 'password' : 'text'}
           value={edit[key] ?? ''}
-          placeholder={key === 'password' ? 'Leave blank if password should not change' : ''}
+          placeholder={
+            key === 'password'
+              ? 'Leave blank if password should not change'
+              : ''
+          }
           onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
         />
       </label>
@@ -256,19 +340,28 @@ export default function UserControl() {
         <div className="toolbar">
           <div className="search">
             <Search size={16} />
+
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search users..."
             />
+
             <input
               value={tenant}
               onChange={(e) => setTenant(e.target.value)}
               placeholder="tenant_id filter"
             />
-            <button type="button" onClick={load}>
+
+            <button type="button" onClick={searchUsers}>
               Search
             </button>
+
+            {(q || tenant) && (
+              <button type="button" className="secondary" onClick={clearSearch}>
+                Clear
+              </button>
+            )}
           </div>
         </div>
 
@@ -277,13 +370,14 @@ export default function UserControl() {
             <label key={key}>
               {key.replaceAll('_', ' ')}
               <input
+                type={key === 'password' ? 'password' : 'text'}
                 value={form[key] ?? ''}
                 onChange={(e) => setForm({ ...form, [key]: e.target.value })}
               />
             </label>
           ))}
 
-          <button className="primary">
+          <button type="submit" className="primary">
             <Plus size={16} /> Create User
           </button>
         </form>
@@ -310,15 +404,16 @@ export default function UserControl() {
             <tbody>
               {rows.map((user) => (
                 <tr key={user._id}>
-                  <td>{user.name}</td>
-                  <td>{user.email}</td>
-                  <td>{user.tenant_id}</td>
+                  <td>{user.name || ''}</td>
+                  <td>{user.email || ''}</td>
+                  <td>{user.tenant_id || ''}</td>
                   <td>{(user.roles || []).join(', ')}</td>
                   <td>{user.employee_profile?.department || ''}</td>
                   <td>{user.employee_profile?.designation || ''}</td>
                   <td>{user.employee_profile?.team_leader_name || ''}</td>
                   <td>{user.employee_profile?.reporting_officer_name || ''}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
+
                   <td>
                     <button
                       type="button"
@@ -346,7 +441,7 @@ export default function UserControl() {
       </section>
 
       {edit && (
-        <section className="panel">
+        <section className="panel" id="user-edit-section">
           <div className="toolbar">
             <div>
               <h3>Edit Complete User Profile</h3>
@@ -365,7 +460,7 @@ export default function UserControl() {
           <form className="dynamic-form" onSubmit={save}>
             {editFields.map((key) => renderEditField(key))}
 
-            <button className="primary">
+            <button type="submit" className="primary">
               <Save size={16} /> Save Changes
             </button>
           </form>
@@ -373,7 +468,7 @@ export default function UserControl() {
       )}
 
       {resetTarget && (
-        <section className="panel">
+        <section className="panel" id="password-reset-section">
           <div className="toolbar">
             <div>
               <h3>Reset Password</h3>
@@ -409,12 +504,15 @@ export default function UserControl() {
                 type="password"
                 value={resetForm.confirm_password}
                 onChange={(e) =>
-                  setResetForm({ ...resetForm, confirm_password: e.target.value })
+                  setResetForm({
+                    ...resetForm,
+                    confirm_password: e.target.value,
+                  })
                 }
               />
             </label>
 
-            <button className="primary">
+            <button type="submit" className="primary">
               <KeyRound size={16} /> Update Password
             </button>
           </form>

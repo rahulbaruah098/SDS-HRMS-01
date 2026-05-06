@@ -19,10 +19,12 @@ export default function ModuleCrud({ collection }) {
   async function load() {
     const params = [];
 
-    if (q) params.push(`q=${encodeURIComponent(q)}`);
+    if (q.trim()) {
+      params.push(`q=${encodeURIComponent(q.trim())}`);
+    }
 
-    if (isSuperAdmin() && tenant) {
-      params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+    if (isSuperAdmin() && tenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
     }
 
     const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
@@ -32,14 +34,20 @@ export default function ModuleCrud({ collection }) {
   async function loadEmployeeOptions() {
     const params = [];
 
-    if (isSuperAdmin() && tenant) {
-      params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+    if (isSuperAdmin() && tenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
     }
 
     const data = await api(`/employees${params.length ? `?${params.join('&')}` : ''}`);
-    setEmployeeOptions(data.items || []);
+    const items = data.items || [];
 
-    return data.items || [];
+    setEmployeeOptions(items);
+
+    return items;
+  }
+
+  function resetForm() {
+    setForm({ ...template });
   }
 
   function generatePassword() {
@@ -53,11 +61,15 @@ export default function ModuleCrud({ collection }) {
   }
 
   useEffect(() => {
-    setForm(template);
+    resetForm();
     setEdit(null);
     setMessage('');
+    setRows([]);
 
-    load().catch(console.error);
+    load().catch((error) => {
+      console.error(error);
+      setMessage(error.message || 'Unable to load records');
+    });
 
     if (collection === 'employees') {
       loadEmployeeOptions().catch(console.error);
@@ -73,7 +85,7 @@ export default function ModuleCrud({ collection }) {
         body: JSON.stringify(form),
       });
 
-      setForm(template);
+      resetForm();
       setMessage('Record created successfully');
       await load();
 
@@ -138,6 +150,12 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function remove(id) {
+    const ok = window.confirm('Are you sure you want to delete this record?');
+
+    if (!ok) {
+      return;
+    }
+
     try {
       await api(`/${collection}/${id}`, {
         method: 'DELETE',
@@ -171,11 +189,34 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function searchRecords() {
-    await load();
+    try {
+      await load();
 
-    if (collection === 'employees') {
-      await loadEmployeeOptions();
+      if (collection === 'employees') {
+        await loadEmployeeOptions();
+      }
+    } catch (error) {
+      setMessage(error.message);
     }
+  }
+
+  async function clearSearch() {
+    setQ('');
+    setTenant('');
+
+    setTimeout(async () => {
+      try {
+        const data = await api(`/${collection}`);
+        setRows(data.items || []);
+
+        if (collection === 'employees') {
+          const empData = await api('/employees');
+          setEmployeeOptions(empData.items || []);
+        }
+      } catch (error) {
+        setMessage(error.message);
+      }
+    }, 0);
   }
 
   function renderField(state, setState, key, isEditMode = false) {
@@ -234,6 +275,26 @@ export default function ModuleCrud({ collection }) {
     );
   }
 
+  function displayValue(value) {
+    if (value === null || value === undefined || value === '') {
+      return '';
+    }
+
+    if (Array.isArray(value)) {
+      return value.join(', ');
+    }
+
+    if (typeof value === 'object') {
+      if (value.$date) {
+        return value.$date;
+      }
+
+      return JSON.stringify(value);
+    }
+
+    return String(value);
+  }
+
   const createFields = Object.keys(template);
 
   const editFields =
@@ -279,6 +340,12 @@ export default function ModuleCrud({ collection }) {
             <button type="button" onClick={searchRecords}>
               Search
             </button>
+
+            {(q || tenant) && (
+              <button type="button" className="secondary" onClick={clearSearch}>
+                Clear
+              </button>
+            )}
           </div>
         </div>
 
@@ -329,13 +396,7 @@ export default function ModuleCrud({ collection }) {
                 return (
                   <tr key={row._id}>
                     {keys.map((key) => (
-                      <td key={key}>
-                        {Array.isArray(row[key])
-                          ? row[key].join(', ')
-                          : typeof row[key] === 'object'
-                            ? JSON.stringify(row[key])
-                            : String(row[key] ?? '')}
-                      </td>
+                      <td key={key}>{displayValue(row[key])}</td>
                     ))}
 
                     <td>

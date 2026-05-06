@@ -1,4 +1,10 @@
-export default function ModuleGrid({ modules, setPage }) {
+export default function ModuleGrid({ modules = [], setPage }) {
+  function openModule(key) {
+    if (typeof setPage === 'function') {
+      setPage(key);
+    }
+  }
+
   return (
     <section className="module-grid">
       {modules.map(([key, title, Icon, description]) => (
@@ -6,13 +12,21 @@ export default function ModuleGrid({ modules, setPage }) {
           type="button"
           className="module-card module-card-btn"
           key={key}
-          onClick={() => setPage(key)}
+          onClick={() => openModule(key)}
         >
-          <Icon />
+          {Icon ? <Icon /> : null}
+
           <h3>{title}</h3>
-          <p>{description}</p>
+
+          {description && <p>{description}</p>}
         </button>
       ))}
+
+      {!modules.length && (
+        <div className="panel">
+          <p>No modules available for your role.</p>
+        </div>
+      )}
     </section>
   );
 }
