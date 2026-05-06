@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, g, request
+from flask import Blueprint, jsonify, g
 from datetime import date
 
 from app.extensions import get_db
@@ -242,12 +242,29 @@ def employee_dashboard():
 
     emp = current_employee(db)
 
-    emp_id = str(emp["_id"]) if emp else "__none__"
+    if not emp:
+        return jsonify({
+            "employee": None,
+            "roles": list(roles),
+            "is_team_leader": False,
+            "is_reporting_officer": False,
+            "team_members": [],
+            "reporting_members": [],
+            "team_pending_leaves": [],
+            "my_performance_reviews": [],
+            "reviews_given": [],
+            "today_attendance": None,
+            "leaves": [],
+            "tickets": [],
+            "notifications": [],
+        })
+
+    emp_id = str(emp["_id"])
     today = date.today().isoformat()
 
     team_members = []
 
-    if "team_leader" in roles and emp:
+    if "team_leader" in roles:
         team_members = list(
             db.employees
             .find({
@@ -260,7 +277,7 @@ def employee_dashboard():
 
     reporting_members = []
 
-    if "reporting_officer" in roles and emp:
+    if roles.intersection({"reporting_officer", "manager", "ro"}):
         reporting_members = list(
             db.employees
             .find({
@@ -273,6 +290,7 @@ def employee_dashboard():
 
     team_member_ids = [str(member["_id"]) for member in team_members]
     reporting_member_ids = [str(member["_id"]) for member in reporting_members]
+    team_scope_ids = list(set(team_member_ids + reporting_member_ids))
 
     my_reviews = list(
         db.performance_reviews
@@ -332,9 +350,7 @@ def employee_dashboard():
 
     team_pending_leaves = []
 
-    if team_member_ids or reporting_member_ids:
-        team_scope_ids = list(set(team_member_ids + reporting_member_ids))
-
+    if team_scope_ids:
         team_pending_leaves = list(
             db.leave_requests
             .find({
@@ -350,7 +366,7 @@ def employee_dashboard():
         "employee": clean_doc(emp),
         "roles": list(roles),
         "is_team_leader": "team_leader" in roles,
-        "is_reporting_officer": "reporting_officer" in roles,
+        "is_reporting_officer": bool(roles.intersection({"reporting_officer", "manager", "ro"})),
         "team_members": clean_doc(team_members),
         "reporting_members": clean_doc(reporting_members),
         "team_pending_leaves": clean_doc(team_pending_leaves),

@@ -13,6 +13,7 @@ export default function EmployeeDashboard({ setPage }) {
     comments: '',
   });
   const [message, setMessage] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
 
   async function loadDashboard() {
     try {
@@ -34,8 +35,27 @@ export default function EmployeeDashboard({ setPage }) {
     }
   }
 
+  function getRoleLabel() {
+    const labels = [];
+
+    if (data?.is_team_leader) {
+      labels.push('Team Leader');
+    }
+
+    if (data?.is_reporting_officer) {
+      labels.push('Reporting Officer');
+    }
+
+    if (!labels.length) {
+      labels.push('Employee');
+    }
+
+    return labels.join(' + ');
+  }
+
   async function submitReview(e) {
     e.preventDefault();
+    setMessage('');
 
     if (!reviewForm.employee_id) {
       setMessage('Please select an employee to review');
@@ -50,6 +70,8 @@ export default function EmployeeDashboard({ setPage }) {
     }
 
     try {
+      setSubmittingReview(true);
+
       const res = await api('/performance/reviews', {
         method: 'POST',
         body: JSON.stringify({
@@ -69,15 +91,13 @@ export default function EmployeeDashboard({ setPage }) {
 
       await loadDashboard();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to submit performance review');
+    } finally {
+      setSubmittingReview(false);
     }
   }
 
-  const roleLabel = data?.is_team_leader
-    ? 'Team Leader'
-    : data?.is_reporting_officer
-      ? 'Reporting Officer'
-      : 'Employee';
+  const roleLabel = getRoleLabel();
 
   const reviewableEmployeesMap = new Map();
 
@@ -133,18 +153,21 @@ export default function EmployeeDashboard({ setPage }) {
           </div>
         </div>
 
-        <AttendanceWidget />
+        <AttendanceWidget onSuccess={loadDashboard} />
       </section>
 
       {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
         <Stat label="Dashboard Role" value={roleLabel} />
+
         <Stat
           label="Today Status"
           value={data?.today_attendance?.status || 'Not checked-in'}
         />
+
         <Stat label="Team Members" value={data?.team_members?.length || 0} />
+
         <Stat
           label="Reporting Members"
           value={data?.reporting_members?.length || 0}
@@ -173,6 +196,7 @@ export default function EmployeeDashboard({ setPage }) {
                     employee_id: e.target.value,
                   })
                 }
+                disabled={submittingReview}
               >
                 <option value="">Select employee</option>
 
@@ -195,6 +219,7 @@ export default function EmployeeDashboard({ setPage }) {
                     cycle: e.target.value,
                   })
                 }
+                disabled={submittingReview}
               />
             </label>
 
@@ -211,6 +236,7 @@ export default function EmployeeDashboard({ setPage }) {
                     rating: e.target.value,
                   })
                 }
+                disabled={submittingReview}
               />
             </label>
 
@@ -224,11 +250,16 @@ export default function EmployeeDashboard({ setPage }) {
                     comments: e.target.value,
                   })
                 }
+                disabled={submittingReview}
               />
             </label>
 
-            <button type="submit" className="primary">
-              Submit Rating
+            <button
+              type="submit"
+              className="primary"
+              disabled={submittingReview}
+            >
+              {submittingReview ? 'Submitting...' : 'Submit Rating'}
             </button>
           </form>
         </section>

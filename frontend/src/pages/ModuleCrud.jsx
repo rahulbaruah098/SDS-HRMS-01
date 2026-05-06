@@ -16,27 +16,35 @@ export default function ModuleCrud({ collection }) {
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  async function load() {
+  function buildParams(nextQ = q, nextTenant = tenant) {
     const params = [];
 
-    if (q.trim()) {
-      params.push(`q=${encodeURIComponent(q.trim())}`);
+    if (nextQ.trim()) {
+      params.push(`q=${encodeURIComponent(nextQ.trim())}`);
     }
 
-    if (isSuperAdmin() && tenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
+    if (isSuperAdmin() && nextTenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
     }
 
-    const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
-    setRows(data.items || []);
+    return params;
   }
 
-  async function loadEmployeeOptions() {
+  async function load(nextQ = q, nextTenant = tenant) {
+    const params = buildParams(nextQ, nextTenant);
+    const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
+    setRows(data.items || []);
+    return data.items || [];
+  }
+
+  async function loadEmployeeOptions(nextTenant = tenant) {
     const params = [];
 
-    if (isSuperAdmin() && tenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
+    if (isSuperAdmin() && nextTenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
     }
 
     const data = await api(`/employees${params.length ? `?${params.join('&')}` : ''}`);
@@ -46,11 +54,11 @@ export default function ModuleCrud({ collection }) {
     return items;
   }
 
-  async function loadDesignationOptions() {
+  async function loadDesignationOptions(nextTenant = tenant) {
     const params = [];
 
-    if (isSuperAdmin() && tenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
+    if (isSuperAdmin() && nextTenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
     }
 
     const data = await api(`/designations${params.length ? `?${params.join('&')}` : ''}`);
@@ -58,6 +66,15 @@ export default function ModuleCrud({ collection }) {
 
     setDesignationOptions(items);
     return items;
+  }
+
+  async function reloadEmployeeHelpers(nextTenant = tenant) {
+    if (collection !== 'employees') {
+      return;
+    }
+
+    await loadEmployeeOptions(nextTenant);
+    await loadDesignationOptions(nextTenant);
   }
 
   function resetForm() {
@@ -78,22 +95,27 @@ export default function ModuleCrud({ collection }) {
     setEdit(null);
     setMessage('');
     setRows([]);
+    setEmployeeOptions([]);
+    setDesignationOptions([]);
 
-    load().catch((error) => {
-      console.error(error);
-      setMessage(error.message || 'Unable to load records');
-    });
+    setLoading(true);
 
-    if (collection === 'employees') {
-      loadEmployeeOptions().catch(console.error);
-      loadDesignationOptions().catch(console.error);
-    }
+    load('', '')
+      .then(() => reloadEmployeeHelpers(''))
+      .catch((error) => {
+        console.error(error);
+        setMessage(error.message || 'Unable to load records');
+      })
+      .finally(() => setLoading(false));
   }, [collection]);
 
   async function submit(e) {
     e.preventDefault();
+    setMessage('');
 
     try {
+      setSaving(true);
+
       await api(`/${collection}`, {
         method: 'POST',
         body: JSON.stringify(form),
@@ -102,47 +124,50 @@ export default function ModuleCrud({ collection }) {
       resetForm();
       setMessage('Record created successfully');
       await load();
-
-      if (collection === 'employees') {
-        await loadEmployeeOptions();
-        await loadDesignationOptions();
-      }
+      await reloadEmployeeHelpers();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to create record');
+    } finally {
+      setSaving(false);
     }
   }
 
   async function startEdit(row) {
-    if (collection === 'employees') {
-      await loadEmployeeOptions();
-      await loadDesignationOptions();
+    try {
+      setMessage('');
+      await reloadEmployeeHelpers();
+
+      const editData = { ...template, ...row };
+
+      if (collection === 'employees') {
+        delete editData.password;
+
+        editData.is_team_leader = String(row.is_team_leader || 'false');
+        editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
+        editData.team_leader_id = row.team_leader_id || '';
+        editData.reporting_officer_id = row.reporting_officer_id || '';
+      }
+
+      setEdit(editData);
+
+      setTimeout(() => {
+        document.getElementById('edit-section')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 100);
+    } catch (error) {
+      setMessage(error.message || 'Unable to open edit form');
     }
-
-    const editData = { ...template, ...row };
-
-    if (collection === 'employees') {
-      delete editData.password;
-
-      editData.is_team_leader = String(row.is_team_leader || 'false');
-      editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
-      editData.team_leader_id = row.team_leader_id || '';
-      editData.reporting_officer_id = row.reporting_officer_id || '';
-    }
-
-    setEdit(editData);
-
-    setTimeout(() => {
-      document.getElementById('edit-section')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    }, 100);
   }
 
   async function saveEdit(e) {
     e.preventDefault();
+    setMessage('');
 
     try {
+      setSaving(true);
+
       const payload = { ...edit };
 
       delete payload._id;
@@ -156,13 +181,11 @@ export default function ModuleCrud({ collection }) {
       setEdit(null);
       setMessage('Record updated successfully');
       await load();
-
-      if (collection === 'employees') {
-        await loadEmployeeOptions();
-        await loadDesignationOptions();
-      }
+      await reloadEmployeeHelpers();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to update record');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -174,24 +197,24 @@ export default function ModuleCrud({ collection }) {
     }
 
     try {
+      setMessage('');
+
       await api(`/${collection}/${id}`, {
         method: 'DELETE',
       });
 
       setMessage('Record deleted successfully');
       await load();
-
-      if (collection === 'employees') {
-        await loadEmployeeOptions();
-        await loadDesignationOptions();
-      }
+      await reloadEmployeeHelpers();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to delete record');
     }
   }
 
   async function runPayroll() {
     try {
+      setMessage('');
+
       const month = form.month || new Date().toISOString().slice(0, 7);
 
       const data = await api('/payroll/run', {
@@ -199,51 +222,63 @@ export default function ModuleCrud({ collection }) {
         body: JSON.stringify({ month }),
       });
 
-      setMessage(data.message);
+      setMessage(data.message || 'Payroll processed');
       await load();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to run payroll');
     }
   }
 
   async function searchRecords() {
     try {
-      await load();
+      setMessage('');
+      setLoading(true);
 
-      if (collection === 'employees') {
-        await loadEmployeeOptions();
-        await loadDesignationOptions();
-      }
+      await load(q, tenant);
+      await reloadEmployeeHelpers(tenant);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to search records');
+    } finally {
+      setLoading(false);
     }
   }
 
   async function clearSearch() {
-    setQ('');
-    setTenant('');
+    const clearedQ = '';
+    const clearedTenant = '';
 
-    setTimeout(async () => {
-      try {
-        const data = await api(`/${collection}`);
-        setRows(data.items || []);
+    setQ(clearedQ);
+    setTenant(clearedTenant);
+    setMessage('');
 
-        if (collection === 'employees') {
-          const empData = await api('/employees');
-          setEmployeeOptions(empData.items || []);
-
-          const desigData = await api('/designations');
-          setDesignationOptions(desigData.items || []);
-        }
-      } catch (error) {
-        setMessage(error.message);
-      }
-    }, 0);
+    try {
+      setLoading(true);
+      await load(clearedQ, clearedTenant);
+      await reloadEmployeeHelpers(clearedTenant);
+    } catch (error) {
+      setMessage(error.message || 'Unable to clear search');
+    } finally {
+      setLoading(false);
+    }
   }
 
   function isReportingOfficerEligible(employee) {
     const designation = String(employee?.designation || '').trim().toLowerCase();
     return designation === 'managing director' || designation === 'manager';
+  }
+
+  function applyDesignationChange(state, setState, nextDesignation) {
+    const nextDesignationLower = String(nextDesignation || '').trim().toLowerCase();
+    const canRemainReportingOfficer =
+      nextDesignationLower === 'managing director' || nextDesignationLower === 'manager';
+
+    setState({
+      ...state,
+      designation: nextDesignation,
+      is_reporting_officer: canRemainReportingOfficer
+        ? String(state.is_reporting_officer ?? 'false')
+        : 'false',
+    });
   }
 
   function renderField(state, setState, key, isEditMode = false) {
@@ -259,19 +294,16 @@ export default function ModuleCrud({ collection }) {
           {label}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => {
-              const nextDesignation = e.target.value;
-
-              setState({
-                ...state,
-                designation: nextDesignation,
-              });
-            }}
+            onChange={(e) => applyDesignationChange(state, setState, e.target.value)}
           >
             <option value="">Select designation</option>
 
             {designationOptions.map((desig) => {
               const value = desig.title || desig.name || '';
+
+              if (!value) {
+                return null;
+              }
 
               return (
                 <option key={desig._id || value} value={value}>
@@ -318,6 +350,12 @@ export default function ModuleCrud({ collection }) {
             onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             <option value="">Select {label}</option>
+
+            {key === 'reporting_officer_id' && !filteredEmployees.length && (
+              <option value="" disabled>
+                No eligible Reporting Officer found
+              </option>
+            )}
 
             {filteredEmployees.map((emp) => (
               <option key={emp._id} value={emp._id}>
@@ -403,12 +441,17 @@ export default function ModuleCrud({ collection }) {
               />
             )}
 
-            <button type="button" onClick={searchRecords}>
-              Search
+            <button type="button" onClick={searchRecords} disabled={loading}>
+              {loading ? 'Searching...' : 'Search'}
             </button>
 
             {(q || tenant) && (
-              <button type="button" className="secondary" onClick={clearSearch}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={clearSearch}
+                disabled={loading}
+              >
                 Clear
               </button>
             )}
@@ -424,13 +467,14 @@ export default function ModuleCrud({ collection }) {
                 type="button"
                 className="secondary"
                 onClick={generatePassword}
+                disabled={saving}
               >
                 Auto Generate Password
               </button>
             )}
 
-            <button type="submit" className="primary">
-              <Plus size={16} /> Create
+            <button type="submit" className="primary" disabled={saving}>
+              <Plus size={16} /> {saving ? 'Creating...' : 'Create'}
             </button>
           </form>
         )}
@@ -472,6 +516,7 @@ export default function ModuleCrud({ collection }) {
                             type="button"
                             className="secondary"
                             onClick={() => startEdit(row)}
+                            disabled={saving}
                           >
                             Edit
                           </button>
@@ -480,6 +525,7 @@ export default function ModuleCrud({ collection }) {
                             type="button"
                             className="danger"
                             onClick={() => remove(row._id)}
+                            disabled={saving}
                           >
                             Delete
                           </button>
@@ -492,7 +538,11 @@ export default function ModuleCrud({ collection }) {
             </tbody>
           </table>
 
-          {!rows.length && <div className="empty">No records found</div>}
+          {!rows.length && (
+            <div className="empty">
+              {loading ? 'Loading records...' : 'No records found'}
+            </div>
+          )}
         </div>
       </section>
 
@@ -514,6 +564,7 @@ export default function ModuleCrud({ collection }) {
               type="button"
               className="secondary"
               onClick={() => setEdit(null)}
+              disabled={saving}
             >
               <X size={16} /> Close
             </button>
@@ -522,8 +573,8 @@ export default function ModuleCrud({ collection }) {
           <form className="dynamic-form" onSubmit={saveEdit}>
             {editFields.map((key) => renderField(edit, setEdit, key, true))}
 
-            <button type="submit" className="primary">
-              <Save size={16} /> Save Changes
+            <button type="submit" className="primary" disabled={saving}>
+              <Save size={16} /> {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </form>
         </section>

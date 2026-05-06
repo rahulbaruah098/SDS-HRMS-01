@@ -24,6 +24,27 @@ ATTENDANCE_MANAGER_ROLES = (
 )
 
 
+FULL_TENANT_REPORT_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+}
+
+
+TEAM_SCOPE_ROLES = {
+    "team_leader",
+}
+
+
+REPORTING_SCOPE_ROLES = {
+    "manager",
+    "ro",
+    "reporting_officer",
+}
+
+
 def safe_object_id(value):
     try:
         return ObjectId(value)
@@ -38,15 +59,41 @@ def emp(db):
     })
 
 
+def scoped_employee_ids_for_manager(db):
+    roles = set(g.current_user.get("roles", []))
+
+    if roles.intersection(FULL_TENANT_REPORT_ROLES):
+        return None
+
+    current_emp = emp(db)
+
+    if not current_emp:
+        return []
+
+    current_emp_id = str(current_emp["_id"])
+    scope_or = []
+
+    if roles.intersection(TEAM_SCOPE_ROLES):
+        scope_or.append({"team_leader_id": current_emp_id})
+
+    if roles.intersection(REPORTING_SCOPE_ROLES):
+        scope_or.append({"reporting_officer_id": current_emp_id})
+
+    if not scope_or:
+        return []
+
+    rows = list(
+        db.employees.find({
+            "tenant_id": g.tenant_id,
+            "status": {"$ne": "Inactive"},
+            "$or": scope_or,
+        })
+    )
+
+    return [str(row["_id"]) for row in rows]
+
+
 def manager_scope_query(db):
-    """
-    Attendance report scope:
-    - super_admin: can see all tenant records, or selected tenant_id if provided
-    - admin/hr/hr_manager/hr_admin: can see tenant records
-    - manager/team_leader/reporting_officer/ro: can see tenant records for now
-      because this project currently does not have final subordinate-only report filtering
-      implemented safely across all modules.
-    """
     roles = set(g.current_user.get("roles", []))
     tenant_arg = (request.args.get("tenant_id") or "").strip()
 
@@ -55,7 +102,14 @@ def manager_scope_query(db):
             return {"tenant_id": tenant_arg}
         return {}
 
-    return {"tenant_id": g.tenant_id}
+    q = {"tenant_id": g.tenant_id}
+
+    scoped_employee_ids = scoped_employee_ids_for_manager(db)
+
+    if scoped_employee_ids is not None:
+        q["employee_id"] = {"$in": scoped_employee_ids}
+
+    return q
 
 
 @attendance_bp.post("/check-in")
@@ -104,6 +158,10 @@ def check_in():
         "employee_name": e.get("name"),
         "department": e.get("department"),
         "designation": e.get("designation"),
+        "team_leader_id": e.get("team_leader_id", ""),
+        "team_leader_name": e.get("team_leader_name", ""),
+        "reporting_officer_id": e.get("reporting_officer_id", ""),
+        "reporting_officer_name": e.get("reporting_officer_name", ""),
         "date": today,
         "check_in": now,
         "check_out": None,
@@ -228,6 +286,10 @@ def report():
     date_to = (request.args.get("date_to") or "").strip()
 
     if employee_id:
+        if isinstance(q.get("employee_id"), dict) and "$in" in q["employee_id"]:
+            if employee_id not in q["employee_id"]["$in"]:
+                return jsonify({"items": []})
+
         q["employee_id"] = employee_id
 
     if department:
@@ -268,13 +330,19 @@ def verify(attendance_id):
     if "super_admin" not in roles:
         q["tenant_id"] = g.tenant_id
 
+    if not roles.intersection(FULL_TENANT_REPORT_ROLES):
+        scoped_employee_ids = scoped_employee_ids_for_manager(db)
+
+        if scoped_employee_ids is not None:
+            q["employee_id"] = {"$in": scoped_employee_ids}
+
     existing = db.attendance_logs.find_one(q)
 
     if not existing:
-        return jsonify({"message": "Attendance record not found"}), 404
+        return jsonify({"message": "Attendance record not found or not in your scope"}), 404
 
     db.attendance_logs.update_one(
-        q,
+        {"_id": existing["_id"]},
         {
             "$set": {
                 "verified_by_ro": True,
