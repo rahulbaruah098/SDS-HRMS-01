@@ -169,78 +169,151 @@ def create_user():
 @superadmin_bp.patch('/users/<user_id>')
 @roles_required('super_admin')
 def update_user(user_id):
-    db=get_db(); data=request.get_json(silent=True) or {}
-    user_update={}
-    for key in ['name','email','tenant_id','is_active']:
-        if key in data: user_update[key]=data[key]
-    if 'roles' in data:
-        roles=data['roles']; user_update['roles']=[r.strip() for r in roles.split(',') if r.strip()] if isinstance(roles,str) else roles
-    if data.get('password'):
-        user_update['password_hash']=generate_password_hash(data['password'])
-    if user_update:
-        user_update['updated_at']=now(); user_update['updated_by']=str(g.current_user['_id'])
-        if 'email' in user_update: user_update['email']=user_update['email'].strip().lower()
-        db.users.update_one({'_id':ObjectId(user_id)},{'$set':user_update})
-    emp_update={}
-    for key in [
-    'emp_code',
-    'department',
-    'designation',
-    'job_type',
-    'project',
-    'state',
-    'status',
-    'salary',
-    'name',
-    'email',
-    'is_team_leader',
-    'is_reporting_officer',
-    'team_leader_id',
-    'team_leader_name',
-    'reporting_officer_id',
-    'reporting_officer_name',
-]:
-        if key in data: emp_update[key]=data[key]
-    if emp_update:
-        emp_update['updated_at']=now(); emp_update['updated_by']=str(g.current_user['_id'])
-        tenant_for_lookup = data.get("tenant_id") or g.current_user.get("tenant_id") or "sds"
+    db = get_db()
+    data = request.get_json(silent=True) or {}
 
-    if "team_leader_id" in emp_update:
-        emp_update["team_leader_name"] = resolve_employee_name(
-            db,
-            tenant_for_lookup,
-            emp_update.get("team_leader_id"),
-        )
+    try:
+        user_obj_id = ObjectId(user_id)
+    except Exception:
+        return jsonify({'message': 'Invalid user id'}), 400
 
-    if "reporting_officer_id" in emp_update:
-        emp_update["reporting_officer_name"] = resolve_employee_name(
-            db,
-            tenant_for_lookup,
-            emp_update.get("reporting_officer_id"),
-        )
-        existing=db.employees.find_one({'user_id':user_id})
-        if existing:
-            db.employees.update_one({"user_id": user_id}, {"$set": emp_update})
-        updated_emp = db.employees.find_one({"user_id": user_id})
-        if updated_emp:
-            sync_employee_roles(db, updated_emp)
-    else:
-        user = db.users.find_one({"_id": ObjectId(user_id)})
-        emp_update.update({
-            "tenant_id": user.get("tenant_id"),
-            "user_id": user_id,
-            "created_at": now(),
+    existing_user = db.users.find_one({'_id': user_obj_id})
+    if not existing_user:
+        return jsonify({'message': 'User not found'}), 404
+
+    user_update = {}
+
+    if 'name' in data:
+        user_update['name'] = (data.get('name') or '').strip()
+
+    if 'email' in data:
+        email = (data.get('email') or '').strip().lower()
+        if not email:
+            return jsonify({'message': 'Email is required'}), 400
+
+        duplicate = db.users.find_one({
+            'email': email,
+            '_id': {'$ne': user_obj_id}
         })
-        res = db.employees.insert_one(emp_update)
-        updated_emp = db.employees.find_one({"_id": res.inserted_id})
+
+        if duplicate:
+            return jsonify({'message': 'Email already exists for another user'}), 409
+
+        user_update['email'] = email
+
+    if 'tenant_id' in data:
+        user_update['tenant_id'] = (data.get('tenant_id') or '').strip().lower()
+
+    if 'is_active' in data:
+        user_update['is_active'] = truthy(data.get('is_active'))
+
+    if 'roles' in data:
+        roles = data.get('roles') or []
+        if isinstance(roles, str):
+            roles = [r.strip() for r in roles.split(',') if r.strip()]
+        user_update['roles'] = roles or ['employee']
+
+    if data.get('password'):
+        password = data.get('password')
+        if len(password) < 6:
+            return jsonify({'message': 'Password must be at least 6 characters'}), 400
+        user_update['password_hash'] = generate_password_hash(password)
+
+    if user_update:
+        user_update['updated_at'] = now()
+        user_update['updated_by'] = str(g.current_user['_id'])
+        db.users.update_one({'_id': user_obj_id}, {'$set': user_update})
+
+    updated_user = db.users.find_one({'_id': user_obj_id})
+    tenant_for_lookup = updated_user.get('tenant_id') or existing_user.get('tenant_id') or 'sds'
+
+    emp_update = {}
+
+    employee_fields = [
+        'emp_code',
+        'department',
+        'designation',
+        'job_type',
+        'project',
+        'state',
+        'status',
+        'salary',
+        'name',
+        'email',
+        'is_team_leader',
+        'is_reporting_officer',
+        'team_leader_id',
+        'reporting_officer_id',
+    ]
+
+    for key in employee_fields:
+        if key in data:
+            emp_update[key] = data[key]
+
+    if 'salary' in emp_update:
+        try:
+            emp_update['salary'] = float(emp_update.get('salary') or 0)
+        except Exception:
+            emp_update['salary'] = 0
+
+    if 'email' in emp_update:
+        emp_update['email'] = (emp_update.get('email') or '').strip().lower()
+
+    if 'team_leader_id' in emp_update:
+        emp_update['team_leader_name'] = resolve_employee_name(
+            db,
+            tenant_for_lookup,
+            emp_update.get('team_leader_id'),
+        )
+
+    if 'reporting_officer_id' in emp_update:
+        emp_update['reporting_officer_name'] = resolve_employee_name(
+            db,
+            tenant_for_lookup,
+            emp_update.get('reporting_officer_id'),
+        )
+
+    if 'tenant_id' in user_update:
+        emp_update['tenant_id'] = user_update['tenant_id']
+
+    existing_emp = db.employees.find_one({'user_id': user_id})
+
+    if emp_update:
+        emp_update['updated_at'] = now()
+        emp_update['updated_by'] = str(g.current_user['_id'])
+
+        if existing_emp:
+            db.employees.update_one(
+                {'_id': existing_emp['_id']},
+                {'$set': emp_update}
+            )
+            updated_emp = db.employees.find_one({'_id': existing_emp['_id']})
+        else:
+            emp_update.setdefault('tenant_id', tenant_for_lookup)
+            emp_update.setdefault('user_id', user_id)
+            emp_update.setdefault('name', updated_user.get('name', ''))
+            emp_update.setdefault('email', updated_user.get('email', ''))
+            emp_update.setdefault('status', 'Active')
+            emp_update['created_at'] = now()
+
+            res = db.employees.insert_one(emp_update)
+            updated_emp = db.employees.find_one({'_id': res.inserted_id})
+
         if updated_emp:
             sync_employee_roles(db, updated_emp)
-        else:
-            user=db.users.find_one({'_id':ObjectId(user_id)})
-            emp_update.update({'tenant_id':user.get('tenant_id'),'user_id':user_id,'created_at':now()})
-            db.employees.insert_one(emp_update)
-    audit('update_user','users',user_id,data)
-    return jsonify({'message':'User/profile updated','item':clean_doc(db.users.find_one({'_id':ObjectId(user_id)}))})
+
+    audit('update_user', 'users', user_id, data)
+
+    refreshed = db.users.find_one({'_id': user_obj_id})
+    employee_profile = db.employees.find_one({'user_id': user_id})
+
+    if employee_profile:
+        refreshed['employee_profile'] = employee_profile
+
+    return jsonify({
+        'message': 'User/profile updated',
+        'item': clean_doc(refreshed),
+    })
 
 @superadmin_bp.post('/users/<user_id>/reset-password')
 @roles_required('super_admin')

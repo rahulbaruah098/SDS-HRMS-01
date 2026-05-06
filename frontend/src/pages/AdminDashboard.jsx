@@ -6,7 +6,7 @@ import Table from '../components/Table';
 import MiniList from '../components/MiniList';
 import ModuleGrid from '../components/ModuleGrid';
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
@@ -45,7 +45,7 @@ export default function AdminDashboard() {
         </div>
       </section>
 
-      <ModuleGrid modules={allModules.slice(0, 14)} />
+     <ModuleGrid modules={allModules.slice(0, 14)} setPage={setPage} />
     </div>
   );
 }

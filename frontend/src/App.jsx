@@ -17,18 +17,18 @@ import PasswordRequests from './pages/PasswordRequests';
 
 import './styles.css';
 
-function DashboardRouter({ user }) {
+function DashboardRouter({ user, setPage }) {
   const userRoles = user.roles || [];
 
   if (userRoles.includes('super_admin')) {
-    return <SuperAdminDashboard />;
+    return <SuperAdminDashboard setPage={setPage} />;
   }
 
   if (isEmployeeOnly()) {
-    return <EmployeeDashboard />;
+    return <EmployeeDashboard setPage={setPage} />;
   }
 
-  return <AdminDashboard />;
+  return <AdminDashboard setPage={setPage} />;
 }
 
 function UnauthorizedPage() {
@@ -43,7 +43,7 @@ function UnauthorizedPage() {
 
 function PageRouter({ page, user }) {
   if (page === 'dashboard') {
-    return <DashboardRouter user={user} />;
+    return <DashboardRouter user={user} setPage={setPage} />;
   }
 
   if (!canAccessModule(user, page)) {

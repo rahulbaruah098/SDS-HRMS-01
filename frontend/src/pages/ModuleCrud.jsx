@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Save, X } from 'lucide-react';
 import { api } from '../api/client';
 import { allModules, templates } from '../data/modules';
 import { isSuperAdmin } from '../utils/authHelpers';
@@ -7,8 +7,10 @@ import { isSuperAdmin } from '../utils/authHelpers';
 export default function ModuleCrud({ collection }) {
   const moduleInfo = allModules.find((m) => m[0] === collection);
   const template = templates[collection] || { title: '', status: 'active' };
+
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(template);
+  const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
   const [message, setMessage] = useState('');
@@ -16,12 +18,31 @@ export default function ModuleCrud({ collection }) {
 
   async function load() {
     const params = [];
+
     if (q) params.push(`q=${encodeURIComponent(q)}`);
-    if (isSuperAdmin() && tenant) params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+
+    if (isSuperAdmin() && tenant) {
+      params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+    }
+
     const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
     setRows(data.items || []);
   }
-    function generatePassword() {
+
+  async function loadEmployeeOptions() {
+    const params = [];
+
+    if (isSuperAdmin() && tenant) {
+      params.push(`tenant_id=${encodeURIComponent(tenant)}`);
+    }
+
+    const data = await api(`/employees${params.length ? `?${params.join('&')}` : ''}`);
+    setEmployeeOptions(data.items || []);
+
+    return data.items || [];
+  }
+
+  function generatePassword() {
     const namePart = (form.name || form.email || 'User')
       .replace(/[^a-zA-Z0-9]/g, '')
       .slice(0, 8);
@@ -30,50 +51,195 @@ export default function ModuleCrud({ collection }) {
 
     setForm({ ...form, password: pass });
   }
+
   useEffect(() => {
     setForm(template);
+    setEdit(null);
+    setMessage('');
+
     load().catch(console.error);
 
     if (collection === 'employees') {
-      api('/employees')
-        .then((data) => setEmployeeOptions(data.items || []))
-        .catch(console.error);
+      loadEmployeeOptions().catch(console.error);
     }
   }, [collection]);
 
   async function submit(e) {
     e.preventDefault();
+
     try {
       await api(`/${collection}`, {
         method: 'POST',
         body: JSON.stringify(form),
       });
+
       setForm(template);
-      setMessage('Record created');
-      load();
+      setMessage('Record created successfully');
+      await load();
+
+      if (collection === 'employees') {
+        await loadEmployeeOptions();
+      }
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function startEdit(row) {
+    if (collection === 'employees') {
+      await loadEmployeeOptions();
+    }
+
+    const editData = { ...template, ...row };
+
+    if (collection === 'employees') {
+      delete editData.password;
+
+      editData.is_team_leader = String(row.is_team_leader || 'false');
+      editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
+      editData.team_leader_id = row.team_leader_id || '';
+      editData.reporting_officer_id = row.reporting_officer_id || '';
+    }
+
+    setEdit(editData);
+
+    setTimeout(() => {
+      document.getElementById('edit-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 100);
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault();
+
+    try {
+      const payload = { ...edit };
+
+      delete payload._id;
+      delete payload.password_hash;
+
+      await api(`/${collection}/${edit._id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+
+      setEdit(null);
+      setMessage('Record updated successfully');
+      await load();
+
+      if (collection === 'employees') {
+        await loadEmployeeOptions();
+      }
     } catch (error) {
       setMessage(error.message);
     }
   }
 
   async function remove(id) {
-    await api(`/${collection}/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      await api(`/${collection}/${id}`, {
+        method: 'DELETE',
+      });
+
+      setMessage('Record deleted successfully');
+      await load();
+
+      if (collection === 'employees') {
+        await loadEmployeeOptions();
+      }
+    } catch (error) {
+      setMessage(error.message);
+    }
   }
 
   async function runPayroll() {
     try {
       const month = form.month || new Date().toISOString().slice(0, 7);
+
       const data = await api('/payroll/run', {
         method: 'POST',
         body: JSON.stringify({ month }),
       });
+
       setMessage(data.message);
-      load();
+      await load();
     } catch (error) {
       setMessage(error.message);
     }
   }
+
+  async function searchRecords() {
+    await load();
+
+    if (collection === 'employees') {
+      await loadEmployeeOptions();
+    }
+  }
+
+  function renderField(state, setState, key, isEditMode = false) {
+    const label = key.replaceAll('_', ' ');
+
+    if (collection === 'employees' && isEditMode && key === 'password') {
+      return null;
+    }
+
+    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="">Select {label}</option>
+
+            {employeeOptions
+              .filter((emp) => emp._id !== state._id)
+              .map((emp) => (
+                <option key={emp._id} value={emp._id}>
+                  {emp.name} — {emp.designation || emp.department || emp.email}
+                </option>
+              ))}
+          </select>
+        </label>
+      );
+    }
+
+    return (
+      <label key={key}>
+        {label}
+        <input
+          type={key === 'password' ? 'password' : 'text'}
+          value={state[key] ?? ''}
+          onChange={(e) => setState({ ...state, [key]: e.target.value })}
+        />
+      </label>
+    );
+  }
+
+  const createFields = Object.keys(template);
+
+  const editFields =
+    collection === 'employees'
+      ? Object.keys(template).filter((key) => key !== 'password')
+      : Object.keys(template);
 
   return (
     <div className="page-grid">
@@ -83,62 +249,54 @@ export default function ModuleCrud({ collection }) {
           <h1>{moduleInfo?.[1] || collection}</h1>
           <p>{moduleInfo?.[3]}</p>
         </div>
-        {collection === 'payroll_runs' && <button className="primary" onClick={runPayroll}>Run Payroll</button>}
+
+        {collection === 'payroll_runs' && (
+          <button type="button" className="primary" onClick={runPayroll}>
+            Run Payroll
+          </button>
+        )}
       </section>
 
       <section className="panel">
         <div className="toolbar">
           <div className="search">
             <Search size={16} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search records..." />
-            {isSuperAdmin() && <input value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="tenant_id filter" />}
-            <button onClick={load}>Search</button>
+
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search records..."
+            />
+
+            {isSuperAdmin() && (
+              <input
+                value={tenant}
+                onChange={(e) => setTenant(e.target.value)}
+                placeholder="tenant_id filter"
+              />
+            )}
+
+            <button type="button" onClick={searchRecords}>
+              Search
+            </button>
           </div>
         </div>
 
         {collection !== 'audit_logs' && (
           <form className="dynamic-form" onSubmit={submit}>
-            {Object.keys(template).map((key) => (
-              <label key={key}>
-                {key.replaceAll('_', ' ')}
+            {createFields.map((key) => renderField(form, setForm, key, false))}
 
-                {['is_team_leader', 'is_reporting_officer'].includes(key) ? (
-                  <select
-                    value={form[key] ?? 'false'}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                  >
-                    <option value="false">No</option>
-                    <option value="true">Yes</option>
-                  </select>
-                ) : ['team_leader_id', 'reporting_officer_id'].includes(key) ? (
-                  <select
-                    value={form[key] ?? ''}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                  >
-                    <option value="">Select {key.replaceAll('_', ' ')}</option>
-                    {employeeOptions.map((emp) => (
-                      <option key={emp._id} value={emp._id}>
-                        {emp.name} — {emp.designation || emp.department || emp.email}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type={key === 'password' ? 'password' : 'text'}
-                    value={form[key] ?? ''}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                  />
-                )}
-              </label>
-            ))}
+            {collection === 'employees' && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={generatePassword}
+              >
+                Auto Generate Password
+              </button>
+            )}
 
-              {collection === 'employees' && (
-                <button type="button" className="secondary" onClick={generatePassword}>
-                  Auto Generate Password
-                </button>
-              )}
-
-            <button className="primary">
+            <button type="submit" className="primary">
               <Plus size={16} /> Create
             </button>
           </form>
@@ -150,13 +308,24 @@ export default function ModuleCrud({ collection }) {
           <table>
             <thead>
               <tr>
-                {rows[0] && Object.keys(rows[0]).filter((key) => !['password_hash'].includes(key)).slice(0, 8).map((key) => <th key={key}>{key.replaceAll('_', ' ')}</th>)}
+                {rows[0] &&
+                  Object.keys(rows[0])
+                    .filter((key) => !['password_hash'].includes(key))
+                    .slice(0, 8)
+                    .map((key) => (
+                      <th key={key}>{key.replaceAll('_', ' ')}</th>
+                    ))}
+
                 <th>Action</th>
               </tr>
             </thead>
+
             <tbody>
               {rows.map((row) => {
-                const keys = Object.keys(row).filter((key) => !['password_hash'].includes(key)).slice(0, 8);
+                const keys = Object.keys(row)
+                  .filter((key) => !['password_hash'].includes(key))
+                  .slice(0, 8);
+
                 return (
                   <tr key={row._id}>
                     {keys.map((key) => (
@@ -168,15 +337,70 @@ export default function ModuleCrud({ collection }) {
                             : String(row[key] ?? '')}
                       </td>
                     ))}
-                    <td>{collection !== 'audit_logs' && <button className="danger" onClick={() => remove(row._id)}>Delete</button>}</td>
+
+                    <td>
+                      {collection !== 'audit_logs' && (
+                        <>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => startEdit(row)}
+                          >
+                            Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => remove(row._id)}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+
           {!rows.length && <div className="empty">No records found</div>}
         </div>
       </section>
+
+      {edit && (
+        <section className="panel" id="edit-section">
+          <div className="toolbar">
+            <div>
+              <h3>Edit {moduleInfo?.[1] || collection}</h3>
+
+              {collection === 'employees' && (
+                <p>
+                  HR can change employee details, team leader and reporting
+                  officer from here.
+                </p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setEdit(null)}
+            >
+              <X size={16} /> Close
+            </button>
+          </div>
+
+          <form className="dynamic-form" onSubmit={saveEdit}>
+            {editFields.map((key) => renderField(edit, setEdit, key, true))}
+
+            <button type="submit" className="primary">
+              <Save size={16} /> Save Changes
+            </button>
+          </form>
+        </section>
+      )}
     </div>
   );
 }
