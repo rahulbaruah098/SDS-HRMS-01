@@ -226,20 +226,40 @@ export default function ModuleCrud({ collection }) {
       return null;
     }
 
-    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
-      return (
-        <label key={key}>
-          {label}
-          <select
-            value={String(state[key] ?? 'false')}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
-          >
-            <option value="false">No</option>
-            <option value="true">Yes</option>
-          </select>
-        </label>
-      );
-    }
+        if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
+          const designation = String(state.designation || '').trim().toLowerCase();
+          const canBeReportingOfficer = ['managing director', 'manager'].includes(designation);
+
+          if (key === 'is_reporting_officer' && !canBeReportingOfficer) {
+            return (
+              <label key={key}>
+                {label}
+                <select
+                  value="false"
+                  disabled
+                  onChange={() => {}}
+                >
+                  <option value="false">
+                    No - only Managing Director or Manager can be Reporting Officer
+                  </option>
+                </select>
+              </label>
+            );
+          }
+
+          return (
+            <label key={key}>
+              {label}
+              <select
+                value={String(state[key] ?? 'false')}
+                onChange={(e) => setState({ ...state, [key]: e.target.value })}
+              >
+                <option value="false">No</option>
+                <option value="true">Yes</option>
+              </select>
+            </label>
+          );
+        }
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
       return (
@@ -251,8 +271,14 @@ export default function ModuleCrud({ collection }) {
           >
             <option value="">Select {label}</option>
 
-            {employeeOptions
-              .filter((emp) => emp._id !== state._id)
+              {employeeOptions
+                .filter((emp) => emp._id !== state._id)
+                .filter((emp) => {
+                  if (key !== 'reporting_officer_id') return true;
+
+                  const designation = String(emp.designation || '').trim().toLowerCase();
+                  return ['managing director', 'manager'].includes(designation);
+                })
               .map((emp) => (
                 <option key={emp._id} value={emp._id}>
                   {emp.name} — {emp.designation || emp.department || emp.email}

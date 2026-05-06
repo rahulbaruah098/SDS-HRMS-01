@@ -141,6 +141,11 @@ def resolve_employee_name(db, tenant_id, emp_id):
     return emp.get("name", "") if emp else ""
 
 
+def can_be_reporting_officer(data):
+    designation = (data.get("designation") or "").strip().lower()
+    return designation in ["managing director", "manager"]
+
+
 def build_employee_roles(data):
     roles = ["employee"]
 
@@ -148,10 +153,10 @@ def build_employee_roles(data):
         roles.append("team_leader")
 
     if truthy(data.get("is_reporting_officer")):
-        roles.append("reporting_officer")
+        if can_be_reporting_officer(data):
+            roles.append("reporting_officer")
 
     return roles
-
 
 def search(q, fields):
     return {
@@ -343,6 +348,10 @@ def create_item(collection):
 
         if not name or not email:
             return jsonify({"message": "Employee name and email are required"}), 400
+        if truthy(data.get("is_reporting_officer")) and not can_be_reporting_officer(data):
+            return jsonify({
+                "message": "Only Managing Director or Manager can be Reporting Officer"
+            }), 400
 
         if db.users.find_one({"email": email}):
             return jsonify({"message": "This email already exists as a login user"}), 409
@@ -452,7 +461,12 @@ def update_item(collection, item_id):
             return jsonify({"message": "Employee not found"}), 404
 
         tenant_id = existing.get("tenant_id") or g.tenant_id
+        merged_for_role_check = {**existing, **data}
 
+        if truthy(merged_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(merged_for_role_check):
+            return jsonify({
+                "message": "Only Managing Director or Manager can be Reporting Officer"
+            }), 400
         if "team_leader_id" in data:
             data["team_leader_name"] = resolve_employee_name(
                 db,

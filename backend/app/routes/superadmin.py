@@ -86,6 +86,10 @@ def normalize_roles(value):
 
     return roles or ["employee"]
 
+def can_be_reporting_officer(data):
+    designation = (data.get("designation") or "").strip().lower()
+    return designation in ["managing director", "manager"]
+
 
 def resolve_employee_name(db, tenant_id, emp_id):
     if not emp_id:
@@ -128,7 +132,7 @@ def sync_employee_roles(db, employee_doc):
     else:
         roles.discard("team_leader")
 
-    if truthy(employee_doc.get("is_reporting_officer")):
+    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
         roles.add("reporting_officer")
     else:
         roles.discard("reporting_officer")
@@ -439,6 +443,11 @@ def create_user():
     if len(password) < 6:
         return jsonify({"message": "Password must be at least 6 characters"}), 400
 
+    if truthy(data.get("is_reporting_officer")) and not can_be_reporting_officer(data):
+        return jsonify({
+            "message": "Only Managing Director or Manager can be Reporting Officer"
+        }), 400
+    
     if db.users.find_one({"email": email}):
         return jsonify({"message": "Email already exists"}), 409
 
@@ -518,6 +527,15 @@ def update_user(user_id):
     if not existing_user:
         return jsonify({"message": "User not found"}), 404
 
+    
+    existing_emp_for_validation = db.employees.find_one({"user_id": user_id}) or {}
+    merged_for_role_check = {**existing_emp_for_validation, **data}
+
+    if truthy(merged_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(merged_for_role_check):
+        return jsonify({
+            "message": "Only Managing Director or Manager can be Reporting Officer"
+        }), 400
+    
     user_update = {}
 
     if "name" in data:
