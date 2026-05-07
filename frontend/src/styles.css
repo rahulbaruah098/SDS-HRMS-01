@@ -124,6 +124,19 @@ a {
   outline: none;
   color: var(--text);
   min-width: 0;
+  width: 100%;
+}
+
+.dynamic-form select {
+  appearance: auto;
+  cursor: pointer;
+}
+
+.dynamic-form input[readonly],
+.dynamic-form textarea[readonly] {
+  background: #F8FAFC;
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .login-card input:focus,
@@ -409,6 +422,10 @@ a {
   box-shadow: var(--shadow);
 }
 
+.panel {
+  overflow: hidden;
+}
+
 .stat-card span {
   color: var(--muted);
   font-weight: 800;
@@ -489,12 +506,13 @@ a {
   overflow: auto;
   border-radius: 18px;
   border: 1px solid var(--line);
+  margin-top: 14px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 860px;
   background: #fff;
 }
 
@@ -512,6 +530,7 @@ th {
   color: var(--ink);
   text-transform: capitalize;
   font-weight: 900;
+  white-space: nowrap;
 }
 
 tr:hover td {
@@ -521,6 +540,14 @@ tr:hover td {
 .table-wrap td button {
   margin-right: 6px;
   margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+.table-wrap td .secondary,
+.table-wrap td .danger {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
 }
 
 .empty {
@@ -535,22 +562,46 @@ tr:hover td {
 
 .dynamic-form {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 14px;
   margin: 16px 0;
+  align-items: end;
 }
 
 .dynamic-form label {
   display: grid;
-  gap: 6px;
+  gap: 7px;
   text-transform: capitalize;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.25;
+}
+
+.dynamic-form label:has(textarea) {
+  grid-column: span 2;
 }
 
 .dynamic-form label input[type="checkbox"] {
   width: auto;
+}
+
+.dynamic-form .primary,
+.dynamic-form .secondary {
+  min-height: 46px;
+  align-self: end;
+}
+
+.dynamic-form > button {
+  align-self: end;
+}
+
+.dynamic-form > .primary {
+  box-shadow: 0 10px 24px rgba(79, 70, 229, .18);
+}
+
+.dynamic-form select option {
+  color: var(--text);
 }
 
 .search {
@@ -562,12 +613,68 @@ tr:hover td {
   border-radius: 16px;
   padding: 6px;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .search input {
   border: none;
   background: transparent;
   min-width: 220px;
+  width: auto;
+  flex: 1 1 220px;
+}
+
+.search button {
+  flex: 0 0 auto;
+}
+
+/* Long HRMS employee/user forms */
+
+.panel .dynamic-form {
+  background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px;
+}
+
+#edit-section .dynamic-form,
+#user-edit-section .dynamic-form,
+#password-reset-section .dynamic-form {
+  background: #fff;
+}
+
+#password-reset-section .dynamic-form {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+#password-reset-section .dynamic-form .primary {
+  grid-column: span 2;
+}
+
+#user-edit-section,
+#edit-section,
+#password-reset-section {
+  border-color: #C7D2FE;
+  box-shadow: 0 20px 60px rgba(79, 70, 229, .10);
+}
+
+#user-edit-section .toolbar,
+#edit-section .toolbar,
+#password-reset-section .toolbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+#user-edit-section .toolbar h3,
+#edit-section .toolbar h3,
+#password-reset-section .toolbar h3 {
+  margin-bottom: 4px;
+}
+
+#user-edit-section .toolbar p,
+#edit-section .toolbar p,
+#password-reset-section .toolbar p {
+  margin: 0;
 }
 
 /* Attendance */
@@ -612,6 +719,21 @@ tr:hover td {
   color: var(--muted);
 }
 
+.mini-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.mini-list span strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.mini-list span small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 /* Utility */
 
 #edit-section,
@@ -621,6 +743,12 @@ tr:hover td {
 }
 
 /* Responsive */
+
+@media (max-width: 1320px) {
+  .dynamic-form {
+    grid-template-columns: repeat(3, minmax(180px, 1fr));
+  }
+}
 
 @media (max-width: 1180px) {
   .stats-grid {
@@ -633,6 +761,10 @@ tr:hover td {
 
   .dynamic-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dynamic-form label:has(textarea) {
+    grid-column: span 2;
   }
 }
 
@@ -660,8 +792,14 @@ tr:hover td {
 
   .stats-grid,
   .module-grid,
-  .dynamic-form {
+  .dynamic-form,
+  #password-reset-section .dynamic-form {
     grid-template-columns: 1fr;
+  }
+
+  .dynamic-form label:has(textarea),
+  #password-reset-section .dynamic-form .primary {
+    grid-column: span 1;
   }
 
   .topbar {
@@ -693,12 +831,28 @@ tr:hover td {
   .search input {
     width: 100%;
     min-width: 0;
+    flex-basis: 100%;
   }
 
+  .search button,
   .primary,
   .secondary,
   .danger {
     width: 100%;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .panel .dynamic-form {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  table {
+    min-width: 760px;
   }
 }
 

@@ -8,14 +8,19 @@ import ModuleGrid from '../components/ModuleGrid';
 export default function SuperAdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setLoading(true);
+    setMessage('');
+
     api('/dashboard/superadmin')
       .then(setData)
       .catch((error) => {
         console.error(error);
         setMessage(error.message || 'Unable to load dashboard data');
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   function goTo(page) {
@@ -23,6 +28,15 @@ export default function SuperAdminDashboard({ setPage }) {
       setPage(page);
     }
   }
+
+  const stats = data?.stats || {};
+  const tenants = data?.tenants || [];
+  const recentUsers = data?.recent_users || [];
+  const recentAudit = data?.recent_audit || [];
+
+  const dashboardModules = allModules.filter(
+    ([key]) => !['profile'].includes(key)
+  );
 
   return (
     <div className="page-grid">
@@ -53,19 +67,33 @@ export default function SuperAdminDashboard({ setPage }) {
           >
             Manage Users
           </button>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('password_requests')}
+          >
+            Password Requests
+          </button>
         </div>
       </section>
 
       {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
-        {Object.entries(data?.stats || {}).map(([key, value]) => (
+        {Object.entries(stats).map(([key, value]) => (
           <Stat key={key} label={key} value={value} />
         ))}
 
-        {!data && !message && (
+        {loading && (
           <div className="panel">
             <p>Loading dashboard...</p>
+          </div>
+        )}
+
+        {!loading && !message && !Object.keys(stats).length && (
+          <div className="panel">
+            <p>No dashboard stats available.</p>
           </div>
         )}
       </section>
@@ -73,16 +101,77 @@ export default function SuperAdminDashboard({ setPage }) {
       <section className="two-col">
         <div className="panel">
           <h3>Companies / Tenants</h3>
-          <Table rows={data?.tenants || []} />
+          <Table rows={tenants} />
         </div>
 
         <div className="panel">
-          <h3>Recent Audit</h3>
-          <Table rows={data?.recent_audit || []} />
+          <h3>Recent Users</h3>
+          <Table rows={recentUsers} />
         </div>
       </section>
 
-      <ModuleGrid modules={allModules.slice(0, 12)} setPage={setPage} />
+      <section className="two-col">
+        <div className="panel">
+          <h3>Recent Audit</h3>
+          <Table rows={recentAudit} />
+        </div>
+
+        <div className="panel">
+          <h3>Quick Actions</h3>
+
+          <div className="mini-list">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('companies')}
+            >
+              Manage Companies / Tenants
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('users')}
+            >
+              Manage Users
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('employees')}
+            >
+              Employee Master
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('departments')}
+            >
+              Manage Departments
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('designations')}
+            >
+              Manage Designations
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('password_requests')}
+            >
+              Review Password Requests
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <ModuleGrid modules={dashboardModules.slice(0, 12)} setPage={setPage} />
     </div>
   );
 }

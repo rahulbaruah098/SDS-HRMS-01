@@ -49,6 +49,60 @@ DEFAULT_PROJECTS = [
 ]
 
 
+EMPLOYEE_PROFILE_FIELDS = [
+    "avatar",
+    "phone",
+    "country",
+    "joining_date",
+    "date_of_birth",
+    "blood_group",
+    "gross_salary",
+    "branch",
+    "aadhar_no",
+    "employee_uan_no",
+    "employee_type",
+    "skill_level",
+    "are_parents_senior_citizen",
+    "number_of_children",
+    "payment_mode",
+    "previous_designation",
+    "previous_employment_tenure_end_date",
+    "role",
+    "designation",
+    "department",
+    "shift",
+    "gender",
+    "address",
+    "religion",
+    "marital_status",
+    "speak_language",
+    "pan_no",
+    "disability_level",
+    "employee_esic_ip",
+    "employment_status",
+    "father_name",
+    "dependent_disability_level",
+    "children_in_hostel",
+    "previous_employer_name",
+    "previous_employment_tenure_from_date",
+    "employee_id",
+
+    "emp_code",
+    "job_type",
+    "project",
+    "state",
+    "status",
+    "salary",
+
+    "is_team_leader",
+    "is_reporting_officer",
+    "team_leader_id",
+    "team_leader_name",
+    "reporting_officer_id",
+    "reporting_officer_name",
+]
+
+
 def now():
     return datetime.utcnow()
 
@@ -71,6 +125,21 @@ def slugify(value):
 
 def truthy(value):
     return str(value).lower() in ["true", "yes", "1", "on"]
+
+
+def normalize_text(value):
+    return (value or "").strip()
+
+
+def normalize_email(value):
+    return (value or "").strip().lower()
+
+
+def normalize_float(value, default=0):
+    try:
+        return float(value or default)
+    except Exception:
+        return float(default)
 
 
 def normalize_roles(value):
@@ -182,6 +251,33 @@ def sync_employee_roles(db, employee_doc):
             }
         },
     )
+
+
+def build_employee_profile_payload(data):
+    payload = {}
+
+    for key in EMPLOYEE_PROFILE_FIELDS:
+        if key in data:
+            payload[key] = data.get(key)
+
+    payload["phone"] = normalize_text(payload.get("phone"))
+    payload["employee_id"] = normalize_text(payload.get("employee_id"))
+    payload["emp_code"] = normalize_text(payload.get("emp_code"))
+    payload["department"] = normalize_text(payload.get("department"))
+    payload["designation"] = normalize_text(payload.get("designation"))
+    payload["branch"] = normalize_text(payload.get("branch"))
+    payload["status"] = payload.get("status") or "Active"
+
+    payload["is_team_leader"] = str(payload.get("is_team_leader", "false")).lower()
+    payload["is_reporting_officer"] = str(payload.get("is_reporting_officer", "false")).lower()
+
+    if "salary" in payload:
+        payload["salary"] = normalize_float(payload.get("salary"), 0)
+
+    if "gross_salary" in payload:
+        payload["gross_salary"] = normalize_text(str(payload.get("gross_salary") or ""))
+
+    return payload
 
 
 def seed_company_masters(db, tenant_id):
@@ -372,8 +468,18 @@ def create_company():
             "emp_code": f"{tenant_id.upper()}-ADMIN",
             "name": admin_name,
             "email": admin_email,
+            "phone": "",
+            "country": "India",
+            "joining_date": "",
+            "date_of_birth": "",
+            "blood_group": "",
+            "gross_salary": "",
+            "branch": "Assam/Guwahati (HO)",
             "department": "HR & Admin",
             "designation": "Manager",
+            "role": "Admin",
+            "shift": "General",
+            "gender": "",
             "job_type": "Regular",
             "project": "Administration",
             "state": "Assam",
@@ -386,6 +492,7 @@ def create_company():
             "reporting_officer_id": "",
             "reporting_officer_name": "",
             "created_at": now(),
+            "created_by": str(g.current_user["_id"]),
         })
 
     audit("create_company", "tenants", tenant_id, doc)
@@ -464,9 +571,9 @@ def create_user():
     if not db.tenants.find_one({"tenant_id": tenant_id}):
         return jsonify({"message": "Invalid tenant_id / company"}), 400
 
-    email = (data.get("email") or "").strip().lower()
+    email = normalize_email(data.get("email"))
     password = data.get("password") or "User@123"
-    name = (data.get("name") or "").strip()
+    name = normalize_text(data.get("name"))
 
     if not email or not name:
         return jsonify({"message": "Name and email are required"}), 400
@@ -482,18 +589,29 @@ def create_user():
     if db.users.find_one({"email": email}):
         return jsonify({"message": "Email already exists"}), 409
 
-    roles = normalize_roles(data.get("roles") or ["employee"])
+    employee_id = normalize_text(data.get("employee_id"))
 
-    user_res = db.users.insert_one({
-        "tenant_id": tenant_id,
-        "name": name,
-        "email": email,
-        "password_hash": generate_password_hash(password),
-        "roles": roles,
-        "is_active": truthy(data.get("is_active", True)),
-        "created_at": now(),
-        "created_by": str(g.current_user["_id"]),
-    })
+    if employee_id:
+        existing_employee_id = db.employees.find_one({
+            "tenant_id": tenant_id,
+            "employee_id": employee_id,
+            "is_deleted": {"$ne": True},
+        })
+
+        if existing_employee_id:
+            return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+
+    emp_code = normalize_text(data.get("emp_code"))
+
+    if emp_code:
+        existing_emp_code = db.employees.find_one({
+            "tenant_id": tenant_id,
+            "emp_code": emp_code,
+            "is_deleted": {"$ne": True},
+        })
+
+        if existing_emp_code:
+            return jsonify({"message": "Employee code already exists in this tenant"}), 409
 
     team_leader_id = data.get("team_leader_id") or ""
     reporting_officer_id = data.get("reporting_officer_id") or ""
@@ -509,28 +627,42 @@ def create_user():
             "message": "Selected Reporting Officer must be Managing Director or Manager"
         }), 400
 
-    emp = {
+    roles = normalize_roles(data.get("roles") or ["employee"])
+
+    user_res = db.users.insert_one({
         "tenant_id": tenant_id,
-        "user_id": str(user_res.inserted_id),
-        "emp_code": data.get("emp_code") or "",
         "name": name,
         "email": email,
-        "department": data.get("department", ""),
-        "designation": data.get("designation", ""),
-        "job_type": data.get("job_type", "Regular"),
-        "project": data.get("project", ""),
-        "state": data.get("state", ""),
-        "status": data.get("status") or data.get("employee_status") or "Active",
-        "salary": float(data.get("salary") or 0),
-        "is_team_leader": data.get("is_team_leader", "false"),
-        "is_reporting_officer": data.get("is_reporting_officer", "false"),
+        "password_hash": generate_password_hash(password),
+        "roles": roles,
+        "is_active": truthy(data.get("is_active", True)),
+        "created_at": now(),
+        "created_by": str(g.current_user["_id"]),
+    })
+
+    emp = build_employee_profile_payload(data)
+    emp.update({
+        "tenant_id": tenant_id,
+        "user_id": str(user_res.inserted_id),
+        "name": name,
+        "email": email,
+        "employee_id": employee_id,
+        "emp_code": emp_code,
         "team_leader_id": team_leader_id,
         "team_leader_name": resolve_employee_name(db, tenant_id, team_leader_id),
         "reporting_officer_id": reporting_officer_id,
         "reporting_officer_name": reporting_officer_name or "",
         "created_at": now(),
         "created_by": str(g.current_user["_id"]),
-    }
+    })
+
+    emp.setdefault("country", "India")
+    emp.setdefault("branch", "Assam/Guwahati (HO)")
+    emp.setdefault("role", "Employee")
+    emp.setdefault("shift", "General")
+    emp.setdefault("status", "Active")
+    emp.setdefault("is_team_leader", "false")
+    emp.setdefault("is_reporting_officer", "false")
 
     emp_res = db.employees.insert_one(emp)
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
@@ -580,7 +712,7 @@ def update_user(user_id):
     user_update = {}
 
     if "name" in data:
-        name = (data.get("name") or "").strip()
+        name = normalize_text(data.get("name"))
 
         if not name:
             return jsonify({"message": "Name is required"}), 400
@@ -588,7 +720,7 @@ def update_user(user_id):
         user_update["name"] = name
 
     if "email" in data:
-        email = (data.get("email") or "").strip().lower()
+        email = normalize_email(data.get("email"))
 
         if not email:
             return jsonify({"message": "Email is required"}), 400
@@ -604,7 +736,7 @@ def update_user(user_id):
         user_update["email"] = email
 
     if "tenant_id" in data:
-        tenant_id = (data.get("tenant_id") or "").strip().lower()
+        tenant_id = normalize_text(data.get("tenant_id")).lower()
 
         if not tenant_id:
             return jsonify({"message": "tenant_id is required"}), 400
@@ -641,28 +773,8 @@ def update_user(user_id):
         or "sds"
     )
 
-    emp_update = {}
-
-    employee_fields = [
-        "emp_code",
-        "department",
-        "designation",
-        "job_type",
-        "project",
-        "state",
-        "status",
-        "salary",
-        "name",
-        "email",
-        "is_team_leader",
-        "is_reporting_officer",
-        "team_leader_id",
-        "reporting_officer_id",
-    ]
-
-    for key in employee_fields:
-        if key in data:
-            emp_update[key] = data[key]
+    existing_emp = db.employees.find_one({"user_id": user_id})
+    emp_update = build_employee_profile_payload(data)
 
     if "name" in user_update:
         emp_update["name"] = user_update["name"]
@@ -673,14 +785,27 @@ def update_user(user_id):
     if "tenant_id" in user_update:
         emp_update["tenant_id"] = user_update["tenant_id"]
 
-    if "salary" in emp_update:
-        try:
-            emp_update["salary"] = float(emp_update.get("salary") or 0)
-        except Exception:
-            emp_update["salary"] = 0
+    if emp_update.get("employee_id"):
+        duplicate_employee_id = db.employees.find_one({
+            "_id": {"$ne": existing_emp["_id"]} if existing_emp else {"$exists": True},
+            "tenant_id": tenant_for_lookup,
+            "employee_id": emp_update.get("employee_id"),
+            "is_deleted": {"$ne": True},
+        })
 
-    if "email" in emp_update:
-        emp_update["email"] = (emp_update.get("email") or "").strip().lower()
+        if duplicate_employee_id:
+            return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+
+    if emp_update.get("emp_code"):
+        duplicate_emp_code = db.employees.find_one({
+            "_id": {"$ne": existing_emp["_id"]} if existing_emp else {"$exists": True},
+            "tenant_id": tenant_for_lookup,
+            "emp_code": emp_update.get("emp_code"),
+            "is_deleted": {"$ne": True},
+        })
+
+        if duplicate_emp_code:
+            return jsonify({"message": "Employee code already exists in this tenant"}), 409
 
     if "team_leader_id" in emp_update:
         emp_update["team_leader_name"] = resolve_employee_name(
@@ -704,8 +829,6 @@ def update_user(user_id):
 
         emp_update["reporting_officer_name"] = reporting_officer_name or ""
 
-    existing_emp = db.employees.find_one({"user_id": user_id})
-
     if emp_update:
         emp_update["updated_at"] = now()
         emp_update["updated_by"] = str(g.current_user["_id"])
@@ -721,7 +844,13 @@ def update_user(user_id):
             emp_update.setdefault("user_id", user_id)
             emp_update.setdefault("name", updated_user.get("name", ""))
             emp_update.setdefault("email", updated_user.get("email", ""))
+            emp_update.setdefault("country", "India")
+            emp_update.setdefault("branch", "Assam/Guwahati (HO)")
+            emp_update.setdefault("role", "Employee")
+            emp_update.setdefault("shift", "General")
             emp_update.setdefault("status", "Active")
+            emp_update.setdefault("is_team_leader", "false")
+            emp_update.setdefault("is_reporting_officer", "false")
             emp_update["created_at"] = now()
             emp_update["created_by"] = str(g.current_user["_id"])
 

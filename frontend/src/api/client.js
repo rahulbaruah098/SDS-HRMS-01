@@ -36,9 +36,38 @@ export function currentEmployee() {
   }
 }
 
+function buildUrl(path = '') {
+  const cleanBase = String(API_BASE).replace(/\/+$/, '');
+  const cleanPath = String(path).startsWith('/') ? path : `/${path}`;
+
+  return `${cleanBase}${cleanPath}`;
+}
+
+async function parseResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (response.status === 204) {
+    return {};
+  }
+
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.json();
+    } catch {
+      return {};
+    }
+  }
+
+  try {
+    const text = await response.text();
+    return text ? { message: text } : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function api(path, options = {}) {
   const token = getToken();
-
   const isFormData = options.body instanceof FormData;
 
   const headers = {
@@ -53,7 +82,7 @@ export async function api(path, options = {}) {
   let response;
 
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(buildUrl(path), {
       ...options,
       headers,
     });
@@ -61,17 +90,15 @@ export async function api(path, options = {}) {
     throw new Error('Unable to connect to backend server');
   }
 
-  let data = {};
-
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
-  }
+  const data = await parseResponse(response);
 
   if (response.status === 401) {
     clearSession();
     throw new Error(data.message || 'Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error(data.message || 'You do not have permission to perform this action.');
   }
 
   if (!response.ok) {

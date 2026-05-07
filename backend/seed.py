@@ -13,6 +13,53 @@ def now():
     return datetime.utcnow()
 
 
+def employee_profile_defaults(row):
+    return {
+        "avatar": "",
+        "phone": row.get("phone", ""),
+        "country": row.get("country", "India"),
+        "joining_date": row.get("joining_date", "2026-01-01"),
+        "date_of_birth": row.get("date_of_birth", ""),
+        "blood_group": row.get("blood_group", ""),
+        "gross_salary": str(row.get("gross_salary", row.get("salary", ""))),
+        "branch": row.get("branch", "Assam/Guwahati (HO)"),
+        "aadhar_no": row.get("aadhar_no", ""),
+        "employee_uan_no": row.get("employee_uan_no", ""),
+        "employee_type": row.get("employee_type", "Permanent"),
+        "skill_level": row.get("skill_level", ""),
+        "are_parents_senior_citizen": row.get("are_parents_senior_citizen", "false"),
+        "number_of_children": row.get("number_of_children", ""),
+        "payment_mode": row.get("payment_mode", "Bank Transfer"),
+        "previous_designation": row.get("previous_designation", ""),
+        "previous_employment_tenure_end_date": row.get(
+            "previous_employment_tenure_end_date",
+            "",
+        ),
+        "role": row.get("role", "Employee"),
+        "shift": row.get("shift", "General"),
+        "gender": row.get("gender", ""),
+        "address": row.get("address", "Guwahati, Assam"),
+        "religion": row.get("religion", ""),
+        "marital_status": row.get("marital_status", ""),
+        "speak_language": row.get("speak_language", "English, Assamese, Hindi"),
+        "pan_no": row.get("pan_no", ""),
+        "disability_level": row.get("disability_level", "No Disability"),
+        "employee_esic_ip": row.get("employee_esic_ip", ""),
+        "employment_status": row.get("employment_status", "Active"),
+        "father_name": row.get("father_name", ""),
+        "dependent_disability_level": row.get(
+            "dependent_disability_level",
+            "No Disability",
+        ),
+        "children_in_hostel": row.get("children_in_hostel", ""),
+        "previous_employer_name": row.get("previous_employer_name", ""),
+        "previous_employment_tenure_from_date": row.get(
+            "previous_employment_tenure_from_date",
+            "",
+        ),
+    }
+
+
 with app.app_context():
     db = get_db()
     tenant_id = "sds"
@@ -140,68 +187,98 @@ with app.app_context():
 
     employee_rows = [
         {
+            "employee_id": "SDS-EMP-001",
             "emp_code": "SDS001",
             "name": "SDS Admin",
             "email": "admin@sdshr.in",
+            "phone": "9000000001",
             "department": "HR & Admin",
             "designation": "Managing Director",
+            "role": "Admin",
             "salary": 120000,
+            "gross_salary": 120000,
             "tenant_id": "sds",
+            "gender": "Male",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
         {
+            "employee_id": "SDS-EMP-002",
             "emp_code": "SDS002",
             "name": "HR Manager",
             "email": "hr@sdshr.in",
+            "phone": "9000000002",
             "department": "HR & Admin",
             "designation": "Manager",
+            "role": "HR",
             "salary": 65000,
+            "gross_salary": 65000,
             "tenant_id": "sds",
+            "gender": "Female",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
         {
+            "employee_id": "SDS-EMP-003",
             "emp_code": "SDS003",
             "name": "Finance User",
             "email": "finance@sdshr.in",
+            "phone": "9000000003",
             "department": "Finance & Accounts",
             "designation": "Executive",
+            "role": "Employee",
             "salary": 50000,
+            "gross_salary": 50000,
             "tenant_id": "sds",
+            "gender": "Male",
             "is_team_leader": "false",
             "is_reporting_officer": "false",
         },
         {
+            "employee_id": "SDS-EMP-004",
             "emp_code": "SDS004",
             "name": "Manager User",
             "email": "manager@sdshr.in",
+            "phone": "9000000004",
             "department": "Operations",
             "designation": "Manager",
+            "role": "Manager",
             "salary": 60000,
+            "gross_salary": 60000,
             "tenant_id": "sds",
+            "gender": "Male",
             "is_team_leader": "true",
             "is_reporting_officer": "true",
         },
         {
+            "employee_id": "SDS-EMP-005",
             "emp_code": "SDS005",
             "name": "Employee User",
             "email": "employee@sdshr.in",
+            "phone": "9000000005",
             "department": "Operations",
             "designation": "Associate",
+            "role": "Employee",
             "salary": 35000,
+            "gross_salary": 35000,
             "tenant_id": "sds",
+            "gender": "Male",
             "is_team_leader": "false",
             "is_reporting_officer": "false",
         },
         {
+            "employee_id": "DEMO-EMP-001",
             "emp_code": "DEMO001",
             "name": "Client Company Admin",
             "email": "clientadmin@example.com",
+            "phone": "9000000101",
             "department": "HR & Admin",
             "designation": "Manager",
+            "role": "Admin",
             "salary": 70000,
+            "gross_salary": 70000,
             "tenant_id": "demo-company",
+            "gender": "Male",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
@@ -212,20 +289,29 @@ with app.app_context():
     for row in employee_rows:
         email = row["email"]
 
-        res = db.employees.insert_one({
+        profile_defaults = employee_profile_defaults(row)
+
+        employee_doc = {
+            **profile_defaults,
             "tenant_id": row["tenant_id"],
             "user_id": uids[email],
+            "employee_id": row["employee_id"],
             "emp_code": row["emp_code"],
             "name": row["name"],
             "email": email,
+            "phone": row.get("phone", ""),
             "department": row["department"],
             "designation": row["designation"],
+            "role": row.get("role", "Employee"),
             "job_type": "Regular",
             "project": "SFAC",
             "state": "Assam",
-            "doj": "2026-01-01",
+            "doj": row.get("joining_date", "2026-01-01"),
+            "joining_date": row.get("joining_date", "2026-01-01"),
             "status": "Active",
+            "employment_status": "Active",
             "salary": row["salary"],
+            "gross_salary": str(row.get("gross_salary", row["salary"])),
             "is_team_leader": row["is_team_leader"],
             "is_reporting_officer": row["is_reporting_officer"],
             "team_leader_id": "",
@@ -233,7 +319,9 @@ with app.app_context():
             "reporting_officer_id": "",
             "reporting_officer_name": "",
             "created_at": now(),
-        })
+        }
+
+        res = db.employees.insert_one(employee_doc)
 
         eids[email] = str(res.inserted_id)
 

@@ -17,8 +17,27 @@ import PasswordRequests from './pages/PasswordRequests';
 
 import './styles.css';
 
+function normalizeRoles(user) {
+  const userRoles = user?.roles;
+
+  if (Array.isArray(userRoles)) {
+    return userRoles
+      .map((role) => String(role || '').trim())
+      .filter(Boolean);
+  }
+
+  if (typeof userRoles === 'string') {
+    return userRoles
+      .split(',')
+      .map((role) => role.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 function DashboardRouter({ user, setPage }) {
-  const userRoles = user.roles || [];
+  const userRoles = normalizeRoles(user);
 
   if (userRoles.includes('super_admin')) {
     return <SuperAdminDashboard setPage={setPage} />;
@@ -28,7 +47,7 @@ function DashboardRouter({ user, setPage }) {
     return <EmployeeDashboard setPage={setPage} />;
   }
 
-  return <AdminDashboard user={user} setPage={setPage} />;
+  return <AdminDashboard user={{ ...user, roles: userRoles }} setPage={setPage} />;
 }
 
 function UnauthorizedPage() {
@@ -42,11 +61,16 @@ function UnauthorizedPage() {
 }
 
 function PageRouter({ page, user, setPage }) {
+  const safeUser = {
+    ...(user || {}),
+    roles: normalizeRoles(user),
+  };
+
   if (page === 'dashboard') {
-    return <DashboardRouter user={user} setPage={setPage} />;
+    return <DashboardRouter user={safeUser} setPage={setPage} />;
   }
 
-  if (!canAccessModule(user, page)) {
+  if (!canAccessModule(safeUser, page)) {
     return <UnauthorizedPage />;
   }
 
@@ -79,7 +103,17 @@ export default function App() {
   const [page, setPage] = useState('dashboard');
 
   function handleSetUser(nextUser) {
-    setUser(nextUser);
+    if (!nextUser) {
+      setUser(null);
+      setPage('dashboard');
+      return;
+    }
+
+    setUser({
+      ...nextUser,
+      roles: normalizeRoles(nextUser),
+    });
+
     setPage('dashboard');
   }
 
@@ -89,12 +123,22 @@ export default function App() {
 
   return (
     <AppLayout
-      user={user}
+      user={{
+        ...user,
+        roles: normalizeRoles(user),
+      }}
       setUser={handleSetUser}
       page={page}
       setPage={setPage}
     >
-      <PageRouter page={page} user={user} setPage={setPage} />
+      <PageRouter
+        page={page}
+        user={{
+          ...user,
+          roles: normalizeRoles(user),
+        }}
+        setPage={setPage}
+      />
     </AppLayout>
   );
 }

@@ -2,21 +2,45 @@ import { useState } from 'react';
 import { api, setSession } from '../api/client';
 
 export default function Login({ onLogin }) {
-  const [form, setForm] = useState({ email: 'superadmin@sdshr.in', password: 'Super@123' });
+  const [form, setForm] = useState({
+    email: 'superadmin@sdshr.in',
+    password: 'Super@123',
+  });
+
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
     setError('');
+
+    if (!form.email.trim()) {
+      setError('Email is required');
+      return;
+    }
+
+    if (!form.password) {
+      setError('Password is required');
+      return;
+    }
+
     try {
+      setLoading(true);
+
       const data = await api('/auth/login', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          email: form.email.trim().toLowerCase(),
+          password: form.password,
+        }),
       });
+
       setSession(data);
       onLogin(data.user);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Unable to login');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -24,18 +48,45 @@ export default function Login({ onLogin }) {
     <div className="login-page">
       <div className="login-card">
         <div className="brand-mark">SDS</div>
+
         <h1>SDS HRMS</h1>
+
         <p>Multi-company SaaS-ready HRMS built with React Vite + Flask + MongoDB</p>
 
         <form onSubmit={submit}>
           <label>Email</label>
-          <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <input
+            type="email"
+            value={form.email}
+            autoComplete="email"
+            placeholder="Enter email"
+            onChange={(e) =>
+              setForm({
+                ...form,
+                email: e.target.value,
+              })
+            }
+          />
 
           <label>Password</label>
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <input
+            type="password"
+            value={form.password}
+            autoComplete="current-password"
+            placeholder="Enter password"
+            onChange={(e) =>
+              setForm({
+                ...form,
+                password: e.target.value,
+              })
+            }
+          />
 
           {error && <div className="alert">{error}</div>}
-          <button className="primary">Login</button>
+
+          <button type="submit" className="primary" disabled={loading}>
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
         </form>
 
         <div className="demo-box">

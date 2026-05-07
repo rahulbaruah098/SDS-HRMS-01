@@ -9,14 +9,19 @@ import ModuleGrid from '../components/ModuleGrid';
 export default function AdminDashboard({ user, setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setLoading(true);
+    setMessage('');
+
     api('/dashboard/admin')
       .then(setData)
       .catch((error) => {
         console.error(error);
         setMessage(error.message || 'Unable to load dashboard data');
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   function goTo(page) {
@@ -28,6 +33,12 @@ export default function AdminDashboard({ user, setPage }) {
   const allowedModules = moduleList(user || {}).filter(
     ([key]) => !['profile'].includes(key)
   );
+
+  const stats = data?.stats || {};
+  const recentEmployees = data?.recent_employees || [];
+  const recentAttendance = data?.recent_attendance || [];
+  const departmentSummary = data?.department_summary || [];
+  const designationSummary = data?.designation_summary || [];
 
   return (
     <div className="page-grid">
@@ -54,6 +65,22 @@ export default function AdminDashboard({ user, setPage }) {
           <button
             type="button"
             className="secondary"
+            onClick={() => goTo('departments')}
+          >
+            Departments
+          </button>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('designations')}
+          >
+            Designations
+          </button>
+
+          <button
+            type="button"
+            className="secondary"
             onClick={() => goTo('attendance')}
           >
             Attendance
@@ -64,23 +91,48 @@ export default function AdminDashboard({ user, setPage }) {
       {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
-        {Object.entries(data?.stats || {}).map(([key, value]) => (
+        {Object.entries(stats).map(([key, value]) => (
           <Stat key={key} label={key} value={value} />
         ))}
 
-        {!data && !message && (
+        {loading && (
           <div className="panel">
             <p>Loading dashboard...</p>
+          </div>
+        )}
+
+        {!loading && !message && !Object.keys(stats).length && (
+          <div className="panel">
+            <p>No dashboard stats available.</p>
           </div>
         )}
       </section>
 
       <section className="two-col">
         <div className="panel">
-          <h3>Recent Attendance</h3>
-          <Table rows={data?.recent_attendance || []} />
+          <h3>Recent Employees</h3>
+          <Table rows={recentEmployees} />
         </div>
 
+        <div className="panel">
+          <h3>Recent Attendance</h3>
+          <Table rows={recentAttendance} />
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <h3>Department Summary</h3>
+          <Table rows={departmentSummary} />
+        </div>
+
+        <div className="panel">
+          <h3>Designation Summary</h3>
+          <Table rows={designationSummary} />
+        </div>
+      </section>
+
+      <section className="two-col">
         <div className="panel">
           <h3>Pending Approvals</h3>
 
@@ -98,6 +150,52 @@ export default function AdminDashboard({ user, setPage }) {
             title="Tickets"
             rows={data?.pending?.tickets || []}
           />
+        </div>
+
+        <div className="panel">
+          <h3>Quick Actions</h3>
+
+          <div className="mini-list">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('employees')}
+            >
+              Open Employee Master
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('departments')}
+            >
+              Manage Departments
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('designations')}
+            >
+              Manage Designations
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Review Leave Requests
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('expenses')}
+            >
+              Review Expenses
+            </button>
+          </div>
         </div>
       </section>
 

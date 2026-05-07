@@ -12,7 +12,19 @@ crud_bp = Blueprint("crud", __name__)
 
 
 COLLECTIONS = {
-    "employees": ["name", "email", "emp_code", "department", "designation"],
+    "employees": [
+        "name",
+        "email",
+        "phone",
+        "employee_id",
+        "emp_code",
+        "department",
+        "designation",
+        "role",
+        "branch",
+        "employment_status",
+        "status",
+    ],
     "departments": ["name"],
     "designations": ["title"],
     "projects": ["name"],
@@ -167,6 +179,81 @@ COLLECTION_ROLES = {
 }
 
 
+EMPLOYEE_ALLOWED_FIELDS = {
+    "name",
+    "email",
+    "avatar",
+    "phone",
+    "country",
+    "joining_date",
+    "date_of_birth",
+    "blood_group",
+    "gross_salary",
+    "branch",
+    "aadhar_no",
+    "employee_uan_no",
+    "employee_type",
+    "skill_level",
+    "are_parents_senior_citizen",
+    "number_of_children",
+    "payment_mode",
+    "previous_designation",
+    "previous_employment_tenure_end_date",
+    "password",
+    "role",
+    "designation",
+    "department",
+    "shift",
+    "gender",
+    "address",
+    "religion",
+    "marital_status",
+    "speak_language",
+    "pan_no",
+    "disability_level",
+    "employee_esic_ip",
+    "employment_status",
+    "father_name",
+    "dependent_disability_level",
+    "children_in_hostel",
+    "previous_employer_name",
+    "previous_employment_tenure_from_date",
+    "employee_id",
+    "emp_code",
+    "job_type",
+    "project",
+    "state",
+    "status",
+    "salary",
+    "is_team_leader",
+    "is_reporting_officer",
+    "team_leader_id",
+    "team_leader_name",
+    "reporting_officer_id",
+    "reporting_officer_name",
+}
+
+
+ROLE_VALUE_MAP = {
+    "admin": "admin",
+    "hr": "hr",
+    "hr admin": "hr_admin",
+    "hr_admin": "hr_admin",
+    "hr manager": "hr_manager",
+    "hr_manager": "hr_manager",
+    "finance": "finance",
+    "accounts finance": "accounts_finance",
+    "accounts_finance": "accounts_finance",
+    "manager": "manager",
+    "ro": "ro",
+    "team leader": "team_leader",
+    "team_leader": "team_leader",
+    "reporting officer": "reporting_officer",
+    "reporting_officer": "reporting_officer",
+    "employee": "employee",
+}
+
+
 def can_access_collection(collection):
     roles = set(g.current_user.get("roles", []))
 
@@ -183,6 +270,19 @@ def truthy(value):
 
 def normalize_status(value, default="active"):
     return (value or default).strip()
+
+
+def normalize_text(value):
+    return (value or "").strip()
+
+
+def normalize_email(value):
+    return (value or "").strip().lower()
+
+
+def normalize_role_value(value):
+    role_key = str(value or "").strip().lower()
+    return ROLE_VALUE_MAP.get(role_key, "employee")
 
 
 def generate_default_password(name="", email=""):
@@ -246,15 +346,21 @@ def resolve_reporting_officer_name(db, tenant_id, emp_id):
 
 
 def build_employee_roles(data):
-    roles = ["employee"]
+    roles = set()
+
+    selected_role = normalize_role_value(data.get("role"))
+    roles.add(selected_role)
 
     if truthy(data.get("is_team_leader")):
-        roles.append("team_leader")
+        roles.add("team_leader")
 
     if truthy(data.get("is_reporting_officer")) and can_be_reporting_officer(data):
-        roles.append("reporting_officer")
+        roles.add("reporting_officer")
 
-    return roles
+    if not roles:
+        roles.add("employee")
+
+    return list(roles)
 
 
 def search(q, fields):
@@ -287,17 +393,9 @@ def sync_employee_roles(db, employee_doc):
 
     roles = set(user.get("roles", []))
 
-    if truthy(employee_doc.get("is_team_leader")):
-        roles.add("team_leader")
-    else:
-        roles.discard("team_leader")
+    selected_role = normalize_role_value(employee_doc.get("role"))
 
-    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
-        roles.add("reporting_officer")
-    else:
-        roles.discard("reporting_officer")
-
-    if not roles.intersection({
+    protected_roles = {
         "super_admin",
         "admin",
         "hr_admin",
@@ -305,7 +403,33 @@ def sync_employee_roles(db, employee_doc):
         "hr",
         "finance",
         "accounts_finance",
-    }):
+    }
+
+    previous_dynamic_roles = {
+        "employee",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+    }
+
+    if not roles.intersection(protected_roles):
+        roles.difference_update(previous_dynamic_roles)
+        roles.add(selected_role)
+
+    if truthy(employee_doc.get("is_team_leader")):
+        roles.add("team_leader")
+    else:
+        if selected_role != "team_leader":
+            roles.discard("team_leader")
+
+    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
+        roles.add("reporting_officer")
+    else:
+        if selected_role != "reporting_officer":
+            roles.discard("reporting_officer")
+
+    if not roles:
         roles.add("employee")
 
     db.users.update_one(
@@ -361,6 +485,30 @@ def is_self_service_user(roles):
     )
 
 
+def sanitize_employee_payload(data):
+    clean = {}
+
+    for key in EMPLOYEE_ALLOWED_FIELDS:
+        if key in data:
+            clean[key] = data.get(key)
+
+    clean["name"] = normalize_text(clean.get("name"))
+    clean["email"] = normalize_email(clean.get("email"))
+    clean["phone"] = normalize_text(clean.get("phone"))
+    clean["employee_id"] = normalize_text(clean.get("employee_id"))
+    clean["emp_code"] = normalize_text(clean.get("emp_code"))
+    clean["department"] = normalize_text(clean.get("department"))
+    clean["designation"] = normalize_text(clean.get("designation"))
+    clean["branch"] = normalize_text(clean.get("branch"))
+    clean["role"] = clean.get("role") or "Employee"
+    clean["status"] = clean.get("status") or "Active"
+
+    clean["is_team_leader"] = str(clean.get("is_team_leader", "false")).lower()
+    clean["is_reporting_officer"] = str(clean.get("is_reporting_officer", "false")).lower()
+
+    return clean
+
+
 @crud_bp.get("/<collection>")
 @current_user_required
 def list_items(collection):
@@ -412,6 +560,7 @@ def create_item(collection):
     roles = set(g.current_user.get("roles", []))
     data = request.get_json(silent=True) or {}
     data.pop("_id", None)
+    data.pop("password_mode", None)
 
     now = datetime.utcnow()
 
@@ -441,8 +590,10 @@ def create_item(collection):
             data["user_id"] = str(g.current_user["_id"])
 
     if collection == "employees":
-        name = (data.get("name") or "").strip()
-        email = (data.get("email") or "").strip().lower()
+        data = sanitize_employee_payload(data)
+
+        name = data.get("name", "")
+        email = data.get("email", "")
         password = data.get("password") or generate_default_password(name, email)
 
         if not name or not email:
@@ -455,6 +606,26 @@ def create_item(collection):
 
         if db.users.find_one({"email": email}):
             return jsonify({"message": "This email already exists as a login user"}), 409
+
+        if data.get("employee_id"):
+            existing_employee_id = db.employees.find_one({
+                "tenant_id": tenant_id,
+                "employee_id": data.get("employee_id"),
+                "is_deleted": {"$ne": True},
+            })
+
+            if existing_employee_id:
+                return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+
+        if data.get("emp_code"):
+            existing_emp_code = db.employees.find_one({
+                "tenant_id": tenant_id,
+                "emp_code": data.get("emp_code"),
+                "is_deleted": {"$ne": True},
+            })
+
+            if existing_emp_code:
+                return jsonify({"message": "Employee code already exists in this tenant"}), 409
 
         team_leader_id = data.get("team_leader_id") or ""
         reporting_officer_id = data.get("reporting_officer_id") or ""
@@ -498,9 +669,6 @@ def create_item(collection):
             "updated_at": now,
             "created_by": str(g.current_user["_id"]),
         })
-
-        if "status" not in data:
-            data["status"] = "Active"
 
         res = db.employees.insert_one(data)
         created_employee = db.employees.find_one({"_id": res.inserted_id})
@@ -554,6 +722,8 @@ def update_item(collection, item_id):
     data = request.get_json(silent=True) or {}
     data.pop("_id", None)
     data.pop("password_hash", None)
+    data.pop("password", None)
+    data.pop("password_mode", None)
 
     data.update({
         "updated_at": datetime.utcnow(),
@@ -572,12 +742,46 @@ def update_item(collection, item_id):
             return jsonify({"message": "Employee not found"}), 404
 
         tenant_id = existing.get("tenant_id") or g.tenant_id
+
+        data = sanitize_employee_payload({
+            **{key: existing.get(key) for key in EMPLOYEE_ALLOWED_FIELDS},
+            **data,
+        })
+        data.pop("password", None)
+
+        data.update({
+            "updated_at": datetime.utcnow(),
+            "updated_by": str(g.current_user["_id"]),
+        })
+
         merged_for_role_check = {**existing, **data}
 
         if truthy(merged_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(merged_for_role_check):
             return jsonify({
                 "message": "Only Managing Director or Manager can be Reporting Officer"
             }), 400
+
+        if data.get("employee_id"):
+            duplicate_employee_id = db.employees.find_one({
+                "_id": {"$ne": item_obj_id},
+                "tenant_id": tenant_id,
+                "employee_id": data.get("employee_id"),
+                "is_deleted": {"$ne": True},
+            })
+
+            if duplicate_employee_id:
+                return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+
+        if data.get("emp_code"):
+            duplicate_emp_code = db.employees.find_one({
+                "_id": {"$ne": item_obj_id},
+                "tenant_id": tenant_id,
+                "emp_code": data.get("emp_code"),
+                "is_deleted": {"$ne": True},
+            })
+
+            if duplicate_emp_code:
+                return jsonify({"message": "Employee code already exists in this tenant"}), 409
 
         if "team_leader_id" in data:
             data["team_leader_name"] = resolve_employee_name(
@@ -602,7 +806,7 @@ def update_item(collection, item_id):
             data["reporting_officer_name"] = reporting_officer_name or ""
 
         if "email" in data:
-            email = (data.get("email") or "").strip().lower()
+            email = normalize_email(data.get("email"))
 
             if not email:
                 return jsonify({"message": "Email is required"}), 400

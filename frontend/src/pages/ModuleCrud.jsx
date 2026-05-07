@@ -16,6 +16,7 @@ export default function ModuleCrud({ collection }) {
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
+  const [departmentOptions, setDepartmentOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -68,6 +69,20 @@ export default function ModuleCrud({ collection }) {
     return items;
   }
 
+  async function loadDepartmentOptions(nextTenant = tenant) {
+    const params = [];
+
+    if (isSuperAdmin() && nextTenant.trim()) {
+      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
+    }
+
+    const data = await api(`/departments${params.length ? `?${params.join('&')}` : ''}`);
+    const items = data.items || [];
+
+    setDepartmentOptions(items);
+    return items;
+  }
+
   async function reloadEmployeeHelpers(nextTenant = tenant) {
     if (collection !== 'employees') {
       return;
@@ -75,6 +90,7 @@ export default function ModuleCrud({ collection }) {
 
     await loadEmployeeOptions(nextTenant);
     await loadDesignationOptions(nextTenant);
+    await loadDepartmentOptions(nextTenant);
   }
 
   function resetForm() {
@@ -87,7 +103,12 @@ export default function ModuleCrud({ collection }) {
       .slice(0, 8);
 
     const pass = `${namePart || 'User'}@123`;
-    setForm({ ...form, password: pass });
+
+    setForm({
+      ...form,
+      password_mode: 'custom',
+      password: pass,
+    });
   }
 
   useEffect(() => {
@@ -97,6 +118,7 @@ export default function ModuleCrud({ collection }) {
     setRows([]);
     setEmployeeOptions([]);
     setDesignationOptions([]);
+    setDepartmentOptions([]);
 
     setLoading(true);
 
@@ -116,9 +138,15 @@ export default function ModuleCrud({ collection }) {
     try {
       setSaving(true);
 
+      const payload = { ...form };
+
+      if (collection === 'employees') {
+        delete payload.password_mode;
+      }
+
       await api(`/${collection}`, {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
 
       resetForm();
@@ -141,11 +169,14 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         delete editData.password;
+        delete editData.password_mode;
 
         editData.is_team_leader = String(row.is_team_leader || 'false');
         editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
         editData.team_leader_id = row.team_leader_id || '';
+        editData.team_leader_name = row.team_leader_name || '';
         editData.reporting_officer_id = row.reporting_officer_id || '';
+        editData.reporting_officer_name = row.reporting_officer_name || '';
       }
 
       setEdit(editData);
@@ -172,6 +203,7 @@ export default function ModuleCrud({ collection }) {
 
       delete payload._id;
       delete payload.password_hash;
+      delete payload.password_mode;
 
       await api(`/${collection}/${edit._id}`, {
         method: 'PATCH',
@@ -281,17 +313,97 @@ export default function ModuleCrud({ collection }) {
     });
   }
 
+  function applyTeamLeaderChange(state, setState, employeeId) {
+    const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      team_leader_id: employeeId,
+      team_leader_name: selectedEmployee?.name || '',
+    });
+  }
+
+  function applyReportingOfficerChange(state, setState, employeeId) {
+    const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      reporting_officer_id: employeeId,
+      reporting_officer_name: selectedEmployee?.name || '',
+    });
+  }
+
   function renderField(state, setState, key, isEditMode = false) {
     const label = key.replaceAll('_', ' ');
+
+    const requiredFields = [
+      'name',
+      'email',
+      'phone',
+      'country',
+      'joining_date',
+      'gross_salary',
+      'branch',
+      'are_parents_senior_citizen',
+      'payment_mode',
+      'password',
+      'role',
+      'designation',
+      'department',
+      'shift',
+      'gender',
+      'disability_level',
+    ];
+
+    const labelText = label
+      .split(' ')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+
+    const finalLabel = collection === 'employees' && requiredFields.includes(key)
+      ? `${labelText} *`
+      : labelText;
 
     if (collection === 'employees' && isEditMode && key === 'password') {
       return null;
     }
 
+    if (collection === 'employees' && isEditMode && key === 'password_mode') {
+      return null;
+    }
+
+    if (collection === 'employees' && key === 'department') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="">Select department</option>
+
+            {departmentOptions.map((dept) => {
+              const value = dept.name || dept.title || '';
+
+              if (!value) {
+                return null;
+              }
+
+              return (
+                <option key={dept._id || value} value={value}>
+                  {value}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      );
+    }
+
     if (collection === 'employees' && key === 'designation') {
       return (
         <label key={key}>
-          {label}
+          {finalLabel}
           <select
             value={state[key] ?? ''}
             onChange={(e) => applyDesignationChange(state, setState, e.target.value)}
@@ -316,10 +428,48 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'employees' && key === 'password_mode') {
+      return (
+        <label key={key}>
+          Password Type
+          <select
+            value={state[key] ?? 'default'}
+            onChange={(e) => {
+              const mode = e.target.value;
+
+              setState({
+                ...state,
+                password_mode: mode,
+                password: mode === 'default' ? '12345678' : '',
+              });
+            }}
+          >
+            <option value="default">Default Password (12345678)</option>
+            <option value="custom">Custom Password</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (collection === 'employees' && key === 'are_parents_senior_citizen') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      );
+    }
+
     if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
       return (
         <label key={key}>
-          {label}
+          {finalLabel}
           <select
             value={String(state[key] ?? 'false')}
             onChange={(e) => setState({ ...state, [key]: e.target.value })}
@@ -344,10 +494,17 @@ export default function ModuleCrud({ collection }) {
 
       return (
         <label key={key}>
-          {label}
+          {finalLabel}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(e) => {
+              if (key === 'team_leader_id') {
+                applyTeamLeaderChange(state, setState, e.target.value);
+                return;
+              }
+
+              applyReportingOfficerChange(state, setState, e.target.value);
+            }}
           >
             <option value="">Select {label}</option>
 
@@ -367,11 +524,125 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'employees' && ['team_leader_name', 'reporting_officer_name'].includes(key)) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="text"
+            value={state[key] ?? ''}
+            readOnly
+            placeholder={key === 'team_leader_name' ? 'Team leader name' : 'Reporting officer name'}
+          />
+        </label>
+      );
+    }
+
+    const selectOptions = {
+      country: ['Bangladesh', 'India'],
+      blood_group: ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+      employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
+      skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
+      payment_mode: ['Cash', 'Bank Transfer', 'UPI', 'Cheque'],
+      role: [
+        'Admin',
+        'HR',
+        'Manager',
+        'Team Leader',
+        'Reporting Officer',
+        'Employee',
+      ],
+      shift: ['General', 'Morning', 'Evening', 'Night'],
+      gender: ['Male', 'Female', 'Other'],
+      religion: ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Other'],
+      marital_status: ['', 'Single', 'Married', 'Divorced', 'Widowed'],
+      disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
+      dependent_disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
+      employment_status: ['', 'Active', 'Probation', 'Confirmed', 'Resigned', 'Terminated'],
+    };
+
+    if (collection === 'employees' && selectOptions[key]) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            {selectOptions[key].map((option) => (
+              <option key={option || 'empty'} value={option}>
+                {option || 'Choose One'}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    if (
+      collection === 'employees' &&
+      [
+        'joining_date',
+        'date_of_birth',
+        'previous_employment_tenure_end_date',
+        'previous_employment_tenure_from_date',
+      ].includes(key)
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="date"
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          />
+        </label>
+      );
+    }
+
+    if (
+      collection === 'employees' &&
+      ['gross_salary', 'number_of_children', 'children_in_hostel'].includes(key)
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="number"
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          />
+        </label>
+      );
+    }
+
+    if (collection === 'employees' && key === 'address') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <textarea
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            rows={3}
+            placeholder="Address"
+          />
+        </label>
+      );
+    }
+
     return (
       <label key={key}>
-        {label}
+        {finalLabel}
         <input
-          type={key === 'password' ? 'password' : 'text'}
+          type={
+            key === 'password'
+              ? 'password'
+              : key === 'email'
+                ? 'email'
+                : key === 'phone'
+                  ? 'tel'
+                  : 'text'
+          }
           value={state[key] ?? ''}
           onChange={(e) => setState({ ...state, [key]: e.target.value })}
         />
@@ -403,7 +674,7 @@ export default function ModuleCrud({ collection }) {
 
   const editFields =
     collection === 'employees'
-      ? Object.keys(template).filter((key) => key !== 'password')
+      ? Object.keys(template).filter((key) => key !== 'password' && key !== 'password_mode')
       : Object.keys(template);
 
   return (

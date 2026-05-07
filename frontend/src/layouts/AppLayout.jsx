@@ -3,9 +3,34 @@ import { useState } from 'react';
 import { clearSession } from '../api/client';
 import { moduleList } from '../data/modules';
 
+function normalizeRoles(user) {
+  const userRoles = user?.roles;
+
+  if (Array.isArray(userRoles)) {
+    return userRoles
+      .map((role) => String(role || '').trim())
+      .filter(Boolean);
+  }
+
+  if (typeof userRoles === 'string') {
+    return userRoles
+      .split(',')
+      .map((role) => role.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const modules = moduleList(user);
+
+  const safeUser = {
+    ...(user || {}),
+    roles: normalizeRoles(user),
+  };
+
+  const modules = moduleList(safeUser).filter((module) => module[0] !== 'dashboard');
 
   const currentTitle =
     page === 'dashboard'
@@ -30,6 +55,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         type="button"
         className={`mobile-menu-btn ${sidebarOpen ? 'active' : ''}`}
         onClick={() => setSidebarOpen(!sidebarOpen)}
+        aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
       >
         {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
       </button>
@@ -71,7 +97,12 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           ))}
         </nav>
 
-        <button type="button" className="logout" onClick={logout}>
+        <button
+          type="button"
+          className="logout"
+          onClick={logout}
+          aria-label="Logout"
+        >
           <LogOut size={18} /> Logout
         </button>
       </aside>
@@ -81,12 +112,12 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           <div>
             <h2>{currentTitle}</h2>
             <p>
-              {(user?.roles || []).join(', ')}
-              {user?.tenant_id ? ` • ${user.tenant_id}` : ''}
+              {safeUser.roles.join(', ')}
+              {safeUser?.tenant_id ? ` • ${safeUser.tenant_id}` : ''}
             </p>
           </div>
 
-          <div className="user-chip">{user?.name || user?.email}</div>
+          <div className="user-chip">{safeUser?.name || safeUser?.email}</div>
         </header>
 
         {children}

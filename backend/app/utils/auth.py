@@ -15,14 +15,39 @@ def safe_object_id(value):
         return None
 
 
+def now_utc():
+    return datetime.utcnow()
+
+
+def normalize_roles(value):
+    if not value:
+        return []
+
+    if isinstance(value, list):
+        return [str(role).strip() for role in value if str(role).strip()]
+
+    if isinstance(value, str):
+        return [role.strip() for role in value.split(",") if role.strip()]
+
+    return []
+
+
+def default_tenant_id():
+    return current_app.config.get("DEFAULT_TENANT_ID", "sds")
+
+
 def issue_token(user):
+    roles = normalize_roles(user.get("roles", []))
+    tenant_id = user.get("tenant_id") or default_tenant_id()
+
     payload = {
         "sub": str(user["_id"]),
         "email": user.get("email"),
         "name": user.get("name"),
-        "roles": user.get("roles", []),
-        "tenant_id": user.get("tenant_id"),
+        "roles": roles,
+        "tenant_id": tenant_id,
         "exp": datetime.now(timezone.utc) + timedelta(hours=12),
+        "iat": datetime.now(timezone.utc),
     }
 
     return jwt.encode(
@@ -40,7 +65,7 @@ def current_user_required(fn):
         if not auth.startswith("Bearer "):
             return jsonify({"message": "Missing token"}), 401
 
-        token = auth.replace("Bearer ", "").strip()
+        token = auth.replace("Bearer ", "", 1).strip()
 
         if not token:
             return jsonify({"message": "Missing token"}), 401
@@ -71,11 +96,14 @@ def current_user_required(fn):
         if not user:
             return jsonify({"message": "User not found"}), 401
 
+        user_roles = normalize_roles(user.get("roles", []))
+        tenant_id = user.get("tenant_id") or payload.get("tenant_id") or default_tenant_id()
+
+        user["roles"] = user_roles
+        user["tenant_id"] = tenant_id
+
         g.current_user = user
-        g.tenant_id = user.get(
-            "tenant_id",
-            current_app.config.get("DEFAULT_TENANT_ID", "sds"),
-        )
+        g.tenant_id = tenant_id
 
         return fn(*args, **kwargs)
 
@@ -87,7 +115,7 @@ def roles_required(*roles):
         @wraps(fn)
         @current_user_required
         def wrapper(*args, **kwargs):
-            user_roles = set(g.current_user.get("roles", []))
+            user_roles = set(normalize_roles(g.current_user.get("roles", [])))
             allowed_roles = set(roles)
 
             if "super_admin" in user_roles:
@@ -111,7 +139,7 @@ def audit(action, entity, entity_id=None, meta=None):
         tenant_id = getattr(
             g,
             "tenant_id",
-            user.get("tenant_id", current_app.config.get("DEFAULT_TENANT_ID", "sds")),
+            user.get("tenant_id") or default_tenant_id(),
         )
 
         db.audit_logs.insert_one({
@@ -119,12 +147,12 @@ def audit(action, entity, entity_id=None, meta=None):
             "actor_id": str(user.get("_id", "")),
             "actor_email": user.get("email", "system"),
             "actor_name": user.get("name", ""),
-            "actor_roles": user.get("roles", []),
+            "actor_roles": normalize_roles(user.get("roles", [])),
             "action": action,
             "entity": entity,
             "entity_id": str(entity_id) if entity_id else None,
             "meta": meta or {},
-            "created_at": datetime.utcnow(),
+            "created_at": now_utc(),
         })
     except Exception:
         pass

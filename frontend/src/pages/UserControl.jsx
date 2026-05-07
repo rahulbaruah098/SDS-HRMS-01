@@ -3,22 +3,241 @@ import { Plus, Save, Search, KeyRound, X } from 'lucide-react';
 import { api } from '../api/client';
 import { emptyUser } from '../data/modules';
 
+const USER_CREATE_TEMPLATE = {
+  ...emptyUser,
+
+  avatar: '',
+  phone: '',
+  country: 'Bangladesh',
+  joining_date: '',
+  date_of_birth: '',
+  blood_group: '',
+  gross_salary: '',
+  branch: 'Assam/Guwahati (HO)',
+  aadhar_no: '',
+  employee_uan_no: '',
+  employee_type: '',
+  skill_level: '',
+  are_parents_senior_citizen: 'false',
+  number_of_children: '',
+  payment_mode: 'Cash',
+  previous_designation: 'Manager',
+  previous_employment_tenure_end_date: '',
+  role: 'Employee',
+  shift: 'General',
+  gender: 'Male',
+  address: '',
+  religion: '',
+  marital_status: '',
+  speak_language: '',
+  pan_no: '',
+  disability_level: 'No Disability',
+  employee_esic_ip: '',
+  employment_status: '',
+  father_name: '',
+  dependent_disability_level: 'No Disability',
+  children_in_hostel: '',
+  previous_employer_name: '',
+  previous_employment_tenure_from_date: '',
+  employee_id: '',
+
+  team_leader_name: '',
+  reporting_officer_name: '',
+};
+
+const CREATE_FIELD_ORDER = [
+  'tenant_id',
+  'name',
+  'email',
+  'password',
+  'roles',
+
+  'avatar',
+  'phone',
+  'country',
+  'joining_date',
+  'date_of_birth',
+  'blood_group',
+  'gross_salary',
+  'branch',
+  'aadhar_no',
+  'employee_uan_no',
+  'employee_type',
+  'skill_level',
+  'are_parents_senior_citizen',
+  'number_of_children',
+  'payment_mode',
+  'previous_designation',
+  'previous_employment_tenure_end_date',
+  'role',
+  'designation',
+  'department',
+  'shift',
+  'gender',
+  'address',
+  'religion',
+  'marital_status',
+  'speak_language',
+  'pan_no',
+  'disability_level',
+  'employee_esic_ip',
+  'employment_status',
+  'father_name',
+  'dependent_disability_level',
+  'children_in_hostel',
+  'previous_employer_name',
+  'previous_employment_tenure_from_date',
+  'employee_id',
+
+  'emp_code',
+  'job_type',
+  'project',
+  'state',
+  'status',
+  'salary',
+  'is_active',
+
+  'is_team_leader',
+  'is_reporting_officer',
+  'team_leader_id',
+  'team_leader_name',
+  'reporting_officer_id',
+  'reporting_officer_name',
+];
+
+const EDIT_FIELD_ORDER = [
+  'name',
+  'email',
+  'tenant_id',
+  'roles',
+  'password',
+
+  'avatar',
+  'phone',
+  'country',
+  'joining_date',
+  'date_of_birth',
+  'blood_group',
+  'gross_salary',
+  'branch',
+  'aadhar_no',
+  'employee_uan_no',
+  'employee_type',
+  'skill_level',
+  'are_parents_senior_citizen',
+  'number_of_children',
+  'payment_mode',
+  'previous_designation',
+  'previous_employment_tenure_end_date',
+  'role',
+  'designation',
+  'department',
+  'shift',
+  'gender',
+  'address',
+  'religion',
+  'marital_status',
+  'speak_language',
+  'pan_no',
+  'disability_level',
+  'employee_esic_ip',
+  'employment_status',
+  'father_name',
+  'dependent_disability_level',
+  'children_in_hostel',
+  'previous_employer_name',
+  'previous_employment_tenure_from_date',
+  'employee_id',
+
+  'emp_code',
+  'job_type',
+  'project',
+  'state',
+  'status',
+  'salary',
+  'is_active',
+
+  'is_team_leader',
+  'is_reporting_officer',
+  'team_leader_id',
+  'team_leader_name',
+  'reporting_officer_id',
+  'reporting_officer_name',
+];
+
+const REQUIRED_FIELDS = [
+  'tenant_id',
+  'name',
+  'email',
+  'password',
+  'roles',
+  'phone',
+  'country',
+  'joining_date',
+  'gross_salary',
+  'branch',
+  'are_parents_senior_citizen',
+  'payment_mode',
+  'role',
+  'designation',
+  'department',
+  'shift',
+  'gender',
+  'disability_level',
+];
+
+const SELECT_OPTIONS = {
+  country: ['Bangladesh', 'India'],
+  blood_group: ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+  employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
+  skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
+  payment_mode: ['Cash', 'Bank Transfer', 'UPI', 'Cheque'],
+  role: ['Admin', 'HR', 'Manager', 'Team Leader', 'Reporting Officer', 'Employee'],
+  shift: ['General', 'Morning', 'Evening', 'Night'],
+  gender: ['Male', 'Female', 'Other'],
+  religion: ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Other'],
+  marital_status: ['', 'Single', 'Married', 'Divorced', 'Widowed'],
+  disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
+  dependent_disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
+  employment_status: ['', 'Active', 'Probation', 'Confirmed', 'Resigned', 'Terminated'],
+  job_type: ['', 'Regular', 'Contractual', 'Intern', 'Consultant'],
+  status: ['Active', 'Inactive'],
+  state: ['', 'Assam', 'Meghalaya', 'Tripura', 'Nagaland', 'Manipur', 'Mizoram', 'Arunachal Pradesh', 'Sikkim'],
+};
+
+const DATE_FIELDS = [
+  'joining_date',
+  'date_of_birth',
+  'previous_employment_tenure_end_date',
+  'previous_employment_tenure_from_date',
+];
+
+const NUMBER_FIELDS = [
+  'gross_salary',
+  'salary',
+  'number_of_children',
+  'children_in_hostel',
+];
+
 export default function UserControl() {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ ...emptyUser });
+  const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
   const [edit, setEdit] = useState(null);
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
+  const [departmentOptions, setDepartmentOptions] = useState([]);
   const [resetTarget, setResetTarget] = useState(null);
   const [resetForm, setResetForm] = useState({
     password: '',
     confirm_password: '',
   });
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  async function load() {
+  function buildQueryParams() {
     const params = [];
 
     if (q.trim()) {
@@ -29,11 +248,18 @@ export default function UserControl() {
       params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
     }
 
+    return params;
+  }
+
+  async function load() {
+    const params = buildQueryParams();
+
     const data = await api(
       `/superadmin/users${params.length ? `?${params.join('&')}` : ''}`
     );
 
     setRows(data.items || []);
+    return data.items || [];
   }
 
   async function loadEmployeeOptions(tenantId = '') {
@@ -64,45 +290,73 @@ export default function UserControl() {
     return items;
   }
 
+  async function loadDepartmentOptions(tenantId = '') {
+    const cleanTenant = (tenantId || tenant || '').trim();
+
+    const url = cleanTenant
+      ? `/departments?tenant_id=${encodeURIComponent(cleanTenant)}`
+      : '/departments';
+
+    const data = await api(url);
+    const items = data.items || [];
+
+    setDepartmentOptions(items);
+    return items;
+  }
+
+  async function loadHelperOptions(tenantId = '') {
+    await loadEmployeeOptions(tenantId);
+    await loadDesignationOptions(tenantId);
+    await loadDepartmentOptions(tenantId);
+  }
+
   function resetCreateForm() {
-    setForm({ ...emptyUser });
+    setForm({ ...USER_CREATE_TEMPLATE });
   }
 
   useEffect(() => {
-    load().catch((error) => {
-      console.error(error);
-      setMessage(error.message || 'Unable to load users');
-    });
+    setLoading(true);
 
-    loadEmployeeOptions().catch(console.error);
-    loadDesignationOptions().catch(console.error);
+    load()
+      .catch((error) => {
+        console.error(error);
+        setMessage(error.message || 'Unable to load users');
+      })
+      .finally(() => setLoading(false));
+
+    loadHelperOptions().catch(console.error);
   }, []);
 
   async function searchUsers() {
     try {
+      setMessage('');
+      setLoading(true);
+
       await load();
-      await loadEmployeeOptions();
-      await loadDesignationOptions();
+      await loadHelperOptions(tenant);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to search users');
+    } finally {
+      setLoading(false);
     }
   }
 
   async function clearSearch() {
     setQ('');
     setTenant('');
+    setMessage('');
 
     try {
+      setLoading(true);
+
       const data = await api('/superadmin/users');
       setRows(data.items || []);
 
-      const empData = await api('/employees');
-      setEmployeeOptions(empData.items || []);
-
-      const desigData = await api('/designations');
-      setDesignationOptions(desigData.items || []);
+      await loadHelperOptions('');
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to clear search');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -110,69 +364,126 @@ export default function UserControl() {
     e.preventDefault();
 
     try {
+      setMessage('');
+      setSaving(true);
+
+      const payload = { ...form };
+
       const data = await api('/superadmin/users', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
 
       setMessage(data.message || 'User created successfully');
       resetCreateForm();
       await load();
-      await loadEmployeeOptions(form.tenant_id);
-      await loadDesignationOptions(form.tenant_id);
+      await loadHelperOptions(form.tenant_id);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to create user');
+    } finally {
+      setSaving(false);
     }
   }
 
   async function openEdit(user) {
-    const employee = user.employee_profile || {};
+    try {
+      setMessage('');
 
-    await loadEmployeeOptions(user.tenant_id);
-    await loadDesignationOptions(user.tenant_id);
+      const employee = user.employee_profile || {};
 
-    const editData = {
-      ...employee,
-      ...user,
+      await loadHelperOptions(user.tenant_id);
 
-      user_id_for_edit: user._id,
-      employee_id_for_edit: employee._id || '',
+      const editData = {
+        ...USER_CREATE_TEMPLATE,
+        ...employee,
+        ...user,
 
-      roles: (user.roles || []).join(', '),
+        user_id_for_edit: user._id,
+        employee_id_for_edit: employee._id || '',
 
-      emp_code: employee.emp_code || '',
-      department: employee.department || '',
-      designation: employee.designation || '',
-      job_type: employee.job_type || '',
-      project: employee.project || '',
-      state: employee.state || '',
-      status: employee.status || 'Active',
-      salary: employee.salary || 0,
+        roles: (user.roles || []).join(', '),
 
-      is_team_leader: String(employee.is_team_leader || 'false'),
-      is_reporting_officer: String(employee.is_reporting_officer || 'false'),
+        avatar: employee.avatar || '',
+        phone: employee.phone || '',
+        country: employee.country || 'Bangladesh',
+        joining_date: employee.joining_date || '',
+        date_of_birth: employee.date_of_birth || '',
+        blood_group: employee.blood_group || '',
+        gross_salary: employee.gross_salary || '',
+        branch: employee.branch || 'Assam/Guwahati (HO)',
+        aadhar_no: employee.aadhar_no || '',
+        employee_uan_no: employee.employee_uan_no || '',
+        employee_type: employee.employee_type || '',
+        skill_level: employee.skill_level || '',
+        are_parents_senior_citizen: String(
+          employee.are_parents_senior_citizen || 'false'
+        ),
+        number_of_children: employee.number_of_children || '',
+        payment_mode: employee.payment_mode || 'Cash',
+        previous_designation: employee.previous_designation || 'Manager',
+        previous_employment_tenure_end_date:
+          employee.previous_employment_tenure_end_date || '',
+        role: employee.role || 'Employee',
+        designation: employee.designation || '',
+        department: employee.department || '',
+        shift: employee.shift || 'General',
+        gender: employee.gender || 'Male',
+        address: employee.address || '',
+        religion: employee.religion || '',
+        marital_status: employee.marital_status || '',
+        speak_language: employee.speak_language || '',
+        pan_no: employee.pan_no || '',
+        disability_level: employee.disability_level || 'No Disability',
+        employee_esic_ip: employee.employee_esic_ip || '',
+        employment_status: employee.employment_status || '',
+        father_name: employee.father_name || '',
+        dependent_disability_level:
+          employee.dependent_disability_level || 'No Disability',
+        children_in_hostel: employee.children_in_hostel || '',
+        previous_employer_name: employee.previous_employer_name || '',
+        previous_employment_tenure_from_date:
+          employee.previous_employment_tenure_from_date || '',
+        employee_id: employee.employee_id || '',
 
-      team_leader_id: employee.team_leader_id || '',
-      reporting_officer_id: employee.reporting_officer_id || '',
+        emp_code: employee.emp_code || '',
+        job_type: employee.job_type || '',
+        project: employee.project || '',
+        state: employee.state || '',
+        status: employee.status || 'Active',
+        salary: employee.salary || 0,
 
-      password: '',
-      is_active: String(user.is_active !== false),
-    };
+        is_team_leader: String(employee.is_team_leader || 'false'),
+        is_reporting_officer: String(employee.is_reporting_officer || 'false'),
 
-    setEdit(editData);
+        team_leader_id: employee.team_leader_id || '',
+        team_leader_name: employee.team_leader_name || '',
+        reporting_officer_id: employee.reporting_officer_id || '',
+        reporting_officer_name: employee.reporting_officer_name || '',
 
-    setTimeout(() => {
-      document.getElementById('user-edit-section')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    }, 100);
+        password: '',
+        is_active: String(user.is_active !== false),
+      };
+
+      setEdit(editData);
+
+      setTimeout(() => {
+        document.getElementById('user-edit-section')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 100);
+    } catch (error) {
+      setMessage(error.message || 'Unable to open edit form');
+    }
   }
 
   async function save(e) {
     e.preventDefault();
 
     try {
+      setMessage('');
+      setSaving(true);
+
       const payload = { ...edit };
 
       delete payload.user_id_for_edit;
@@ -195,10 +506,11 @@ export default function UserControl() {
       setMessage(data.message || 'User/profile updated successfully');
       setEdit(null);
       await load();
-      await loadEmployeeOptions(payload.tenant_id);
-      await loadDesignationOptions(payload.tenant_id);
+      await loadHelperOptions(payload.tenant_id);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to save user');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -236,6 +548,9 @@ export default function UserControl() {
     }
 
     try {
+      setMessage('');
+      setSaving(true);
+
       const data = await api(`/superadmin/users/${resetTarget._id}/reset-password`, {
         method: 'POST',
         body: JSON.stringify({ password: resetForm.password }),
@@ -248,7 +563,9 @@ export default function UserControl() {
         confirm_password: '',
       });
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || 'Unable to reset password');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -257,104 +574,83 @@ export default function UserControl() {
     return designation === 'managing director' || designation === 'manager';
   }
 
-  function renderCreateField(key) {
-    const label = key.replaceAll('_', ' ');
+  function formatLabel(key) {
+    const labelText = key
+      .replaceAll('_', ' ')
+      .split(' ')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
 
-    if (key === 'designation') {
-      return (
-        <label key={key}>
-          {label}
-          <select
-            value={form[key] ?? ''}
-            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-          >
-            <option value="">Select designation</option>
-
-            {designationOptions.map((desig) => {
-              const value = desig.title || desig.name || '';
-
-              return (
-                <option key={desig._id || value} value={value}>
-                  {value}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-      );
-    }
-
-    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
-      return (
-        <label key={key}>
-          {label}
-          <select
-            value={String(form[key] ?? 'false')}
-            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-          >
-            <option value="false">No</option>
-            <option value="true">Yes</option>
-          </select>
-        </label>
-      );
-    }
-
-    if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
-      const filteredEmployees = employeeOptions
-        .filter((emp) => {
-          if (key !== 'reporting_officer_id') {
-            return true;
-          }
-
-          return isReportingOfficerEligible(emp);
-        });
-
-      return (
-        <label key={key}>
-          {label}
-          <select
-            value={form[key] ?? ''}
-            onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-          >
-            <option value="">Select {label}</option>
-
-            {filteredEmployees.map((emp) => (
-              <option key={emp._id} value={emp._id}>
-                {emp.name} — {emp.designation || emp.department || emp.email}
-              </option>
-            ))}
-          </select>
-        </label>
-      );
-    }
-
-    return (
-      <label key={key}>
-        {label}
-        <input
-          type={key === 'password' ? 'password' : 'text'}
-          value={form[key] ?? ''}
-          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-        />
-      </label>
-    );
+    return REQUIRED_FIELDS.includes(key) ? `${labelText} *` : labelText;
   }
 
-  function renderEditField(key) {
-    const label = key.replaceAll('_', ' ');
+  function applyTeamLeaderChange(state, setState, employeeId) {
+    const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      team_leader_id: employeeId,
+      team_leader_name: selectedEmployee?.name || '',
+    });
+  }
+
+  function applyReportingOfficerChange(state, setState, employeeId) {
+    const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      reporting_officer_id: employeeId,
+      reporting_officer_name: selectedEmployee?.name || '',
+    });
+  }
+
+  function renderCommonField(state, setState, key, mode = 'create') {
+    const label = formatLabel(key);
+
+    if (key === 'department') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="">Select department</option>
+
+            {departmentOptions.map((dept) => {
+              const value = dept.name || dept.title || '';
+
+              if (!value) {
+                return null;
+              }
+
+              return (
+                <option key={dept._id || value} value={value}>
+                  {value}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      );
+    }
 
     if (key === 'designation') {
       return (
         <label key={key}>
           {label}
           <select
-            value={edit[key] ?? ''}
-            onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             <option value="">Select designation</option>
 
             {designationOptions.map((desig) => {
               const value = desig.title || desig.name || '';
+
+              if (!value) {
+                return null;
+              }
 
               return (
                 <option key={desig._id || value} value={value}>
@@ -362,6 +658,30 @@ export default function UserControl() {
                 </option>
               );
             })}
+          </select>
+        </label>
+      );
+    }
+
+    if (key === 'roles') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] ?? 'employee'}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="admin">Admin</option>
+            <option value="hr_admin">HR Admin</option>
+            <option value="hr_manager">HR Manager</option>
+            <option value="hr">HR</option>
+            <option value="finance">Finance</option>
+            <option value="accounts_finance">Accounts Finance</option>
+            <option value="manager">Manager</option>
+            <option value="ro">RO</option>
+            <option value="team_leader">Team Leader</option>
+            <option value="reporting_officer">Reporting Officer</option>
+            <option value="employee">Employee</option>
           </select>
         </label>
       );
@@ -372,11 +692,26 @@ export default function UserControl() {
         <label key={key}>
           {label}
           <select
-            value={String(edit[key] ?? 'true')}
-            onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+            value={String(state[key] ?? 'true')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             <option value="true">Active</option>
             <option value="false">Inactive</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (key === 'are_parents_senior_citizen') {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            <option value="true">Yes</option>
+            <option value="false">No</option>
           </select>
         </label>
       );
@@ -387,8 +722,8 @@ export default function UserControl() {
         <label key={key}>
           {label}
           <select
-            value={String(edit[key] ?? 'false')}
-            onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             <option value="false">No</option>
             <option value="true">Yes</option>
@@ -399,7 +734,7 @@ export default function UserControl() {
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
       const filteredEmployees = employeeOptions
-        .filter((emp) => emp._id !== edit.employee_id_for_edit)
+        .filter((emp) => emp._id !== state.employee_id_for_edit)
         .filter((emp) => {
           if (key !== 'reporting_officer_id') {
             return true;
@@ -412,10 +747,23 @@ export default function UserControl() {
         <label key={key}>
           {label}
           <select
-            value={edit[key] ?? ''}
-            onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+            value={state[key] ?? ''}
+            onChange={(e) => {
+              if (key === 'team_leader_id') {
+                applyTeamLeaderChange(state, setState, e.target.value);
+                return;
+              }
+
+              applyReportingOfficerChange(state, setState, e.target.value);
+            }}
           >
-            <option value="">Select {label}</option>
+            <option value="">Select {key.replaceAll('_', ' ')}</option>
+
+            {key === 'reporting_officer_id' && !filteredEmployees.length && (
+              <option value="" disabled>
+                No eligible Reporting Officer found
+              </option>
+            )}
 
             {filteredEmployees.map((emp) => (
               <option key={emp._id} value={emp._id}>
@@ -427,43 +775,114 @@ export default function UserControl() {
       );
     }
 
+    if (['team_leader_name', 'reporting_officer_name'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <input
+            type="text"
+            value={state[key] ?? ''}
+            readOnly
+            placeholder={
+              key === 'team_leader_name'
+                ? 'Team leader name'
+                : 'Reporting officer name'
+            }
+          />
+        </label>
+      );
+    }
+
+    if (SELECT_OPTIONS[key]) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          >
+            {SELECT_OPTIONS[key].map((option) => (
+              <option key={option || 'empty'} value={option}>
+                {option || 'Choose One'}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    if (DATE_FIELDS.includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <input
+            type="date"
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          />
+        </label>
+      );
+    }
+
+    if (NUMBER_FIELDS.includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <input
+            type="number"
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          />
+        </label>
+      );
+    }
+
+    if (key === 'address') {
+      return (
+        <label key={key}>
+          {label}
+          <textarea
+            value={state[key] ?? ''}
+            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            rows={3}
+            placeholder="Address"
+          />
+        </label>
+      );
+    }
+
     return (
       <label key={key}>
         {label}
         <input
-          type={key === 'password' ? 'password' : 'text'}
-          value={edit[key] ?? ''}
-          placeholder={
+          type={
             key === 'password'
+              ? 'password'
+              : key === 'email'
+                ? 'email'
+                : key === 'phone'
+                  ? 'tel'
+                  : 'text'
+          }
+          value={state[key] ?? ''}
+          placeholder={
+            mode === 'edit' && key === 'password'
               ? 'Leave blank if password should not change'
               : ''
           }
-          onChange={(e) => setEdit({ ...edit, [key]: e.target.value })}
+          onChange={(e) => setState({ ...state, [key]: e.target.value })}
         />
       </label>
     );
   }
 
-  const editFields = [
-    'name',
-    'email',
-    'tenant_id',
-    'roles',
-    'password',
-    'emp_code',
-    'department',
-    'designation',
-    'job_type',
-    'project',
-    'state',
-    'status',
-    'salary',
-    'is_active',
-    'is_team_leader',
-    'is_reporting_officer',
-    'team_leader_id',
-    'reporting_officer_id',
-  ];
+  function renderCreateField(key) {
+    return renderCommonField(form, setForm, key, 'create');
+  }
+
+  function renderEditField(key) {
+    return renderCommonField(edit, setEdit, key, 'edit');
+  }
 
   return (
     <div className="page-grid">
@@ -495,12 +914,17 @@ export default function UserControl() {
               placeholder="tenant_id filter"
             />
 
-            <button type="button" onClick={searchUsers}>
-              Search
+            <button type="button" onClick={searchUsers} disabled={loading}>
+              {loading ? 'Searching...' : 'Search'}
             </button>
 
             {(q || tenant) && (
-              <button type="button" className="secondary" onClick={clearSearch}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={clearSearch}
+                disabled={loading}
+              >
                 Clear
               </button>
             )}
@@ -508,10 +932,10 @@ export default function UserControl() {
         </div>
 
         <form className="dynamic-form" onSubmit={create}>
-          {Object.keys(emptyUser).map((key) => renderCreateField(key))}
+          {CREATE_FIELD_ORDER.map((key) => renderCreateField(key))}
 
-          <button type="submit" className="primary">
-            <Plus size={16} /> Create User
+          <button type="submit" className="primary" disabled={saving}>
+            <Plus size={16} /> {saving ? 'Creating...' : 'Create User'}
           </button>
         </form>
 
@@ -552,6 +976,7 @@ export default function UserControl() {
                       type="button"
                       className="secondary"
                       onClick={() => openEdit(user)}
+                      disabled={saving}
                     >
                       Edit
                     </button>
@@ -560,6 +985,7 @@ export default function UserControl() {
                       type="button"
                       className="danger"
                       onClick={() => openReset(user)}
+                      disabled={saving}
                     >
                       Reset Password
                     </button>
@@ -569,7 +995,11 @@ export default function UserControl() {
             </tbody>
           </table>
 
-          {!rows.length && <div className="empty">No users found</div>}
+          {!rows.length && (
+            <div className="empty">
+              {loading ? 'Loading users...' : 'No users found'}
+            </div>
+          )}
         </div>
       </section>
 
@@ -588,16 +1018,17 @@ export default function UserControl() {
               type="button"
               className="secondary"
               onClick={() => setEdit(null)}
+              disabled={saving}
             >
               <X size={16} /> Close
             </button>
           </div>
 
           <form className="dynamic-form" onSubmit={save}>
-            {editFields.map((key) => renderEditField(key))}
+            {EDIT_FIELD_ORDER.map((key) => renderEditField(key))}
 
-            <button type="submit" className="primary">
-              <Save size={16} /> Save Changes
+            <button type="submit" className="primary" disabled={saving}>
+              <Save size={16} /> {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </form>
         </section>
@@ -617,6 +1048,7 @@ export default function UserControl() {
               type="button"
               className="secondary"
               onClick={() => setResetTarget(null)}
+              disabled={saving}
             >
               <X size={16} /> Close
             </button>
@@ -648,8 +1080,8 @@ export default function UserControl() {
               />
             </label>
 
-            <button type="submit" className="primary">
-              <KeyRound size={16} /> Update Password
+            <button type="submit" className="primary" disabled={saving}>
+              <KeyRound size={16} /> {saving ? 'Updating...' : 'Update Password'}
             </button>
           </form>
         </section>
