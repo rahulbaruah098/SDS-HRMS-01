@@ -1,43 +1,214 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { RefreshCcw, Search, X } from 'lucide-react';
 import { api } from '../api/client';
 import { roles } from '../utils/authHelpers';
 import AttendanceWidget from '../components/AttendanceWidget';
 import Table from '../components/Table';
 
+const MANAGER_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+];
+
+const HOLIDAY_STATES = [
+  'Assam(HO)',
+  'Manipur',
+  'Mizoram',
+  'Arunachal Pradesh',
+];
+
+const EMPTY_REPORT_FILTERS = {
+  employee_id: '',
+  department: '',
+  mode: '',
+  status: '',
+  date_from: '',
+  date_to: '',
+};
+
+const EMPTY_HOLIDAY_FORM = {
+  state: 'Assam(HO)',
+  date: '',
+  title: '',
+  message: '',
+};
+
+const EMPTY_MODE_REQUEST_FORM = {
+  mode: 'wfh',
+  date: '',
+  reason: '',
+  field_location: '',
+};
+
+const EMPTY_COMPOFF_FORM = {
+  compoff_id: '',
+  claim_date: '',
+  reason: '',
+};
+
+function buildQuery(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+
+    query.append(key, value);
+  });
+
+  const queryString = query.toString();
+  return queryString ? `?${queryString}` : '';
+}
+
+function formatDateTime(value) {
+  if (!value) return '—';
+
+  try {
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return value;
+  }
+}
+
+function modeLabel(mode) {
+  if (mode === 'wfh') return 'Work From Home';
+  if (mode === 'field') return 'Field';
+  if (mode === 'office') return 'Office';
+  return mode || '—';
+}
+
+function statusLabel(value) {
+  if (!value) return '—';
+
+  return String(value)
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeAttendanceRows(rows = []) {
+  return rows.map((row) => ({
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    state: row.state || '—',
+    date: row.date || '—',
+    mode: modeLabel(row.mode),
+    status: statusLabel(row.status),
+    check_in: formatDateTime(row.check_in),
+    check_out: formatDateTime(row.check_out),
+    late_reason: row.late_reason || '—',
+    early_checkout_reason: row.early_checkout_reason || '—',
+    holiday: row.holiday_title || '—',
+    verified: row.verified_by_ro ? 'Yes' : 'No',
+    _id: row._id,
+    verified_by_ro: row.verified_by_ro,
+  }));
+}
+
+function normalizeModeRequestRows(rows = []) {
+  return rows.map((row) => ({
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    mode: modeLabel(row.mode),
+    date: row.date || '—',
+    reason: row.reason || '—',
+    field_location: row.field_location || '—',
+    status: statusLabel(row.status),
+    decided_by: row.decided_by_name || '—',
+    decided_at: formatDateTime(row.decided_at),
+    _id: row._id,
+    raw_status: row.status,
+  }));
+}
+
+function normalizeHolidayRows(rows = []) {
+  return rows.map((row) => ({
+    state: row.state || '—',
+    date: row.date || '—',
+    title: row.title || '—',
+    message: row.message || '—',
+    status: statusLabel(row.status),
+    created_at: formatDateTime(row.created_at),
+    _id: row._id,
+  }));
+}
+
+function normalizeCompOffRows(rows = []) {
+  return rows.map((row) => ({
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    earned_date: row.earned_date || '—',
+    valid_until: row.valid_until || '—',
+    claimed_date: row.claimed_date || '—',
+    holiday: row.holiday_title || '—',
+    status: statusLabel(row.status),
+    _id: row._id,
+    raw_status: row.status,
+  }));
+}
+
 export default function Attendance() {
   const [myAttendance, setMyAttendance] = useState([]);
   const [report, setReport] = useState([]);
-  const [message, setMessage] = useState('');
-  const [loadingReport, setLoadingReport] = useState(false);
-  const [verifyingId, setVerifyingId] = useState('');
-  const [filters, setFilters] = useState({
-    employee_id: '',
-    department: '',
-    date_from: '',
-    date_to: '',
-  });
+  const [modeRequests, setModeRequests] = useState([]);
+  const [myModeRequests, setMyModeRequests] = useState([]);
+  const [holidays, setHolidays] = useState([]);
+  const [myCompOffs, setMyCompOffs] = useState([]);
 
-  const canViewReport = roles().some((role) =>
-    [
-      'super_admin',
-      'admin',
-      'hr_admin',
-      'hr_manager',
-      'hr',
-      'manager',
-      'ro',
-      'team_leader',
-      'reporting_officer',
-    ].includes(role)
+  const [message, setMessage] = useState('');
+  const [loadingPage, setLoadingPage] = useState(false);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [savingHoliday, setSavingHoliday] = useState(false);
+  const [submittingModeRequest, setSubmittingModeRequest] = useState(false);
+  const [decidingRequestId, setDecidingRequestId] = useState('');
+  const [verifyingId, setVerifyingId] = useState('');
+  const [claimingCompOff, setClaimingCompOff] = useState(false);
+
+  const [filters, setFilters] = useState({ ...EMPTY_REPORT_FILTERS });
+  const [holidayForm, setHolidayForm] = useState({ ...EMPTY_HOLIDAY_FORM });
+  const [modeRequestForm, setModeRequestForm] = useState({
+    ...EMPTY_MODE_REQUEST_FORM,
+  });
+  const [compOffForm, setCompOffForm] = useState({ ...EMPTY_COMPOFF_FORM });
+
+  const userRoles = roles();
+
+  const canViewReport = userRoles.some((role) => MANAGER_ROLES.includes(role));
+
+  const canManageHoliday = userRoles.some((role) =>
+    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
   );
 
+  const hasActiveReportFilters = useMemo(() => {
+    return Object.values(filters).some((value) => String(value || '').trim());
+  }, [filters]);
+
   async function loadMyAttendance() {
-    try {
-      const data = await api('/attendance/my');
-      setMyAttendance(data.items || []);
-    } catch (error) {
-      setMessage(error.message || 'Unable to load your attendance');
-    }
+    const data = await api('/attendance/my');
+    setMyAttendance(normalizeAttendanceRows(data.items || []));
   }
 
   async function loadReport(nextFilters = filters) {
@@ -45,70 +216,90 @@ export default function Attendance() {
       return;
     }
 
+    setLoadingReport(true);
+
     try {
-      setLoadingReport(true);
-
-      const params = [];
-
-      if (nextFilters.employee_id.trim()) {
-        params.push(`employee_id=${encodeURIComponent(nextFilters.employee_id.trim())}`);
-      }
-
-      if (nextFilters.department.trim()) {
-        params.push(`department=${encodeURIComponent(nextFilters.department.trim())}`);
-      }
-
-      if (nextFilters.date_from.trim()) {
-        params.push(`date_from=${encodeURIComponent(nextFilters.date_from.trim())}`);
-      }
-
-      if (nextFilters.date_to.trim()) {
-        params.push(`date_to=${encodeURIComponent(nextFilters.date_to.trim())}`);
-      }
-
-      const data = await api(
-        `/attendance/report${params.length ? `?${params.join('&')}` : ''}`
-      );
-
-      setReport(data.items || []);
-    } catch (error) {
-      setMessage(error.message || 'Unable to load attendance report');
+      const data = await api(`/attendance/report${buildQuery(nextFilters)}`);
+      setReport(normalizeAttendanceRows(data.items || []));
     } finally {
       setLoadingReport(false);
     }
   }
 
-  async function refreshAttendance() {
-    setMessage('');
-    await loadMyAttendance();
+  async function loadModeRequests() {
+    if (!canViewReport) {
+      return;
+    }
 
-    if (canViewReport) {
-      await loadReport(filters);
+    const data = await api('/attendance/mode-requests');
+    setModeRequests(normalizeModeRequestRows(data.items || []));
+  }
+
+  async function loadMyModeRequests() {
+    const data = await api('/attendance/my-mode-requests');
+    setMyModeRequests(normalizeModeRequestRows(data.items || []));
+  }
+
+  async function loadHolidays() {
+    if (!canManageHoliday) {
+      return;
+    }
+
+    const data = await api('/attendance/holidays');
+    setHolidays(normalizeHolidayRows(data.items || []));
+  }
+
+  async function loadMyCompOffs() {
+    const data = await api('/attendance/compoffs');
+    setMyCompOffs(normalizeCompOffRows(data.items || []));
+  }
+
+  async function refreshAttendance() {
+    try {
+      setMessage('');
+      setLoadingPage(true);
+
+      await Promise.all([
+        loadMyAttendance(),
+        loadMyModeRequests(),
+        loadMyCompOffs(),
+        canViewReport ? loadReport(filters) : Promise.resolve(),
+        canViewReport ? loadModeRequests() : Promise.resolve(),
+        canManageHoliday ? loadHolidays() : Promise.resolve(),
+      ]);
+    } catch (error) {
+      setMessage(error.message || 'Unable to refresh attendance data');
+    } finally {
+      setLoadingPage(false);
     }
   }
 
   useEffect(() => {
     refreshAttendance();
-  }, [canViewReport]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function searchReport(e) {
-    e.preventDefault();
-    setMessage('');
-    await loadReport(filters);
+  async function searchReport(event) {
+    event.preventDefault();
+
+    try {
+      setMessage('');
+      await loadReport(filters);
+    } catch (error) {
+      setMessage(error.message || 'Unable to load attendance report');
+    }
   }
 
   async function clearReportFilters() {
-    setMessage('');
+    const cleared = { ...EMPTY_REPORT_FILTERS };
 
-    const cleared = {
-      employee_id: '',
-      department: '',
-      date_from: '',
-      date_to: '',
-    };
-
-    setFilters(cleared);
-    await loadReport(cleared);
+    try {
+      setMessage('');
+      setFilters(cleared);
+      await loadReport(cleared);
+    } catch (error) {
+      setMessage(error.message || 'Unable to clear report filters');
+    }
   }
 
   async function verifyAttendance(row) {
@@ -143,6 +334,130 @@ export default function Attendance() {
     }
   }
 
+  async function createHoliday(event) {
+    event.preventDefault();
+
+    if (!holidayForm.date || !holidayForm.title.trim()) {
+      setMessage('Holiday date and title are required');
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSavingHoliday(true);
+
+      const data = await api('/attendance/holidays', {
+        method: 'POST',
+        body: JSON.stringify(holidayForm),
+      });
+
+      setMessage(data.message || 'Holiday added');
+      setHolidayForm({ ...EMPTY_HOLIDAY_FORM });
+      await loadHolidays();
+    } catch (error) {
+      setMessage(error.message || 'Unable to add holiday');
+    } finally {
+      setSavingHoliday(false);
+    }
+  }
+
+  async function submitModeRequest(event) {
+    event.preventDefault();
+
+    if (!modeRequestForm.date || !modeRequestForm.reason.trim()) {
+      setMessage('Date and reason are required for WFH / Field request');
+      return;
+    }
+
+    if (
+      modeRequestForm.mode === 'field' &&
+      !modeRequestForm.field_location.trim()
+    ) {
+      setMessage('Field location is required for field request');
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSubmittingModeRequest(true);
+
+      const data = await api('/attendance/mode-requests', {
+        method: 'POST',
+        body: JSON.stringify(modeRequestForm),
+      });
+
+      setMessage(data.message || 'Request submitted');
+      setModeRequestForm({ ...EMPTY_MODE_REQUEST_FORM });
+      await loadMyModeRequests();
+    } catch (error) {
+      setMessage(error.message || 'Unable to submit request');
+    } finally {
+      setSubmittingModeRequest(false);
+    }
+  }
+
+  async function decideModeRequest(row, status) {
+    const requestId = row?._id;
+
+    if (!requestId) {
+      setMessage('Request id not found');
+      return;
+    }
+
+    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setDecidingRequestId(requestId);
+
+      const data = await api(`/attendance/mode-requests/${requestId}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(data.message || `Request ${status}`);
+      await loadModeRequests();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update request');
+    } finally {
+      setDecidingRequestId('');
+    }
+  }
+
+  async function claimCompOff(event) {
+    event.preventDefault();
+
+    if (!compOffForm.compoff_id || !compOffForm.claim_date) {
+      setMessage('Select comp-off and claim date');
+      return;
+    }
+
+    try {
+      setMessage('');
+      setClaimingCompOff(true);
+
+      const data = await api(`/attendance/compoffs/${compOffForm.compoff_id}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({
+          claim_date: compOffForm.claim_date,
+          reason: compOffForm.reason,
+        }),
+      });
+
+      setMessage(data.message || 'Comp-off claim submitted');
+      setCompOffForm({ ...EMPTY_COMPOFF_FORM });
+      await loadMyCompOffs();
+    } catch (error) {
+      setMessage(error.message || 'Unable to claim comp-off');
+    } finally {
+      setClaimingCompOff(false);
+    }
+  }
+
   const reportRows = report.map((row) => ({
     ...row,
     action: row.verified_by_ro ? (
@@ -159,16 +474,61 @@ export default function Attendance() {
     ),
   }));
 
+  const modeRequestRows = modeRequests.map((row) => ({
+    ...row,
+    action:
+      row.raw_status === 'pending' ? (
+        <div className="row-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => decideModeRequest(row, 'approved')}
+            disabled={decidingRequestId === row._id}
+          >
+            Approve
+          </button>
+
+          <button
+            type="button"
+            className="danger"
+            onClick={() => decideModeRequest(row, 'rejected')}
+            disabled={decidingRequestId === row._id}
+          >
+            Reject
+          </button>
+        </div>
+      ) : (
+        statusLabel(row.raw_status)
+      ),
+  }));
+
+  const availableCompOffs = myCompOffs.filter(
+    (item) => item.raw_status === 'available',
+  );
+
   return (
     <div className="page-grid">
       <section className="hero compact">
         <div>
-          <span className="kicker">Office + Field</span>
+          <span className="kicker">Office + WFH + Field</span>
           <h1>Attendance Management</h1>
           <p>
-            Check-in/check-out, field mode, late reason after 09:45 AM, RO
-            verification and reports.
+            Press and hold for attendance, capture exact latitude and longitude,
+            manage late entry reasons after 09:50 AM, early checkout reasons,
+            holiday work, WFH/Field approvals and comp-off claims.
           </p>
+
+          <div className="hero-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={refreshAttendance}
+              disabled={loadingPage}
+            >
+              <RefreshCcw size={16} />
+              {loadingPage ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
         <AttendanceWidget onSuccess={refreshAttendance} />
@@ -178,81 +538,351 @@ export default function Attendance() {
 
       <section className="two-col">
         <div className="panel">
-          <h3>My Attendance</h3>
-          <Table rows={myAttendance} />
+          <h3>Request Work From Home / Field</h3>
+          <p>
+            WFH and Field check-in buttons will appear only after approval for
+            the selected date.
+          </p>
+
+          <form className="dynamic-form" onSubmit={submitModeRequest}>
+            <label>
+              Mode
+              <select
+                value={modeRequestForm.mode}
+                onChange={(e) =>
+                  setModeRequestForm({
+                    ...modeRequestForm,
+                    mode: e.target.value,
+                  })
+                }
+              >
+                <option value="wfh">Work From Home</option>
+                <option value="field">Field</option>
+              </select>
+            </label>
+
+            <label>
+              Date
+              <input
+                type="date"
+                value={modeRequestForm.date}
+                onChange={(e) =>
+                  setModeRequestForm({
+                    ...modeRequestForm,
+                    date: e.target.value,
+                  })
+                }
+              />
+            </label>
+
+            {modeRequestForm.mode === 'field' && (
+              <label>
+                Field Location
+                <input
+                  value={modeRequestForm.field_location}
+                  onChange={(e) =>
+                    setModeRequestForm({
+                      ...modeRequestForm,
+                      field_location: e.target.value,
+                    })
+                  }
+                  placeholder="Visit place / client location"
+                />
+              </label>
+            )}
+
+            <label>
+              Reason
+              <textarea
+                value={modeRequestForm.reason}
+                onChange={(e) =>
+                  setModeRequestForm({
+                    ...modeRequestForm,
+                    reason: e.target.value,
+                  })
+                }
+                placeholder="Reason for WFH / Field attendance"
+              />
+            </label>
+
+            <button
+              type="submit"
+              className="primary"
+              disabled={submittingModeRequest}
+            >
+              {submittingModeRequest ? 'Submitting...' : 'Submit Request'}
+            </button>
+          </form>
         </div>
 
-        {canViewReport && (
-          <div className="panel">
-            <h3>Attendance Report</h3>
+        <div className="panel">
+          <h3>My WFH / Field Requests</h3>
+          <Table rows={myModeRequests} maxColumns={10} />
+        </div>
+      </section>
 
-            <form className="dynamic-form" onSubmit={searchReport}>
-              <label>
-                Employee ID
-                <input
-                  value={filters.employee_id}
-                  onChange={(e) =>
-                    setFilters({ ...filters, employee_id: e.target.value })
-                  }
-                  placeholder="Employee Mongo ID"
-                />
-              </label>
+      <section className="two-col">
+        <div className="panel">
+          <h3>My Attendance</h3>
+          <Table rows={myAttendance} maxColumns={10} />
+        </div>
 
-              <label>
-                Department
-                <input
-                  value={filters.department}
-                  onChange={(e) =>
-                    setFilters({ ...filters, department: e.target.value })
-                  }
-                  placeholder="Department"
-                />
-              </label>
+        <div className="panel">
+          <h3>My Comp-Off Credits</h3>
 
-              <label>
-                Date From
-                <input
-                  type="date"
-                  value={filters.date_from}
-                  onChange={(e) =>
-                    setFilters({ ...filters, date_from: e.target.value })
-                  }
-                />
-              </label>
-
-              <label>
-                Date To
-                <input
-                  type="date"
-                  value={filters.date_to}
-                  onChange={(e) =>
-                    setFilters({ ...filters, date_to: e.target.value })
-                  }
-                />
-              </label>
-
-              <button
-                type="submit"
-                className="primary"
-                disabled={loadingReport}
+          <form className="dynamic-form" onSubmit={claimCompOff}>
+            <label>
+              Available Comp-Off
+              <select
+                value={compOffForm.compoff_id}
+                onChange={(e) =>
+                  setCompOffForm({
+                    ...compOffForm,
+                    compoff_id: e.target.value,
+                  })
+                }
               >
-                {loadingReport ? 'Searching...' : 'Search'}
-              </button>
+                <option value="">Select comp-off</option>
+                {availableCompOffs.map((item) => (
+                  <option key={item._id} value={item._id}>
+                    {item.earned_date} — valid until {item.valid_until}
+                  </option>
+                ))}
+              </select>
+            </label>
 
+            <label>
+              Claim Date
+              <input
+                type="date"
+                value={compOffForm.claim_date}
+                onChange={(e) =>
+                  setCompOffForm({
+                    ...compOffForm,
+                    claim_date: e.target.value,
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              Reason
+              <input
+                value={compOffForm.reason}
+                onChange={(e) =>
+                  setCompOffForm({
+                    ...compOffForm,
+                    reason: e.target.value,
+                  })
+                }
+                placeholder="Optional reason"
+              />
+            </label>
+
+            <button
+              type="submit"
+              className="primary"
+              disabled={claimingCompOff || !availableCompOffs.length}
+            >
+              {claimingCompOff ? 'Claiming...' : 'Claim Comp-Off'}
+            </button>
+          </form>
+
+          <Table rows={myCompOffs} maxColumns={10} />
+        </div>
+      </section>
+
+      {canViewReport && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Attendance Report</h3>
+              <p>
+                Review attendance records by employee, department, mode, status
+                and date range.
+              </p>
+            </div>
+
+            {hasActiveReportFilters && (
               <button
                 type="button"
                 className="secondary"
                 onClick={clearReportFilters}
                 disabled={loadingReport}
               >
-                Clear
+                <X size={16} />
+                Clear Filters
               </button>
-            </form>
-
-            <Table rows={reportRows} />
+            )}
           </div>
-        )}
-      </section>
+
+          <form className="dynamic-form" onSubmit={searchReport}>
+            <label>
+              Employee ID
+              <input
+                value={filters.employee_id}
+                onChange={(e) =>
+                  setFilters({ ...filters, employee_id: e.target.value })
+                }
+                placeholder="Employee Mongo ID"
+              />
+            </label>
+
+            <label>
+              Department
+              <input
+                value={filters.department}
+                onChange={(e) =>
+                  setFilters({ ...filters, department: e.target.value })
+                }
+                placeholder="Department"
+              />
+            </label>
+
+            <label>
+              Mode
+              <select
+                value={filters.mode}
+                onChange={(e) =>
+                  setFilters({ ...filters, mode: e.target.value })
+                }
+              >
+                <option value="">All Modes</option>
+                <option value="office">Office</option>
+                <option value="wfh">Work From Home</option>
+                <option value="field">Field</option>
+              </select>
+            </label>
+
+            <label>
+              Status
+              <input
+                value={filters.status}
+                onChange={(e) =>
+                  setFilters({ ...filters, status: e.target.value })
+                }
+                placeholder="present / late / early_checkout"
+              />
+            </label>
+
+            <label>
+              Date From
+              <input
+                type="date"
+                value={filters.date_from}
+                onChange={(e) =>
+                  setFilters({ ...filters, date_from: e.target.value })
+                }
+              />
+            </label>
+
+            <label>
+              Date To
+              <input
+                type="date"
+                value={filters.date_to}
+                onChange={(e) =>
+                  setFilters({ ...filters, date_to: e.target.value })
+                }
+              />
+            </label>
+
+            <button type="submit" className="primary" disabled={loadingReport}>
+              <Search size={16} />
+              {loadingReport ? 'Searching...' : 'Search'}
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={clearReportFilters}
+              disabled={loadingReport}
+            >
+              Clear
+            </button>
+          </form>
+
+          <Table rows={reportRows} maxColumns={12} />
+        </section>
+      )}
+
+      {canViewReport && (
+        <section className="panel">
+          <h3>WFH / Field Approval Requests</h3>
+          <Table rows={modeRequestRows} maxColumns={11} />
+        </section>
+      )}
+
+      {canManageHoliday && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>State-wise Holiday Calendar</h3>
+              <p>
+                Add holidays for Assam(HO), Manipur, Mizoram and Arunachal
+                Pradesh. Holiday message will show on dashboard and attendance.
+              </p>
+            </div>
+          </div>
+
+          <form className="dynamic-form" onSubmit={createHoliday}>
+            <label>
+              State
+              <select
+                value={holidayForm.state}
+                onChange={(e) =>
+                  setHolidayForm({ ...holidayForm, state: e.target.value })
+                }
+              >
+                {HOLIDAY_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {state}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Date
+              <input
+                type="date"
+                value={holidayForm.date}
+                onChange={(e) =>
+                  setHolidayForm({ ...holidayForm, date: e.target.value })
+                }
+              />
+            </label>
+
+            <label>
+              Holiday Title
+              <input
+                value={holidayForm.title}
+                onChange={(e) =>
+                  setHolidayForm({ ...holidayForm, title: e.target.value })
+                }
+                placeholder="Example: Bohag Bihu"
+              />
+            </label>
+
+            <label>
+              Message
+              <textarea
+                value={holidayForm.message}
+                onChange={(e) =>
+                  setHolidayForm({ ...holidayForm, message: e.target.value })
+                }
+                placeholder="Holiday message for employees"
+              />
+            </label>
+
+            <button type="submit" className="primary" disabled={savingHoliday}>
+              {savingHoliday ? 'Adding...' : 'Add Holiday'}
+            </button>
+          </form>
+
+          <Table rows={holidays} maxColumns={8} />
+        </section>
+      )}
     </div>
   );
 }

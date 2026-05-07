@@ -9,11 +9,43 @@ from app.routes.superadmin import seed_company_masters
 app = create_app()
 
 
+SUPPORTED_HOLIDAY_STATES = [
+    "Assam(HO)",
+    "Manipur",
+    "Mizoram",
+    "Arunachal Pradesh",
+]
+
+
 def now():
     return datetime.utcnow()
 
 
+def normalize_text(value):
+    return str(value or "").strip()
+
+
+def normalize_state(value):
+    state = normalize_text(value)
+
+    if not state:
+        return "Assam(HO)"
+
+    lowered = state.lower()
+
+    if lowered in ["assam", "assam ho", "assam(ho)", "ho", "assam/guwahati (ho)"]:
+        return "Assam(HO)"
+
+    for allowed in SUPPORTED_HOLIDAY_STATES:
+        if lowered == allowed.lower():
+            return allowed
+
+    return state
+
+
 def employee_profile_defaults(row):
+    state = normalize_state(row.get("state") or row.get("branch") or "Assam(HO)")
+
     return {
         "avatar": "",
         "phone": row.get("phone", ""),
@@ -22,7 +54,7 @@ def employee_profile_defaults(row):
         "date_of_birth": row.get("date_of_birth", ""),
         "blood_group": row.get("blood_group", ""),
         "gross_salary": str(row.get("gross_salary", row.get("salary", ""))),
-        "branch": row.get("branch", "Assam/Guwahati (HO)"),
+        "branch": row.get("branch", state),
         "aadhar_no": row.get("aadhar_no", ""),
         "employee_uan_no": row.get("employee_uan_no", ""),
         "employee_type": row.get("employee_type", "Permanent"),
@@ -57,7 +89,53 @@ def employee_profile_defaults(row):
             "previous_employment_tenure_from_date",
             "",
         ),
+        "state": state,
     }
+
+
+def create_leave_balance(db, tenant_id, employee_id, employee_name, department, designation, leave_type, total):
+    total_value = float(total or 0)
+
+    db.leave_balances.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "employee_name": employee_name,
+        "department": department,
+        "designation": designation,
+        "leave_type": leave_type,
+        "opening_balance": total_value,
+        "credited": total_value,
+        "used": 0.0,
+        "available": total_value,
+        "status": "active",
+        "created_at": now(),
+    })
+
+
+def create_default_leave_balances(db, tenant_id, employee):
+    employee_id = str(employee["_id"])
+
+    create_leave_balance(
+        db,
+        tenant_id,
+        employee_id,
+        employee.get("name", ""),
+        employee.get("department", ""),
+        employee.get("designation", ""),
+        "CL",
+        8,
+    )
+
+    create_leave_balance(
+        db,
+        tenant_id,
+        employee_id,
+        employee.get("name", ""),
+        employee.get("department", ""),
+        employee.get("designation", ""),
+        "EL",
+        12,
+    )
 
 
 with app.app_context():
@@ -73,8 +151,12 @@ with app.app_context():
         "projects",
         "states",
         "leave_types",
+        "leave_balances",
         "leave_requests",
+        "holiday_calendar",
         "attendance_logs",
+        "attendance_mode_requests",
+        "compoff_credits",
         "payroll_runs",
         "payslips",
         "job_openings",
@@ -162,6 +244,13 @@ with app.app_context():
             "sds",
         ),
         (
+            "Field Employee",
+            "field@sdshr.in",
+            "Field@123",
+            ["employee"],
+            "sds",
+        ),
+        (
             "Client Company Admin",
             "clientadmin@example.com",
             "Client@123",
@@ -199,6 +288,8 @@ with app.app_context():
             "gross_salary": 120000,
             "tenant_id": "sds",
             "gender": "Male",
+            "state": "Assam(HO)",
+            "branch": "Assam(HO)",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
@@ -215,6 +306,8 @@ with app.app_context():
             "gross_salary": 65000,
             "tenant_id": "sds",
             "gender": "Female",
+            "state": "Assam(HO)",
+            "branch": "Assam(HO)",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
@@ -231,6 +324,8 @@ with app.app_context():
             "gross_salary": 50000,
             "tenant_id": "sds",
             "gender": "Male",
+            "state": "Assam(HO)",
+            "branch": "Assam(HO)",
             "is_team_leader": "false",
             "is_reporting_officer": "false",
         },
@@ -247,6 +342,8 @@ with app.app_context():
             "gross_salary": 60000,
             "tenant_id": "sds",
             "gender": "Male",
+            "state": "Assam(HO)",
+            "branch": "Assam(HO)",
             "is_team_leader": "true",
             "is_reporting_officer": "true",
         },
@@ -263,6 +360,26 @@ with app.app_context():
             "gross_salary": 35000,
             "tenant_id": "sds",
             "gender": "Male",
+            "state": "Assam(HO)",
+            "branch": "Assam(HO)",
+            "is_team_leader": "false",
+            "is_reporting_officer": "false",
+        },
+        {
+            "employee_id": "SDS-EMP-006",
+            "emp_code": "SDS006",
+            "name": "Field Employee",
+            "email": "field@sdshr.in",
+            "phone": "9000000006",
+            "department": "Operations",
+            "designation": "Associate",
+            "role": "Employee",
+            "salary": 32000,
+            "gross_salary": 32000,
+            "tenant_id": "sds",
+            "gender": "Female",
+            "state": "Manipur",
+            "branch": "Manipur",
             "is_team_leader": "false",
             "is_reporting_officer": "false",
         },
@@ -279,6 +396,8 @@ with app.app_context():
             "gross_salary": 70000,
             "tenant_id": "demo-company",
             "gender": "Male",
+            "state": "Arunachal Pradesh",
+            "branch": "Arunachal Pradesh",
             "is_team_leader": "false",
             "is_reporting_officer": "true",
         },
@@ -288,7 +407,6 @@ with app.app_context():
 
     for row in employee_rows:
         email = row["email"]
-
         profile_defaults = employee_profile_defaults(row)
 
         employee_doc = {
@@ -305,7 +423,8 @@ with app.app_context():
             "role": row.get("role", "Employee"),
             "job_type": "Regular",
             "project": "SFAC",
-            "state": "Assam",
+            "state": normalize_state(row.get("state")),
+            "branch": normalize_state(row.get("branch") or row.get("state")),
             "doj": row.get("joining_date", "2026-01-01"),
             "joining_date": row.get("joining_date", "2026-01-01"),
             "status": "Active",
@@ -322,55 +441,271 @@ with app.app_context():
         }
 
         res = db.employees.insert_one(employee_doc)
-
         eids[email] = str(res.inserted_id)
 
-    db.employees.update_one(
-        {"email": "employee@sdshr.in"},
-        {
-            "$set": {
-                "team_leader_id": eids.get("manager@sdshr.in", ""),
-                "team_leader_name": "Manager User",
-                "reporting_officer_id": eids.get("hr@sdshr.in", ""),
-                "reporting_officer_name": "HR Manager",
-                "updated_at": now(),
-            }
+    employee_manager_map = {
+        "employee@sdshr.in": {
+            "team_leader_id": eids.get("manager@sdshr.in", ""),
+            "team_leader_name": "Manager User",
+            "reporting_officer_id": eids.get("hr@sdshr.in", ""),
+            "reporting_officer_name": "HR Manager",
         },
-    )
+        "finance@sdshr.in": {
+            "team_leader_id": eids.get("manager@sdshr.in", ""),
+            "team_leader_name": "Manager User",
+            "reporting_officer_id": eids.get("hr@sdshr.in", ""),
+            "reporting_officer_name": "HR Manager",
+        },
+        "field@sdshr.in": {
+            "team_leader_id": eids.get("manager@sdshr.in", ""),
+            "team_leader_name": "Manager User",
+            "reporting_officer_id": eids.get("hr@sdshr.in", ""),
+            "reporting_officer_name": "HR Manager",
+        },
+    }
 
-    db.employees.update_one(
-        {"email": "finance@sdshr.in"},
-        {
-            "$set": {
-                "team_leader_id": eids.get("manager@sdshr.in", ""),
-                "team_leader_name": "Manager User",
-                "reporting_officer_id": eids.get("hr@sdshr.in", ""),
-                "reporting_officer_name": "HR Manager",
-                "updated_at": now(),
-            }
-        },
-    )
+    for email, mapping in employee_manager_map.items():
+        db.employees.update_one(
+            {"email": email},
+            {
+                "$set": {
+                    **mapping,
+                    "updated_at": now(),
+                }
+            },
+        )
+
+    refreshed_employees = list(db.employees.find({}))
+
+    for employee in refreshed_employees:
+        create_default_leave_balances(
+            db,
+            employee.get("tenant_id", "sds"),
+            employee,
+        )
 
     db.leave_requests.insert_one({
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
         "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
         "team_leader_id": eids["manager@sdshr.in"],
         "team_leader_name": "Manager User",
         "reporting_officer_id": eids["hr@sdshr.in"],
         "reporting_officer_name": "HR Manager",
-        "leave_type": "Casual Leave",
+        "leave_type": "CL",
         "from_date": "2026-05-10",
         "to_date": "2026-05-11",
+        "leave_days": 2,
         "reason": "Personal work",
         "status": "pending",
+        "approval_stage": "team_leader",
+        "approval_stage_label": "Team Leader",
+        "approval_history": [],
+        "balance_deducted": False,
         "created_at": now(),
+    })
+
+    db.leave_requests.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["field@sdshr.in"],
+        "employee_name": "Field Employee",
+        "department": "Operations",
+        "designation": "Associate",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "leave_type": "CL",
+        "from_date": "2026-05-12",
+        "to_date": "2026-05-12",
+        "leave_days": 0.5,
+        "reason": "Half-day personal work",
+        "status": "pending",
+        "approval_stage": "team_leader",
+        "approval_stage_label": "Team Leader",
+        "approval_history": [],
+        "balance_deducted": False,
+        "created_at": now(),
+    })
+
+    db.holiday_calendar.insert_one({
+        "tenant_id": tenant_id,
+        "state": "Assam(HO)",
+        "date": "2026-05-08",
+        "title": "Bohag Bihu",
+        "message": "Bohag Bihu holiday for Assam(HO). Wishing everyone a joyful celebration.",
+        "status": "active",
+        "created_at": now(),
+        "created_by": uids["hr@sdshr.in"],
+    })
+
+    db.holiday_calendar.insert_one({
+        "tenant_id": tenant_id,
+        "state": "Manipur",
+        "date": "2026-05-09",
+        "title": "State Holiday",
+        "message": "Holiday configured for Manipur employees.",
+        "status": "active",
+        "created_at": now(),
+        "created_by": uids["hr@sdshr.in"],
+    })
+
+    db.attendance_mode_requests.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["employee@sdshr.in"],
+        "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "mode": "wfh",
+        "date": "2026-05-08",
+        "reason": "Need to work from home due to personal work.",
+        "field_location": "",
+        "status": "approved",
+        "decision_note": "Approved for demo.",
+        "decided_at": now(),
+        "decided_by": uids["manager@sdshr.in"],
+        "decided_by_name": "Manager User",
+        "created_at": now(),
+        "updated_at": now(),
+    })
+
+    db.attendance_mode_requests.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["field@sdshr.in"],
+        "employee_name": "Field Employee",
+        "department": "Operations",
+        "designation": "Associate",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "mode": "field",
+        "date": "2026-05-08",
+        "reason": "Client field visit.",
+        "field_location": "Imphal field office",
+        "status": "pending",
+        "created_at": now(),
+        "updated_at": now(),
+    })
+
+    db.attendance_logs.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["employee@sdshr.in"],
+        "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
+        "state": "Assam(HO)",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "date": "2026-05-07",
+        "check_in": now(),
+        "check_out": None,
+        "office_start": "09:30",
+        "late_cutoff": "09:50",
+        "office_end": "18:00",
+        "mode": "office",
+        "field_location": "",
+        "late_reason": "",
+        "early_checkout_reason": "",
+        "check_in_location": {
+            "latitude": 26.1445,
+            "longitude": 91.7362,
+            "accuracy": 25,
+            "address": "Guwahati, Assam",
+        },
+        "check_out_location": None,
+        "is_late": False,
+        "is_early_checkout": False,
+        "is_holiday_work": False,
+        "holiday_title": "",
+        "holiday_message": "",
+        "status": "present",
+        "verified_by_ro": False,
+        "timeline": [],
+        "created_at": now(),
+        "updated_at": now(),
+    })
+
+    db.attendance_logs.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["finance@sdshr.in"],
+        "employee_name": "Finance User",
+        "department": "Finance & Accounts",
+        "designation": "Executive",
+        "state": "Assam(HO)",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "date": "2026-05-07",
+        "check_in": now(),
+        "check_out": now(),
+        "office_start": "09:30",
+        "late_cutoff": "09:50",
+        "office_end": "18:00",
+        "mode": "office",
+        "field_location": "",
+        "late_reason": "Traffic delay",
+        "early_checkout_reason": "",
+        "check_in_location": {
+            "latitude": 26.1445,
+            "longitude": 91.7362,
+            "accuracy": 28,
+            "address": "Guwahati, Assam",
+        },
+        "check_out_location": {
+            "latitude": 26.1445,
+            "longitude": 91.7362,
+            "accuracy": 28,
+            "address": "Guwahati, Assam",
+        },
+        "is_late": True,
+        "is_early_checkout": False,
+        "is_holiday_work": False,
+        "holiday_title": "",
+        "holiday_message": "",
+        "status": "late",
+        "verified_by_ro": True,
+        "timeline": [],
+        "created_at": now(),
+        "updated_at": now(),
+    })
+
+    db.compoff_credits.insert_one({
+        "tenant_id": tenant_id,
+        "employee_id": eids["employee@sdshr.in"],
+        "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
+        "team_leader_id": eids["manager@sdshr.in"],
+        "team_leader_name": "Manager User",
+        "reporting_officer_id": eids["hr@sdshr.in"],
+        "reporting_officer_name": "HR Manager",
+        "source_attendance_id": "",
+        "earned_date": "2026-05-03",
+        "valid_until": "2026-08-01",
+        "leave_days": 1.0,
+        "status": "available",
+        "holiday_title": "Sunday Holiday",
+        "holiday_message": "Worked on weekly holiday.",
+        "created_at": now(),
+        "updated_at": now(),
     })
 
     db.expenses.insert_one({
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
         "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
         "type": "Local Conveyance",
         "amount": 850,
         "description": "Field visit travel",
@@ -433,6 +768,8 @@ with app.app_context():
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
         "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
         "cycle": "May 2026",
         "rating": 4,
         "comments": "Good progress in assigned operational tasks.",
@@ -450,6 +787,8 @@ with app.app_context():
         "tenant_id": tenant_id,
         "employee_id": eids["employee@sdshr.in"],
         "employee_name": "Employee User",
+        "department": "Operations",
+        "designation": "Associate",
         "cycle": "May 2026",
         "rating": 4.5,
         "comments": "Consistent attendance and good field coordination.",
@@ -469,6 +808,17 @@ with app.app_context():
         "title": "Welcome to SDS HRMS",
         "body": "Your employee self-service dashboard is active.",
         "read": False,
+        "status": "unread",
+        "created_at": now(),
+    })
+
+    db.notifications.insert_one({
+        "tenant_id": tenant_id,
+        "user_id": uids["hr@sdshr.in"],
+        "title": "Comp-Off Earned",
+        "body": "Employee User worked on a holiday and earned one comp-off.",
+        "read": False,
+        "status": "unread",
         "created_at": now(),
     })
 
@@ -476,7 +826,7 @@ with app.app_context():
         "tenant_id": tenant_id,
         "title": "Attendance Policy",
         "category": "HR",
-        "summary": "Check-in after 09:45 requires a late reason.",
+        "summary": "Office timing is 09:30 AM to 06:00 PM. Check-in from 09:50 AM requires a late reason.",
         "status": "published",
         "created_at": now(),
     })
@@ -488,4 +838,5 @@ with app.app_context():
     print("Finance: finance@sdshr.in / Finance@123")
     print("Manager / Team Leader: manager@sdshr.in / Manager@123")
     print("Employee: employee@sdshr.in / Employee@123")
+    print("Field Employee: field@sdshr.in / Field@123")
     print("Demo Company Admin: clientadmin@example.com / Client@123")

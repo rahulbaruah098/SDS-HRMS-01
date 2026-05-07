@@ -11,6 +11,57 @@ from app.utils.serializers import clean_doc
 crud_bp = Blueprint("crud", __name__)
 
 
+ADMIN_HR_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+}
+
+MANAGER_SCOPE_ROLES = {
+    "manager",
+    "ro",
+    "team_leader",
+    "reporting_officer",
+}
+
+SELF_SERVICE_COLLECTIONS = {
+    "leave_balances",
+    "leave_requests",
+    "attendance_logs",
+    "attendance_mode_requests",
+    "compoff_credits",
+    "payslips",
+    "performance_reviews",
+    "expenses",
+}
+
+EMPLOYEE_CREATE_ONLY_COLLECTIONS = {
+    "leave_requests",
+    "attendance_mode_requests",
+    "expenses",
+    "tickets",
+}
+
+HR_ONLY_CREATE_COLLECTIONS = {
+    "leave_balances",
+    "holiday_calendar",
+}
+
+ATTENDANCE_SYSTEM_COLLECTIONS = {
+    "attendance_logs",
+    "compoff_credits",
+}
+
+SUPPORTED_HOLIDAY_STATES = [
+    "Assam(HO)",
+    "Manipur",
+    "Mizoram",
+    "Arunachal Pradesh",
+]
+
+
 COLLECTIONS = {
     "employees": [
         "name",
@@ -22,6 +73,7 @@ COLLECTIONS = {
         "designation",
         "role",
         "branch",
+        "state",
         "employment_status",
         "status",
     ],
@@ -30,7 +82,59 @@ COLLECTIONS = {
     "projects": ["name"],
     "states": ["name"],
     "leave_types": ["name"],
-    "leave_requests": ["employee_name", "leave_type", "status"],
+
+    "leave_balances": [
+        "employee_name",
+        "leave_type",
+        "department",
+        "designation",
+    ],
+
+    "leave_requests": [
+        "employee_name",
+        "leave_type",
+        "status",
+        "approval_stage",
+        "department",
+        "designation",
+    ],
+
+    "holiday_calendar": [
+        "state",
+        "date",
+        "title",
+        "message",
+        "status",
+    ],
+
+    "attendance_logs": [
+        "employee_name",
+        "department",
+        "designation",
+        "state",
+        "date",
+        "mode",
+        "status",
+    ],
+
+    "attendance_mode_requests": [
+        "employee_name",
+        "department",
+        "designation",
+        "mode",
+        "date",
+        "status",
+    ],
+
+    "compoff_credits": [
+        "employee_name",
+        "department",
+        "designation",
+        "earned_date",
+        "claimed_date",
+        "status",
+    ],
+
     "payroll_runs": ["month", "status"],
     "payslips": ["employee_name", "month"],
     "job_openings": ["title", "department", "status"],
@@ -62,7 +166,72 @@ COLLECTION_ROLES = {
     "states": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
     "leave_types": {"super_admin", "admin", "hr_admin", "hr_manager", "hr"},
 
+    "leave_balances": {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
+    },
+
     "leave_requests": {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
+    },
+
+    "holiday_calendar": {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
+    },
+
+    "attendance_logs": {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
+    },
+
+    "attendance_mode_requests": {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+        "employee",
+    },
+
+    "compoff_credits": {
         "super_admin",
         "admin",
         "hr_admin",
@@ -485,6 +654,160 @@ def is_self_service_user(roles):
     )
 
 
+def is_admin_hr_user(roles):
+    return bool(roles.intersection(ADMIN_HR_ROLES))
+
+
+def normalize_state(value):
+    state = normalize_text(value)
+
+    if not state:
+        return "Assam(HO)"
+
+    lowered = state.lower()
+
+    if lowered in ["assam", "assam ho", "assam(ho)", "ho"]:
+        return "Assam(HO)"
+
+    for allowed in SUPPORTED_HOLIDAY_STATES:
+        if lowered == allowed.lower():
+            return allowed
+
+    return state
+
+
+def current_employee_id_for_user(db, tenant_id):
+    employee = current_employee_for_user(db, tenant_id)
+    return str(employee["_id"]) if employee else ""
+
+
+def scoped_employee_ids_for_manager(db, tenant_id):
+    roles = set(g.current_user.get("roles", []))
+
+    if is_admin_hr_user(roles):
+        return None
+
+    manager_employee = current_employee_for_user(db, tenant_id)
+
+    if not manager_employee:
+        return []
+
+    manager_employee_id = str(manager_employee["_id"])
+    scope_or = []
+
+    if "team_leader" in roles:
+        scope_or.append({"team_leader_id": manager_employee_id})
+
+    if roles.intersection({"manager", "ro", "reporting_officer"}):
+        scope_or.append({"reporting_officer_id": manager_employee_id})
+
+    if not scope_or:
+        return []
+
+    employees = list(db.employees.find({
+        "tenant_id": tenant_id,
+        "status": {"$ne": "Inactive"},
+        "$or": scope_or,
+    }))
+
+    return [str(employee["_id"]) for employee in employees]
+
+
+def apply_people_scope(db, q, collection, roles, tenant_id):
+    if "super_admin" in roles or is_admin_hr_user(roles):
+        return q
+
+    current_employee_id = current_employee_id_for_user(db, tenant_id)
+
+    if is_self_service_user(roles):
+        if collection in SELF_SERVICE_COLLECTIONS:
+            q["employee_id"] = current_employee_id or "__none__"
+
+        if collection == "tickets":
+            q["raised_by"] = current_employee_id or "__none__"
+
+        if collection == "notifications":
+            q["user_id"] = str(g.current_user["_id"])
+
+        return q
+
+    if roles.intersection(MANAGER_SCOPE_ROLES):
+        scoped_employee_ids = scoped_employee_ids_for_manager(db, tenant_id)
+
+        if scoped_employee_ids is not None and collection in SELF_SERVICE_COLLECTIONS:
+            q["employee_id"] = {"$in": scoped_employee_ids}
+
+    return q
+
+
+def sanitize_holiday_payload(data):
+    clean = {
+        "state": normalize_state(data.get("state")),
+        "date": normalize_text(data.get("date")),
+        "title": normalize_text(data.get("title")),
+        "message": normalize_text(data.get("message")),
+        "status": normalize_status(data.get("status"), "active"),
+    }
+
+    return clean
+
+
+def sanitize_leave_balance_payload(data):
+    clean = {
+        "employee_id": normalize_text(data.get("employee_id")),
+        "leave_type": normalize_text(data.get("leave_type")).upper(),
+        "opening_balance": data.get("opening_balance", 0),
+        "credited": data.get("credited", data.get("opening_balance", 0)),
+        "used": data.get("used", 0),
+        "available": data.get("available"),
+        "status": normalize_status(data.get("status"), "active"),
+    }
+
+    for number_key in ["opening_balance", "credited", "used"]:
+        try:
+            clean[number_key] = float(clean[number_key] or 0)
+        except Exception:
+            clean[number_key] = 0.0
+
+    if clean["available"] in [None, ""]:
+        clean["available"] = max(clean["credited"] - clean["used"], 0)
+    else:
+        try:
+            clean["available"] = float(clean["available"] or 0)
+        except Exception:
+            clean["available"] = 0.0
+
+    return clean
+
+
+def attach_employee_snapshot(db, tenant_id, data):
+    employee_id = normalize_text(data.get("employee_id"))
+    employee_obj_id = safe_object_id(employee_id)
+
+    if not employee_obj_id:
+        return data, None
+
+    employee = db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+    })
+
+    if not employee:
+        return data, None
+
+    data.update({
+        "employee_name": employee.get("name", ""),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
+    })
+
+    return data, employee
+
+
 def sanitize_employee_payload(data):
     clean = {}
 
@@ -500,6 +823,7 @@ def sanitize_employee_payload(data):
     clean["department"] = normalize_text(clean.get("department"))
     clean["designation"] = normalize_text(clean.get("designation"))
     clean["branch"] = normalize_text(clean.get("branch"))
+    clean["state"] = normalize_state(clean.get("state"))
     clean["role"] = clean.get("role") or "Employee"
     clean["status"] = clean.get("status") or "Active"
 
@@ -522,25 +846,67 @@ def list_items(collection):
     roles = set(g.current_user.get("roles", []))
 
     q = scoped_query()
+    tenant_id = q.get("tenant_id") or g.tenant_id
+
     q.update(search(request.args.get("q", "").strip(), COLLECTIONS[collection]))
 
-    if is_self_service_user(roles):
-        emp = current_employee_for_user(db, g.tenant_id)
-        eid = str(emp["_id"]) if emp else "__none__"
+    status = normalize_text(request.args.get("status"))
+    employee_id = normalize_text(request.args.get("employee_id"))
+    department = normalize_text(request.args.get("department"))
+    mode = normalize_text(request.args.get("mode"))
+    state = normalize_text(request.args.get("state"))
+    date_from = normalize_text(request.args.get("date_from"))
+    date_to = normalize_text(request.args.get("date_to"))
 
-        if collection in ["leave_requests", "payslips", "performance_reviews", "expenses"]:
-            q["employee_id"] = eid
+    if status:
+        q["status"] = status
 
-        if collection == "tickets":
-            q["raised_by"] = eid
+    if employee_id:
+        q["employee_id"] = employee_id
 
-        if collection == "notifications":
-            q["user_id"] = str(g.current_user["_id"])
+    if department:
+        q["department"] = department
+
+    if mode:
+        q["mode"] = mode
+
+    if state:
+        q["state"] = normalize_state(state)
+
+    if date_from or date_to:
+        date_field = "date"
+
+        if collection == "compoff_credits":
+            date_field = "earned_date"
+
+        if collection == "leave_requests":
+            date_field = "from_date"
+
+        q[date_field] = {}
+
+        if date_from:
+            q[date_field]["$gte"] = date_from
+
+        if date_to:
+            q[date_field]["$lte"] = date_to
+
+    q = apply_people_scope(db, q, collection, roles, tenant_id)
+
+    if collection != "audit_logs":
+        q["is_deleted"] = {"$ne": True}
+
+    sort_field = "created_at"
+
+    if collection in ["attendance_logs", "attendance_mode_requests", "holiday_calendar"]:
+        sort_field = "date"
+
+    if collection == "compoff_credits":
+        sort_field = "earned_date"
 
     items = list(
         db[collection]
         .find(q)
-        .sort("created_at", -1)
+        .sort(sort_field, -1)
         .limit(500)
     )
 
@@ -577,8 +943,19 @@ def create_item(collection):
     current_employee_id = str(current_employee["_id"]) if current_employee else ""
     current_employee_name = current_employee.get("name", "") if current_employee else ""
 
+    if collection in ATTENDANCE_SYSTEM_COLLECTIONS:
+        return jsonify({
+            "message": "This module is system generated. Use attendance APIs instead."
+        }), 400
+
+    if collection in HR_ONLY_CREATE_COLLECTIONS and not is_admin_hr_user(roles):
+        return jsonify({"message": "Only HR/Admin can create this record"}), 403
+
     if is_self_service_user(roles):
-        if collection in ["leave_requests", "expenses", "performance_reviews", "payslips"]:
+        if collection not in EMPLOYEE_CREATE_ONLY_COLLECTIONS:
+            return jsonify({"message": "You cannot create records in this module"}), 403
+
+        if collection in ["leave_requests", "attendance_mode_requests", "expenses"]:
             data["employee_id"] = current_employee_id
             data["employee_name"] = current_employee_name
 
@@ -682,6 +1059,91 @@ def create_item(collection):
             "message": f"Employee and login user created. Password: {password}",
             "item": clean_doc(created_employee),
         }), 201
+
+    if collection == "holiday_calendar":
+        data = sanitize_holiday_payload(data)
+
+        if data["state"] not in SUPPORTED_HOLIDAY_STATES:
+            return jsonify({"message": "Invalid holiday state"}), 400
+
+        if not data["date"] or not data["title"]:
+            return jsonify({"message": "Holiday date and title are required"}), 400
+
+        duplicate = db.holiday_calendar.find_one({
+            "tenant_id": tenant_id,
+            "state": data["state"],
+            "date": data["date"],
+            "is_deleted": {"$ne": True},
+            "status": {"$ne": "inactive"},
+        })
+
+        if duplicate:
+            return jsonify({"message": "Holiday already exists for this state and date"}), 409
+
+    if collection == "leave_balances":
+        data = sanitize_leave_balance_payload(data)
+
+        if data["leave_type"] not in ["CL", "EL"]:
+            return jsonify({"message": "Leave balance type must be CL or EL"}), 400
+
+        data, employee = attach_employee_snapshot(db, tenant_id, data)
+
+        if not employee:
+            return jsonify({"message": "Valid employee_id is required"}), 400
+
+        duplicate = db.leave_balances.find_one({
+            "tenant_id": tenant_id,
+            "employee_id": data["employee_id"],
+            "leave_type": data["leave_type"],
+            "is_deleted": {"$ne": True},
+        })
+
+        if duplicate:
+            return jsonify({
+                "message": "Leave balance already exists for this employee and leave type"
+            }), 409
+
+    if collection == "leave_requests":
+        data, employee = attach_employee_snapshot(db, tenant_id, data)
+
+        if not employee:
+            return jsonify({"message": "Valid employee_id is required"}), 400
+
+        data.setdefault("status", "pending")
+        data.setdefault(
+            "approval_stage",
+            "team_leader" if employee.get("team_leader_id") else "reporting_officer",
+        )
+
+    if collection == "attendance_mode_requests":
+        data, employee = attach_employee_snapshot(db, tenant_id, data)
+
+        if not employee:
+            return jsonify({"message": "Valid employee_id is required"}), 400
+
+        mode = normalize_text(data.get("mode")).lower()
+
+        if mode not in ["wfh", "field"]:
+            return jsonify({"message": "Mode must be wfh or field"}), 400
+
+        if not normalize_text(data.get("date")):
+            return jsonify({"message": "Request date is required"}), 400
+
+        if not normalize_text(data.get("reason")):
+            return jsonify({"message": "Reason is required"}), 400
+
+        if mode == "field" and not normalize_text(data.get("field_location")):
+            return jsonify({"message": "Field location is required"}), 400
+
+        data["mode"] = mode
+        data.setdefault("status", "pending")
+
+    if collection == "expenses":
+        data, _ = attach_employee_snapshot(db, tenant_id, data)
+        data.setdefault("status", "pending")
+
+    if collection == "tickets":
+        data.setdefault("status", "open")
 
     data.update({
         "tenant_id": tenant_id,
@@ -857,6 +1319,65 @@ def update_item(collection, item_id):
             "message": "Employee updated",
             "item": clean_doc(db.employees.find_one({"_id": item_obj_id})),
         })
+
+    if collection in ATTENDANCE_SYSTEM_COLLECTIONS:
+        return jsonify({
+            "message": "This module is system generated. Use attendance APIs instead."
+        }), 400
+
+    if collection in HR_ONLY_CREATE_COLLECTIONS and not is_admin_hr_user(roles):
+        return jsonify({"message": "Only HR/Admin can update this record"}), 403
+
+    existing = db[collection].find_one(q)
+
+    if not existing:
+        return jsonify({"message": "Record not found"}), 404
+
+    if collection == "holiday_calendar":
+        allowed = {
+            "state",
+            "date",
+            "title",
+            "message",
+            "status",
+            "updated_at",
+            "updated_by",
+        }
+
+        data = {key: value for key, value in data.items() if key in allowed}
+
+        if "state" in data:
+            data["state"] = normalize_state(data.get("state"))
+
+            if data["state"] not in SUPPORTED_HOLIDAY_STATES:
+                return jsonify({"message": "Invalid holiday state"}), 400
+
+    if collection == "leave_balances":
+        allowed = {
+            "employee_id",
+            "leave_type",
+            "opening_balance",
+            "credited",
+            "used",
+            "available",
+            "status",
+            "updated_at",
+            "updated_by",
+        }
+
+        data = {key: value for key, value in data.items() if key in allowed}
+
+        merged = sanitize_leave_balance_payload({
+            **existing,
+            **data,
+        })
+
+        merged.update({
+            "updated_at": datetime.utcnow(),
+            "updated_by": str(g.current_user["_id"]),
+        })
+
+        data = merged
 
     db[collection].update_one(q, {"$set": data})
 

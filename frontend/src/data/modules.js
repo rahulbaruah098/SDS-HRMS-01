@@ -23,14 +23,17 @@ import {
   Module format:
   [key, title, Icon, description, allowedRoles]
 
-  Important hierarchy rule:
-  - Team Leader dropdown can show all employees.
-  - Reporting Officer dropdown is filtered in ModuleCrud.jsx/UserControl.jsx.
-  - Only employees with designation "Managing Director" or "Manager"
-    can appear as Reporting Officer.
+  Attendance + Leave rules:
+  - Attendance main page handles Office/WFH/Field check-in, holiday calendar,
+    WFH/Field approval requests and comp-off tracking.
+  - Leave Management handles CL, EL and COMP-OFF requests.
+  - Leave Balances are managed by HR/Admin.
+  - Holiday Calendar is managed by HR/Admin.
+  - Attendance Logs and Comp-Off Credits are system generated/view-only.
+  - Reports page shows attendance, holiday, comp-off, leave and audit reports.
 */
 
-const ALL_COMMON_ROLES = [
+export const ALL_COMMON_ROLES = [
   'super_admin',
   'admin',
   'hr_admin',
@@ -45,7 +48,7 @@ const ALL_COMMON_ROLES = [
   'employee',
 ];
 
-const HR_ROLES = [
+export const HR_ROLES = [
   'super_admin',
   'admin',
   'hr_admin',
@@ -53,7 +56,7 @@ const HR_ROLES = [
   'hr',
 ];
 
-const TEAM_ROLES = [
+export const TEAM_ROLES = [
   'super_admin',
   'admin',
   'hr_admin',
@@ -66,11 +69,50 @@ const TEAM_ROLES = [
   'employee',
 ];
 
-const FINANCE_ROLES = [
+export const FINANCE_ROLES = [
   'super_admin',
   'admin',
   'finance',
   'accounts_finance',
+];
+
+export const ATTENDANCE_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+  'employee',
+];
+
+export const ATTENDANCE_MANAGER_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+];
+
+export const REPORT_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
 ];
 
 export const superModules = [
@@ -109,26 +151,57 @@ export const coreModules = [
     'attendance',
     'Attendance',
     Clock,
-    'Office/field check-in, late reason and reports.',
-    [
-      'super_admin',
-      'admin',
-      'hr_admin',
-      'hr_manager',
-      'hr',
-      'manager',
-      'ro',
-      'team_leader',
-      'reporting_officer',
-      'employee',
-    ],
+    'Press-and-hold Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
+    ATTENDANCE_ROLES,
   ],
   [
     'leave_requests',
     'Leave Management',
     CalendarDays,
-    'Leave application and approvals.',
+    'Apply CL, EL and COMP-OFF with Team Leader, Reporting Officer and HR approval stages.',
     TEAM_ROLES,
+  ],
+  [
+    'leave_balances',
+    'Leave Balances',
+    CalendarDays,
+    'HR/Admin can assign and update employee CL and EL balances.',
+    TEAM_ROLES,
+  ],
+  [
+    'holiday_calendar',
+    'Holiday Calendar',
+    CalendarDays,
+    'State-wise holiday calendar for Assam(HO), Manipur, Mizoram and Arunachal Pradesh.',
+    ATTENDANCE_ROLES,
+  ],
+  [
+    'attendance_mode_requests',
+    'WFH / Field Requests',
+    Clock,
+    'Work From Home and Field attendance approval requests.',
+    ATTENDANCE_ROLES,
+  ],
+  [
+    'attendance_logs',
+    'Attendance Logs',
+    Clock,
+    'System generated attendance records with location, late entry and checkout details.',
+    ATTENDANCE_MANAGER_ROLES,
+  ],
+  [
+    'compoff_credits',
+    'Comp-Off Credits',
+    CalendarDays,
+    'System generated compensatory leave credits for employees working on holidays.',
+    ATTENDANCE_ROLES,
+  ],
+  [
+    'reports',
+    'Reports',
+    BarChart3,
+    'Attendance, WFH/Field, holiday, comp-off, leave and audit reports.',
+    REPORT_ROLES,
   ],
   [
     'payroll_runs',
@@ -270,12 +343,30 @@ export const coreModules = [
 
 export const allModules = [...superModules, ...coreModules];
 
+export function normalizeRoleList(value = []) {
+  if (Array.isArray(value)) {
+    return value
+      .map((role) => String(role || '').trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((role) => role.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 export function hasAnyRole(userRoles = [], allowedRoles = []) {
-  return allowedRoles.some((role) => userRoles.includes(role));
+  const normalizedUserRoles = normalizeRoleList(userRoles);
+  return allowedRoles.some((role) => normalizedUserRoles.includes(role));
 }
 
 export function moduleList(user) {
-  const roles = user?.roles || [];
+  const roles = normalizeRoleList(user?.roles || []);
 
   if (roles.includes('super_admin')) {
     return allModules;
@@ -285,7 +376,7 @@ export function moduleList(user) {
 }
 
 export function canAccessModule(user, moduleKey) {
-  const roles = user?.roles || [];
+  const roles = normalizeRoleList(user?.roles || []);
 
   if (roles.includes('super_admin')) {
     return true;
@@ -306,26 +397,27 @@ export const templates = {
     email: '',
     avatar: '',
     phone: '',
-    country: 'Bangladesh',
+    country: 'India',
     joining_date: '',
     date_of_birth: '',
     blood_group: '',
     gross_salary: '',
-    branch: 'Assam/Guwahati (HO)',
+    branch: 'Assam(HO)',
+    state: 'Assam(HO)',
     aadhar_no: '',
     employee_uan_no: '',
     employee_type: '',
     skill_level: '',
     are_parents_senior_citizen: 'false',
     number_of_children: '',
-    payment_mode: 'Cash',
+    payment_mode: 'Bank Transfer',
     previous_designation: 'Manager',
     previous_employment_tenure_end_date: '',
     password: '12345678',
     password_mode: 'default',
-    role: 'Admin',
-    designation: 'Manager',
-    department: 'Human Resource',
+    role: 'Employee',
+    designation: 'Employee',
+    department: 'HR & Admin',
     shift: 'General',
     gender: 'Male',
     address: '',
@@ -335,13 +427,18 @@ export const templates = {
     pan_no: '',
     disability_level: 'No Disability',
     employee_esic_ip: '',
-    employment_status: '',
+    employment_status: 'Active',
     father_name: '',
     dependent_disability_level: 'No Disability',
     children_in_hostel: '',
     previous_employer_name: '',
     previous_employment_tenure_from_date: '',
     employee_id: '',
+    emp_code: '',
+    job_type: 'Regular',
+    project: '',
+    salary: 0,
+    status: 'Active',
 
     is_team_leader: 'false',
     is_reporting_officer: 'false',
@@ -376,17 +473,105 @@ export const templates = {
   leave_types: {
     tenant_id: 'sds',
     name: '',
+    code: '',
+    days_per_year: 0,
+    carry_forward: false,
+    status: 'active',
+  },
+
+  leave_balances: {
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    leave_type: 'CL',
+    opening_balance: 0,
+    credited: 0,
+    used: 0,
+    available: 0,
     status: 'active',
   },
 
   leave_requests: {
     employee_id: '',
     employee_name: '',
-    leave_type: 'Casual Leave',
+    department: '',
+    designation: '',
+    team_leader_id: '',
+    team_leader_name: '',
+    reporting_officer_id: '',
+    reporting_officer_name: '',
+    leave_type: 'CL',
     from_date: '',
     to_date: '',
+    leave_days: 1,
     reason: '',
     status: 'pending',
+    approval_stage: 'team_leader',
+    approval_stage_label: 'Team Leader',
+    approval_history: [],
+    balance_deducted: false,
+  },
+
+  holiday_calendar: {
+    state: 'Assam(HO)',
+    date: '',
+    title: '',
+    message: '',
+    status: 'active',
+  },
+
+  attendance_logs: {
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    state: 'Assam(HO)',
+    date: '',
+    mode: 'office',
+    status: '',
+    check_in: '',
+    check_out: '',
+    late_reason: '',
+    early_checkout_reason: '',
+    field_location: '',
+    holiday_title: '',
+    holiday_message: '',
+    is_late: false,
+    is_early_checkout: false,
+    is_holiday_work: false,
+    verified_by_ro: false,
+  },
+
+  attendance_mode_requests: {
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    team_leader_id: '',
+    team_leader_name: '',
+    reporting_officer_id: '',
+    reporting_officer_name: '',
+    mode: 'wfh',
+    date: '',
+    reason: '',
+    field_location: '',
+    status: 'pending',
+    decision_note: '',
+  },
+
+  compoff_credits: {
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    earned_date: '',
+    valid_until: '',
+    claimed_date: '',
+    leave_days: 1,
+    holiday_title: '',
+    holiday_message: '',
+    status: 'available',
   },
 
   payroll_runs: {
@@ -433,6 +618,8 @@ export const templates = {
   performance_reviews: {
     employee_id: '',
     employee_name: '',
+    department: '',
+    designation: '',
     cycle: '',
     rating: 0,
     comments: '',
@@ -444,6 +631,8 @@ export const templates = {
   expenses: {
     employee_id: '',
     employee_name: '',
+    department: '',
+    designation: '',
     type: 'Local Conveyance',
     amount: 0,
     description: '',
@@ -472,6 +661,7 @@ export const templates = {
     title: '',
     body: '',
     read: false,
+    status: 'unread',
   },
 
   policies: {
@@ -518,11 +708,12 @@ export const emptyUser = {
   password: 'User@123',
   roles: 'employee',
   emp_code: '',
-  department: '',
-  designation: '',
+  department: 'HR & Admin',
+  designation: 'Employee',
   job_type: 'Regular',
   project: '',
-  state: 'Assam',
+  state: 'Assam(HO)',
+  branch: 'Assam(HO)',
   status: 'Active',
   salary: 0,
   is_active: true,

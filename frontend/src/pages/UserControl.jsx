@@ -3,27 +3,36 @@ import { Plus, Save, Search, KeyRound, X } from 'lucide-react';
 import { api } from '../api/client';
 import { emptyUser } from '../data/modules';
 
+const HOLIDAY_STATES = [
+  'Assam(HO)',
+  'Manipur',
+  'Mizoram',
+  'Arunachal Pradesh',
+];
+
 const USER_CREATE_TEMPLATE = {
   ...emptyUser,
 
   avatar: '',
   phone: '',
-  country: 'Bangladesh',
+  country: 'India',
   joining_date: '',
   date_of_birth: '',
   blood_group: '',
   gross_salary: '',
-  branch: 'Assam/Guwahati (HO)',
+  branch: 'Assam(HO)',
   aadhar_no: '',
   employee_uan_no: '',
   employee_type: '',
   skill_level: '',
   are_parents_senior_citizen: 'false',
   number_of_children: '',
-  payment_mode: 'Cash',
+  payment_mode: 'Bank Transfer',
   previous_designation: 'Manager',
   previous_employment_tenure_end_date: '',
   role: 'Employee',
+  designation: 'Employee',
+  department: 'HR & Admin',
   shift: 'General',
   gender: 'Male',
   address: '',
@@ -33,7 +42,7 @@ const USER_CREATE_TEMPLATE = {
   pan_no: '',
   disability_level: 'No Disability',
   employee_esic_ip: '',
-  employment_status: '',
+  employment_status: 'Active',
   father_name: '',
   dependent_disability_level: 'No Disability',
   children_in_hostel: '',
@@ -41,7 +50,18 @@ const USER_CREATE_TEMPLATE = {
   previous_employment_tenure_from_date: '',
   employee_id: '',
 
+  emp_code: '',
+  job_type: 'Regular',
+  project: '',
+  state: 'Assam(HO)',
+  status: 'Active',
+  salary: 0,
+
+  is_team_leader: 'false',
+  is_reporting_officer: 'false',
+  team_leader_id: '',
   team_leader_name: '',
+  reporting_officer_id: '',
   reporting_officer_name: '',
 };
 
@@ -184,10 +204,11 @@ const REQUIRED_FIELDS = [
   'shift',
   'gender',
   'disability_level',
+  'state',
 ];
 
 const SELECT_OPTIONS = {
-  country: ['Bangladesh', 'India'],
+  country: ['India'],
   blood_group: ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
   employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
   skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
@@ -202,7 +223,8 @@ const SELECT_OPTIONS = {
   employment_status: ['', 'Active', 'Probation', 'Confirmed', 'Resigned', 'Terminated'],
   job_type: ['', 'Regular', 'Contractual', 'Intern', 'Consultant'],
   status: ['Active', 'Inactive'],
-  state: ['', 'Assam', 'Meghalaya', 'Tripura', 'Nagaland', 'Manipur', 'Mizoram', 'Arunachal Pradesh', 'Sikkim'],
+  state: HOLIDAY_STATES,
+  branch: HOLIDAY_STATES,
 };
 
 const DATE_FIELDS = [
@@ -218,6 +240,38 @@ const NUMBER_FIELDS = [
   'number_of_children',
   'children_in_hostel',
 ];
+
+function normalizeState(value) {
+  const state = String(value || '').trim();
+
+  if (!state) return 'Assam(HO)';
+
+  const lowered = state.toLowerCase();
+
+  if (
+    lowered === 'assam' ||
+    lowered === 'assam ho' ||
+    lowered === 'assam(ho)' ||
+    lowered === 'ho' ||
+    lowered === 'assam/guwahati (ho)'
+  ) {
+    return 'Assam(HO)';
+  }
+
+  const matched = HOLIDAY_STATES.find(
+    (item) => item.toLowerCase() === lowered,
+  );
+
+  return matched || state;
+}
+
+function normalizeRolesInput(value) {
+  if (Array.isArray(value)) {
+    return value.join(', ');
+  }
+
+  return String(value || 'employee');
+}
 
 export default function UserControl() {
   const [rows, setRows] = useState([]);
@@ -255,7 +309,7 @@ export default function UserControl() {
     const params = buildQueryParams();
 
     const data = await api(
-      `/superadmin/users${params.length ? `?${params.join('&')}` : ''}`
+      `/superadmin/users${params.length ? `?${params.join('&')}` : ''}`,
     );
 
     setRows(data.items || []);
@@ -325,6 +379,7 @@ export default function UserControl() {
       .finally(() => setLoading(false));
 
     loadHelperOptions().catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function searchUsers() {
@@ -360,14 +415,51 @@ export default function UserControl() {
     }
   }
 
+  function validateUserPayload(payload, mode = 'create') {
+    const required = mode === 'create'
+      ? REQUIRED_FIELDS
+      : REQUIRED_FIELDS.filter((field) => field !== 'password');
+
+    for (const field of required) {
+      if (
+        payload[field] === undefined ||
+        payload[field] === null ||
+        String(payload[field]).trim() === ''
+      ) {
+        return `${field.replaceAll('_', ' ')} is required`;
+      }
+    }
+
+    if (payload.is_reporting_officer === 'true') {
+      const designation = String(payload.designation || '').trim().toLowerCase();
+
+      if (!['managing director', 'manager'].includes(designation)) {
+        return 'Only Managing Director or Manager can be Reporting Officer';
+      }
+    }
+
+    return '';
+  }
+
   async function create(e) {
     e.preventDefault();
+
+    const payload = {
+      ...form,
+      state: normalizeState(form.state),
+      branch: normalizeState(form.branch || form.state),
+    };
+
+    const validationMessage = validateUserPayload(payload, 'create');
+
+    if (validationMessage) {
+      setMessage(validationMessage);
+      return;
+    }
 
     try {
       setMessage('');
       setSaving(true);
-
-      const payload = { ...form };
 
       const data = await api('/superadmin/users', {
         method: 'POST',
@@ -401,25 +493,25 @@ export default function UserControl() {
         user_id_for_edit: user._id,
         employee_id_for_edit: employee._id || '',
 
-        roles: (user.roles || []).join(', '),
+        roles: normalizeRolesInput(user.roles),
 
         avatar: employee.avatar || '',
         phone: employee.phone || '',
-        country: employee.country || 'Bangladesh',
+        country: employee.country || 'India',
         joining_date: employee.joining_date || '',
         date_of_birth: employee.date_of_birth || '',
         blood_group: employee.blood_group || '',
         gross_salary: employee.gross_salary || '',
-        branch: employee.branch || 'Assam/Guwahati (HO)',
+        branch: normalizeState(employee.branch || employee.state || 'Assam(HO)'),
         aadhar_no: employee.aadhar_no || '',
         employee_uan_no: employee.employee_uan_no || '',
         employee_type: employee.employee_type || '',
         skill_level: employee.skill_level || '',
         are_parents_senior_citizen: String(
-          employee.are_parents_senior_citizen || 'false'
+          employee.are_parents_senior_citizen || 'false',
         ),
         number_of_children: employee.number_of_children || '',
-        payment_mode: employee.payment_mode || 'Cash',
+        payment_mode: employee.payment_mode || 'Bank Transfer',
         previous_designation: employee.previous_designation || 'Manager',
         previous_employment_tenure_end_date:
           employee.previous_employment_tenure_end_date || '',
@@ -435,7 +527,7 @@ export default function UserControl() {
         pan_no: employee.pan_no || '',
         disability_level: employee.disability_level || 'No Disability',
         employee_esic_ip: employee.employee_esic_ip || '',
-        employment_status: employee.employment_status || '',
+        employment_status: employee.employment_status || 'Active',
         father_name: employee.father_name || '',
         dependent_disability_level:
           employee.dependent_disability_level || 'No Disability',
@@ -446,9 +538,9 @@ export default function UserControl() {
         employee_id: employee.employee_id || '',
 
         emp_code: employee.emp_code || '',
-        job_type: employee.job_type || '',
+        job_type: employee.job_type || 'Regular',
         project: employee.project || '',
-        state: employee.state || '',
+        state: normalizeState(employee.state || employee.branch || 'Assam(HO)'),
         status: employee.status || 'Active',
         salary: employee.salary || 0,
 
@@ -480,11 +572,22 @@ export default function UserControl() {
   async function save(e) {
     e.preventDefault();
 
+    const payload = {
+      ...edit,
+      state: normalizeState(edit.state),
+      branch: normalizeState(edit.branch || edit.state),
+    };
+
+    const validationMessage = validateUserPayload(payload, 'edit');
+
+    if (validationMessage) {
+      setMessage(validationMessage);
+      return;
+    }
+
     try {
       setMessage('');
       setSaving(true);
-
-      const payload = { ...edit };
 
       delete payload.user_id_for_edit;
       delete payload.employee_id_for_edit;
@@ -584,6 +687,22 @@ export default function UserControl() {
     return REQUIRED_FIELDS.includes(key) ? `${labelText} *` : labelText;
   }
 
+  function applyDesignationChange(state, setState, designation) {
+    const designationLower = String(designation || '').trim().toLowerCase();
+    const canRemainReportingOfficer =
+      designationLower === 'managing director' || designationLower === 'manager';
+
+    setState({
+      ...state,
+      designation,
+      is_reporting_officer: canRemainReportingOfficer
+        ? String(state.is_reporting_officer || 'false')
+        : 'false',
+      reporting_officer_id: canRemainReportingOfficer ? state.reporting_officer_id : '',
+      reporting_officer_name: canRemainReportingOfficer ? state.reporting_officer_name : '',
+    });
+  }
+
   function applyTeamLeaderChange(state, setState, employeeId) {
     const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
 
@@ -641,7 +760,7 @@ export default function UserControl() {
           {label}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(e) => applyDesignationChange(state, setState, e.target.value)}
           >
             <option value="">Select designation</option>
 
@@ -799,7 +918,13 @@ export default function UserControl() {
           {label}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(e) => {
+              const value = ['state', 'branch'].includes(key)
+                ? normalizeState(e.target.value)
+                : e.target.value;
+
+              setState({ ...state, [key]: value });
+            }}
           >
             {SELECT_OPTIONS[key].map((option) => (
               <option key={option || 'empty'} value={option}>
@@ -893,6 +1018,8 @@ export default function UserControl() {
           <p>
             Super Admin can create users, update employee profile, assign team
             leader, assign reporting officer, change roles and reset passwords.
+            Employees are linked with state-wise attendance holidays and CL/EL
+            leave balance setup.
           </p>
         </div>
       </section>
@@ -951,6 +1078,7 @@ export default function UserControl() {
                 <th>Roles</th>
                 <th>Department</th>
                 <th>Designation</th>
+                <th>State</th>
                 <th>Team Leader</th>
                 <th>Reporting Officer</th>
                 <th>Status</th>
@@ -967,6 +1095,7 @@ export default function UserControl() {
                   <td>{(user.roles || []).join(', ')}</td>
                   <td>{user.employee_profile?.department || ''}</td>
                   <td>{user.employee_profile?.designation || ''}</td>
+                  <td>{user.employee_profile?.state || user.employee_profile?.branch || ''}</td>
                   <td>{user.employee_profile?.team_leader_name || ''}</td>
                   <td>{user.employee_profile?.reporting_officer_name || ''}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
@@ -1009,8 +1138,8 @@ export default function UserControl() {
             <div>
               <h3>Edit Complete User Profile</h3>
               <p>
-                Update login details, employee profile, designation and
-                reporting hierarchy.
+                Update login details, employee profile, designation, state,
+                team leader and reporting officer.
               </p>
             </div>
 

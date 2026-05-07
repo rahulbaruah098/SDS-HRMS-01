@@ -10,6 +10,13 @@ from app.utils.serializers import clean_doc
 
 superadmin_bp = Blueprint("superadmin", __name__)
 
+SUPPORTED_HOLIDAY_STATES = [
+    "Assam(HO)",
+    "Manipur",
+    "Mizoram",
+    "Arunachal Pradesh",
+]
+
 DEFAULT_DEPARTMENTS = [
     "HR & Admin",
     "Finance & Accounts",
@@ -24,17 +31,19 @@ DEFAULT_DESIGNATIONS = [
     "Director",
     "General Manager",
     "Manager",
+    "Team Leader",
+    "Reporting Officer",
     "Executive",
     "Associate",
     "Assistant",
+    "Employee",
 ]
 
 DEFAULT_STATES = [
-    "Assam",
-    "Arunachal Pradesh",
+    "Assam(HO)",
     "Manipur",
     "Mizoram",
-    "Tripura",
+    "Arunachal Pradesh",
 ]
 
 DEFAULT_PROJECTS = [
@@ -48,6 +57,59 @@ DEFAULT_PROJECTS = [
     "NEDFi CDAP",
 ]
 
+DEFAULT_LEAVE_TYPES = [
+    {
+        "name": "Casual Leave",
+        "code": "CL",
+        "days_per_year": 12,
+        "carry_forward": False,
+    },
+    {
+        "name": "Earned Leave",
+        "code": "EL",
+        "days_per_year": 18,
+        "carry_forward": True,
+    },
+    {
+        "name": "Comp-Off",
+        "code": "COMP-OFF",
+        "days_per_year": 0,
+        "carry_forward": False,
+    },
+]
+
+ATTENDANCE_SETTINGS = [
+    {
+        "setting_group": "attendance",
+        "setting_key": "office_start",
+        "setting_value": "09:30",
+        "description": "Normal office check-in time.",
+    },
+    {
+        "setting_group": "attendance",
+        "setting_key": "late_cutoff",
+        "setting_value": "09:50",
+        "description": "Check-in from this time onwards requires late reason.",
+    },
+    {
+        "setting_group": "attendance",
+        "setting_key": "office_end",
+        "setting_value": "18:00",
+        "description": "Normal office checkout time.",
+    },
+    {
+        "setting_group": "attendance",
+        "setting_key": "working_days",
+        "setting_value": "Monday to Saturday except Sunday, second Saturday and fourth Saturday",
+        "description": "Default working-day policy.",
+    },
+    {
+        "setting_group": "attendance",
+        "setting_key": "holiday_states",
+        "setting_value": ",".join(SUPPORTED_HOLIDAY_STATES),
+        "description": "Supported state-wise holiday calendar states.",
+    },
+]
 
 EMPLOYEE_PROFILE_FIELDS = [
     "avatar",
@@ -86,14 +148,12 @@ EMPLOYEE_PROFILE_FIELDS = [
     "previous_employer_name",
     "previous_employment_tenure_from_date",
     "employee_id",
-
     "emp_code",
     "job_type",
     "project",
     "state",
     "status",
     "salary",
-
     "is_team_leader",
     "is_reporting_officer",
     "team_leader_id",
@@ -124,15 +184,15 @@ def slugify(value):
 
 
 def truthy(value):
-    return str(value).lower() in ["true", "yes", "1", "on"]
+    return str(value).strip().lower() in ["true", "yes", "1", "on"]
 
 
 def normalize_text(value):
-    return (value or "").strip()
+    return str(value or "").strip()
 
 
 def normalize_email(value):
-    return (value or "").strip().lower()
+    return str(value or "").strip().lower()
 
 
 def normalize_float(value, default=0):
@@ -156,8 +216,51 @@ def normalize_roles(value):
     return roles or ["employee"]
 
 
+def normalize_state(value):
+    state = normalize_text(value)
+
+    if not state:
+        return "Assam(HO)"
+
+    lowered = state.lower()
+
+    if lowered in ["assam", "assam ho", "assam(ho)", "ho", "assam/guwahati (ho)"]:
+        return "Assam(HO)"
+
+    for allowed in SUPPORTED_HOLIDAY_STATES:
+        if lowered == allowed.lower():
+            return allowed
+
+    return state
+
+
+def normalize_role_value(value):
+    role_key = normalize_text(value).lower()
+
+    role_map = {
+        "admin": "admin",
+        "hr": "hr",
+        "hr admin": "hr_admin",
+        "hr_admin": "hr_admin",
+        "hr manager": "hr_manager",
+        "hr_manager": "hr_manager",
+        "finance": "finance",
+        "accounts finance": "accounts_finance",
+        "accounts_finance": "accounts_finance",
+        "manager": "manager",
+        "ro": "ro",
+        "team leader": "team_leader",
+        "team_leader": "team_leader",
+        "reporting officer": "reporting_officer",
+        "reporting_officer": "reporting_officer",
+        "employee": "employee",
+    }
+
+    return role_map.get(role_key, "employee")
+
+
 def can_be_reporting_officer(data):
-    designation = (data.get("designation") or "").strip().lower()
+    designation = normalize_text(data.get("designation")).lower()
     return designation in ["managing director", "manager"]
 
 
@@ -174,6 +277,7 @@ def resolve_employee_name(db, tenant_id, emp_id):
         "_id": emp_obj_id,
         "tenant_id": tenant_id,
         "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
     })
 
     return emp.get("name", "") if emp else ""
@@ -192,6 +296,7 @@ def resolve_reporting_officer_name(db, tenant_id, emp_id):
         "_id": emp_obj_id,
         "tenant_id": tenant_id,
         "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
     })
 
     if not emp:
@@ -201,6 +306,53 @@ def resolve_reporting_officer_name(db, tenant_id, emp_id):
         return None
 
     return emp.get("name", "")
+
+
+def build_dynamic_employee_roles(employee_doc, current_user_roles=None):
+    current_user_roles = set(current_user_roles or [])
+
+    protected_roles = {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "finance",
+        "accounts_finance",
+    }
+
+    dynamic_roles = {
+        "employee",
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+    }
+
+    selected_role = normalize_role_value(employee_doc.get("role"))
+
+    roles = set(current_user_roles)
+
+    if not roles.intersection(protected_roles):
+        roles.difference_update(dynamic_roles)
+        roles.add(selected_role)
+
+    if truthy(employee_doc.get("is_team_leader")):
+        roles.add("team_leader")
+    else:
+        if selected_role != "team_leader":
+            roles.discard("team_leader")
+
+    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
+        roles.add("reporting_officer")
+    else:
+        if selected_role != "reporting_officer":
+            roles.discard("reporting_officer")
+
+    if not roles:
+        roles.add("employee")
+
+    return list(roles)
 
 
 def sync_employee_roles(db, employee_doc):
@@ -219,34 +371,13 @@ def sync_employee_roles(db, employee_doc):
     if not user:
         return
 
-    roles = set(user.get("roles", []))
-
-    if truthy(employee_doc.get("is_team_leader")):
-        roles.add("team_leader")
-    else:
-        roles.discard("team_leader")
-
-    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
-        roles.add("reporting_officer")
-    else:
-        roles.discard("reporting_officer")
-
-    if not roles.intersection({
-        "super_admin",
-        "admin",
-        "hr_admin",
-        "hr_manager",
-        "hr",
-        "finance",
-        "accounts_finance",
-    }):
-        roles.add("employee")
+    roles = build_dynamic_employee_roles(employee_doc, user.get("roles", []))
 
     db.users.update_one(
         {"_id": user_obj_id},
         {
             "$set": {
-                "roles": list(roles),
+                "roles": roles,
                 "updated_at": now(),
             }
         },
@@ -266,6 +397,7 @@ def build_employee_profile_payload(data):
     payload["department"] = normalize_text(payload.get("department"))
     payload["designation"] = normalize_text(payload.get("designation"))
     payload["branch"] = normalize_text(payload.get("branch"))
+    payload["state"] = normalize_state(payload.get("state") or payload.get("branch"))
     payload["status"] = payload.get("status") or "Active"
 
     payload["is_team_leader"] = str(payload.get("is_team_leader", "false")).lower()
@@ -278,6 +410,47 @@ def build_employee_profile_payload(data):
         payload["gross_salary"] = normalize_text(str(payload.get("gross_salary") or ""))
 
     return payload
+
+
+def ensure_leave_balance_for_employee(db, tenant_id, employee, leave_type, total_days):
+    leave_type = normalize_text(leave_type).upper()
+    employee_id = str(employee["_id"])
+
+    existing = db.leave_balances.find_one({
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "leave_type": leave_type,
+        "is_deleted": {"$ne": True},
+    })
+
+    if existing:
+        return existing
+
+    doc = {
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "employee_name": employee.get("name", ""),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "leave_type": leave_type,
+        "opening_balance": float(total_days or 0),
+        "credited": float(total_days or 0),
+        "used": 0.0,
+        "available": float(total_days or 0),
+        "status": "active",
+        "created_at": now(),
+        "created_by": str(g.current_user["_id"]),
+    }
+
+    res = db.leave_balances.insert_one(doc)
+    doc["_id"] = res.inserted_id
+
+    return doc
+
+
+def seed_default_leave_balances_for_employee(db, tenant_id, employee):
+    ensure_leave_balance_for_employee(db, tenant_id, employee, "CL", 0)
+    ensure_leave_balance_for_employee(db, tenant_id, employee, "EL", 0)
 
 
 def seed_company_masters(db, tenant_id):
@@ -337,20 +510,22 @@ def seed_company_masters(db, tenant_id):
             upsert=True,
         )
 
-    for name, days in [
-        ("Casual Leave", 12),
-        ("Sick Leave", 12),
-        ("Earned Leave", 18),
-        ("Comp-Off", 0),
-    ]:
+    for leave_type in DEFAULT_LEAVE_TYPES:
         db.leave_types.update_one(
-            {"tenant_id": tenant_id, "name": name},
+            {
+                "tenant_id": tenant_id,
+                "$or": [
+                    {"name": leave_type["name"]},
+                    {"code": leave_type["code"]},
+                ],
+            },
             {
                 "$setOnInsert": {
                     "tenant_id": tenant_id,
-                    "name": name,
-                    "days_per_year": days,
-                    "carry_forward": name == "Earned Leave",
+                    "name": leave_type["name"],
+                    "code": leave_type["code"],
+                    "days_per_year": leave_type["days_per_year"],
+                    "carry_forward": leave_type["carry_forward"],
                     "status": "active",
                     "created_at": now(),
                 }
@@ -358,23 +533,22 @@ def seed_company_masters(db, tenant_id):
             upsert=True,
         )
 
-    db.system_settings.update_one(
-        {
-            "tenant_id": tenant_id,
-            "setting_group": "attendance",
-            "setting_key": "late_cutoff",
-        },
-        {
-            "$setOnInsert": {
+    for setting in ATTENDANCE_SETTINGS:
+        db.system_settings.update_one(
+            {
                 "tenant_id": tenant_id,
-                "setting_group": "attendance",
-                "setting_key": "late_cutoff",
-                "setting_value": "09:45",
-                "created_at": now(),
-            }
-        },
-        upsert=True,
-    )
+                "setting_group": setting["setting_group"],
+                "setting_key": setting["setting_key"],
+            },
+            {
+                "$setOnInsert": {
+                    "tenant_id": tenant_id,
+                    **setting,
+                    "created_at": now(),
+                }
+            },
+            upsert=True,
+        )
 
 
 @superadmin_bp.get("/companies")
@@ -383,7 +557,7 @@ def list_companies():
     db = get_db()
     q = {}
 
-    search = (request.args.get("q") or "").strip()
+    search = normalize_text(request.args.get("q"))
 
     if search:
         q = {
@@ -396,13 +570,40 @@ def list_companies():
 
     rows = list(db.tenants.find(q).sort("created_at", -1).limit(500))
 
+    today = datetime.utcnow().date().isoformat()
+
     for row in rows:
+        tenant_id = row.get("tenant_id")
+
         row["employee_count"] = db.employees.count_documents({
-            "tenant_id": row.get("tenant_id"),
+            "tenant_id": tenant_id,
             "status": {"$ne": "Inactive"},
+            "is_deleted": {"$ne": True},
         })
         row["user_count"] = db.users.count_documents({
-            "tenant_id": row.get("tenant_id"),
+            "tenant_id": tenant_id,
+        })
+        row["present_today"] = db.attendance_logs.count_documents({
+            "tenant_id": tenant_id,
+            "date": today,
+            "status": {"$in": ["present", "late", "early_checkout", "holiday_work"]},
+        })
+        row["late_today"] = db.attendance_logs.count_documents({
+            "tenant_id": tenant_id,
+            "date": today,
+            "status": "late",
+        })
+        row["pending_wfh_field"] = db.attendance_mode_requests.count_documents({
+            "tenant_id": tenant_id,
+            "status": "pending",
+        })
+        row["pending_leaves"] = db.leave_requests.count_documents({
+            "tenant_id": tenant_id,
+            "status": "pending",
+        })
+        row["available_compoff"] = db.compoff_credits.count_documents({
+            "tenant_id": tenant_id,
+            "status": "available",
         })
 
     return jsonify({"items": clean_doc(rows)})
@@ -414,12 +615,12 @@ def create_company():
     db = get_db()
     data = request.get_json(silent=True) or {}
 
-    name = (data.get("name") or "").strip()
+    name = normalize_text(data.get("name"))
 
     if not name:
         return jsonify({"message": "Company name is required"}), 400
 
-    tenant_id = (data.get("tenant_id") or slugify(name)).strip().lower()
+    tenant_id = normalize_text(data.get("tenant_id") or slugify(name)).lower()
 
     if db.tenants.find_one({"tenant_id": tenant_id}):
         return jsonify({"message": "Company / tenant_id already exists"}), 409
@@ -427,9 +628,9 @@ def create_company():
     doc = {
         "tenant_id": tenant_id,
         "name": name,
-        "domain": (data.get("domain") or "").strip(),
-        "contact_email": (data.get("contact_email") or "").strip().lower(),
-        "contact_phone": (data.get("contact_phone") or "").strip(),
+        "domain": normalize_text(data.get("domain")),
+        "contact_email": normalize_email(data.get("contact_email")),
+        "contact_phone": normalize_text(data.get("contact_phone")),
         "address": data.get("address", ""),
         "status": "active",
         "plan": data.get("plan", "Internal / Trial"),
@@ -440,9 +641,9 @@ def create_company():
     db.tenants.insert_one(doc)
     seed_company_masters(db, tenant_id)
 
-    admin_email = (data.get("admin_email") or "").strip().lower()
+    admin_email = normalize_email(data.get("admin_email"))
     admin_password = data.get("admin_password") or "Admin@123"
-    admin_name = (data.get("admin_name") or f"{name} Admin").strip()
+    admin_name = normalize_text(data.get("admin_name") or f"{name} Admin")
 
     if admin_email:
         if db.users.find_one({"email": admin_email}):
@@ -462,10 +663,11 @@ def create_company():
             "created_by": str(g.current_user["_id"]),
         })
 
-        db.employees.insert_one({
+        emp_doc = {
             "tenant_id": tenant_id,
             "user_id": str(user_res.inserted_id),
             "emp_code": f"{tenant_id.upper()}-ADMIN",
+            "employee_id": f"{tenant_id.upper()}-ADMIN",
             "name": admin_name,
             "email": admin_email,
             "phone": "",
@@ -474,7 +676,7 @@ def create_company():
             "date_of_birth": "",
             "blood_group": "",
             "gross_salary": "",
-            "branch": "Assam/Guwahati (HO)",
+            "branch": "Assam(HO)",
             "department": "HR & Admin",
             "designation": "Manager",
             "role": "Admin",
@@ -482,7 +684,7 @@ def create_company():
             "gender": "",
             "job_type": "Regular",
             "project": "Administration",
-            "state": "Assam",
+            "state": "Assam(HO)",
             "status": "Active",
             "salary": 0,
             "is_team_leader": "false",
@@ -493,7 +695,14 @@ def create_company():
             "reporting_officer_name": "",
             "created_at": now(),
             "created_by": str(g.current_user["_id"]),
-        })
+        }
+
+        emp_res = db.employees.insert_one(emp_doc)
+        created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
+
+        if created_emp:
+            sync_employee_roles(db, created_emp)
+            seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
 
     audit("create_company", "tenants", tenant_id, doc)
 
@@ -536,8 +745,8 @@ def list_users():
     db = get_db()
     q = {}
 
-    tenant_id = (request.args.get("tenant_id") or "").strip()
-    search = (request.args.get("q") or "").strip()
+    tenant_id = normalize_text(request.args.get("tenant_id"))
+    search = normalize_text(request.args.get("q"))
 
     if tenant_id:
         q["tenant_id"] = tenant_id
@@ -552,7 +761,10 @@ def list_users():
     rows = list(db.users.find(q).sort("created_at", -1).limit(1000))
 
     for user in rows:
-        emp = db.employees.find_one({"user_id": str(user["_id"])})
+        emp = db.employees.find_one({
+            "user_id": str(user["_id"]),
+            "is_deleted": {"$ne": True},
+        })
 
         if emp:
             user["employee_profile"] = emp
@@ -566,10 +778,12 @@ def create_user():
     db = get_db()
     data = request.get_json(silent=True) or {}
 
-    tenant_id = (data.get("tenant_id") or "sds").strip().lower()
+    tenant_id = normalize_text(data.get("tenant_id") or "sds").lower()
 
     if not db.tenants.find_one({"tenant_id": tenant_id}):
         return jsonify({"message": "Invalid tenant_id / company"}), 400
+
+    seed_company_masters(db, tenant_id)
 
     email = normalize_email(data.get("email"))
     password = data.get("password") or "User@123"
@@ -581,7 +795,9 @@ def create_user():
     if len(password) < 6:
         return jsonify({"message": "Password must be at least 6 characters"}), 400
 
-    if truthy(data.get("is_reporting_officer")) and not can_be_reporting_officer(data):
+    employee_payload_for_role_check = build_employee_profile_payload(data)
+
+    if truthy(employee_payload_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(employee_payload_for_role_check):
         return jsonify({
             "message": "Only Managing Director or Manager can be Reporting Officer"
         }), 400
@@ -590,6 +806,7 @@ def create_user():
         return jsonify({"message": "Email already exists"}), 409
 
     employee_id = normalize_text(data.get("employee_id"))
+    emp_code = normalize_text(data.get("emp_code"))
 
     if employee_id:
         existing_employee_id = db.employees.find_one({
@@ -600,8 +817,6 @@ def create_user():
 
         if existing_employee_id:
             return jsonify({"message": "Employee ID already exists in this tenant"}), 409
-
-    emp_code = normalize_text(data.get("emp_code"))
 
     if emp_code:
         existing_emp_code = db.employees.find_one({
@@ -657,7 +872,8 @@ def create_user():
     })
 
     emp.setdefault("country", "India")
-    emp.setdefault("branch", "Assam/Guwahati (HO)")
+    emp.setdefault("branch", "Assam(HO)")
+    emp.setdefault("state", normalize_state(emp.get("state") or emp.get("branch")))
     emp.setdefault("role", "Employee")
     emp.setdefault("shift", "General")
     emp.setdefault("status", "Active")
@@ -669,6 +885,7 @@ def create_user():
 
     if created_emp:
         sync_employee_roles(db, created_emp)
+        seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
 
     audit("create_user", "users", user_res.inserted_id, {
         "email": email,
@@ -701,8 +918,15 @@ def update_user(user_id):
     if not existing_user:
         return jsonify({"message": "User not found"}), 404
 
-    existing_emp_for_validation = db.employees.find_one({"user_id": user_id}) or {}
-    merged_for_role_check = {**existing_emp_for_validation, **data}
+    existing_emp_for_validation = db.employees.find_one({
+        "user_id": user_id,
+        "is_deleted": {"$ne": True},
+    }) or {}
+
+    merged_for_role_check = {
+        **existing_emp_for_validation,
+        **build_employee_profile_payload(data),
+    }
 
     if truthy(merged_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(merged_for_role_check):
         return jsonify({
@@ -745,6 +969,7 @@ def update_user(user_id):
             return jsonify({"message": "Invalid tenant_id / company"}), 400
 
         user_update["tenant_id"] = tenant_id
+        seed_company_masters(db, tenant_id)
 
     if "is_active" in data:
         user_update["is_active"] = truthy(data.get("is_active"))
@@ -773,7 +998,11 @@ def update_user(user_id):
         or "sds"
     )
 
-    existing_emp = db.employees.find_one({"user_id": user_id})
+    existing_emp = db.employees.find_one({
+        "user_id": user_id,
+        "is_deleted": {"$ne": True},
+    })
+
     emp_update = build_employee_profile_payload(data)
 
     if "name" in user_update:
@@ -786,23 +1015,31 @@ def update_user(user_id):
         emp_update["tenant_id"] = user_update["tenant_id"]
 
     if emp_update.get("employee_id"):
-        duplicate_employee_id = db.employees.find_one({
-            "_id": {"$ne": existing_emp["_id"]} if existing_emp else {"$exists": True},
+        duplicate_query = {
             "tenant_id": tenant_for_lookup,
             "employee_id": emp_update.get("employee_id"),
             "is_deleted": {"$ne": True},
-        })
+        }
+
+        if existing_emp:
+            duplicate_query["_id"] = {"$ne": existing_emp["_id"]}
+
+        duplicate_employee_id = db.employees.find_one(duplicate_query)
 
         if duplicate_employee_id:
             return jsonify({"message": "Employee ID already exists in this tenant"}), 409
 
     if emp_update.get("emp_code"):
-        duplicate_emp_code = db.employees.find_one({
-            "_id": {"$ne": existing_emp["_id"]} if existing_emp else {"$exists": True},
+        duplicate_query = {
             "tenant_id": tenant_for_lookup,
             "emp_code": emp_update.get("emp_code"),
             "is_deleted": {"$ne": True},
-        })
+        }
+
+        if existing_emp:
+            duplicate_query["_id"] = {"$ne": existing_emp["_id"]}
+
+        duplicate_emp_code = db.employees.find_one(duplicate_query)
 
         if duplicate_emp_code:
             return jsonify({"message": "Employee code already exists in this tenant"}), 409
@@ -829,6 +1066,8 @@ def update_user(user_id):
 
         emp_update["reporting_officer_name"] = reporting_officer_name or ""
 
+    updated_emp = None
+
     if emp_update:
         emp_update["updated_at"] = now()
         emp_update["updated_by"] = str(g.current_user["_id"])
@@ -845,7 +1084,8 @@ def update_user(user_id):
             emp_update.setdefault("name", updated_user.get("name", ""))
             emp_update.setdefault("email", updated_user.get("email", ""))
             emp_update.setdefault("country", "India")
-            emp_update.setdefault("branch", "Assam/Guwahati (HO)")
+            emp_update.setdefault("branch", "Assam(HO)")
+            emp_update.setdefault("state", normalize_state(emp_update.get("state") or emp_update.get("branch")))
             emp_update.setdefault("role", "Employee")
             emp_update.setdefault("shift", "General")
             emp_update.setdefault("status", "Active")
@@ -859,11 +1099,19 @@ def update_user(user_id):
 
         if updated_emp:
             sync_employee_roles(db, updated_emp)
+            seed_default_leave_balances_for_employee(
+                db,
+                updated_emp.get("tenant_id") or tenant_for_lookup,
+                updated_emp,
+            )
 
     audit("update_user", "users", user_id, data)
 
     refreshed = db.users.find_one({"_id": user_obj_id})
-    employee_profile = db.employees.find_one({"user_id": user_id})
+    employee_profile = db.employees.find_one({
+        "user_id": user_id,
+        "is_deleted": {"$ne": True},
+    })
 
     if employee_profile:
         refreshed["employee_profile"] = employee_profile

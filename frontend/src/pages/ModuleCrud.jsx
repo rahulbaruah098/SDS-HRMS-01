@@ -1,8 +1,141 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Save, X } from 'lucide-react';
 import { api } from '../api/client';
 import { allModules, templates } from '../data/modules';
 import { isSuperAdmin } from '../utils/authHelpers';
+
+const HOLIDAY_STATES = [
+  'Assam(HO)',
+  'Manipur',
+  'Mizoram',
+  'Arunachal Pradesh',
+];
+
+const SYSTEM_GENERATED_COLLECTIONS = new Set([
+  'attendance_logs',
+  'compoff_credits',
+  'audit_logs',
+]);
+
+const EMPLOYEE_OPTION_COLLECTIONS = new Set([
+  'employees',
+  'leave_balances',
+  'leave_requests',
+  'attendance_mode_requests',
+  'expenses',
+  'performance_reviews',
+]);
+
+const DATE_FIELDS = new Set([
+  'date',
+  'from_date',
+  'to_date',
+  'claim_date',
+  'earned_date',
+  'valid_until',
+  'joining_date',
+  'date_of_birth',
+  'previous_employment_tenure_end_date',
+  'previous_employment_tenure_from_date',
+]);
+
+const NUMBER_FIELDS = new Set([
+  'gross_salary',
+  'salary',
+  'number_of_children',
+  'children_in_hostel',
+  'opening_balance',
+  'credited',
+  'used',
+  'available',
+  'leave_days',
+  'rating',
+  'amount',
+]);
+
+const TEXTAREA_FIELDS = new Set([
+  'address',
+  'reason',
+  'message',
+  'comments',
+  'decision_note',
+  'field_location',
+  'description',
+  'summary',
+]);
+
+const HIDDEN_TABLE_KEYS = new Set([
+  'password_hash',
+  'password',
+  'is_deleted',
+  '__v',
+]);
+
+function titleCase(value = '') {
+  return String(value)
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return '—';
+  }
+
+  if (Array.isArray(value)) {
+    return value.length ? value.join(', ') : '—';
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+
+  if (typeof value === 'object') {
+    if (value.$date) {
+      return value.$date;
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(value, 'latitude') &&
+      Object.prototype.hasOwnProperty.call(value, 'longitude')
+    ) {
+      const accuracy = value.accuracy ? ` • ±${Math.round(value.accuracy)}m` : '';
+      return `${value.latitude}, ${value.longitude}${accuracy}`;
+    }
+
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function buildQuery(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+
+    query.append(key, value);
+  });
+
+  const queryString = query.toString();
+  return queryString ? `?${queryString}` : '';
+}
+
+function statusLabel(value) {
+  if (!value) return '—';
+
+  return String(value)
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 export default function ModuleCrud({ collection }) {
   const moduleInfo = allModules.find((m) => m[0] === collection);
@@ -20,35 +153,48 @@ export default function ModuleCrud({ collection }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const isSystemGenerated = SYSTEM_GENERATED_COLLECTIONS.has(collection);
+
+  const createFields = useMemo(() => Object.keys(template), [template]);
+
+  const editFields = useMemo(() => {
+    if (collection === 'employees') {
+      return Object.keys(template).filter(
+        (key) => key !== 'password' && key !== 'password_mode',
+      );
+    }
+
+    return Object.keys(template);
+  }, [collection, template]);
+
   function buildParams(nextQ = q, nextTenant = tenant) {
-    const params = [];
+    const params = {};
 
     if (nextQ.trim()) {
-      params.push(`q=${encodeURIComponent(nextQ.trim())}`);
+      params.q = nextQ.trim();
     }
 
     if (isSuperAdmin() && nextTenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
+      params.tenant_id = nextTenant.trim();
     }
 
     return params;
   }
 
   async function load(nextQ = q, nextTenant = tenant) {
-    const params = buildParams(nextQ, nextTenant);
-    const data = await api(`/${collection}${params.length ? `?${params.join('&')}` : ''}`);
+    const data = await api(`/${collection}${buildQuery(buildParams(nextQ, nextTenant))}`);
     setRows(data.items || []);
     return data.items || [];
   }
 
   async function loadEmployeeOptions(nextTenant = tenant) {
-    const params = [];
+    const params = {};
 
     if (isSuperAdmin() && nextTenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
+      params.tenant_id = nextTenant.trim();
     }
 
-    const data = await api(`/employees${params.length ? `?${params.join('&')}` : ''}`);
+    const data = await api(`/employees${buildQuery(params)}`);
     const items = data.items || [];
 
     setEmployeeOptions(items);
@@ -56,13 +202,13 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function loadDesignationOptions(nextTenant = tenant) {
-    const params = [];
+    const params = {};
 
     if (isSuperAdmin() && nextTenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
+      params.tenant_id = nextTenant.trim();
     }
 
-    const data = await api(`/designations${params.length ? `?${params.join('&')}` : ''}`);
+    const data = await api(`/designations${buildQuery(params)}`);
     const items = data.items || [];
 
     setDesignationOptions(items);
@@ -70,13 +216,13 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function loadDepartmentOptions(nextTenant = tenant) {
-    const params = [];
+    const params = {};
 
     if (isSuperAdmin() && nextTenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(nextTenant.trim())}`);
+      params.tenant_id = nextTenant.trim();
     }
 
-    const data = await api(`/departments${params.length ? `?${params.join('&')}` : ''}`);
+    const data = await api(`/departments${buildQuery(params)}`);
     const items = data.items || [];
 
     setDepartmentOptions(items);
@@ -84,13 +230,16 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function reloadEmployeeHelpers(nextTenant = tenant) {
-    if (collection !== 'employees') {
+    if (!EMPLOYEE_OPTION_COLLECTIONS.has(collection)) {
       return;
     }
 
     await loadEmployeeOptions(nextTenant);
-    await loadDesignationOptions(nextTenant);
-    await loadDepartmentOptions(nextTenant);
+
+    if (collection === 'employees') {
+      await loadDesignationOptions(nextTenant);
+      await loadDepartmentOptions(nextTenant);
+    }
   }
 
   function resetForm() {
@@ -129,10 +278,17 @@ export default function ModuleCrud({ collection }) {
         setMessage(error.message || 'Unable to load records');
       })
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collection]);
 
-  async function submit(e) {
-    e.preventDefault();
+  async function submit(event) {
+    event.preventDefault();
+
+    if (isSystemGenerated) {
+      setMessage('This module is system generated. Use the dedicated workflow page.');
+      return;
+    }
+
     setMessage('');
 
     try {
@@ -161,6 +317,11 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function startEdit(row) {
+    if (isSystemGenerated) {
+      setMessage('This module is system generated and cannot be edited here.');
+      return;
+    }
+
     try {
       setMessage('');
       await reloadEmployeeHelpers();
@@ -192,8 +353,8 @@ export default function ModuleCrud({ collection }) {
     }
   }
 
-  async function saveEdit(e) {
-    e.preventDefault();
+  async function saveEdit(event) {
+    event.preventDefault();
     setMessage('');
 
     try {
@@ -204,6 +365,10 @@ export default function ModuleCrud({ collection }) {
       delete payload._id;
       delete payload.password_hash;
       delete payload.password_mode;
+      delete payload.created_at;
+      delete payload.updated_at;
+      delete payload.created_by;
+      delete payload.updated_by;
 
       await api(`/${collection}/${edit._id}`, {
         method: 'PATCH',
@@ -222,6 +387,11 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function remove(id) {
+    if (isSystemGenerated) {
+      setMessage('This module is system generated and cannot be deleted here.');
+      return;
+    }
+
     const ok = window.confirm('Are you sure you want to delete this record?');
 
     if (!ok) {
@@ -261,6 +431,56 @@ export default function ModuleCrud({ collection }) {
     }
   }
 
+  async function decideLeave(row, status) {
+    const ok = window.confirm(`${statusLabel(status)} this leave request?`);
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSaving(true);
+
+      const data = await api(`/leave_requests/${row._id}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(data.message || `Leave ${status}`);
+      await load();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update leave request');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function decideModeRequest(row, status) {
+    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSaving(true);
+
+      const data = await api(`/attendance/mode-requests/${row._id}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(data.message || `Request ${status}`);
+      await load();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update WFH / Field request');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function searchRecords() {
     try {
       setMessage('');
@@ -296,7 +516,15 @@ export default function ModuleCrud({ collection }) {
 
   function isReportingOfficerEligible(employee) {
     const designation = String(employee?.designation || '').trim().toLowerCase();
-    return designation === 'managing director' || designation === 'manager';
+    const role = String(employee?.role || '').trim().toLowerCase();
+
+    return (
+      designation === 'managing director' ||
+      designation === 'manager' ||
+      role === 'reporting officer' ||
+      role === 'manager' ||
+      String(employee?.is_reporting_officer || '').toLowerCase() === 'true'
+    );
   }
 
   function applyDesignationChange(state, setState, nextDesignation) {
@@ -333,6 +561,42 @@ export default function ModuleCrud({ collection }) {
     });
   }
 
+  function applyEmployeeChange(state, setState, employeeId) {
+    const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      employee_id: employeeId,
+      employee_name: selectedEmployee?.name || '',
+      department: selectedEmployee?.department || '',
+      designation: selectedEmployee?.designation || '',
+      team_leader_id: selectedEmployee?.team_leader_id || '',
+      team_leader_name: selectedEmployee?.team_leader_name || '',
+      reporting_officer_id: selectedEmployee?.reporting_officer_id || '',
+      reporting_officer_name: selectedEmployee?.reporting_officer_name || '',
+    });
+  }
+
+  function renderEmployeeSelect(state, setState, key, finalLabel) {
+    return (
+      <label key={key}>
+        {finalLabel}
+        <select
+          value={state[key] ?? ''}
+          onChange={(event) => applyEmployeeChange(state, setState, event.target.value)}
+        >
+          <option value="">Select employee</option>
+
+          {employeeOptions.map((employee) => (
+            <option key={employee._id} value={employee._id}>
+              {employee.name} — {employee.designation || employee.department || employee.email}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
   function renderField(state, setState, key, isEditMode = false) {
     const label = key.replaceAll('_', ' ');
 
@@ -353,16 +617,30 @@ export default function ModuleCrud({ collection }) {
       'shift',
       'gender',
       'disability_level',
+      'employee_id',
+      'leave_type',
+      'date',
+      'title',
+      'state',
+      'mode',
+      'reason',
+      'from_date',
+      'to_date',
     ];
 
-    const labelText = label
-      .split(' ')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    const labelText = titleCase(label);
 
-    const finalLabel = collection === 'employees' && requiredFields.includes(key)
-      ? `${labelText} *`
-      : labelText;
+    const finalLabel =
+      (
+        collection === 'employees' ||
+        collection === 'holiday_calendar' ||
+        collection === 'leave_balances' ||
+        collection === 'attendance_mode_requests' ||
+        collection === 'leave_requests'
+      ) &&
+      requiredFields.includes(key)
+        ? `${labelText} *`
+        : labelText;
 
     if (collection === 'employees' && isEditMode && key === 'password') {
       return null;
@@ -372,25 +650,182 @@ export default function ModuleCrud({ collection }) {
       return null;
     }
 
+    if (
+      [
+        'leave_balances',
+        'leave_requests',
+        'attendance_mode_requests',
+        'expenses',
+        'performance_reviews',
+      ].includes(collection) &&
+      key === 'employee_id'
+    ) {
+      return renderEmployeeSelect(state, setState, key, finalLabel);
+    }
+
+    if (
+      ['employee_name', 'team_leader_name', 'reporting_officer_name'].includes(key) &&
+      [
+        'leave_balances',
+        'leave_requests',
+        'attendance_mode_requests',
+        'expenses',
+        'performance_reviews',
+      ].includes(collection)
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="text"
+            value={state[key] ?? ''}
+            readOnly
+            placeholder={labelText}
+          />
+        </label>
+      );
+    }
+
+    if (
+      ['department', 'designation', 'team_leader_id', 'reporting_officer_id'].includes(key) &&
+      [
+        'leave_balances',
+        'leave_requests',
+        'attendance_mode_requests',
+        'expenses',
+        'performance_reviews',
+      ].includes(collection)
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="text"
+            value={state[key] ?? ''}
+            readOnly
+            placeholder={labelText}
+          />
+        </label>
+      );
+    }
+
+    if (collection === 'holiday_calendar' && key === 'state') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'Assam(HO)'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            {HOLIDAY_STATES.map((holidayState) => (
+              <option key={holidayState} value={holidayState}>
+                {holidayState}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    if (collection === 'leave_balances' && key === 'leave_type') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'CL'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="CL">Casual Leave (CL)</option>
+            <option value="EL">Earned Leave (EL)</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (collection === 'leave_requests' && key === 'leave_type') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'CL'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="CL">Casual Leave (CL)</option>
+            <option value="EL">Earned Leave (EL)</option>
+            <option value="COMP-OFF">Comp-Off</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (collection === 'attendance_mode_requests' && key === 'mode') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'wfh'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="wfh">Work From Home</option>
+            <option value="field">Field</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (
+      ['leave_requests', 'attendance_mode_requests'].includes(collection) &&
+      key === 'status'
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'pending'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (collection === 'holiday_calendar' && key === 'status') {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'active'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </label>
+      );
+    }
+
     if (collection === 'employees' && key === 'department') {
       return (
         <label key={key}>
           {finalLabel}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           >
             <option value="">Select department</option>
 
-            {departmentOptions.map((dept) => {
-              const value = dept.name || dept.title || '';
+            {departmentOptions.map((department) => {
+              const value = department.name || department.title || '';
 
               if (!value) {
                 return null;
               }
 
               return (
-                <option key={dept._id || value} value={value}>
+                <option key={department._id || value} value={value}>
                   {value}
                 </option>
               );
@@ -406,19 +841,21 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => applyDesignationChange(state, setState, e.target.value)}
+            onChange={(event) =>
+              applyDesignationChange(state, setState, event.target.value)
+            }
           >
             <option value="">Select designation</option>
 
-            {designationOptions.map((desig) => {
-              const value = desig.title || desig.name || '';
+            {designationOptions.map((designation) => {
+              const value = designation.title || designation.name || '';
 
               if (!value) {
                 return null;
               }
 
               return (
-                <option key={desig._id || value} value={value}>
+                <option key={designation._id || value} value={value}>
                   {value}
                 </option>
               );
@@ -434,8 +871,8 @@ export default function ModuleCrud({ collection }) {
           Password Type
           <select
             value={state[key] ?? 'default'}
-            onChange={(e) => {
-              const mode = e.target.value;
+            onChange={(event) => {
+              const mode = event.target.value;
 
               setState({
                 ...state,
@@ -451,13 +888,31 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'employees' && ['state', 'branch'].includes(key)) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'Assam(HO)'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            {HOLIDAY_STATES.map((holidayState) => (
+              <option key={holidayState} value={holidayState}>
+                {holidayState}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
     if (collection === 'employees' && key === 'are_parents_senior_citizen') {
       return (
         <label key={key}>
           {finalLabel}
           <select
             value={String(state[key] ?? 'false')}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           >
             <option value="true">Yes</option>
             <option value="false">No</option>
@@ -472,7 +927,7 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={String(state[key] ?? 'false')}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           >
             <option value="false">No</option>
             <option value="true">Yes</option>
@@ -483,13 +938,13 @@ export default function ModuleCrud({ collection }) {
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
       const filteredEmployees = employeeOptions
-        .filter((emp) => emp._id !== state._id)
-        .filter((emp) => {
+        .filter((employee) => employee._id !== state._id)
+        .filter((employee) => {
           if (key !== 'reporting_officer_id') {
             return true;
           }
 
-          return isReportingOfficerEligible(emp);
+          return isReportingOfficerEligible(employee);
         });
 
       return (
@@ -497,13 +952,13 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => {
+            onChange={(event) => {
               if (key === 'team_leader_id') {
-                applyTeamLeaderChange(state, setState, e.target.value);
+                applyTeamLeaderChange(state, setState, event.target.value);
                 return;
               }
 
-              applyReportingOfficerChange(state, setState, e.target.value);
+              applyReportingOfficerChange(state, setState, event.target.value);
             }}
           >
             <option value="">Select {label}</option>
@@ -514,9 +969,9 @@ export default function ModuleCrud({ collection }) {
               </option>
             )}
 
-            {filteredEmployees.map((emp) => (
-              <option key={emp._id} value={emp._id}>
-                {emp.name} — {emp.designation || emp.department || emp.email}
+            {filteredEmployees.map((employee) => (
+              <option key={employee._id} value={employee._id}>
+                {employee.name} — {employee.designation || employee.department || employee.email}
               </option>
             ))}
           </select>
@@ -524,7 +979,10 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
-    if (collection === 'employees' && ['team_leader_name', 'reporting_officer_name'].includes(key)) {
+    if (
+      collection === 'employees' &&
+      ['team_leader_name', 'reporting_officer_name'].includes(key)
+    ) {
       return (
         <label key={key}>
           {finalLabel}
@@ -532,18 +990,22 @@ export default function ModuleCrud({ collection }) {
             type="text"
             value={state[key] ?? ''}
             readOnly
-            placeholder={key === 'team_leader_name' ? 'Team leader name' : 'Reporting officer name'}
+            placeholder={
+              key === 'team_leader_name'
+                ? 'Team leader name'
+                : 'Reporting officer name'
+            }
           />
         </label>
       );
     }
 
     const selectOptions = {
-      country: ['Bangladesh', 'India'],
+      country: ['India', 'Bangladesh'],
       blood_group: ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
       employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
       skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
-      payment_mode: ['Cash', 'Bank Transfer', 'UPI', 'Cheque'],
+      payment_mode: ['Bank Transfer', 'Cash', 'UPI', 'Cheque'],
       role: [
         'Admin',
         'HR',
@@ -559,6 +1021,7 @@ export default function ModuleCrud({ collection }) {
       disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
       dependent_disability_level: ['No Disability', 'Mild', 'Moderate', 'Severe'],
       employment_status: ['', 'Active', 'Probation', 'Confirmed', 'Resigned', 'Terminated'],
+      status: ['active', 'inactive', 'pending', 'approved', 'rejected'],
     };
 
     if (collection === 'employees' && selectOptions[key]) {
@@ -567,7 +1030,7 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           >
             {selectOptions[key].map((option) => (
               <option key={option || 'empty'} value={option}>
@@ -579,52 +1042,46 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
-    if (
-      collection === 'employees' &&
-      [
-        'joining_date',
-        'date_of_birth',
-        'previous_employment_tenure_end_date',
-        'previous_employment_tenure_from_date',
-      ].includes(key)
-    ) {
+    if (DATE_FIELDS.has(key)) {
       return (
         <label key={key}>
           {finalLabel}
           <input
             type="date"
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           />
         </label>
       );
     }
 
-    if (
-      collection === 'employees' &&
-      ['gross_salary', 'number_of_children', 'children_in_hostel'].includes(key)
-    ) {
+    if (NUMBER_FIELDS.has(key)) {
       return (
         <label key={key}>
           {finalLabel}
           <input
             type="number"
+            step={
+              ['opening_balance', 'credited', 'used', 'available', 'leave_days'].includes(key)
+                ? '0.5'
+                : 'any'
+            }
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
           />
         </label>
       );
     }
 
-    if (collection === 'employees' && key === 'address') {
+    if (TEXTAREA_FIELDS.has(key)) {
       return (
         <label key={key}>
           {finalLabel}
           <textarea
             value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
             rows={3}
-            placeholder="Address"
+            placeholder={labelText}
           />
         </label>
       );
@@ -644,38 +1101,97 @@ export default function ModuleCrud({ collection }) {
                   : 'text'
           }
           value={state[key] ?? ''}
-          onChange={(e) => setState({ ...state, [key]: e.target.value })}
+          onChange={(event) => setState({ ...state, [key]: event.target.value })}
         />
       </label>
     );
   }
 
-  function displayValue(value) {
-    if (value === null || value === undefined || value === '') {
-      return '';
-    }
-
-    if (Array.isArray(value)) {
-      return value.join(', ');
-    }
-
-    if (typeof value === 'object') {
-      if (value.$date) {
-        return value.$date;
-      }
-
-      return JSON.stringify(value);
-    }
-
-    return String(value);
+  function visibleTableKeys(row) {
+    return Object.keys(row || {})
+      .filter((key) => !HIDDEN_TABLE_KEYS.has(key))
+      .slice(0, 8);
   }
 
-  const createFields = Object.keys(template);
+  function renderRowActions(row) {
+    if (collection === 'leave_requests' && row.status === 'pending') {
+      return (
+        <>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => decideLeave(row, 'approved')}
+            disabled={saving}
+          >
+            Approve
+          </button>
 
-  const editFields =
-    collection === 'employees'
-      ? Object.keys(template).filter((key) => key !== 'password' && key !== 'password_mode')
-      : Object.keys(template);
+          <button
+            type="button"
+            className="danger"
+            onClick={() => decideLeave(row, 'rejected')}
+            disabled={saving}
+          >
+            Reject
+          </button>
+        </>
+      );
+    }
+
+    if (collection === 'attendance_mode_requests' && row.status === 'pending') {
+      return (
+        <>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => decideModeRequest(row, 'approved')}
+            disabled={saving}
+          >
+            Approve
+          </button>
+
+          <button
+            type="button"
+            className="danger"
+            onClick={() => decideModeRequest(row, 'rejected')}
+            disabled={saving}
+          >
+            Reject
+          </button>
+        </>
+      );
+    }
+
+    if (collection !== 'audit_logs' && !isSystemGenerated) {
+      return (
+        <>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => startEdit(row)}
+            disabled={saving}
+          >
+            Edit
+          </button>
+
+          <button
+            type="button"
+            className="danger"
+            onClick={() => remove(row._id)}
+            disabled={saving}
+          >
+            Delete
+          </button>
+        </>
+      );
+    }
+
+    if (isSystemGenerated) {
+      return <span>View only</span>;
+    }
+
+    return '—';
+  }
 
   return (
     <div className="page-grid">
@@ -700,14 +1216,14 @@ export default function ModuleCrud({ collection }) {
 
             <input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(event) => setQ(event.target.value)}
               placeholder="Search records..."
             />
 
             {isSuperAdmin() && (
               <input
                 value={tenant}
-                onChange={(e) => setTenant(e.target.value)}
+                onChange={(event) => setTenant(event.target.value)}
                 placeholder="tenant_id filter"
               />
             )}
@@ -729,7 +1245,15 @@ export default function ModuleCrud({ collection }) {
           </div>
         </div>
 
-        {collection !== 'audit_logs' && (
+        {isSystemGenerated && (
+          <div className="inline-message">
+            This module is system generated. Records can be viewed here, but
+            creation and editing must happen through the dedicated attendance or
+            workflow pages.
+          </div>
+        )}
+
+        {collection !== 'audit_logs' && !isSystemGenerated && (
           <form className="dynamic-form" onSubmit={submit}>
             {createFields.map((key) => renderField(form, setForm, key, false))}
 
@@ -757,12 +1281,9 @@ export default function ModuleCrud({ collection }) {
             <thead>
               <tr>
                 {rows[0] &&
-                  Object.keys(rows[0])
-                    .filter((key) => !['password_hash'].includes(key))
-                    .slice(0, 8)
-                    .map((key) => (
-                      <th key={key}>{key.replaceAll('_', ' ')}</th>
-                    ))}
+                  visibleTableKeys(rows[0]).map((key) => (
+                    <th key={key}>{titleCase(key)}</th>
+                  ))}
 
                 <th>Action</th>
               </tr>
@@ -770,9 +1291,7 @@ export default function ModuleCrud({ collection }) {
 
             <tbody>
               {rows.map((row) => {
-                const keys = Object.keys(row)
-                  .filter((key) => !['password_hash'].includes(key))
-                  .slice(0, 8);
+                const keys = visibleTableKeys(row);
 
                 return (
                   <tr key={row._id}>
@@ -780,29 +1299,7 @@ export default function ModuleCrud({ collection }) {
                       <td key={key}>{displayValue(row[key])}</td>
                     ))}
 
-                    <td>
-                      {collection !== 'audit_logs' && (
-                        <>
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => startEdit(row)}
-                            disabled={saving}
-                          >
-                            Edit
-                          </button>
-
-                          <button
-                            type="button"
-                            className="danger"
-                            onClick={() => remove(row._id)}
-                            disabled={saving}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                    </td>
+                    <td>{renderRowActions(row)}</td>
                   </tr>
                 );
               })}
