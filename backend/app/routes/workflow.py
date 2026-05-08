@@ -76,6 +76,16 @@ def normalize_text(value):
     return str(value or "").strip()
 
 
+def normalize_role(value):
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
 def normalize_status(value):
     return normalize_text(value).lower()
 
@@ -162,6 +172,35 @@ def truthy(value):
     ]
 
 
+def first_present(data, keys, default=None):
+    for key in keys:
+        if key in data and data.get(key) not in [None, ""]:
+            return data.get(key)
+    return default
+
+
+def parse_number(value, default=0.0):
+    if value in [None, ""]:
+        return float(default)
+
+    try:
+        return float(value)
+    except Exception:
+        raise ValueError("Value must be a valid number")
+
+
+def parse_non_negative_number(value, field_name, default=0.0):
+    try:
+        number = parse_number(value, default)
+    except ValueError:
+        raise ValueError(f"{field_name} must be a valid number")
+
+    if number < 0:
+        raise ValueError(f"{field_name} cannot be negative")
+
+    return number
+
+
 def current_tenant_id():
     return getattr(g, "tenant_id", None) or g.current_user.get("tenant_id") or "sds"
 
@@ -170,12 +209,22 @@ def current_user_roles():
     roles = g.current_user.get("roles", [])
 
     if isinstance(roles, list):
-        return set([str(role).strip() for role in roles if str(role).strip()])
+        return {
+            normalize_role(role)
+            for role in roles
+            if normalize_role(role)
+        }
 
     if isinstance(roles, str):
-        return set([role.strip() for role in roles.split(",") if role.strip()])
+        return {
+            normalize_role(role)
+            for role in roles.split(",")
+            if normalize_role(role)
+        }
 
-    return set()
+    role = normalize_role(g.current_user.get("role"))
+
+    return {role} if role else set()
 
 
 def current_employee(db):
@@ -203,7 +252,46 @@ def current_employee_id(db):
 
 def has_any_role(*allowed_roles):
     roles = current_user_roles()
-    return bool(roles.intersection(set(allowed_roles)))
+    return bool(roles.intersection({normalize_role(role) for role in allowed_roles}))
+
+
+def employee_roles(employee):
+    raw_roles = employee.get("roles", [])
+
+    if isinstance(raw_roles, list):
+        roles = {normalize_role(role) for role in raw_roles if normalize_role(role)}
+    elif isinstance(raw_roles, str):
+        roles = {normalize_role(role) for role in raw_roles.split(",") if normalize_role(role)}
+    else:
+        roles = set()
+
+    raw_role = normalize_role(employee.get("role"))
+
+    if raw_role:
+        roles.add(raw_role)
+
+    return roles
+
+
+def employee_is_team_leader(employee):
+    if not employee:
+        return False
+
+    return (
+        truthy(employee.get("is_team_leader"))
+        or "team_leader" in employee_roles(employee)
+    )
+
+
+def employee_is_reporting_officer(employee):
+    if not employee:
+        return False
+
+    return (
+        truthy(employee.get("is_reporting_officer"))
+        or "reporting_officer" in employee_roles(employee)
+        or "ro" in employee_roles(employee)
+    )
 
 
 def employee_display_name(employee):
@@ -250,11 +338,15 @@ def employee_user_id(db, employee_id, tenant_id=None):
 
 def users_for_roles(db, role_names, tenant_id=None):
     tenant_id = tenant_id or current_tenant_id()
+    normalized_roles = list({normalize_role(role) for role in role_names})
 
     rows = db.users.find({
         "tenant_id": tenant_id,
         "is_active": True,
-        "roles": {"$in": list(role_names)},
+        "$or": [
+            {"roles": {"$in": normalized_roles}},
+            {"role": {"$in": normalized_roles}},
+        ],
     })
 
     return [str(row["_id"]) for row in rows]
@@ -310,18 +402,110 @@ def can_manage_employee_record(db, employee_id):
         return False
 
     if (
-        ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")))
+        ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
         and employee.get("team_leader_id") == reviewer_emp_id
     ):
         return True
 
     if (
-        ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")))
+        ("reporting_officer" in roles or employee_is_reporting_officer(reviewer_emp))
         and employee.get("reporting_officer_id") == reviewer_emp_id
     ):
         return True
 
     return False
+
+
+# -----------------------------------------------------------------------------
+# Live status helpers
+# -----------------------------------------------------------------------------
+
+def leave_stage_label(stage):
+    labels = {
+        "team_leader": "Team Leader",
+        "reporting_officer": "Reporting Officer",
+        "hr": "HR",
+        "final": "Final Approval",
+        "approved": "Approved",
+        "rejected": "Rejected / Cancelled",
+    }
+
+    return labels.get(stage, stage or "Approval")
+
+
+def leave_request_live_status(leave_doc):
+    status = normalize_status(leave_doc.get("status"))
+    stage = normalize_text(leave_doc.get("approval_stage"))
+
+    if status == "approved" or stage == "approved":
+        return "Approved"
+
+    if status == "rejected" or stage == "rejected":
+        return "Rejected / Cancelled"
+
+    if stage == "team_leader":
+        return "Pending with Team Leader"
+
+    if stage == "reporting_officer":
+        return "Pending with Reporting Officer"
+
+    if stage == "hr":
+        return "Pending with HR"
+
+    return leave_stage_label(stage) if stage else "Pending"
+
+
+def mode_request_live_status(item):
+    status = normalize_status(item.get("status"))
+    stage = normalize_text(item.get("approval_stage"))
+
+    if status == "approved":
+        return "Approved"
+
+    if status == "rejected":
+        return "Rejected / Cancelled"
+
+    if stage == "team_leader":
+        return "Pending with Team Leader"
+
+    if stage == "reporting_officer":
+        return "Pending with Reporting Officer"
+
+    if stage == "hr":
+        return "Pending with HR"
+
+    return leave_stage_label(stage) if stage else status.title() if status else "Pending"
+
+
+def enrich_leave_request_doc(item):
+    item = dict(item or {})
+    live_status = leave_request_live_status(item)
+    item["live_status"] = live_status
+    item["status_text"] = live_status
+    item["status_display"] = live_status
+    item["current_approval_stage"] = live_status
+    item["approval_stage_label"] = item.get("approval_stage_label") or leave_stage_label(item.get("approval_stage"))
+    item["leave_type_label"] = item.get("leave_type_label") or leave_type_label(item.get("leave_type"))
+    return item
+
+
+def enrich_leave_request_docs(items):
+    return [enrich_leave_request_doc(item) for item in items]
+
+
+def enrich_mode_request_doc(item):
+    item = dict(item or {})
+    live_status = mode_request_live_status(item)
+    item["live_status"] = live_status
+    item["status_text"] = live_status
+    item["status_display"] = live_status
+    item["current_approval_stage"] = live_status
+    item["approval_stage_label"] = item.get("approval_stage_label") or leave_stage_label(item.get("approval_stage"))
+    return item
+
+
+def enrich_mode_request_docs(items):
+    return [enrich_mode_request_doc(item) for item in items]
 
 
 # -----------------------------------------------------------------------------
@@ -349,7 +533,20 @@ def calculate_leave_days(data):
 
 
 def build_initial_leave_stage(employee):
-    if employee.get("team_leader_id"):
+    """
+    Correct leave approval entry stage:
+
+    - Team Leader's own leave should never go back to Team Leader stage.
+    - If no Team Leader is mapped, send directly to Reporting Officer.
+    - If no Reporting Officer is mapped, send to HR.
+    """
+
+    applicant_is_team_leader = employee_is_team_leader(employee)
+
+    if (
+        employee.get("team_leader_id")
+        and not applicant_is_team_leader
+    ):
         return "team_leader"
 
     if employee.get("reporting_officer_id"):
@@ -362,7 +559,8 @@ def next_leave_stage(employee, current_stage):
     if current_stage == "team_leader":
         if employee.get("reporting_officer_id"):
             return "reporting_officer"
-        return "final"
+
+        return "hr"
 
     if current_stage == "reporting_officer":
         return "final"
@@ -371,19 +569,6 @@ def next_leave_stage(employee, current_stage):
         return "final"
 
     return "final"
-
-
-def leave_stage_label(stage):
-    labels = {
-        "team_leader": "Team Leader",
-        "reporting_officer": "Reporting Officer",
-        "hr": "HR",
-        "final": "Final Approval",
-        "approved": "Approved",
-        "rejected": "Rejected",
-    }
-
-    return labels.get(stage, stage or "Approval")
 
 
 def reviewer_can_decide_leave(db, leave_doc):
@@ -405,7 +590,7 @@ def reviewer_can_decide_leave(db, leave_doc):
             leave_doc.get("team_leader_id") == reviewer_emp_id
             and (
                 "team_leader" in roles
-                or truthy(reviewer_emp.get("is_team_leader"))
+                or employee_is_team_leader(reviewer_emp)
             )
         )
 
@@ -414,7 +599,8 @@ def reviewer_can_decide_leave(db, leave_doc):
             leave_doc.get("reporting_officer_id") == reviewer_emp_id
             and (
                 "reporting_officer" in roles
-                or truthy(reviewer_emp.get("is_reporting_officer"))
+                or "ro" in roles
+                or employee_is_reporting_officer(reviewer_emp)
             )
         )
 
@@ -444,13 +630,13 @@ def scoped_leave_query(db, leave_obj_id):
     reviewer_emp_id = str(reviewer_emp["_id"])
     scope_or = [{"employee_id": reviewer_emp_id}]
 
-    if "team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")):
+    if "team_leader" in roles or employee_is_team_leader(reviewer_emp):
         scope_or.append({
             "team_leader_id": reviewer_emp_id,
             "approval_stage": "team_leader",
         })
 
-    if "reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")):
+    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp):
         scope_or.append({
             "reporting_officer_id": reviewer_emp_id,
             "approval_stage": "reporting_officer",
@@ -504,6 +690,152 @@ def ensure_leave_balance(db, employee, leave_type):
     doc["_id"] = res.inserted_id
 
     return doc
+
+
+def leave_balance_payload_for_type(data, leave_type):
+    leave_type = normalize_leave_type(leave_type)
+
+    if leave_type == "CL":
+        nested = (
+            data.get("CL")
+            if isinstance(data.get("CL"), dict)
+            else data.get("cl")
+            if isinstance(data.get("cl"), dict)
+            else data.get("casual_leave")
+            if isinstance(data.get("casual_leave"), dict)
+            else {}
+        )
+        raw_total = first_present(data, ["CL", "cl", "casual_leave"], None)
+        prefixes = ["cl", "casual", "casual_leave"]
+    else:
+        nested = (
+            data.get("EL")
+            if isinstance(data.get("EL"), dict)
+            else data.get("el")
+            if isinstance(data.get("el"), dict)
+            else data.get("earned_leave")
+            if isinstance(data.get("earned_leave"), dict)
+            else {}
+        )
+        raw_total = first_present(data, ["EL", "el", "earned_leave"], None)
+        prefixes = ["el", "earned", "earned_leave"]
+
+    payload = {}
+
+    if isinstance(raw_total, (int, float, str)) and normalize_text(raw_total) != "":
+        payload["opening_balance"] = raw_total
+        payload["credited"] = 0
+
+    if isinstance(nested, dict):
+        payload.update(nested)
+
+    opening_keys = []
+    credited_keys = []
+    used_keys = []
+    available_keys = []
+    status_keys = []
+
+    for prefix in prefixes:
+        opening_keys.extend([
+            f"{prefix}_opening_balance",
+            f"{prefix}_opening",
+            f"{prefix}_balance",
+        ])
+        credited_keys.extend([
+            f"{prefix}_credited",
+            f"{prefix}_credit",
+        ])
+        used_keys.extend([
+            f"{prefix}_used",
+            f"{prefix}_used_leave",
+        ])
+        available_keys.extend([
+            f"{prefix}_available",
+            f"{prefix}_available_leave",
+        ])
+        status_keys.append(f"{prefix}_status")
+
+    for source_key, target_key in [
+        (opening_keys, "opening_balance"),
+        (credited_keys, "credited"),
+        (used_keys, "used"),
+        (available_keys, "available"),
+        (status_keys, "status"),
+    ]:
+        value = first_present(data, source_key, None)
+        if value not in [None, ""]:
+            payload[target_key] = value
+
+    return payload
+
+
+def upsert_leave_balance_from_payload(db, employee, leave_type, payload):
+    leave_type = normalize_leave_type(leave_type)
+
+    if leave_type not in LEAVE_TYPES_WITH_BALANCE:
+        raise ValueError("Unsupported leave type")
+
+    existing = ensure_leave_balance(db, employee, leave_type)
+    now = datetime.utcnow()
+
+    opening_balance = parse_non_negative_number(
+        payload.get("opening_balance", existing.get("opening_balance", 0)),
+        f"{leave_type_label(leave_type)} opening balance",
+        existing.get("opening_balance", 0),
+    )
+    credited = parse_non_negative_number(
+        payload.get("credited", existing.get("credited", 0)),
+        f"{leave_type_label(leave_type)} credited",
+        existing.get("credited", 0),
+    )
+    used = parse_non_negative_number(
+        payload.get("used", existing.get("used", 0)),
+        f"{leave_type_label(leave_type)} used",
+        existing.get("used", 0),
+    )
+
+    calculated_available = max(opening_balance + credited - used, 0)
+
+    if payload.get("available") not in [None, ""]:
+        available = parse_non_negative_number(
+            payload.get("available"),
+            f"{leave_type_label(leave_type)} available",
+            calculated_available,
+        )
+    else:
+        available = calculated_available
+
+    status = normalize_text(payload.get("status") or existing.get("status") or "active").lower()
+
+    db.leave_balances.update_one(
+        {"_id": existing["_id"]},
+        {
+            "$set": {
+                "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+                "employee_id": str(employee["_id"]),
+                "employee_code": employee_code(employee),
+                "emp_code": employee.get("emp_code", ""),
+                "employee_name": employee_display_name(employee),
+                "department": employee.get("department", ""),
+                "designation": employee.get("designation", ""),
+                "leave_type": leave_type,
+                "leave_type_label": leave_type_label(leave_type),
+                "opening_balance": opening_balance,
+                "credited": credited,
+                "used": used,
+                "available": available,
+                "status": status or "active",
+                "updated_at": now,
+                "updated_by": str(g.current_user["_id"]),
+                "updated_by_name": g.current_user.get("name") or g.current_user.get("email"),
+            },
+            "$setOnInsert": {
+                "created_at": now,
+            },
+        },
+    )
+
+    return db.leave_balances.find_one({"_id": existing["_id"]})
 
 
 def has_sufficient_leave_balance(db, employee, leave_type, leave_days):
@@ -610,25 +942,54 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         "Leave Approval Pending",
         f"{employee_display_name(employee)} has a leave request pending at {leave_stage_label(stage)} stage.",
         {
+            "target": "application_status",
             "leave_request_id": str(leave_doc.get("_id")),
             "employee_id": str(employee.get("_id")),
             "stage": stage,
+            "status": "pending",
         },
         tenant_id=tenant_id,
     )
 
 
 def notify_employee_leave_decision(db, employee, leave_doc, status):
+    status_text = "approved" if status == "approved" else "rejected/cancelled"
+
     notify_users(
         db,
         [employee.get("user_id")],
         "Leave Request Updated",
-        f"Your leave request has been {status}.",
+        f"Your leave request has been {status_text}.",
         {
+            "target": "application_status",
             "leave_request_id": str(leave_doc.get("_id")),
             "status": status,
         },
         tenant_id=employee.get("tenant_id") or current_tenant_id(),
+    )
+
+
+def notify_hr_leave_result(db, employee, leave_doc, status):
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    user_ids = users_for_roles(db, ADMIN_HR_ROLES, tenant_id)
+
+    if not user_ids:
+        return
+
+    status_text = "approved" if status == "approved" else "rejected/cancelled"
+
+    notify_users(
+        db,
+        user_ids,
+        "Leave Workflow Updated",
+        f"{employee_display_name(employee)}'s leave request has been {status_text}.",
+        {
+            "target": "application_status",
+            "leave_request_id": str(leave_doc.get("_id")),
+            "employee_id": str(employee.get("_id")),
+            "status": status,
+        },
+        tenant_id=tenant_id,
     )
 
 
@@ -796,13 +1157,13 @@ def leave_list_scope_query(db):
     emp_id = str(employee["_id"])
     scope_or = [{"employee_id": emp_id}]
 
-    if "team_leader" in roles or truthy(employee.get("is_team_leader")):
+    if "team_leader" in roles or employee_is_team_leader(employee):
         scope_or.append({
             "team_leader_id": emp_id,
             "approval_stage": "team_leader",
         })
 
-    if "reporting_officer" in roles or truthy(employee.get("is_reporting_officer")):
+    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
         scope_or.append({
             "reporting_officer_id": emp_id,
             "approval_stage": "reporting_officer",
@@ -810,6 +1171,294 @@ def leave_list_scope_query(db):
 
     q["$or"] = scope_or
     return q
+
+
+# -----------------------------------------------------------------------------
+# Notification APIs
+# -----------------------------------------------------------------------------
+
+@workflow_bp.get("/notifications")
+@current_user_required
+def list_notifications():
+    db = get_db()
+    only_unread = truthy(request.args.get("unread"))
+    limit_raw = request.args.get("limit", 50)
+
+    try:
+        limit = min(max(int(limit_raw), 1), 100)
+    except Exception:
+        limit = 50
+
+    q = {
+        "tenant_id": current_tenant_id(),
+        "user_id": str(g.current_user["_id"]),
+        "is_deleted": {"$ne": True},
+    }
+
+    if only_unread:
+        q["read"] = {"$ne": True}
+
+    items = list(
+        db.notifications
+        .find(q)
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+
+    unread_count = db.notifications.count_documents({
+        "tenant_id": current_tenant_id(),
+        "user_id": str(g.current_user["_id"]),
+        "read": {"$ne": True},
+        "is_deleted": {"$ne": True},
+    })
+
+    return jsonify({
+        "items": clean_doc(items),
+        "unread_count": unread_count,
+    })
+
+
+@workflow_bp.patch("/notifications/<notification_id>/read")
+@current_user_required
+def mark_notification_read(notification_id):
+    notification_obj_id = safe_object_id(notification_id)
+
+    if not notification_obj_id:
+        return jsonify({"message": "Invalid notification id"}), 400
+
+    db = get_db()
+
+    db.notifications.update_one(
+        {
+            "_id": notification_obj_id,
+            "tenant_id": current_tenant_id(),
+            "user_id": str(g.current_user["_id"]),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "read": True,
+                "status": "read",
+                "read_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    return jsonify({"message": "Notification marked as read"})
+
+
+@workflow_bp.patch("/notifications/read_all")
+@current_user_required
+def mark_all_notifications_read():
+    db = get_db()
+
+    db.notifications.update_many(
+        {
+            "tenant_id": current_tenant_id(),
+            "user_id": str(g.current_user["_id"]),
+            "read": {"$ne": True},
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "read": True,
+                "status": "read",
+                "read_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    return jsonify({"message": "All notifications marked as read"})
+
+
+# -----------------------------------------------------------------------------
+# Application status API
+# -----------------------------------------------------------------------------
+
+@workflow_bp.get("/application_status")
+@current_user_required
+def application_status():
+    db = get_db()
+    employee = current_employee(db)
+    tenant_id = current_tenant_id()
+    user_id = str(g.current_user["_id"])
+
+    if not employee:
+        return jsonify({
+            "employee": None,
+            "summary": {
+                "total": 0,
+                "pending": 0,
+                "approved": 0,
+                "rejected": 0,
+            },
+            "leave_requests": [],
+            "attendance_mode_requests": [],
+            "password_requests": [],
+            "tickets": [],
+            "compoff_claims": [],
+            "notifications": [],
+        })
+
+    emp_id = str(employee["_id"])
+
+    leave_requests = list(
+        db.leave_requests
+        .find({
+            "tenant_id": tenant_id,
+            "employee_id": emp_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(100)
+    )
+
+    attendance_mode_requests = list(
+        db.attendance_mode_requests
+        .find({
+            "tenant_id": tenant_id,
+            "employee_id": emp_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(100)
+    )
+
+    password_requests = list(
+        db.password_requests
+        .find({
+            "tenant_id": tenant_id,
+            "$or": [
+                {"user_id": user_id},
+                {"employee_id": emp_id},
+                {"requested_by": user_id},
+            ],
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(50)
+    )
+
+    tickets = list(
+        db.tickets
+        .find({
+            "tenant_id": tenant_id,
+            "$or": [
+                {"raised_by": emp_id},
+                {"user_id": user_id},
+                {"created_by": user_id},
+            ],
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(50)
+    )
+
+    compoff_claims = list(
+        db.compoff_credits
+        .find({
+            "tenant_id": tenant_id,
+            "employee_id": emp_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(50)
+    )
+
+    notifications = list(
+        db.notifications
+        .find({
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(30)
+    )
+
+    enriched_leaves = enrich_leave_request_docs(leave_requests)
+    enriched_modes = enrich_mode_request_docs(attendance_mode_requests)
+
+    all_status_rows = []
+
+    for row in enriched_leaves:
+        all_status_rows.append({
+            "type": "Leave Request",
+            "title": row.get("leave_type_label") or leave_type_label(row.get("leave_type")),
+            "date": row.get("from_date"),
+            "status": row.get("status"),
+            "live_status": row.get("live_status"),
+        })
+
+    for row in enriched_modes:
+        all_status_rows.append({
+            "type": "WFH / Field Request",
+            "title": row.get("mode", ""),
+            "date": row.get("date"),
+            "status": row.get("status"),
+            "live_status": row.get("live_status"),
+        })
+
+    for row in password_requests:
+        status = normalize_status(row.get("status"))
+        all_status_rows.append({
+            "type": "Password Change Request",
+            "title": "Password Change",
+            "date": row.get("created_at"),
+            "status": status,
+            "live_status": "Approved" if status == "approved" else "Rejected / Cancelled" if status == "rejected" else "Pending with Super Admin",
+        })
+
+    for row in tickets:
+        status = normalize_status(row.get("status"))
+        all_status_rows.append({
+            "type": "Ticket / Grievance",
+            "title": row.get("title", "Ticket"),
+            "date": row.get("created_at"),
+            "status": status,
+            "live_status": status.replace("_", " ").title() if status else "Open",
+        })
+
+    for row in compoff_claims:
+        status = normalize_status(row.get("status"))
+        all_status_rows.append({
+            "type": "Comp-Off",
+            "title": row.get("holiday_title", "Comp-Off"),
+            "date": row.get("earned_date"),
+            "status": status,
+            "live_status": status.replace("_", " ").title() if status else "Available",
+        })
+
+    summary = {
+        "total": len(all_status_rows),
+        "pending": len([
+            row for row in all_status_rows
+            if "pending" in normalize_text(row.get("live_status")).lower()
+            or normalize_status(row.get("status")) in ["pending", "open", "in_review", "in_progress"]
+        ]),
+        "approved": len([
+            row for row in all_status_rows
+            if normalize_status(row.get("status")) in ["approved", "resolved", "closed", "claimed"]
+        ]),
+        "rejected": len([
+            row for row in all_status_rows
+            if normalize_status(row.get("status")) in ["rejected", "cancelled", "expired"]
+        ]),
+    }
+
+    return jsonify({
+        "employee": clean_doc(employee),
+        "summary": summary,
+        "items": clean_doc(all_status_rows),
+        "leave_requests": clean_doc(enriched_leaves),
+        "attendance_mode_requests": clean_doc(enriched_modes),
+        "password_requests": clean_doc(password_requests),
+        "tickets": clean_doc(tickets),
+        "compoff_claims": clean_doc(compoff_claims),
+        "notifications": clean_doc(notifications),
+    })
 
 
 # -----------------------------------------------------------------------------
@@ -852,6 +1501,18 @@ def list_leave_balances():
     return jsonify({"items": clean_doc(items)})
 
 
+@workflow_bp.post("/leave_balances")
+@roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
+def create_or_update_leave_balances():
+    data = request.get_json(silent=True) or {}
+    employee_id = normalize_text(data.get("employee_id") or data.get("employee") or data.get("user_id"))
+
+    if not employee_id:
+        return jsonify({"message": "employee_id is required"}), 400
+
+    return set_leave_balance(employee_id)
+
+
 @workflow_bp.patch("/leave_balances/<employee_id>")
 @roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
 def set_leave_balance(employee_id):
@@ -878,50 +1539,29 @@ def set_leave_balance(employee_id):
         return jsonify({"message": "Employee not found"}), 404
 
     updates = []
-    now = datetime.utcnow()
+    updated_items = []
 
     for leave_type in ["CL", "EL"]:
-        if leave_type not in data and leave_type.lower() not in data:
+        payload = leave_balance_payload_for_type(data, leave_type)
+
+        if not payload:
             continue
 
-        raw = data.get(leave_type, data.get(leave_type.lower()))
-
         try:
-            total = float(raw)
-        except Exception:
-            return jsonify({"message": f"{leave_type} balance must be a number"}), 400
-
-        if total < 0:
-            return jsonify({"message": f"{leave_type} balance cannot be negative"}), 400
-
-        existing = ensure_leave_balance(db, employee, leave_type)
-        used = float(existing.get("used", 0) or 0)
-        available = max(total - used, 0)
-
-        db.leave_balances.update_one(
-            {"_id": existing["_id"]},
-            {
-                "$set": {
-                    "employee_code": employee_code(employee),
-                    "emp_code": employee.get("emp_code", ""),
-                    "employee_name": employee_display_name(employee),
-                    "department": employee.get("department", ""),
-                    "designation": employee.get("designation", ""),
-                    "leave_type_label": leave_type_label(leave_type),
-                    "opening_balance": total,
-                    "credited": total,
-                    "available": available,
-                    "status": "active",
-                    "updated_at": now,
-                    "updated_by": str(g.current_user["_id"]),
-                }
-            },
-        )
+            updated_items.append(upsert_leave_balance_from_payload(db, employee, leave_type, payload))
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
 
         updates.append(leave_type)
 
     if not updates:
-        return jsonify({"message": "Send CL and/or EL balance to update"}), 400
+        return jsonify({
+            "message": "Send Casual Leave and/or Earned Leave balance details",
+            "accepted_formats": [
+                {"employee_id": employee_id, "cl_opening_balance": 8, "cl_credited": 0, "el_opening_balance": 32, "el_credited": 0},
+                {"employee_id": employee_id, "casual_leave": {"opening_balance": 8, "credited": 0}, "earned_leave": {"opening_balance": 32, "credited": 0}},
+            ],
+        }), 400
 
     audit("set_leave_balance", "leave_balances", employee_id, data)
 
@@ -929,11 +1569,13 @@ def set_leave_balance(employee_id):
         "tenant_id": employee.get("tenant_id") or current_tenant_id(),
         "employee_id": str(employee_obj_id),
         "is_deleted": {"$ne": True},
-    }))
+    }).sort("leave_type", 1))
 
     return jsonify({
-        "message": "Leave balance updated",
+        "message": "Leave balances updated",
+        "updated_types": updates,
         "items": clean_doc(items),
+        "updated_items": clean_doc(updated_items),
     })
 
 
@@ -1078,7 +1720,7 @@ def list_leave_requests():
         .limit(1000)
     )
 
-    return jsonify({"items": clean_doc(items)})
+    return jsonify({"items": clean_doc(enrich_leave_request_docs(items))})
 
 
 @workflow_bp.post("/leave_requests/apply")
@@ -1199,14 +1841,21 @@ def apply_leave_request():
 
     audit("apply_leave", "leave_requests", res.inserted_id, doc)
 
+    if initial_stage == "team_leader":
+        response_message = "Your request has been sent to your Team Leader for approval."
+    elif initial_stage == "reporting_officer":
+        response_message = "Your request has been sent to your Reporting Officer for approval."
+    else:
+        response_message = "Your request has been sent to HR for approval."
+
     return jsonify({
-        "message": "Leave request submitted",
-        "item": clean_doc(doc),
+        "message": response_message,
+        "item": clean_doc(enrich_leave_request_doc(doc)),
     }), 201
 
 
 @workflow_bp.patch("/leave_requests/<req_id>/decision")
-@roles_required(*LEAVE_APPROVAL_ROLES)
+@current_user_required
 def leave_decision(req_id):
     leave_obj_id = safe_object_id(req_id)
 
@@ -1259,7 +1908,7 @@ def leave_decision(req_id):
         update_set = {
             "status": "rejected",
             "approval_stage": "rejected",
-            "approval_stage_label": "Rejected",
+            "approval_stage_label": "Rejected / Cancelled",
             "decision_reason": note,
             "rejected_at": now,
             "rejected_by": str(g.current_user["_id"]),
@@ -1280,11 +1929,12 @@ def leave_decision(req_id):
         updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
         notify_employee_leave_decision(db, employee, updated, "rejected")
-        audit("reject_leave", "leave_requests", req_id, data)
+        notify_hr_leave_result(db, employee, updated, "rejected")
+        audit("reject_leave_cancelled", "leave_requests", req_id, data)
 
         return jsonify({
-            "message": "Leave rejected",
-            "item": clean_doc(updated),
+            "message": "Leave rejected/cancelled",
+            "item": clean_doc(enrich_leave_request_doc(updated)),
         })
 
     next_stage = next_leave_stage(employee, current_stage)
@@ -1326,7 +1976,7 @@ def leave_decision(req_id):
 
         return jsonify({
             "message": f"Approved by {leave_stage_label(current_stage)}. Sent to {leave_stage_label(next_stage)}.",
-            "item": clean_doc(updated),
+            "item": clean_doc(enrich_leave_request_doc(updated)),
         })
 
     leave_type = normalize_leave_type(existing.get("leave_type"))
@@ -1368,11 +2018,12 @@ def leave_decision(req_id):
     updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
     notify_employee_leave_decision(db, employee, updated, "approved")
+    notify_hr_leave_result(db, employee, updated, "approved")
     audit("approve_leave_final", "leave_requests", req_id, data)
 
     return jsonify({
         "message": "Leave approved",
-        "item": clean_doc(updated),
+        "item": clean_doc(enrich_leave_request_doc(updated)),
     })
 
 
@@ -1638,13 +2289,15 @@ def create_performance_review():
         can_review = False
 
         if (
-            ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader") if reviewer_emp else False))
+            reviewer_emp
+            and ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
             and employee.get("team_leader_id") == reviewer_emp_id
         ):
             can_review = True
 
         if (
-            ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer") if reviewer_emp else False))
+            reviewer_emp
+            and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp))
             and employee.get("reporting_officer_id") == reviewer_emp_id
         ):
             can_review = True
@@ -1656,14 +2309,14 @@ def create_performance_review():
 
     if (
         reviewer_emp
-        and ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")))
+        and ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
         and employee.get("team_leader_id") == reviewer_emp_id
     ):
         reviewer_role = "team_leader"
 
     if (
         reviewer_emp
-        and ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")))
+        and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp))
         and employee.get("reporting_officer_id") == reviewer_emp_id
     ):
         reviewer_role = "reporting_officer"

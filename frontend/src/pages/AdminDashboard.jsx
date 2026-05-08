@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
@@ -85,10 +85,41 @@ function boolLabel(value) {
     : 'No';
 }
 
+function leaveLiveStatus(row = {}) {
+  if (row.live_status || row.status_text || row.status_display) {
+    return row.live_status || row.status_text || row.status_display;
+  }
+
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (status === 'approved' || stage === 'approved') return 'Approved';
+  if (status === 'rejected' || stage === 'rejected') return 'Rejected';
+  if (stage === 'team_leader') return 'Pending with Team Leader';
+  if (stage === 'reporting_officer') return 'Pending with Reporting Officer';
+  if (stage === 'hr') return 'Pending with HR';
+
+  return row.approval_stage_label || statusLabel(row.status);
+}
+
+function modeRequestLiveStatus(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (status === 'approved') return 'Approved';
+  if (status === 'rejected') return 'Rejected';
+  if (stage === 'team_leader') return 'Pending with Team Leader';
+  if (stage === 'reporting_officer') return 'Pending with Reporting Officer';
+  if (stage === 'hr') return 'Pending with HR';
+
+  return row.approval_stage_label || statusLabel(row.status);
+}
+
 export default function AdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [decisionSavingId, setDecisionSavingId] = useState('');
 
   async function loadDashboard() {
     try {
@@ -115,11 +146,93 @@ export default function AdminDashboard({ setPage }) {
     }
   }
 
+  async function decideLeave(row, status) {
+    const requestId = row?._id;
+
+    if (!requestId) {
+      setMessage('Leave request id not found');
+      return;
+    }
+
+    const ok = window.confirm(`${statusLabel(status)} this leave request?`);
+
+    if (!ok) return;
+
+    try {
+      setMessage('');
+      setDecisionSavingId(requestId);
+
+      const res = await api(`/leave_requests/${requestId}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(res.message || `Leave ${status}`);
+      await loadDashboard();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update leave request');
+    } finally {
+      setDecisionSavingId('');
+    }
+  }
+
+  async function decideModeRequest(row, status) {
+    const requestId = row?._id;
+
+    if (!requestId) {
+      setMessage('WFH / Field request id not found');
+      return;
+    }
+
+    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+
+    if (!ok) return;
+
+    try {
+      setMessage('');
+      setDecisionSavingId(requestId);
+
+      const res = await api(`/attendance/mode-requests/${requestId}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(res.message || `Request ${status}`);
+      await loadDashboard();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update WFH / Field request');
+    } finally {
+      setDecisionSavingId('');
+    }
+  }
+
   const stats = data?.stats || {};
   const employeeSummary = data?.employee_summary || null;
   const myPendingLeaves = data?.my_pending_leave_approvals || [];
   const myPendingModeRequests = data?.my_pending_attendance_mode_requests || [];
   const teamScopeCount = data?.team_scope_employee_ids?.length || 0;
+  const pendingLeaveRequests = data?.pending?.leave_requests || [];
+
+  const leaveSummary = useMemo(() => {
+    const pendingWithTeamLeader = pendingLeaveRequests.filter(
+      (row) => String(row.approval_stage || '').toLowerCase() === 'team_leader',
+    ).length;
+
+    const pendingWithReportingOfficer = pendingLeaveRequests.filter(
+      (row) => String(row.approval_stage || '').toLowerCase() === 'reporting_officer',
+    ).length;
+
+    const pendingWithHr = pendingLeaveRequests.filter(
+      (row) => String(row.approval_stage || '').toLowerCase() === 'hr',
+    ).length;
+
+    return {
+      pendingWithTeamLeader,
+      pendingWithReportingOfficer,
+      pendingWithHr,
+      assignedToMe: myPendingLeaves.length,
+    };
+  }, [pendingLeaveRequests, myPendingLeaves]);
 
   const statItems = [
     ['Total Employees', stats['Total Employees'] || 0],
@@ -131,6 +244,9 @@ export default function AdminDashboard({ setPage }) {
     ['Field Today', stats['Field Today'] || 0],
     ['Absent Today', stats['Absent Today'] || 0],
     ['Pending Leaves', stats['Pending Leaves'] || 0],
+    ['Pending TL Leaves', leaveSummary.pendingWithTeamLeader],
+    ['Pending RO Leaves', leaveSummary.pendingWithReportingOfficer],
+    ['Pending HR Leaves', leaveSummary.pendingWithHr],
     ['Pending WFH/Field', stats['Pending WFH/Field'] || 0],
     ['Available Comp-Off', stats['Available Comp-Off'] || 0],
     ['Open Tickets', stats['Open Tickets'] || 0],
@@ -164,7 +280,44 @@ export default function AdminDashboard({ setPage }) {
     verified: row.verified_by_ro ? 'Yes' : 'No',
   }));
 
-  const pendingLeaveRows = (data?.pending?.leave_requests || []).map((row) => ({
+  const pendingLeaveRows = pendingLeaveRequests.map((row) => ({
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+    from_date: formatDate(row.from_date),
+    upto_date: formatDate(row.to_date || row.upto_date),
+    leave_days: row.leave_days ?? '—',
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
+    current_stage: leaveLiveStatus(row),
+    reason: row.reason || '—',
+    final_status: statusLabel(row.status),
+  }));
+
+  const myPendingLeaveRows = myPendingLeaves.map((row) => ({
+    action: (
+      <div className="row-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => decideLeave(row, 'approved')}
+          disabled={decisionSavingId === row._id}
+        >
+          {decisionSavingId === row._id ? 'Approving...' : 'Approve'}
+        </button>
+
+        <button
+          type="button"
+          className="danger"
+          onClick={() => decideLeave(row, 'rejected')}
+          disabled={decisionSavingId === row._id}
+        >
+          {decisionSavingId === row._id ? 'Rejecting...' : 'Reject'}
+        </button>
+      </div>
+    ),
     employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     employee_name: row.employee_name || '—',
     department: row.department || '—',
@@ -174,21 +327,8 @@ export default function AdminDashboard({ setPage }) {
     leave_days: row.leave_days ?? '—',
     task_handover_to: row.task_handover_to_name || '—',
     project_handover: row.project_handover_name || '—',
-    stage: row.approval_stage_label || statusLabel(row.approval_stage),
-    reason: row.reason || '—',
-    status: statusLabel(row.status),
-  }));
-
-  const myPendingLeaveRows = myPendingLeaves.map((row) => ({
-    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
-    employee_name: row.employee_name || '—',
-    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-    from_date: formatDate(row.from_date),
-    upto_date: formatDate(row.to_date || row.upto_date),
-    task_handover_to: row.task_handover_to_name || '—',
-    project_handover: row.project_handover_name || '—',
-    stage: row.approval_stage_label || statusLabel(row.approval_stage),
-    status: statusLabel(row.status),
+    current_stage: leaveLiveStatus(row),
+    final_status: statusLabel(row.status),
   }));
 
   const pendingModeRows = (data?.pending?.attendance_mode_requests || []).map(
@@ -200,11 +340,33 @@ export default function AdminDashboard({ setPage }) {
       date: formatDate(row.date),
       reason: row.reason || '—',
       field_location: row.field_location || '—',
+      current_stage: modeRequestLiveStatus(row),
       status: statusLabel(row.status),
     }),
   );
 
   const myPendingModeRows = myPendingModeRequests.map((row) => ({
+    action: (
+      <div className="row-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => decideModeRequest(row, 'approved')}
+          disabled={decisionSavingId === row._id}
+        >
+          {decisionSavingId === row._id ? 'Approving...' : 'Approve'}
+        </button>
+
+        <button
+          type="button"
+          className="danger"
+          onClick={() => decideModeRequest(row, 'rejected')}
+          disabled={decisionSavingId === row._id}
+        >
+          {decisionSavingId === row._id ? 'Rejecting...' : 'Reject'}
+        </button>
+      </div>
+    ),
     employee_name: row.employee_name || '—',
     department: row.department || '—',
     designation: row.designation || '—',
@@ -212,6 +374,7 @@ export default function AdminDashboard({ setPage }) {
     date: formatDate(row.date),
     reason: row.reason || '—',
     field_location: row.field_location || '—',
+    current_stage: modeRequestLiveStatus(row),
     status: statusLabel(row.status),
   }));
 
@@ -394,7 +557,8 @@ export default function AdminDashboard({ setPage }) {
                 <h3>My Pending Leave Approvals</h3>
                 <p>
                   These requests are pending at your mapped Team Leader or
-                  Reporting Officer approval stage.
+                  Reporting Officer approval stage. Approval will move the leave
+                  to the next stage, and final approval deducts balance.
                 </p>
               </div>
 
@@ -407,7 +571,7 @@ export default function AdminDashboard({ setPage }) {
               </button>
             </div>
 
-            <Table rows={myPendingLeaveRows} maxColumns={9} />
+            <Table rows={myPendingLeaveRows} maxColumns={11} />
           </div>
 
           <div className="panel">
@@ -429,7 +593,7 @@ export default function AdminDashboard({ setPage }) {
               </button>
             </div>
 
-            <Table rows={myPendingModeRows} maxColumns={8} />
+            <Table rows={myPendingModeRows} maxColumns={9} />
           </div>
         </section>
       )}
@@ -455,7 +619,7 @@ export default function AdminDashboard({ setPage }) {
             </button>
           </div>
 
-          <Table rows={pendingLeaveRows} maxColumns={11} />
+          <Table rows={pendingLeaveRows} maxColumns={12} />
         </div>
 
         <div className="panel">
@@ -476,7 +640,7 @@ export default function AdminDashboard({ setPage }) {
             </button>
           </div>
 
-          <Table rows={pendingModeRows} maxColumns={8} />
+          <Table rows={pendingModeRows} maxColumns={9} />
         </div>
       </section>
 

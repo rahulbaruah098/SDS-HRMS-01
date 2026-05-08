@@ -172,6 +172,77 @@ def normalize_leave_type(value):
     return LEAVE_TYPE_ALIASES.get(key, key)
 
 
+def leave_type_label(value):
+    leave_type = normalize_leave_type(value)
+
+    labels = {
+        "CL": "Casual Leave",
+        "EL": "Earned Leave",
+        "COMP-OFF": "Comp-Off",
+    }
+
+    return labels.get(leave_type, normalize_text(value) or "Leave")
+
+
+def leave_stage_label(stage):
+    labels = {
+        "team_leader": "Team Leader",
+        "reporting_officer": "Reporting Officer",
+        "hr": "HR",
+        "final": "Final Approval",
+        "approved": "Approved",
+        "rejected": "Rejected",
+    }
+
+    return labels.get(normalize_text(stage), normalize_text(stage) or "Approval")
+
+
+def leave_live_status(row):
+    status = normalize_text(row.get("status")).lower()
+    stage = normalize_text(row.get("approval_stage")).lower()
+
+    if status == "approved" or stage == "approved":
+        return "Approved"
+
+    if status == "rejected" or stage == "rejected":
+        return "Rejected"
+
+    if stage == "team_leader":
+        return "Pending with Team Leader"
+
+    if stage == "reporting_officer":
+        return "Pending with Reporting Officer"
+
+    if stage == "hr":
+        return "Pending with HR"
+
+    if status == "pending":
+        return "Pending"
+
+    return status.title() if status else "—"
+
+
+def enrich_leave_request(row):
+    row = dict(row or {})
+    live_status = leave_live_status(row)
+    leave_type = normalize_leave_type(row.get("leave_type") or row.get("leave_type_label"))
+
+    row["leave_type"] = leave_type
+    row["leave_type_label"] = row.get("leave_type_label") or leave_type_label(leave_type)
+    row["live_status"] = live_status
+    row["status_text"] = live_status
+    row["status_display"] = live_status
+    row["approval_stage_label"] = row.get("approval_stage_label") or leave_stage_label(row.get("approval_stage"))
+    row["current_approval_stage"] = live_status
+    row["deducted_from_balance"] = bool(row.get("balance_deducted"))
+
+    return row
+
+
+def enrich_leave_requests(rows):
+    return [enrich_leave_request(row) for row in rows]
+
+
 def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
@@ -435,19 +506,34 @@ def summarize_leave_requests(items):
         "pending": 0,
         "approved": 0,
         "rejected": 0,
+        "pending_with_team_leader": 0,
+        "pending_with_reporting_officer": 0,
+        "pending_with_hr": 0,
         "casual_leave": 0.0,
         "earned_leave": 0.0,
         "comp_off": 0.0,
         "total_days": 0.0,
+        "deducted_days": 0.0,
+        "not_deducted_days": 0.0,
     }
 
     for item in items:
         status = normalize_text(item.get("status")).lower()
+        stage = normalize_text(item.get("approval_stage")).lower()
         leave_type = normalize_leave_type(item.get("leave_type"))
         days = float(item.get("leave_days", 0) or 0)
 
-        if status in summary:
+        if status in ["pending", "approved", "rejected"]:
             summary[status] += 1
+
+        if status == "pending" and stage == "team_leader":
+            summary["pending_with_team_leader"] += 1
+
+        if status == "pending" and stage == "reporting_officer":
+            summary["pending_with_reporting_officer"] += 1
+
+        if status == "pending" and stage == "hr":
+            summary["pending_with_hr"] += 1
 
         if leave_type == "CL":
             summary["casual_leave"] += days
@@ -456,9 +542,74 @@ def summarize_leave_requests(items):
         elif leave_type == "COMP-OFF":
             summary["comp_off"] += days
 
+        if item.get("balance_deducted"):
+            summary["deducted_days"] += days
+        else:
+            summary["not_deducted_days"] += days
+
         summary["total_days"] += days
 
     return summary
+
+
+def summarize_leave_balances(items):
+    summary = {
+        "employees": len({item.get("employee_id") for item in items if item.get("employee_id")}),
+        "casual_opening": 0.0,
+        "casual_credited": 0.0,
+        "casual_used": 0.0,
+        "casual_available": 0.0,
+        "earned_opening": 0.0,
+        "earned_credited": 0.0,
+        "earned_used": 0.0,
+        "earned_available": 0.0,
+        "total_opening": 0.0,
+        "total_credited": 0.0,
+        "total_used_deducted": 0.0,
+        "total_available": 0.0,
+    }
+
+    for item in items:
+        leave_type = normalize_leave_type(item.get("leave_type") or item.get("leave_type_label"))
+        opening = float(item.get("opening_balance", 0) or 0)
+        credited = float(item.get("credited", 0) or 0)
+        used = float(item.get("used", 0) or 0)
+        available = float(item.get("available", 0) or 0)
+
+        if leave_type == "CL":
+            summary["casual_opening"] += opening
+            summary["casual_credited"] += credited
+            summary["casual_used"] += used
+            summary["casual_available"] += available
+
+        if leave_type == "EL":
+            summary["earned_opening"] += opening
+            summary["earned_credited"] += credited
+            summary["earned_used"] += used
+            summary["earned_available"] += available
+
+        summary["total_opening"] += opening
+        summary["total_credited"] += credited
+        summary["total_used_deducted"] += used
+        summary["total_available"] += available
+
+    return summary
+
+
+def enrich_leave_balance(row):
+    row = dict(row or {})
+    leave_type = normalize_leave_type(row.get("leave_type") or row.get("leave_type_label"))
+
+    row["leave_type"] = leave_type
+    row["leave_type_label"] = row.get("leave_type_label") or leave_type_label(leave_type)
+    row["used_deducted"] = row.get("used", 0)
+    row["available_balance"] = row.get("available", 0)
+
+    return row
+
+
+def enrich_leave_balances(rows):
+    return [enrich_leave_balance(row) for row in rows]
 
 
 def leave_type_options():
@@ -532,10 +683,45 @@ def summary():
         "available",
     )
 
+    leave_balance_query = with_not_deleted(
+        apply_employee_scope(db, dict(base_q), "employee_id")
+    )
+
+    approved_deducted_leave_query = {
+        **apply_employee_scope(db, dict(base_q), "employee_id"),
+        "status": "approved",
+        "balance_deducted": True,
+        "is_deleted": {"$ne": True},
+    }
+
+    pending_with_team_leader_query = {
+        **apply_employee_scope(db, dict(base_q), "employee_id"),
+        "status": "pending",
+        "approval_stage": "team_leader",
+        "is_deleted": {"$ne": True},
+    }
+
+    pending_with_reporting_officer_query = {
+        **apply_employee_scope(db, dict(base_q), "employee_id"),
+        "status": "pending",
+        "approval_stage": "reporting_officer",
+        "is_deleted": {"$ne": True},
+    }
+
+    pending_with_hr_query = {
+        **apply_employee_scope(db, dict(base_q), "employee_id"),
+        "status": "pending",
+        "approval_stage": "hr",
+        "is_deleted": {"$ne": True},
+    }
+
     holiday_today_query = dict(base_q)
     holiday_today_query["date"] = today
     holiday_today_query["status"] = {"$ne": "inactive"}
     holiday_today_query["is_deleted"] = {"$ne": True}
+
+    balance_rows = list(db.leave_balances.find(leave_balance_query))
+    balance_summary = summarize_leave_balances(balance_rows)
 
     extra = {
         "today": today,
@@ -568,6 +754,24 @@ def summary():
                 **attendance_today_query,
                 "mode": "office",
             }),
+        },
+        "leave": {
+            "pending_total": db.leave_requests.count_documents(leave_pending_query),
+            "pending_with_team_leader": db.leave_requests.count_documents(pending_with_team_leader_query),
+            "pending_with_reporting_officer": db.leave_requests.count_documents(pending_with_reporting_officer_query),
+            "pending_with_hr": db.leave_requests.count_documents(pending_with_hr_query),
+            "approved": db.leave_requests.count_documents({
+                **apply_employee_scope(db, dict(base_q), "employee_id"),
+                "status": "approved",
+                "is_deleted": {"$ne": True},
+            }),
+            "rejected": db.leave_requests.count_documents({
+                **apply_employee_scope(db, dict(base_q), "employee_id"),
+                "status": "rejected",
+                "is_deleted": {"$ne": True},
+            }),
+            "approved_and_deducted": db.leave_requests.count_documents(approved_deducted_leave_query),
+            "balance_summary": balance_summary,
         },
         "pending": {
             "leave_requests": db.leave_requests.count_documents(leave_pending_query),
@@ -604,7 +808,7 @@ def summary():
 
     return jsonify({
         "counts": counts,
-        "extra": extra,
+        "extra": clean_doc(extra),
     })
 
 
@@ -727,9 +931,12 @@ def leave_balances_report():
         .limit(1000)
     )
 
+    enriched_items = enrich_leave_balances(items)
+
     return jsonify({
         "leave_types": leave_type_options(),
-        "items": clean_doc(items),
+        "summary": summarize_leave_balances(enriched_items),
+        "items": clean_doc(enriched_items),
     })
 
 
@@ -754,6 +961,25 @@ def leave_requests_report():
     if approval_stage:
         q["approval_stage"] = approval_stage
 
+    live_status = normalize_text(request.args.get("live_status")).lower()
+
+    if live_status:
+        live_stage_map = {
+            "pending_with_team_leader": "team_leader",
+            "pending with team leader": "team_leader",
+            "team_leader": "team_leader",
+            "pending_with_reporting_officer": "reporting_officer",
+            "pending with reporting officer": "reporting_officer",
+            "reporting_officer": "reporting_officer",
+            "pending_with_hr": "hr",
+            "pending with hr": "hr",
+            "hr": "hr",
+        }
+
+        if live_status in live_stage_map:
+            q["status"] = "pending"
+            q["approval_stage"] = live_stage_map[live_status]
+
     task_handover_to_id = normalize_text(request.args.get("task_handover_to_id"))
     project_handover_id = normalize_text(request.args.get("project_handover_id"))
 
@@ -763,6 +989,14 @@ def leave_requests_report():
     if project_handover_id:
         q["project_handover_id"] = project_handover_id
 
+    balance_deducted = normalize_text(request.args.get("balance_deducted")).lower()
+
+    if balance_deducted in ["true", "yes", "1"]:
+        q["balance_deducted"] = True
+
+    if balance_deducted in ["false", "no", "0"]:
+        q["balance_deducted"] = {"$ne": True}
+
     items = list(
         db.leave_requests
         .find(q)
@@ -770,10 +1004,86 @@ def leave_requests_report():
         .limit(1000)
     )
 
+    enriched_items = enrich_leave_requests(items)
+
     return jsonify({
         "leave_types": leave_type_options(),
-        "summary": summarize_leave_requests(items),
-        "items": clean_doc(items),
+        "summary": summarize_leave_requests(enriched_items),
+        "items": clean_doc(enriched_items),
+    })
+
+
+@reports_bp.get("/leave-approvals")
+@roles_required(*REPORT_ROLES)
+def leave_approvals_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_common_filters(q)
+    q = add_leave_overlap_date_filter(q)
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    q["approval_stage"] = {
+        "$in": ["team_leader", "reporting_officer", "hr", "approved", "rejected"],
+    }
+
+    status = normalize_text(request.args.get("status"))
+
+    if status:
+        q["status"] = status
+
+    approval_stage = normalize_text(request.args.get("approval_stage"))
+
+    if approval_stage:
+        q["approval_stage"] = approval_stage
+
+    items = list(
+        db.leave_requests
+        .find(q)
+        .sort([("updated_at", -1), ("created_at", -1)])
+        .limit(1000)
+    )
+
+    enriched_items = enrich_leave_requests(items)
+
+    return jsonify({
+        "summary": summarize_leave_requests(enriched_items),
+        "items": clean_doc(enriched_items),
+    })
+
+
+@reports_bp.get("/leave-deductions")
+@roles_required(*REPORT_ROLES)
+def leave_deductions_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_common_filters(q)
+    q = add_leave_overlap_date_filter(q)
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    q["status"] = "approved"
+    q["balance_deducted"] = True
+
+    leave_type = normalize_leave_type(request.args.get("leave_type"))
+
+    if leave_type:
+        q["leave_type"] = leave_type
+
+    items = list(
+        db.leave_requests
+        .find(q)
+        .sort([("approved_at", -1), ("updated_at", -1), ("created_at", -1)])
+        .limit(1000)
+    )
+
+    enriched_items = enrich_leave_requests(items)
+
+    return jsonify({
+        "summary": summarize_leave_requests(enriched_items),
+        "items": clean_doc(enriched_items),
     })
 
 

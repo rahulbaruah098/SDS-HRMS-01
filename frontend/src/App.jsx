@@ -15,6 +15,7 @@ import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 import Projects from './pages/Projects';
+import ApplicationStatus from './pages/ApplicationStatus';
 
 import './styles.css';
 
@@ -35,27 +36,105 @@ const EMPLOYEE_CAPABILITY_ROLES = [
   'reporting_officer',
 ];
 
+const PAGE_ALIASES = {
+  home: 'dashboard',
+  dashboard_home: 'dashboard',
+
+  leave: 'leave_requests',
+  leave_request: 'leave_requests',
+  leave_requests: 'leave_requests',
+  leave_management: 'leave_requests',
+  leave_approvals: 'leave_requests',
+  leave_deductions: 'reports',
+  leave_records: 'reports',
+
+  leave_balance: 'leave_balances',
+  leave_balances: 'leave_balances',
+
+  attendance_mode_request: 'attendance_mode_requests',
+  attendance_mode_requests: 'attendance_mode_requests',
+  wfh_field_requests: 'attendance_mode_requests',
+
+  application_status: 'application_status',
+  application_statuses: 'application_status',
+  application: 'application_status',
+  application_status_page: 'application_status',
+  applicationstatus: 'application_status',
+  application_status_report: 'application_status',
+  request_status: 'application_status',
+  request_status_page: 'application_status',
+  my_requests: 'application_status',
+  my_request_status: 'application_status',
+  my_applications: 'application_status',
+  application_tracking: 'application_status',
+
+  'application-status': 'application_status',
+  'request-status': 'application_status',
+  'my-requests': 'application_status',
+  'my-applications': 'application_status',
+
+  notification: 'notifications',
+  notifications: 'notifications',
+
+  password_request: 'password_requests',
+  password_requests: 'password_requests',
+
+  project: 'projects',
+  projects: 'projects',
+
+  report: 'reports',
+  reports: 'reports',
+
+  profile: 'profile',
+  my_profile: 'profile',
+};
+
+function normalizeRoleValue(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
 function normalizeRoles(user) {
   const userRoles = user?.roles;
 
   if (Array.isArray(userRoles)) {
     return userRoles
-      .map((role) => String(role || '').trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
   if (typeof userRoles === 'string') {
     return userRoles
       .split(',')
-      .map((role) => role.trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
-  return [];
+  const singleRole = normalizeRoleValue(user?.role);
+
+  return singleRole ? [singleRole] : [];
+}
+
+function normalizePageKey(page) {
+  const key = String(page || 'dashboard')
+    .trim()
+    .replaceAll(' ', '_');
+
+  if (!key) {
+    return 'dashboard';
+  }
+
+  return PAGE_ALIASES[key] || PAGE_ALIASES[key.toLowerCase()] || key;
 }
 
 function hasAnyRole(userRoles = [], allowedRoles = []) {
-  return allowedRoles.some((role) => userRoles.includes(role));
+  const normalizedUserRoles = userRoles.map((role) => normalizeRoleValue(role));
+  const normalizedAllowedRoles = allowedRoles.map((role) => normalizeRoleValue(role));
+
+  return normalizedAllowedRoles.some((role) => normalizedUserRoles.includes(role));
 }
 
 function shouldUseEmployeeDashboard(userRoles = []) {
@@ -122,43 +201,49 @@ function PageRouter({ page, user, setPage }) {
     roles: normalizeRoles(user),
   };
 
-  if (page === 'dashboard') {
+  const normalizedPage = normalizePageKey(page);
+
+  if (normalizedPage === 'dashboard') {
     return <DashboardRouter user={safeUser} setPage={setPage} />;
   }
 
-  if (!canAccessModule(safeUser, page)) {
+  if (!canAccessModule(safeUser, normalizedPage)) {
     return <UnauthorizedPage setPage={setPage} />;
   }
 
-  if (page === 'attendance') {
+  if (normalizedPage === 'attendance') {
     return <Attendance setPage={setPage} />;
   }
 
-  if (page === 'companies') {
+  if (normalizedPage === 'companies') {
     return <Companies setPage={setPage} />;
   }
 
-  if (page === 'users') {
+  if (normalizedPage === 'users') {
     return <UserControl setPage={setPage} />;
   }
 
-  if (page === 'projects') {
+  if (normalizedPage === 'projects') {
     return <Projects setPage={setPage} />;
   }
 
-  if (page === 'profile') {
+  if (normalizedPage === 'profile') {
     return <Profile setPage={setPage} />;
   }
 
-  if (page === 'password_requests') {
+  if (normalizedPage === 'password_requests') {
     return <PasswordRequests setPage={setPage} />;
   }
 
-  if (page === 'reports') {
+  if (normalizedPage === 'reports') {
     return <Reports setPage={setPage} />;
   }
 
-  return <ModuleCrud collection={page} setPage={setPage} />;
+  if (normalizedPage === 'application_status') {
+    return <ApplicationStatus setPage={setPage} />;
+  }
+
+  return <ModuleCrud collection={normalizedPage} setPage={setPage} />;
 }
 
 export default function App() {
@@ -178,6 +263,8 @@ export default function App() {
     };
   }, [user]);
 
+  const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
+
   function handleSetUser(nextUser) {
     if (!nextUser) {
       setUser(null);
@@ -194,12 +281,7 @@ export default function App() {
   }
 
   function handleSetPage(nextPage) {
-    if (!nextPage) {
-      setPage('dashboard');
-      return;
-    }
-
-    setPage(nextPage);
+    setPage(normalizePageKey(nextPage));
   }
 
   useEffect(() => {
@@ -207,10 +289,15 @@ export default function App() {
       return;
     }
 
-    if (page !== 'dashboard' && !canAccessModule(normalizedUser, page)) {
+    if (page !== normalizedPage) {
+      setPage(normalizedPage);
+      return;
+    }
+
+    if (normalizedPage !== 'dashboard' && !canAccessModule(normalizedUser, normalizedPage)) {
       setPage('dashboard');
     }
-  }, [page, normalizedUser]);
+  }, [page, normalizedPage, normalizedUser]);
 
   if (!normalizedUser) {
     return <Login onLogin={handleSetUser} />;
@@ -220,11 +307,11 @@ export default function App() {
     <AppLayout
       user={normalizedUser}
       setUser={handleSetUser}
-      page={page}
+      page={normalizedPage}
       setPage={handleSetPage}
     >
       <PageRouter
-        page={page}
+        page={normalizedPage}
         user={normalizedUser}
         setPage={handleSetPage}
       />

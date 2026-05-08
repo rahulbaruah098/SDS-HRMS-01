@@ -17,6 +17,7 @@ import {
   KeyRound,
   UserCircle,
   LockKeyhole,
+  ClipboardList,
 } from 'lucide-react';
 
 /*
@@ -42,9 +43,16 @@ import {
       Leave Type, Reason, From Date, Upto Date, Task Handover To, Project Handover.
   - Leave project handover dropdown shows only active projects.
   - Leave types shown to employees should be Casual Leave and Earned Leave.
-  - Leave balances are managed by HR/Admin/Super Admin.
+  - Leave balances are managed only by HR/Admin/Super Admin.
   - Team Leader/Reporting Officer approval is based on employee mapping.
   - Reports page shows attendance, holiday, comp-off, leave and audit reports.
+  - Application Status page shows live request status for employees.
+  - Leave request status should show live stage:
+      Pending with Team Leader
+      Pending with Reporting Officer
+      Pending with HR
+      Approved
+      Rejected / Cancelled
 
   Project workflow:
   - Team Leader can create projects.
@@ -126,6 +134,10 @@ export const REPORT_ROLES = [
   ...CAPABILITY_ROLES,
 ];
 
+export const LEAVE_BALANCE_MANAGER_ROLES = HR_ROLES;
+
+export const APPLICATION_STATUS_ROLES = ALL_COMMON_ROLES;
+
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
@@ -196,11 +208,18 @@ export const coreModules = [
     TEAM_ROLES,
   ],
   [
+    'application_status',
+    'Application Status',
+    ClipboardList,
+    'Track live status of leave, WFH/Field, password, ticket and comp-off requests.',
+    APPLICATION_STATUS_ROLES,
+  ],
+  [
     'leave_balances',
     'Leave Balances',
     CalendarDays,
-    'HR/Admin can assign and update employee Casual Leave and Earned Leave balances.',
-    [...HR_ROLES, BASE_EMPLOYEE_ROLE, ...CAPABILITY_ROLES],
+    'HR/Admin can assign Casual Leave and Earned Leave together from one form.',
+    LEAVE_BALANCE_MANAGER_ROLES,
   ],
   [
     'holiday_calendar',
@@ -367,17 +386,25 @@ export const coreModules = [
 
 export const allModules = [...superModules, ...coreModules];
 
+export function normalizeRoleValue(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
 export function normalizeRoleList(value = []) {
   if (Array.isArray(value)) {
     return value
-      .map((role) => String(role || '').trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
   if (typeof value === 'string') {
     return value
       .split(',')
-      .map((role) => role.trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
@@ -386,11 +413,13 @@ export function normalizeRoleList(value = []) {
 
 export function hasAnyRole(userRoles = [], allowedRoles = []) {
   const normalizedUserRoles = normalizeRoleList(userRoles);
-  return allowedRoles.some((role) => normalizedUserRoles.includes(role));
+  const normalizedAllowedRoles = normalizeRoleList(allowedRoles);
+
+  return normalizedAllowedRoles.some((role) => normalizedUserRoles.includes(role));
 }
 
 export function isCapabilityRole(role) {
-  return CAPABILITY_ROLES.includes(String(role || '').trim());
+  return CAPABILITY_ROLES.includes(normalizeRoleValue(role));
 }
 
 export function isEmployeePortalUser(user) {
@@ -418,6 +447,11 @@ export function canManageProjects(user) {
   return hasAnyRole(roles, PROJECT_ROLES);
 }
 
+export function canManageLeaveBalances(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  return hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES);
+}
+
 export function getEmployeeCapabilities(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = user?.employee_summary || user?.employee || user?.profile || {};
@@ -437,6 +471,7 @@ export function getEmployeeCapabilities(user) {
       truthy(employee?.is_team_leader) ||
       truthy(employee?.is_reporting_officer) ||
       hasAnyRole(roles, PROJECT_ROLES),
+    canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
     displayRole: 'Employee',
   };
 }
@@ -471,7 +506,11 @@ export function canAccessModule(user, moduleKey) {
     return true;
   }
 
-  const module = allModules.find((item) => item[0] === moduleKey);
+  const normalizedModuleKey = String(moduleKey || '')
+    .trim()
+    .replaceAll('-', '_');
+
+  const module = allModules.find((item) => item[0] === normalizedModuleKey);
 
   if (!module) {
     return false;
@@ -603,12 +642,17 @@ export const templates = {
     employee_name: '',
     department: '',
     designation: '',
-    leave_type: 'CL',
-    leave_type_label: 'Casual Leave',
-    opening_balance: 0,
-    credited: 0,
-    used: 0,
-    available: 0,
+
+    cl_opening_balance: 0,
+    cl_credited: 0,
+    cl_used: 0,
+    cl_available: 0,
+
+    el_opening_balance: 0,
+    el_credited: 0,
+    el_used: 0,
+    el_available: 0,
+
     status: 'active',
   },
 
@@ -634,6 +678,9 @@ export const templates = {
     project_handover_id: '',
     project_handover_name: '',
     status: 'pending',
+    live_status: '',
+    status_text: '',
+    status_display: '',
     approval_stage: '',
     approval_stage_label: '',
     approval_history: [],

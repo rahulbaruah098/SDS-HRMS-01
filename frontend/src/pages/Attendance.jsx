@@ -50,10 +50,7 @@ function buildQuery(params = {}) {
   const query = new URLSearchParams();
 
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') {
-      return;
-    }
-
+    if (value === undefined || value === null || value === '') return;
     query.append(key, value);
   });
 
@@ -66,10 +63,7 @@ function formatDate(value) {
 
   try {
     const parsed = new Date(value);
-
-    if (Number.isNaN(parsed.getTime())) {
-      return value;
-    }
+    if (Number.isNaN(parsed.getTime())) return value;
 
     return parsed.toLocaleDateString('en-IN', {
       day: '2-digit',
@@ -86,10 +80,7 @@ function formatDateTime(value) {
 
   try {
     const parsed = new Date(value);
-
-    if (Number.isNaN(parsed.getTime())) {
-      return value;
-    }
+    if (Number.isNaN(parsed.getTime())) return value;
 
     return parsed.toLocaleString('en-IN', {
       day: '2-digit',
@@ -117,6 +108,20 @@ function statusLabel(value) {
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function requestLiveStatus(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (status === 'approved') return 'Approved';
+  if (status === 'rejected') return 'Rejected';
+
+  if (stage === 'team_leader') return 'Pending with Team Leader';
+  if (stage === 'reporting_officer') return 'Pending with Reporting Officer';
+  if (stage === 'hr') return 'Pending with HR';
+
+  return row.approval_stage_label || statusLabel(row.status);
 }
 
 function normalizeAttendanceRows(rows = []) {
@@ -152,11 +157,13 @@ function normalizeModeRequestRows(rows = []) {
     date: formatDate(row.date),
     reason: row.reason || '—',
     field_location: row.field_location || '—',
+    current_stage: requestLiveStatus(row),
     status: statusLabel(row.status),
-    decided_by: row.decided_by_name || '—',
-    decided_at: formatDateTime(row.decided_at),
+    decided_by: row.decided_by_name || row.approved_by_name || row.rejected_by_name || '—',
+    decided_at: formatDateTime(row.decided_at || row.approved_at || row.rejected_at),
     _id: row._id,
     raw_status: row.status,
+    raw_stage: row.approval_stage,
   }));
 }
 
@@ -236,9 +243,7 @@ export default function Attendance() {
   }
 
   async function loadReport(nextFilters = filters) {
-    if (!canViewReport) {
-      return;
-    }
+    if (!canViewReport) return;
 
     setLoadingReport(true);
 
@@ -251,9 +256,7 @@ export default function Attendance() {
   }
 
   async function loadModeRequests() {
-    if (!canViewReport) {
-      return;
-    }
+    if (!canViewReport) return;
 
     const data = await api('/attendance/mode-requests');
     setModeRequests(normalizeModeRequestRows(data.items || []));
@@ -265,9 +268,7 @@ export default function Attendance() {
   }
 
   async function loadHolidays() {
-    if (!canManageHoliday) {
-      return;
-    }
+    if (!canManageHoliday) return;
 
     const data = await api('/attendance/holidays');
     setHolidays(normalizeHolidayRows(data.items || []));
@@ -336,9 +337,7 @@ export default function Attendance() {
 
     const ok = window.confirm('Verify this attendance record?');
 
-    if (!ok) {
-      return;
-    }
+    if (!ok) return;
 
     try {
       setMessage('');
@@ -410,9 +409,17 @@ export default function Attendance() {
         body: JSON.stringify(modeRequestForm),
       });
 
-      setMessage(data.message || 'Request submitted');
+      setMessage(
+        data.message ||
+          'Your WFH / Field request has been sent for approval.',
+      );
+
       setModeRequestForm({ ...EMPTY_MODE_REQUEST_FORM });
-      await loadMyModeRequests();
+
+      await Promise.all([
+        loadMyModeRequests(),
+        canViewReport ? loadModeRequests() : Promise.resolve(),
+      ]);
     } catch (error) {
       setMessage(error.message || 'Unable to submit request');
     } finally {
@@ -430,9 +437,7 @@ export default function Attendance() {
 
     const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
 
-    if (!ok) {
-      return;
-    }
+    if (!ok) return;
 
     try {
       setMessage('');
@@ -444,8 +449,12 @@ export default function Attendance() {
       });
 
       setMessage(data.message || `Request ${status}`);
-      await loadModeRequests();
-      await loadMyModeRequests();
+
+      await Promise.all([
+        loadModeRequests(),
+        loadMyModeRequests(),
+        loadReport(filters),
+      ]);
     } catch (error) {
       setMessage(error.message || 'Unable to update request');
     } finally {
@@ -499,6 +508,10 @@ export default function Attendance() {
     ),
   }));
 
+  const pendingModeRequestCount = modeRequests.filter(
+    (row) => row.raw_status === 'pending',
+  ).length;
+
   const modeRequestRows = modeRequests.map((row) => ({
     ...row,
     action:
@@ -510,7 +523,7 @@ export default function Attendance() {
             onClick={() => decideModeRequest(row, 'approved')}
             disabled={decidingRequestId === row._id}
           >
-            Approve
+            {decidingRequestId === row._id ? 'Approving...' : 'Approve'}
           </button>
 
           <button
@@ -519,7 +532,7 @@ export default function Attendance() {
             onClick={() => decideModeRequest(row, 'rejected')}
             disabled={decidingRequestId === row._id}
           >
-            Reject
+            {decidingRequestId === row._id ? 'Rejecting...' : 'Reject'}
           </button>
         </div>
       ) : (
@@ -581,6 +594,7 @@ export default function Attendance() {
                     mode: e.target.value,
                   })
                 }
+                disabled={submittingModeRequest}
               >
                 <option value="wfh">Work From Home</option>
                 <option value="field">Field</option>
@@ -598,6 +612,7 @@ export default function Attendance() {
                     date: e.target.value,
                   })
                 }
+                disabled={submittingModeRequest}
               />
             </label>
 
@@ -613,6 +628,7 @@ export default function Attendance() {
                     })
                   }
                   placeholder="Visit place / client location"
+                  disabled={submittingModeRequest}
                 />
               </label>
             )}
@@ -628,6 +644,7 @@ export default function Attendance() {
                   })
                 }
                 placeholder="Reason for WFH / Field attendance"
+                disabled={submittingModeRequest}
               />
             </label>
 
@@ -642,7 +659,13 @@ export default function Attendance() {
         </div>
 
         <div className="panel">
-          <h3>My WFH / Field Requests</h3>
+          <div className="toolbar">
+            <div>
+              <h3>My WFH / Field Requests</h3>
+              <p>Track whether your request is pending, approved, or rejected.</p>
+            </div>
+          </div>
+
           <Table rows={myModeRequests} maxColumns={10} />
         </div>
       </section>
@@ -667,6 +690,7 @@ export default function Attendance() {
                     compoff_id: e.target.value,
                   })
                 }
+                disabled={claimingCompOff}
               >
                 <option value="">Select comp-off</option>
                 {availableCompOffs.map((item) => (
@@ -688,6 +712,7 @@ export default function Attendance() {
                     claim_date: e.target.value,
                   })
                 }
+                disabled={claimingCompOff}
               />
             </label>
 
@@ -702,6 +727,7 @@ export default function Attendance() {
                   })
                 }
                 placeholder="Optional reason"
+                disabled={claimingCompOff}
               />
             </label>
 
@@ -840,11 +866,20 @@ export default function Attendance() {
 
       {canViewReport && (
         <section className="panel">
-          <h3>WFH / Field Approval Requests</h3>
-          <p>
-            Approval access is based on HR/Admin permission or employee mapping
-            as Team Leader / Reporting Officer.
-          </p>
+          <div className="toolbar">
+            <div>
+              <h3>WFH / Field Approval Requests</h3>
+              <p>
+                Approval access is based on HR/Admin permission or employee
+                mapping as Team Leader / Reporting Officer.
+              </p>
+            </div>
+
+            <span className="employee-role-pill">
+              Pending Requests: {pendingModeRequestCount}
+            </span>
+          </div>
+
           <Table rows={modeRequestRows} maxColumns={12} />
         </section>
       )}
@@ -869,6 +904,7 @@ export default function Attendance() {
                 onChange={(e) =>
                   setHolidayForm({ ...holidayForm, state: e.target.value })
                 }
+                disabled={savingHoliday}
               >
                 {HOLIDAY_STATES.map((state) => (
                   <option key={state} value={state}>
@@ -886,6 +922,7 @@ export default function Attendance() {
                 onChange={(e) =>
                   setHolidayForm({ ...holidayForm, date: e.target.value })
                 }
+                disabled={savingHoliday}
               />
             </label>
 
@@ -897,6 +934,7 @@ export default function Attendance() {
                   setHolidayForm({ ...holidayForm, title: e.target.value })
                 }
                 placeholder="Example: Bohag Bihu"
+                disabled={savingHoliday}
               />
             </label>
 
@@ -908,6 +946,7 @@ export default function Attendance() {
                   setHolidayForm({ ...holidayForm, message: e.target.value })
                 }
                 placeholder="Holiday message for employees"
+                disabled={savingHoliday}
               />
             </label>
 

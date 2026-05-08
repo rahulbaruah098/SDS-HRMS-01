@@ -5,7 +5,6 @@ import {
   allModules,
   templates,
   LEAVE_TYPES_FOR_EMPLOYEE,
-  LEAVE_BALANCE_TYPES,
 } from '../data/modules';
 import { isSuperAdmin } from '../utils/authHelpers';
 
@@ -29,6 +28,15 @@ const EMPLOYEE_OPTION_COLLECTIONS = new Set([
   'attendance_mode_requests',
   'expenses',
   'performance_reviews',
+]);
+
+const LEAVE_BALANCE_MANAGER_ROLES = new Set([
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'hr_executive',
 ]);
 
 const DATE_FIELDS = new Set([
@@ -102,11 +110,14 @@ const SIMPLE_LEAVE_EDIT_FIELDS = [
 
 const LEAVE_BALANCE_CREATE_FIELDS = [
   'employee_id',
-  'leave_type',
-  'opening_balance',
-  'credited',
-  'used',
-  'available',
+  'cl_opening_balance',
+  'cl_credited',
+  'cl_used',
+  'cl_available',
+  'el_opening_balance',
+  'el_credited',
+  'el_used',
+  'el_available',
   'status',
 ];
 
@@ -186,6 +197,14 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function normalizeRole(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
 function normalizeProjectStatus(value) {
   const status = String(value || '').trim().toLowerCase();
 
@@ -239,6 +258,23 @@ function leaveTypeLabel(value) {
   return value || '—';
 }
 
+function leaveLiveStatus(row = {}) {
+  if (row.live_status || row.status_text || row.status_display) {
+    return row.live_status || row.status_text || row.status_display;
+  }
+
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (status === 'approved' || stage === 'approved') return 'Approved';
+  if (status === 'rejected' || stage === 'rejected') return 'Rejected / Cancelled';
+  if (stage === 'team_leader') return 'Pending with Team Leader';
+  if (stage === 'reporting_officer') return 'Pending with Reporting Officer';
+  if (stage === 'hr') return 'Pending with HR';
+
+  return row.approval_stage_label || statusLabel(row.status);
+}
+
 function normalizeLeavePayload(payload) {
   const nextPayload = { ...payload };
 
@@ -268,14 +304,198 @@ function normalizeLeavePayload(payload) {
   return nextPayload;
 }
 
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function getStoredUser() {
+  const keys = [
+    'sds_hrms_user',
+    'user',
+    'currentUser',
+    'auth_user',
+    'hrms_user',
+  ];
+
+  for (const key of keys) {
+    try {
+      const raw = localStorage.getItem(key);
+
+      if (!raw) {
+        continue;
+      }
+
+      const parsed = JSON.parse(raw);
+
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      // Ignore malformed storage values.
+    }
+  }
+
+  return {};
+}
+
+function getCurrentUserRoles() {
+  const user = getStoredUser();
+  const roles = [];
+
+  if (Array.isArray(user.roles)) {
+    roles.push(...user.roles);
+  }
+
+  if (user.role) {
+    roles.push(user.role);
+  }
+
+  if (user.user?.role) {
+    roles.push(user.user.role);
+  }
+
+  if (Array.isArray(user.user?.roles)) {
+    roles.push(...user.user.roles);
+  }
+
+  return new Set(
+    roles
+      .map((role) => normalizeRole(role))
+      .filter(Boolean),
+  );
+}
+
+function canManageLeaveBalances() {
+  if (isSuperAdmin()) {
+    return true;
+  }
+
+  const roles = getCurrentUserRoles();
+
+  for (const role of LEAVE_BALANCE_MANAGER_ROLES) {
+    if (roles.has(role)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function emptyLeaveBalanceForm(template = {}) {
+  return {
+    ...template,
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    cl_opening_balance: 0,
+    cl_credited: 0,
+    cl_used: 0,
+    cl_available: 0,
+    el_opening_balance: 0,
+    el_credited: 0,
+    el_used: 0,
+    el_available: 0,
+    status: 'active',
+  };
+}
+
 function normalizeBalancePayload(payload) {
-  const nextPayload = { ...payload };
-  const selected = LEAVE_BALANCE_TYPES.find((item) => item.value === nextPayload.leave_type);
+  const clOpening = toNumber(payload.cl_opening_balance, 0);
+  const clCredited = toNumber(payload.cl_credited, 0);
+  const clUsed = toNumber(payload.cl_used, 0);
 
-  nextPayload.leave_type = nextPayload.leave_type || 'CL';
-  nextPayload.leave_type_label = selected?.label || leaveTypeLabel(nextPayload.leave_type);
+  const elOpening = toNumber(payload.el_opening_balance, 0);
+  const elCredited = toNumber(payload.el_credited, 0);
+  const elUsed = toNumber(payload.el_used, 0);
 
-  return nextPayload;
+  const clAvailable =
+    payload.cl_available === '' || payload.cl_available === undefined || payload.cl_available === null
+      ? Math.max(clOpening + clCredited - clUsed, 0)
+      : toNumber(payload.cl_available, 0);
+
+  const elAvailable =
+    payload.el_available === '' || payload.el_available === undefined || payload.el_available === null
+      ? Math.max(elOpening + elCredited - elUsed, 0)
+      : toNumber(payload.el_available, 0);
+
+  return {
+    employee_id: payload.employee_id,
+    cl_opening_balance: clOpening,
+    cl_credited: clCredited,
+    cl_used: clUsed,
+    cl_available: clAvailable,
+    el_opening_balance: elOpening,
+    el_credited: elCredited,
+    el_used: elUsed,
+    el_available: elAvailable,
+    status: payload.status || 'active',
+  };
+}
+
+function groupLeaveBalanceRows(rows = []) {
+  const map = new Map();
+
+  rows.forEach((row) => {
+    const employeeId = row.employee_id || row.employee || row.user_id || row._id;
+
+    if (!employeeId) {
+      return;
+    }
+
+    if (!map.has(employeeId)) {
+      map.set(employeeId, {
+        _id: employeeId,
+        employee_id: employeeId,
+        employee_name: row.employee_name || row.name || '—',
+        department: row.department || '',
+        designation: row.designation || '',
+        status: row.status || 'active',
+        cl_opening_balance: 0,
+        cl_credited: 0,
+        cl_used: 0,
+        cl_available: 0,
+        el_opening_balance: 0,
+        el_credited: 0,
+        el_used: 0,
+        el_available: 0,
+        raw_rows: [],
+      });
+    }
+
+    const grouped = map.get(employeeId);
+    const leaveType = String(row.leave_type || row.leave_type_label || '').toUpperCase();
+
+    grouped.raw_rows.push(row);
+    grouped.employee_name = row.employee_name || grouped.employee_name;
+    grouped.department = row.department || grouped.department;
+    grouped.designation = row.designation || grouped.designation;
+    grouped.status = row.status || grouped.status;
+
+    if (leaveType === 'CL' || leaveType.includes('CASUAL')) {
+      grouped.cl_opening_balance = row.opening_balance ?? 0;
+      grouped.cl_credited = row.credited ?? 0;
+      grouped.cl_used = row.used ?? 0;
+      grouped.cl_available = row.available ?? 0;
+    }
+
+    if (leaveType === 'EL' || leaveType.includes('EARNED')) {
+      grouped.el_opening_balance = row.opening_balance ?? 0;
+      grouped.el_credited = row.credited ?? 0;
+      grouped.el_used = row.used ?? 0;
+      grouped.el_available = row.available ?? 0;
+    }
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.employee_name || '').localeCompare(String(b.employee_name || '')),
+  );
 }
 
 export default function ModuleCrud({ collection }) {
@@ -283,7 +503,9 @@ export default function ModuleCrud({ collection }) {
   const template = templates[collection] || { title: '', status: 'active' };
 
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ ...template });
+  const [form, setForm] = useState(
+    collection === 'leave_balances' ? emptyLeaveBalanceForm(template) : { ...template },
+  );
   const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
@@ -297,6 +519,15 @@ export default function ModuleCrud({ collection }) {
   const [saving, setSaving] = useState(false);
 
   const isSystemGenerated = SYSTEM_GENERATED_COLLECTIONS.has(collection);
+  const leaveBalanceAllowed = collection !== 'leave_balances' || canManageLeaveBalances();
+
+  const displayRows = useMemo(() => {
+    if (collection === 'leave_balances') {
+      return groupLeaveBalanceRows(rows);
+    }
+
+    return rows;
+  }, [collection, rows]);
 
   const activeProjectOptions = useMemo(
     () => projectOptions.filter((project) => isActiveProject(project)),
@@ -446,6 +677,11 @@ export default function ModuleCrud({ collection }) {
   }
 
   function resetForm() {
+    if (collection === 'leave_balances') {
+      setForm(emptyLeaveBalanceForm(template));
+      return;
+    }
+
     setForm({ ...template });
   }
 
@@ -474,6 +710,12 @@ export default function ModuleCrud({ collection }) {
     setProjectOptions([]);
     setTaskHandoverOptions([]);
 
+    if (collection === 'leave_balances' && !canManageLeaveBalances()) {
+      setLoading(false);
+      setMessage('Leave Balances can only be accessed by HR, Admin, and Super Admin.');
+      return;
+    }
+
     setLoading(true);
 
     load('', '')
@@ -488,6 +730,11 @@ export default function ModuleCrud({ collection }) {
 
   async function submit(event) {
     event.preventDefault();
+
+    if (!leaveBalanceAllowed) {
+      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      return;
+    }
 
     if (isSystemGenerated) {
       setMessage('This module is system generated. Use the dedicated workflow page.');
@@ -512,15 +759,34 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'leave_balances') {
         payload = normalizeBalancePayload(payload);
+
+        if (!payload.employee_id) {
+          setMessage('Please select an employee.');
+          setSaving(false);
+          return;
+        }
       }
 
-      await api(`/${collection}`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      if (collection === 'leave_requests') {
+        await api('/leave_requests/apply', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api(`/${collection}`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      }
 
       resetForm();
-      setMessage('Record created successfully');
+      setMessage(
+        collection === 'leave_balances'
+          ? 'Casual Leave and Earned Leave balances saved successfully'
+          : collection === 'leave_requests'
+            ? 'Leave request submitted successfully'
+            : 'Record created successfully',
+      );
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
@@ -531,6 +797,11 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function startEdit(row) {
+    if (!leaveBalanceAllowed) {
+      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      return;
+    }
+
     if (isSystemGenerated) {
       setMessage('This module is system generated and cannot be edited here.');
       return;
@@ -561,11 +832,26 @@ export default function ModuleCrud({ collection }) {
         editData.task_handover_to_name = row.task_handover_to_name || '';
         editData.project_handover_id = row.project_handover_id || '';
         editData.project_handover_name = row.project_handover_name || '';
+        editData.approval_stage_label = leaveLiveStatus(row);
       }
 
       if (collection === 'leave_balances') {
-        editData.leave_type = row.leave_type || 'CL';
-        editData.leave_type_label = row.leave_type_label || leaveTypeLabel(row.leave_type);
+        const selectedEmployee = employeeOptions.find((emp) => emp._id === row.employee_id);
+
+        editData._id = row.employee_id;
+        editData.employee_id = row.employee_id;
+        editData.employee_name = row.employee_name || selectedEmployee?.name || '';
+        editData.department = row.department || selectedEmployee?.department || '';
+        editData.designation = row.designation || selectedEmployee?.designation || '';
+        editData.cl_opening_balance = row.cl_opening_balance ?? 0;
+        editData.cl_credited = row.cl_credited ?? 0;
+        editData.cl_used = row.cl_used ?? 0;
+        editData.cl_available = row.cl_available ?? 0;
+        editData.el_opening_balance = row.el_opening_balance ?? 0;
+        editData.el_credited = row.el_credited ?? 0;
+        editData.el_used = row.el_used ?? 0;
+        editData.el_available = row.el_available ?? 0;
+        editData.status = row.status || 'active';
       }
 
       setEdit(editData);
@@ -597,6 +883,7 @@ export default function ModuleCrud({ collection }) {
       delete payload.updated_at;
       delete payload.created_by;
       delete payload.updated_by;
+      delete payload.raw_rows;
 
       if (collection === 'employees') {
         payload.role = 'Employee';
@@ -610,13 +897,22 @@ export default function ModuleCrud({ collection }) {
         payload = normalizeBalancePayload(payload);
       }
 
-      await api(`/${collection}/${edit._id}`, {
+      const updateId =
+        collection === 'leave_balances'
+          ? edit.employee_id
+          : edit._id;
+
+      await api(`/${collection}/${updateId}`, {
         method: 'PATCH',
         body: JSON.stringify(payload),
       });
 
       setEdit(null);
-      setMessage('Record updated successfully');
+      setMessage(
+        collection === 'leave_balances'
+          ? 'Casual Leave and Earned Leave balances updated successfully'
+          : 'Record updated successfully',
+      );
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
@@ -627,6 +923,16 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function remove(id) {
+    if (!leaveBalanceAllowed) {
+      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      return;
+    }
+
+    if (collection === 'leave_balances') {
+      setMessage('Leave Balances should be updated instead of deleted.');
+      return;
+    }
+
     if (isSystemGenerated) {
       setMessage('This module is system generated and cannot be deleted here.');
       return;
@@ -777,7 +1083,7 @@ export default function ModuleCrud({ collection }) {
   function applyEmployeeChange(state, setState, employeeId) {
     const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
 
-    setState({
+    const nextState = {
       ...state,
       employee_id: employeeId,
       employee_name: selectedEmployee?.name || '',
@@ -787,7 +1093,26 @@ export default function ModuleCrud({ collection }) {
       team_leader_name: selectedEmployee?.team_leader_name || '',
       reporting_officer_id: selectedEmployee?.reporting_officer_id || '',
       reporting_officer_name: selectedEmployee?.reporting_officer_name || '',
-    });
+    };
+
+    if (collection === 'leave_balances') {
+      const existingRows = groupLeaveBalanceRows(rows);
+      const existing = existingRows.find((item) => item.employee_id === employeeId);
+
+      if (existing) {
+        nextState.cl_opening_balance = existing.cl_opening_balance ?? 0;
+        nextState.cl_credited = existing.cl_credited ?? 0;
+        nextState.cl_used = existing.cl_used ?? 0;
+        nextState.cl_available = existing.cl_available ?? 0;
+        nextState.el_opening_balance = existing.el_opening_balance ?? 0;
+        nextState.el_credited = existing.el_credited ?? 0;
+        nextState.el_used = existing.el_used ?? 0;
+        nextState.el_available = existing.el_available ?? 0;
+        nextState.status = existing.status || 'active';
+      }
+    }
+
+    setState(nextState);
   }
 
   function applyTaskHandoverChange(state, setState, employeeId) {
@@ -814,6 +1139,53 @@ export default function ModuleCrud({ collection }) {
     });
   }
 
+  function updateLeaveBalanceNumber(state, setState, key, value) {
+    const nextState = {
+      ...state,
+      [key]: value,
+    };
+
+    if (
+      ['cl_opening_balance', 'cl_credited', 'cl_used'].includes(key)
+    ) {
+      const opening = toNumber(
+        key === 'cl_opening_balance' ? value : nextState.cl_opening_balance,
+        0,
+      );
+      const credited = toNumber(
+        key === 'cl_credited' ? value : nextState.cl_credited,
+        0,
+      );
+      const used = toNumber(
+        key === 'cl_used' ? value : nextState.cl_used,
+        0,
+      );
+
+      nextState.cl_available = Math.max(opening + credited - used, 0);
+    }
+
+    if (
+      ['el_opening_balance', 'el_credited', 'el_used'].includes(key)
+    ) {
+      const opening = toNumber(
+        key === 'el_opening_balance' ? value : nextState.el_opening_balance,
+        0,
+      );
+      const credited = toNumber(
+        key === 'el_credited' ? value : nextState.el_credited,
+        0,
+      );
+      const used = toNumber(
+        key === 'el_used' ? value : nextState.el_used,
+        0,
+      );
+
+      nextState.el_available = Math.max(opening + credited - used, 0);
+    }
+
+    setState(nextState);
+  }
+
   function renderEmployeeSelect(state, setState, key, finalLabel) {
     return (
       <label key={key}>
@@ -821,6 +1193,7 @@ export default function ModuleCrud({ collection }) {
         <select
           value={state[key] ?? ''}
           onChange={(event) => applyEmployeeChange(state, setState, event.target.value)}
+          disabled={collection === 'leave_balances' && Boolean(edit)}
         >
           <option value="">Select employee</option>
 
@@ -919,6 +1292,21 @@ export default function ModuleCrud({ collection }) {
 
     let labelText = titleCase(label);
 
+    const leaveBalanceLabels = {
+      cl_opening_balance: 'Casual Leave Opening Balance',
+      cl_credited: 'Casual Leave Credited',
+      cl_used: 'Casual Leave Used',
+      cl_available: 'Casual Leave Available',
+      el_opening_balance: 'Earned Leave Opening Balance',
+      el_credited: 'Earned Leave Credited',
+      el_used: 'Earned Leave Used',
+      el_available: 'Earned Leave Available',
+    };
+
+    if (leaveBalanceLabels[key]) {
+      labelText = leaveBalanceLabels[key];
+    }
+
     if (key === 'upto_date') {
       labelText = 'Upto Date';
     }
@@ -968,7 +1356,7 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <input
             type="text"
-            value={state[key] ?? ''}
+            value={key === 'approval_stage_label' ? leaveLiveStatus(state) : state[key] ?? ''}
             readOnly
             placeholder={labelText}
           />
@@ -1050,34 +1438,6 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
-    if (collection === 'leave_balances' && key === 'leave_type') {
-      return (
-        <label key={key}>
-          {finalLabel}
-          <select
-            value={state[key] ?? 'CL'}
-            onChange={(event) => {
-              const selected = LEAVE_BALANCE_TYPES.find(
-                (item) => item.value === event.target.value,
-              );
-
-              setState({
-                ...state,
-                leave_type: event.target.value,
-                leave_type_label: selected?.label || leaveTypeLabel(event.target.value),
-              });
-            }}
-          >
-            {LEAVE_BALANCE_TYPES.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      );
-    }
-
     if (collection === 'leave_requests' && key === 'leave_type') {
       return (
         <label key={key}>
@@ -1142,7 +1502,10 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
-    if (collection === 'holiday_calendar' && key === 'status') {
+    if (
+      (collection === 'holiday_calendar' || collection === 'leave_balances') &&
+      key === 'status'
+    ) {
       return (
         <label key={key}>
           {finalLabel}
@@ -1415,6 +1778,23 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'leave_balances' && key !== 'employee_id' && key !== 'status') {
+      return (
+        <label key={key}>
+          {labelText}
+          <input
+            type="number"
+            step="0.5"
+            value={state[key] ?? 0}
+            readOnly={key.endsWith('_available')}
+            onChange={(event) =>
+              updateLeaveBalanceNumber(state, setState, key, event.target.value)
+            }
+          />
+        </label>
+      );
+    }
+
     if (NUMBER_FIELDS.has(key)) {
       return (
         <label key={key}>
@@ -1484,11 +1864,14 @@ export default function ModuleCrud({ collection }) {
     if (collection === 'leave_balances') {
       return [
         'employee_name',
-        'leave_type',
-        'opening_balance',
-        'credited',
-        'used',
-        'available',
+        'cl_opening_balance',
+        'cl_credited',
+        'cl_used',
+        'cl_available',
+        'el_opening_balance',
+        'el_credited',
+        'el_used',
+        'el_available',
         'status',
       ];
     }
@@ -1498,13 +1881,30 @@ export default function ModuleCrud({ collection }) {
       .slice(0, 8);
   }
 
+  function tableHeaderLabel(key) {
+    const labels = {
+      employee_name: 'Employee Name',
+      cl_opening_balance: 'CL Opening',
+      cl_credited: 'CL Credited',
+      cl_used: 'CL Used',
+      cl_available: 'CL Available',
+      el_opening_balance: 'EL Opening',
+      el_credited: 'EL Credited',
+      el_used: 'EL Used',
+      el_available: 'EL Available',
+      approval_stage_label: 'Live Status',
+    };
+
+    return labels[key] || titleCase(key);
+  }
+
   function tableCellValue(row, key) {
     if (key === 'leave_type') {
       return leaveTypeLabel(row.leave_type_label || row.leave_type);
     }
 
     if (key === 'approval_stage_label') {
-      return row.approval_stage_label || statusLabel(row.approval_stage);
+      return leaveLiveStatus(row);
     }
 
     if (key === 'status') {
@@ -1563,6 +1963,19 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'leave_balances') {
+      return (
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => startEdit(row)}
+          disabled={saving}
+        >
+          Edit
+        </button>
+      );
+    }
+
     if (collection !== 'audit_logs' && !isSystemGenerated) {
       return (
         <>
@@ -1594,6 +2007,20 @@ export default function ModuleCrud({ collection }) {
     return '—';
   }
 
+  if (!leaveBalanceAllowed) {
+    return (
+      <div className="page-grid">
+        <section className="hero compact">
+          <div>
+            <span className="kicker">Restricted</span>
+            <h1>Leave Balances</h1>
+            <p>This page can only be viewed and used by HR, Admin, and Super Admin.</p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="page-grid">
       <section className="hero compact">
@@ -1614,6 +2041,14 @@ export default function ModuleCrud({ collection }) {
               Leave apply form is simplified to Leave Type, Reason, From Date,
               Upto Date, Task Handover To, and Project Handover. Only active
               projects are shown in the Project Handover dropdown.
+            </p>
+          )}
+
+          {collection === 'leave_balances' && (
+            <p>
+              HR/Admin can assign Casual Leave and Earned Leave together from one
+              form. Available balance is reflected in employee leave management
+              and is deducted after final approval.
             </p>
           )}
         </div>
@@ -1685,7 +2120,7 @@ export default function ModuleCrud({ collection }) {
             )}
 
             <button type="submit" className="primary" disabled={saving}>
-              <Plus size={16} /> {saving ? 'Creating...' : 'Create'}
+              <Plus size={16} /> {saving ? 'Saving...' : collection === 'leave_balances' ? 'Save Leave Balances' : 'Create'}
             </button>
           </form>
         )}
@@ -1696,9 +2131,9 @@ export default function ModuleCrud({ collection }) {
           <table>
             <thead>
               <tr>
-                {rows[0] &&
-                  visibleTableKeys(rows[0]).map((key) => (
-                    <th key={key}>{titleCase(key)}</th>
+                {displayRows[0] &&
+                  visibleTableKeys(displayRows[0]).map((key) => (
+                    <th key={key}>{tableHeaderLabel(key)}</th>
                   ))}
 
                 <th>Action</th>
@@ -1706,7 +2141,7 @@ export default function ModuleCrud({ collection }) {
             </thead>
 
             <tbody>
-              {rows.map((row) => {
+              {displayRows.map((row) => {
                 const keys = visibleTableKeys(row);
 
                 return (
@@ -1722,7 +2157,7 @@ export default function ModuleCrud({ collection }) {
             </tbody>
           </table>
 
-          {!rows.length && (
+          {!displayRows.length && (
             <div className="empty">
               {loading ? 'Loading records...' : 'No records found'}
             </div>
@@ -1747,6 +2182,12 @@ export default function ModuleCrud({ collection }) {
                 <p>
                   Leave approval should be handled using Approve/Reject actions.
                   Form edit is kept only for correction of basic leave details.
+                </p>
+              )}
+
+              {collection === 'leave_balances' && (
+                <p>
+                  Update Casual Leave and Earned Leave together for this employee.
                 </p>
               )}
             </div>

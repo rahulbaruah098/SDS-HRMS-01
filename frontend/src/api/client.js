@@ -247,6 +247,14 @@ export function getEmployeeDashboard() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Application Status APIs                                                    */
+/* -------------------------------------------------------------------------- */
+
+export function getApplicationStatus() {
+  return api('/application_status');
+}
+
+/* -------------------------------------------------------------------------- */
 /* Project APIs                                                               */
 /* -------------------------------------------------------------------------- */
 
@@ -434,11 +442,34 @@ export function getLeaveBalances(params = {}) {
   return api(`/leave_balances${buildQuery(params)}`);
 }
 
+export function createLeaveBalances(payload = {}) {
+  return api('/leave_balances', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function setLeaveBalance(employeeId, payload = {}) {
   return api(`/leave_balances/${employeeId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+}
+
+export function saveCombinedLeaveBalance(employeeId, payload = {}) {
+  const normalizedPayload = {
+    ...payload,
+    employee_id: payload.employee_id || employeeId,
+    status: payload.status || 'active',
+  };
+
+  if (!employeeId && !normalizedPayload.employee_id) {
+    throw new Error('employee_id is required to save leave balance.');
+  }
+
+  const targetEmployeeId = employeeId || normalizedPayload.employee_id;
+
+  return setLeaveBalance(targetEmployeeId, normalizedPayload);
 }
 
 export function getLeaveOptions(params = {}) {
@@ -504,6 +535,35 @@ export function getCompOffCredits(params = {}) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Notification APIs                                                          */
+/* -------------------------------------------------------------------------- */
+
+export function getNotifications(params = {}) {
+  return api(`/notifications${buildQuery(params)}`);
+}
+
+export function getUnreadNotifications(limit = 20) {
+  return getNotifications({
+    unread: true,
+    limit,
+  });
+}
+
+export function markNotificationRead(notificationId) {
+  return api(`/notifications/${notificationId}/read`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  });
+}
+
+export function markAllNotificationsRead() {
+  return api('/notifications/read_all', {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* Reports APIs                                                               */
 /* -------------------------------------------------------------------------- */
 
@@ -533,6 +593,14 @@ export function getLeaveBalanceReports(params = {}) {
 
 export function getLeaveRequestReports(params = {}) {
   return api(`/reports/leave-requests${buildQuery(params)}`);
+}
+
+export function getLeaveApprovalReports(params = {}) {
+  return api(`/reports/leave-approvals${buildQuery(params)}`);
+}
+
+export function getLeaveDeductionReports(params = {}) {
+  return api(`/reports/leave-deductions${buildQuery(params)}`);
 }
 
 export function getLeaveRecordReports(params = {}) {

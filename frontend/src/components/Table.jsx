@@ -31,12 +31,18 @@ export default function Table({
     'check_in_location',
     'check_out_location',
     'approval_history',
+    'raw_rows',
+    'raw_status',
+    'raw_stage',
+    'raw_role',
     'is_deleted',
     '__v',
   ];
 
   const priorityKeys = [
     'action',
+
+    'employee_id',
     'employee_name',
     'name',
     'title',
@@ -45,38 +51,131 @@ export default function Table({
     'department',
     'designation',
     'state',
+
     'date',
     'from_date',
     'to_date',
+    'upto_date',
     'earned_date',
     'valid_until',
     'claimed_date',
+
     'mode',
     'leave_type',
     'leave_days',
-    'status',
+    'reason',
+
+    'current_stage',
+    'current_status',
+    'live_status',
+    'status_text',
+    'status_display',
     'approval_stage',
     'approval_stage_label',
+    'final_status',
+    'status',
+
+    'team_leader',
+    'team_leader_name',
+    'reporting_officer',
+    'reporting_officer_name',
+    'task_handover_to',
+    'task_handover_to_name',
+    'project_handover',
+    'project_handover_name',
+
+    'opening_balance',
+    'credited',
+    'used',
+    'used_deducted',
+    'available',
+    'available_balance',
+    'deducted',
+
+    'cl_opening_balance',
+    'cl_credited',
+    'cl_used',
+    'cl_available',
+    'el_opening_balance',
+    'el_credited',
+    'el_used',
+    'el_available',
+
     'check_in',
     'check_out',
     'late_reason',
     'early_checkout_reason',
-    'reason',
     'field_location',
     'holiday',
     'holiday_title',
-    'available',
-    'used',
-    'credited',
-    'opening_balance',
+
     'amount',
     'rating',
     'verified',
     'decided_by',
     'decided_at',
+    'approved_by',
+    'approved_at',
+    'rejected_by',
+    'rejected_at',
     'created_at',
     'updated_at',
   ];
+
+  const customLabels = {
+    employee_id: 'Employee ID',
+    employee_name: 'Employee Name',
+    from_date: 'From Date',
+    to_date: 'To Date',
+    upto_date: 'Upto Date',
+    leave_type: 'Leave Type',
+    leave_days: 'Leave Days',
+
+    live_status: 'Live Status',
+    status_text: 'Live Status',
+    status_display: 'Live Status',
+    current_stage: 'Current Stage',
+    current_status: 'Current Status',
+    approval_stage: 'Approval Stage',
+    approval_stage_label: 'Approval Stage',
+    final_status: 'Final Status',
+
+    task_handover_to: 'Task Handover To',
+    task_handover_to_name: 'Task Handover To',
+    project_handover: 'Project Handover',
+    project_handover_name: 'Project Handover',
+
+    opening_balance: 'Opening',
+    credited: 'Credited',
+    used: 'Used',
+    used_deducted: 'Used / Deducted',
+    available: 'Available',
+    available_balance: 'Available Balance',
+
+    cl_opening_balance: 'CL Opening',
+    cl_credited: 'CL Credited',
+    cl_used: 'CL Used',
+    cl_available: 'CL Available',
+    el_opening_balance: 'EL Opening',
+    el_credited: 'EL Credited',
+    el_used: 'EL Used',
+    el_available: 'EL Available',
+
+    check_in: 'Check In',
+    check_out: 'Check Out',
+    late_reason: 'Late Reason',
+    early_checkout_reason: 'Early Checkout Reason',
+    field_location: 'Field Location',
+
+    decided_by: 'Decided By',
+    decided_at: 'Decided At',
+    approved_by: 'Approved By',
+    approved_at: 'Approved At',
+    rejected_by: 'Rejected By',
+    rejected_at: 'Rejected At',
+    created_at: 'Created At',
+    updated_at: 'Updated At',
+  };
 
   function isReactNode(value) {
     return (
@@ -115,17 +214,9 @@ export default function Table({
       const aIndex = priorityKeys.indexOf(a);
       const bIndex = priorityKeys.indexOf(b);
 
-      if (aIndex !== -1 && bIndex !== -1) {
-        return aIndex - bIndex;
-      }
-
-      if (aIndex !== -1) {
-        return -1;
-      }
-
-      if (bIndex !== -1) {
-        return 1;
-      }
+      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
 
       return a.localeCompare(b);
     });
@@ -136,6 +227,10 @@ export default function Table({
   const keys = getKeys();
 
   function formatKey(key) {
+    if (customLabels[key]) {
+      return customLabels[key];
+    }
+
     return String(key || '')
       .replaceAll('_', ' ')
       .replaceAll('-', ' ')
@@ -182,6 +277,24 @@ export default function Table({
       .replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
+  function leaveTypeLabel(value) {
+    const normalized = String(value || '').trim().toUpperCase();
+
+    if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+      return 'Casual Leave';
+    }
+
+    if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+      return 'Earned Leave';
+    }
+
+    if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+      return 'Comp-Off';
+    }
+
+    return prettifyValue(value);
+  }
+
   function formatObjectValue(value) {
     if (value.$date) {
       return formatDate(value.$date);
@@ -220,24 +333,13 @@ export default function Table({
     }
 
     if (Array.isArray(value)) {
-      if (!value.length) {
-        return '—';
-      }
+      if (!value.length) return '—';
 
       const formattedItems = value
         .map((item) => {
-          if (item === null || item === undefined || item === '') {
-            return '';
-          }
-
-          if (isReactNode(item)) {
-            return item;
-          }
-
-          if (typeof item === 'object') {
-            return formatObjectValue(item);
-          }
-
+          if (item === null || item === undefined || item === '') return '';
+          if (isReactNode(item)) return item;
+          if (typeof item === 'object') return formatObjectValue(item);
           return String(item);
         })
         .filter(Boolean);
@@ -255,15 +357,25 @@ export default function Table({
 
     const stringValue = String(value);
 
+    if (key === 'leave_type') {
+      return leaveTypeLabel(stringValue);
+    }
+
     if (
       [
         'status',
+        'final_status',
         'mode',
         'approval_stage',
         'approval_stage_label',
-        'leave_type',
+        'current_stage',
+        'current_status',
+        'live_status',
+        'status_text',
+        'status_display',
         'priority',
         'verified',
+        'deducted',
       ].includes(key)
     ) {
       return prettifyValue(stringValue);
@@ -274,6 +386,7 @@ export default function Table({
         'date',
         'from_date',
         'to_date',
+        'upto_date',
         'earned_date',
         'valid_until',
         'claimed_date',
@@ -298,7 +411,21 @@ export default function Table({
   function getCellClass(key, value) {
     const rawValue = String(value || '').toLowerCase();
 
-    if (key === 'status' || key === 'verified') {
+    const statusKeys = [
+      'status',
+      'final_status',
+      'current_stage',
+      'current_status',
+      'live_status',
+      'status_text',
+      'status_display',
+      'approval_stage',
+      'approval_stage_label',
+      'verified',
+      'deducted',
+    ];
+
+    if (statusKeys.includes(key)) {
       if (
         [
           'approved',
@@ -312,6 +439,7 @@ export default function Table({
           'paid',
           'resolved',
           'closed',
+          'deducted',
         ].includes(rawValue)
       ) {
         return 'table-status table-status-success';
@@ -320,6 +448,12 @@ export default function Table({
       if (
         [
           'pending',
+          'pending with team leader',
+          'pending with reporting officer',
+          'pending with hr',
+          'team_leader',
+          'reporting_officer',
+          'hr',
           'late',
           'early_checkout',
           'open',
@@ -341,6 +475,7 @@ export default function Table({
           'deleted',
           'terminated',
           'no',
+          'not deducted',
           'cancelled',
           'failed',
         ].includes(rawValue)
@@ -355,17 +490,16 @@ export default function Table({
           'wfh',
           'office',
           'read',
+          'casual leave',
+          'earned leave',
+          'comp-off',
         ].includes(rawValue)
       ) {
         return 'table-status table-status-info';
       }
     }
 
-    if (key === 'mode') {
-      return 'table-status table-status-info';
-    }
-
-    if (key === 'leave_type') {
+    if (key === 'mode' || key === 'leave_type') {
       return 'table-status table-status-info';
     }
 
@@ -374,7 +508,7 @@ export default function Table({
 
   function renderValue(value, key) {
     const formatted = formatValue(value, key);
-    const cellClass = getCellClass(key, value);
+    const cellClass = getCellClass(key, formatted);
 
     if (cellClass && !isReactNode(formatted)) {
       return <span className={cellClass}>{formatted}</span>;

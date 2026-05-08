@@ -36,6 +36,16 @@ const REPORT_TABS = [
     endpoint: '/reports/leave-requests',
   },
   {
+    key: 'leave-approvals',
+    title: 'Leave Approvals',
+    endpoint: '/reports/leave-approvals',
+  },
+  {
+    key: 'leave-deductions',
+    title: 'Leave Deductions',
+    endpoint: '/reports/leave-deductions',
+  },
+  {
     key: 'leave-records',
     title: 'Leave Records',
     endpoint: '/reports/leave-records',
@@ -63,6 +73,8 @@ const EMPTY_FILTERS = {
   state: '',
   leave_type: '',
   approval_stage: '',
+  live_status: '',
+  balance_deducted: '',
   task_handover_to_id: '',
   project_handover_id: '',
   period: '',
@@ -73,6 +85,18 @@ const EMPTY_FILTERS = {
   entity: '',
   actor_email: '',
 };
+
+const LEAVE_REPORT_TABS = [
+  'leave-requests',
+  'leave-records',
+  'leave-approvals',
+  'leave-deductions',
+];
+
+const LEAVE_RELATED_TABS = [
+  ...LEAVE_REPORT_TABS,
+  'leave-balances',
+];
 
 function buildQuery(params = {}) {
   const query = new URLSearchParams();
@@ -165,6 +189,10 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function yesNo(value) {
+  return value ? 'Yes' : 'No';
+}
+
 function normalizeRows(tab, rows = []) {
   if (tab === 'attendance') {
     return rows.map((row) => ({
@@ -231,13 +259,18 @@ function normalizeRows(tab, rows = []) {
       leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
       opening_balance: row.opening_balance ?? '—',
       credited: row.credited ?? '—',
-      used: row.used ?? '—',
-      available: row.available ?? '—',
+      used_deducted: row.used_deducted ?? row.used ?? '—',
+      available_balance: row.available_balance ?? row.available ?? '—',
       status: statusLabel(row.status),
     }));
   }
 
-  if (tab === 'leave-requests' || tab === 'leave-records') {
+  if (
+    tab === 'leave-requests' ||
+    tab === 'leave-records' ||
+    tab === 'leave-approvals' ||
+    tab === 'leave-deductions'
+  ) {
     return rows.map((row) => ({
       employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
       employee_name: row.employee_name || '—',
@@ -252,9 +285,15 @@ function normalizeRows(tab, rows = []) {
       project_handover: row.project_handover_name || '—',
       team_leader: row.team_leader_name || '—',
       reporting_officer: row.reporting_officer_name || '—',
-      stage: row.approval_stage_label || statusLabel(row.approval_stage) || '—',
-      status: statusLabel(row.status),
+      current_stage: row.live_status || row.status_text || row.current_approval_stage || row.approval_stage_label || statusLabel(row.approval_stage),
+      final_status: statusLabel(row.status),
+      deducted: yesNo(row.deducted_from_balance || row.balance_deducted),
+      approved_by: row.approved_by_name || '—',
+      approved_at: formatDateTime(row.approved_at),
+      rejected_by: row.rejected_by_name || '—',
+      rejected_at: formatDateTime(row.rejected_at),
       created_at: formatDateTime(row.created_at),
+      updated_at: formatDateTime(row.updated_at),
     }));
   }
 
@@ -278,10 +317,30 @@ function normalizeLeaveSummary(summary = {}) {
     pending: summary.pending || 0,
     approved: summary.approved || 0,
     rejected: summary.rejected || 0,
+    pending_with_team_leader: summary.pending_with_team_leader || 0,
+    pending_with_reporting_officer: summary.pending_with_reporting_officer || 0,
+    pending_with_hr: summary.pending_with_hr || 0,
     casual_leave: summary.casual_leave || 0,
     earned_leave: summary.earned_leave || 0,
     comp_off: summary.comp_off || 0,
     total_days: summary.total_days || 0,
+    deducted_days: summary.deducted_days || 0,
+    not_deducted_days: summary.not_deducted_days || 0,
+  };
+}
+
+function normalizeBalanceSummary(summary = {}) {
+  return {
+    employees: summary.employees || 0,
+    casual_credited: summary.casual_credited || 0,
+    casual_used: summary.casual_used || 0,
+    casual_available: summary.casual_available || 0,
+    earned_credited: summary.earned_credited || 0,
+    earned_used: summary.earned_used || 0,
+    earned_available: summary.earned_available || 0,
+    total_credited: summary.total_credited || 0,
+    total_used_deducted: summary.total_used_deducted || 0,
+    total_available: summary.total_available || 0,
   };
 }
 
@@ -301,30 +360,41 @@ export default function Reports() {
     return Object.values(filters).some((value) => String(value || '').trim());
   }, [filters]);
 
-  function activeTabFilters(nextFilters = filters) {
+  const showLeaveAdvancedFilters = LEAVE_REPORT_TABS.includes(activeTab);
+  const showLeaveFilters = LEAVE_RELATED_TABS.includes(activeTab);
+  const showBalanceDeductionFilter = ['leave-requests', 'leave-records'].includes(activeTab);
+
+  function activeTabFilters(tabKey = activeTab, nextFilters = filters) {
     const payload = { ...nextFilters };
 
-    if (!['leave-requests', 'leave-records'].includes(activeTab)) {
+    if (!LEAVE_REPORT_TABS.includes(tabKey)) {
       delete payload.approval_stage;
+      delete payload.live_status;
       delete payload.task_handover_to_id;
       delete payload.project_handover_id;
       delete payload.period;
       delete payload.on_date;
+      delete payload.balance_deducted;
     }
 
-    if (!['attendance', 'attendance-mode-requests'].includes(activeTab)) {
+    if (!['leave-requests', 'leave-records'].includes(tabKey)) {
+      delete payload.live_status;
+      delete payload.balance_deducted;
+    }
+
+    if (!['attendance', 'attendance-mode-requests'].includes(tabKey)) {
       delete payload.mode;
     }
 
-    if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(activeTab)) {
+    if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(tabKey)) {
       delete payload.state;
     }
 
-    if (!['leave-requests', 'leave-records', 'leave-balances'].includes(activeTab)) {
+    if (!LEAVE_RELATED_TABS.includes(tabKey)) {
       delete payload.leave_type;
     }
 
-    if (activeTab !== 'audit') {
+    if (tabKey !== 'audit') {
       delete payload.action;
       delete payload.entity;
       delete payload.actor_email;
@@ -364,7 +434,7 @@ export default function Reports() {
       setMessage('');
       setTabSummary(null);
 
-      const filteredPayload = activeTabFilters(nextFilters);
+      const filteredPayload = activeTabFilters(tabKey, nextFilters);
       const data = await api(`${selectedTab.endpoint}${buildQuery(filteredPayload)}`);
 
       setRows(normalizeRows(tabKey, data.items || []));
@@ -394,56 +464,7 @@ export default function Reports() {
     setActiveTab(tabKey);
     setRows([]);
     setTabSummary(null);
-
-    const selectedTab = REPORT_TABS.find((tab) => tab.key === tabKey);
-
-    if (!selectedTab) {
-      return;
-    }
-
-    try {
-      setLoadingRows(true);
-      setMessage('');
-
-      const filteredPayload = { ...filters };
-
-      if (!['leave-requests', 'leave-records'].includes(tabKey)) {
-        delete filteredPayload.approval_stage;
-        delete filteredPayload.task_handover_to_id;
-        delete filteredPayload.project_handover_id;
-        delete filteredPayload.period;
-        delete filteredPayload.on_date;
-      }
-
-      if (!['attendance', 'attendance-mode-requests'].includes(tabKey)) {
-        delete filteredPayload.mode;
-      }
-
-      if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(tabKey)) {
-        delete filteredPayload.state;
-      }
-
-      if (!['leave-requests', 'leave-records', 'leave-balances'].includes(tabKey)) {
-        delete filteredPayload.leave_type;
-      }
-
-      if (tabKey !== 'audit') {
-        delete filteredPayload.action;
-        delete filteredPayload.entity;
-        delete filteredPayload.actor_email;
-      }
-
-      const data = await api(`${selectedTab.endpoint}${buildQuery(filteredPayload)}`);
-
-      setRows(normalizeRows(tabKey, data.items || []));
-      setTabSummary(data.summary || null);
-    } catch (error) {
-      setRows([]);
-      setTabSummary(null);
-      setMessage(error.message || 'Unable to load report');
-    } finally {
-      setLoadingRows(false);
-    }
+    await loadRows(tabKey, filters);
   }
 
   async function searchReport(event) {
@@ -469,6 +490,7 @@ export default function Reports() {
   const counts = summary?.counts || {};
   const extra = summary?.extra || {};
   const leaveSummary = normalizeLeaveSummary(tabSummary);
+  const balanceSummary = normalizeBalanceSummary(tabSummary || extra?.leave?.balance_summary);
 
   const statItems = [
     ['Employees', counts.employees || 0],
@@ -483,8 +505,6 @@ export default function Reports() {
     ['Audit Logs', counts.audit_logs || 0],
   ];
 
-  const showLeaveAdvancedFilters = ['leave-requests', 'leave-records'].includes(activeTab);
-
   return (
     <div className="page-grid">
       <section className="hero compact">
@@ -493,8 +513,8 @@ export default function Reports() {
           <h1>HRMS Reports Center</h1>
           <p>
             View attendance, WFH/Field requests, holidays, comp-off, leave
-            balances, leave requests, leave records and audit logs from one
-            reporting screen.
+            balances, leave workflow approvals, leave deductions, and audit logs
+            from one reporting screen.
           </p>
         </div>
 
@@ -545,27 +565,27 @@ export default function Reports() {
         </div>
 
         <div className="panel">
-          <h3>Pending & Comp-Off Summary</h3>
+          <h3>Leave Workflow Summary</h3>
 
           <div className="mini-list">
             <span>
-              <strong>Pending Leave Requests</strong>
-              <small>{extra?.pending?.leave_requests || 0}</small>
+              <strong>Pending with Team Leader</strong>
+              <small>{extra?.leave?.pending_with_team_leader || 0}</small>
             </span>
 
             <span>
-              <strong>Pending WFH / Field</strong>
-              <small>{extra?.pending?.wfh_field_requests || 0}</small>
+              <strong>Pending with Reporting Officer</strong>
+              <small>{extra?.leave?.pending_with_reporting_officer || 0}</small>
             </span>
 
             <span>
-              <strong>Available Comp-Off</strong>
-              <small>{extra?.compoff?.available || 0}</small>
+              <strong>Approved & Deducted</strong>
+              <small>{extra?.leave?.approved_and_deducted || 0}</small>
             </span>
 
             <span>
-              <strong>Holidays Today</strong>
-              <small>{extra?.holiday_calendar?.holidays_today || 0}</small>
+              <strong>Total Used / Deducted</strong>
+              <small>{extra?.leave?.balance_summary?.total_used_deducted || 0}</small>
             </span>
           </div>
         </div>
@@ -577,9 +597,23 @@ export default function Reports() {
           <Stat label="Pending" value={leaveSummary.pending} />
           <Stat label="Approved" value={leaveSummary.approved} />
           <Stat label="Rejected" value={leaveSummary.rejected} />
-          <Stat label="Casual Leave" value={leaveSummary.casual_leave} />
-          <Stat label="Earned Leave" value={leaveSummary.earned_leave} />
+          <Stat label="Pending TL" value={leaveSummary.pending_with_team_leader} />
+          <Stat label="Pending RO" value={leaveSummary.pending_with_reporting_officer} />
+          <Stat label="Deducted Days" value={leaveSummary.deducted_days} />
           <Stat label="Total Leave Days" value={leaveSummary.total_days} />
+        </section>
+      )}
+
+      {activeTab === 'leave-balances' && (
+        <section className="stats-grid">
+          <Stat label="Employees" value={balanceSummary.employees} />
+          <Stat label="CL Credited" value={balanceSummary.casual_credited} />
+          <Stat label="CL Used" value={balanceSummary.casual_used} />
+          <Stat label="CL Available" value={balanceSummary.casual_available} />
+          <Stat label="EL Credited" value={balanceSummary.earned_credited} />
+          <Stat label="EL Used" value={balanceSummary.earned_used} />
+          <Stat label="EL Available" value={balanceSummary.earned_available} />
+          <Stat label="Total Available" value={balanceSummary.total_available} />
         </section>
       )}
 
@@ -588,8 +622,8 @@ export default function Reports() {
           <div>
             <h3>Report Filters</h3>
             <p>
-              Use filters according to the active report. For Leave Records,
-              use Today, Day, Week, Month or Year period filters.
+              Use filters according to the active report. Leave workflow reports
+              support approval stage, live status, deduction status, and period filters.
             </p>
           </div>
 
@@ -682,18 +716,20 @@ export default function Reports() {
             </select>
           </label>
 
-          <label>
-            Leave Type
-            <select
-              value={filters.leave_type}
-              onChange={(e) => updateFilter('leave_type', e.target.value)}
-            >
-              <option value="">All Leave Types</option>
-              <option value="CL">Casual Leave</option>
-              <option value="EL">Earned Leave</option>
-              <option value="COMP-OFF">Comp-Off</option>
-            </select>
-          </label>
+          {showLeaveFilters && (
+            <label>
+              Leave Type
+              <select
+                value={filters.leave_type}
+                onChange={(e) => updateFilter('leave_type', e.target.value)}
+              >
+                <option value="">All Leave Types</option>
+                <option value="CL">Casual Leave</option>
+                <option value="EL">Earned Leave</option>
+                <option value="COMP-OFF">Comp-Off</option>
+              </select>
+            </label>
+          )}
 
           {showLeaveAdvancedFilters && (
             <>
@@ -735,7 +771,34 @@ export default function Reports() {
                   <option value="rejected">Rejected</option>
                 </select>
               </label>
+
+              <label>
+                Live Status
+                <select
+                  value={filters.live_status}
+                  onChange={(e) => updateFilter('live_status', e.target.value)}
+                >
+                  <option value="">All Live Status</option>
+                  <option value="pending_with_team_leader">Pending with Team Leader</option>
+                  <option value="pending_with_reporting_officer">Pending with Reporting Officer</option>
+                  <option value="pending_with_hr">Pending with HR</option>
+                </select>
+              </label>
             </>
+          )}
+
+          {showBalanceDeductionFilter && (
+            <label>
+              Balance Deducted
+              <select
+                value={filters.balance_deducted}
+                onChange={(e) => updateFilter('balance_deducted', e.target.value)}
+              >
+                <option value="">All</option>
+                <option value="true">Deducted</option>
+                <option value="false">Not Deducted</option>
+              </select>
+            </label>
           )}
 
           <label>
@@ -833,7 +896,7 @@ export default function Reports() {
 
         {loadingRows && <div className="inline-message">Loading report...</div>}
 
-        <Table rows={rows} maxColumns={14} />
+        <Table rows={rows} maxColumns={16} />
       </section>
     </div>
   );

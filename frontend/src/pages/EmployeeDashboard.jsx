@@ -173,6 +173,37 @@ function percentValue(value) {
   return Math.min(Math.max(number, 0), 100);
 }
 
+function leaveLiveStatus(row = {}) {
+  if (row.live_status || row.status_text || row.status_display) {
+    return row.live_status || row.status_text || row.status_display;
+  }
+
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (status === 'approved' || stage === 'approved') {
+    return 'Approved';
+  }
+
+  if (status === 'rejected' || stage === 'rejected') {
+    return 'Rejected';
+  }
+
+  if (stage === 'team_leader') {
+    return 'Pending with Team Leader';
+  }
+
+  if (stage === 'reporting_officer') {
+    return 'Pending with Reporting Officer';
+  }
+
+  if (stage === 'hr') {
+    return 'Pending with HR';
+  }
+
+  return row.approval_stage_label || statusLabel(row.status);
+}
+
 function MiniProgressBar({ value }) {
   const percentage = percentValue(value);
 
@@ -229,11 +260,79 @@ function ProjectChart({ title, rows = [] }) {
   );
 }
 
+function LeaveApprovalTable({ rows = [], saving, onDecision }) {
+  if (!rows.length) {
+    return <div className="empty">No pending leave approval found.</div>;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Leave Type</th>
+            <th>From</th>
+            <th>Upto</th>
+            <th>Days</th>
+            <th>Task Handover</th>
+            <th>Project Handover</th>
+            <th>Current Stage</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row._id}>
+              <td>
+                <strong>{row.employee_name || '—'}</strong>
+                <br />
+                <small>{row.employee_code || row.emp_code || row.employee_id || '—'}</small>
+              </td>
+              <td>{leaveTypeLabel(row.leave_type_label || row.leave_type)}</td>
+              <td>{formatDate(row.from_date)}</td>
+              <td>{formatDate(row.to_date || row.upto_date)}</td>
+              <td>{row.leave_days ?? '—'}</td>
+              <td>{row.task_handover_to_name || '—'}</td>
+              <td>{row.project_handover_name || '—'}</td>
+              <td>{leaveLiveStatus(row)}</td>
+              <td>
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => onDecision(row, 'approved')}
+                    disabled={saving}
+                  >
+                    Approve
+                  </button>
+
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => onDecision(row, 'rejected')}
+                    disabled={saving}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function EmployeeDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [attendanceStatus, setAttendanceStatus] = useState(null);
   const [modeRequests, setModeRequests] = useState([]);
   const [compOffs, setCompOffs] = useState([]);
+  const [leaveBalances, setLeaveBalances] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]);
 
   const [claimForm, setClaimForm] = useState({
     compoff_id: '',
@@ -251,6 +350,7 @@ export default function EmployeeDashboard({ setPage }) {
   const [message, setMessage] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [claimingCompOff, setClaimingCompOff] = useState(false);
+  const [leaveDecisionSaving, setLeaveDecisionSaving] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function loadDashboard() {
@@ -258,18 +358,28 @@ export default function EmployeeDashboard({ setPage }) {
       setLoading(true);
       setMessage('');
 
-      const [dashboardData, attendanceData, requestData, compOffData] =
-        await Promise.all([
-          api('/dashboard/employee'),
-          getAttendanceStatus().catch(() => null),
-          getMyAttendanceModeRequests().catch(() => ({ items: [] })),
-          getMyCompOffs().catch(() => ({ items: [] })),
-        ]);
+      const [
+        dashboardData,
+        attendanceData,
+        requestData,
+        compOffData,
+        leaveBalanceData,
+        leaveRequestData,
+      ] = await Promise.all([
+        api('/dashboard/employee'),
+        getAttendanceStatus().catch(() => null),
+        getMyAttendanceModeRequests().catch(() => ({ items: [] })),
+        getMyCompOffs().catch(() => ({ items: [] })),
+        api('/leave_balances').catch(() => ({ items: [] })),
+        api('/leave_requests').catch(() => ({ items: [] })),
+      ]);
 
       setData(dashboardData);
       setAttendanceStatus(attendanceData);
       setModeRequests(requestData?.items || []);
       setCompOffs(compOffData?.items || []);
+      setLeaveBalances(leaveBalanceData?.items || []);
+      setLeaveRequests(leaveRequestData?.items || []);
     } catch (error) {
       console.error(error);
       setMessage(error.message || 'Unable to load employee dashboard');
@@ -370,6 +480,31 @@ export default function EmployeeDashboard({ setPage }) {
     }
   }
 
+  async function decideLeave(row, status) {
+    const ok = window.confirm(`${statusLabel(status)} this leave request?`);
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setLeaveDecisionSaving(true);
+
+      const res = await api(`/leave_requests/${row._id}/decision`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+
+      setMessage(res.message || `Leave ${status}`);
+      await loadDashboard();
+    } catch (error) {
+      setMessage(error.message || 'Unable to update leave request');
+    } finally {
+      setLeaveDecisionSaving(false);
+    }
+  }
+
   const employee = data?.employee || {};
   const employeeSummary = data?.employee_summary || employee;
 
@@ -378,6 +513,8 @@ export default function EmployeeDashboard({ setPage }) {
     employee?.name ||
     employeeSummary?.name ||
     'Employee';
+
+  const employeeId = String(employee?._id || employeeSummary?._id || '');
 
   const mappedCapabilityLabel = capabilityLabel(data, employee);
 
@@ -449,8 +586,41 @@ export default function EmployeeDashboard({ setPage }) {
 
   const reviewableEmployees = Array.from(reviewableEmployeesMap.values());
 
+  const dashboardLeaveBalances = data?.leave_balances || [];
+  const leaveBalanceSource = leaveBalances.length ? leaveBalances : dashboardLeaveBalances;
+
+  const dashboardLeaveRequests = data?.leaves || [];
+  const leaveRequestSource = leaveRequests.length ? leaveRequests : dashboardLeaveRequests;
+
+  const myLeaveRows = leaveRequestSource.filter((row) => {
+    if (!employeeId) {
+      return true;
+    }
+
+    return String(row.employee_id || '') === employeeId;
+  });
+
+  const pendingApprovalLeavesFromApi = leaveRequestSource.filter((row) => {
+    if (String(row.status || '').toLowerCase() !== 'pending') {
+      return false;
+    }
+
+    if (employeeId && String(row.employee_id || '') === employeeId) {
+      return false;
+    }
+
+    return ['team_leader', 'reporting_officer', 'hr'].includes(
+      String(row.approval_stage || '').toLowerCase(),
+    );
+  });
+
+  const pendingApprovalLeaves =
+    pendingApprovalLeavesFromApi.length > 0
+      ? pendingApprovalLeavesFromApi
+      : data?.team_pending_leaves || [];
+
   const approvalCounts = data?.pending_approval_counts || {
-    leave_requests: data?.team_pending_leaves?.length || 0,
+    leave_requests: pendingApprovalLeaves.length,
     attendance_mode_requests:
       data?.team_pending_attendance_mode_requests?.length || 0,
   };
@@ -526,14 +696,34 @@ export default function EmployeeDashboard({ setPage }) {
     },
   ];
 
-  const leaveBalanceRows = (data?.leave_balances || []).map((row) => ({
+  const leaveBalanceRows = leaveBalanceSource.map((row) => ({
     leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-    opening_balance: row.opening_balance ?? '—',
-    credited: row.credited ?? '—',
-    used: row.used ?? '—',
-    available: row.available ?? '—',
+    opening_balance: row.opening_balance ?? 0,
+    credited: row.credited ?? 0,
+    used_deducted: row.used ?? 0,
+    available: row.available ?? 0,
     status: statusLabel(row.status),
   }));
+
+  const casualBalance =
+    leaveBalanceSource.find((row) =>
+      ['CL', 'CASUAL LEAVE'].includes(String(row.leave_type || row.leave_type_label || '').toUpperCase()),
+    ) || {};
+
+  const earnedBalance =
+    leaveBalanceSource.find((row) =>
+      ['EL', 'EARNED LEAVE'].includes(String(row.leave_type || row.leave_type_label || '').toUpperCase()),
+    ) || {};
+
+  const totalAvailableLeave = leaveBalanceSource.reduce(
+    (total, row) => total + Number(row.available || 0),
+    0,
+  );
+
+  const totalUsedLeave = leaveBalanceSource.reduce(
+    (total, row) => total + Number(row.used || 0),
+    0,
+  );
 
   const modeRequestRows = modeRequests.slice(0, 8).map((row) => ({
     mode: modeLabel(row.mode),
@@ -554,16 +744,16 @@ export default function EmployeeDashboard({ setPage }) {
     status: statusLabel(row.status),
   }));
 
-  const leaveRows = (data?.leaves || []).map((row) => ({
+  const leaveRows = myLeaveRows.map((row) => ({
     leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-    from_date: row.from_date || '—',
-    upto_date: row.to_date || row.upto_date || '—',
+    from_date: formatDate(row.from_date),
+    upto_date: formatDate(row.to_date || row.upto_date),
     leave_days: row.leave_days ?? '—',
     reason: row.reason || '—',
     task_handover_to: row.task_handover_to_name || '—',
     project_handover: row.project_handover_name || '—',
-    approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
-    status: statusLabel(row.status),
+    current_status: leaveLiveStatus(row),
+    final_status: statusLabel(row.status),
   }));
 
   const notificationRows = (data?.notifications || []).map((row) => ({
@@ -591,19 +781,6 @@ export default function EmployeeDashboard({ setPage }) {
     designation: row.designation || '—',
     state: row.state || row.branch || '—',
     status: row.status || row.employment_status || '—',
-  }));
-
-  const teamPendingLeaveRows = (data?.team_pending_leaves || []).map((row) => ({
-    employee_name: row.employee_name || '—',
-    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
-    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-    from_date: row.from_date || '—',
-    upto_date: row.to_date || row.upto_date || '—',
-    leave_days: row.leave_days ?? '—',
-    task_handover_to: row.task_handover_to_name || '—',
-    project_handover: row.project_handover_name || '—',
-    approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
-    status: statusLabel(row.status),
   }));
 
   const teamPendingModeRows = (
@@ -691,6 +868,48 @@ export default function EmployeeDashboard({ setPage }) {
         .emp-project-dashboard {
           display: grid;
           gap: 18px;
+        }
+
+        .emp-leave-status-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin: 14px 0 18px;
+        }
+
+        .emp-leave-status-card {
+          border: 1px solid #e2e8f0;
+          background: #ffffff;
+          border-radius: 18px;
+          padding: 14px;
+          box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+        }
+
+        .emp-leave-status-card span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .emp-leave-status-card strong {
+          display: block;
+          margin-top: 7px;
+          color: #0f172a;
+          font-size: 26px;
+        }
+
+        .emp-leave-note {
+          background: #f8fafc;
+          border: 1px dashed #cbd5e1;
+          color: #64748b;
+          border-radius: 16px;
+          padding: 12px;
+          line-height: 1.5;
+          font-size: 13px;
+          margin-bottom: 14px;
         }
 
         .emp-project-hero {
@@ -859,14 +1078,16 @@ export default function EmployeeDashboard({ setPage }) {
 
         @media (max-width: 1024px) {
           .emp-project-stats,
-          .emp-project-card-grid {
+          .emp-project-card-grid,
+          .emp-leave-status-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
         @media (max-width: 640px) {
           .emp-project-stats,
-          .emp-project-card-grid {
+          .emp-project-card-grid,
+          .emp-leave-status-grid {
             grid-template-columns: 1fr;
           }
 
@@ -991,6 +1212,10 @@ export default function EmployeeDashboard({ setPage }) {
           value={availableModes.map(modeLabel).join(', ')}
         />
 
+        <Stat label="Available Leave" value={totalAvailableLeave} />
+
+        <Stat label="Used / Deducted Leave" value={totalUsedLeave} />
+
         <Stat label="Available Comp-Off" value={availableCompOffs.length} />
 
         <Stat label="Pending WFH/Field" value={pendingModeRequests.length} />
@@ -1008,7 +1233,7 @@ export default function EmployeeDashboard({ setPage }) {
 
         <Stat
           label="Pending Leave Approvals"
-          value={approvalCounts.leave_requests || 0}
+          value={pendingApprovalLeaves.length || approvalCounts.leave_requests || 0}
         />
 
         <Stat
@@ -1028,6 +1253,110 @@ export default function EmployeeDashboard({ setPage }) {
           </div>
         )}
       </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>My Leave Balance</h3>
+              <p>
+                Leave balance is credited by HR/Admin and deducted automatically
+                after final approval.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Apply Leave
+            </button>
+          </div>
+
+          <div className="emp-leave-status-grid">
+            <div className="emp-leave-status-card">
+              <span>CL Available</span>
+              <strong>{casualBalance.available ?? 0}</strong>
+            </div>
+
+            <div className="emp-leave-status-card">
+              <span>CL Used</span>
+              <strong>{casualBalance.used ?? 0}</strong>
+            </div>
+
+            <div className="emp-leave-status-card">
+              <span>EL Available</span>
+              <strong>{earnedBalance.available ?? 0}</strong>
+            </div>
+
+            <div className="emp-leave-status-card">
+              <span>EL Used</span>
+              <strong>{earnedBalance.used ?? 0}</strong>
+            </div>
+          </div>
+
+          <div className="emp-leave-note">
+            When you apply for leave, it first goes to your Team Leader. If no
+            Team Leader is mapped, it goes directly to your Reporting Officer.
+            Balance is deducted only after final approval.
+          </div>
+
+          <Table rows={leaveBalanceRows} maxColumns={8} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>My Leave Request Status</h3>
+              <p>
+                Track live status: Pending with Team Leader, Pending with
+                Reporting Officer, Approved, or Rejected.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Open Leave Management
+            </button>
+          </div>
+
+          <Table rows={leaveRows} maxColumns={8} />
+        </div>
+      </section>
+
+      {isMappedApprover && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Pending Leave Approvals</h3>
+              <p>
+                Shows leave requests currently waiting at your approval stage.
+                After Team Leader approval, the request moves to Reporting
+                Officer. After final approval, the employee receives notification
+                and leave balance is deducted.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Open Leave Management
+            </button>
+          </div>
+
+          <LeaveApprovalTable
+            rows={pendingApprovalLeaves}
+            saving={leaveDecisionSaving}
+            onDecision={decideLeave}
+          />
+        </section>
+      )}
 
       <section className="emp-project-dashboard">
         <div className="emp-project-hero">
@@ -1294,25 +1623,6 @@ export default function EmployeeDashboard({ setPage }) {
         <div className="panel">
           <div className="toolbar">
             <div>
-              <h3>My Leave Balance</h3>
-              <p>Casual Leave and Earned Leave are maintained separately.</p>
-            </div>
-
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_balances')}
-            >
-              View Balance
-            </button>
-          </div>
-
-          <Table rows={leaveBalanceRows} maxColumns={8} />
-        </div>
-
-        <div className="panel">
-          <div className="toolbar">
-            <div>
               <h3>WFH / Field Requests</h3>
               <p>
                 Approved requests unlock WFH or Field check-in on the selected
@@ -1331,84 +1641,84 @@ export default function EmployeeDashboard({ setPage }) {
 
           <Table rows={modeRequestRows} maxColumns={8} />
         </div>
-      </section>
 
-      <section className="panel">
-        <div className="toolbar">
-          <div>
-            <h3>My Comp-Off</h3>
-            <p>
-              If you work on a holiday, one compensatory off is generated and
-              can be claimed for one day.
-            </p>
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>My Comp-Off</h3>
+              <p>
+                If you work on a holiday, one compensatory off is generated and
+                can be claimed for one day.
+              </p>
+            </div>
           </div>
-        </div>
 
-        {availableCompOffs.length > 0 && (
-          <form className="dynamic-form" onSubmit={submitCompOffClaim}>
-            <label>
-              Available Comp-Off
-              <select
-                value={claimForm.compoff_id}
-                onChange={(event) =>
-                  setClaimForm({
-                    ...claimForm,
-                    compoff_id: event.target.value,
-                  })
-                }
+          {availableCompOffs.length > 0 && (
+            <form className="dynamic-form" onSubmit={submitCompOffClaim}>
+              <label>
+                Available Comp-Off
+                <select
+                  value={claimForm.compoff_id}
+                  onChange={(event) =>
+                    setClaimForm({
+                      ...claimForm,
+                      compoff_id: event.target.value,
+                    })
+                  }
+                  disabled={claimingCompOff}
+                >
+                  <option value="">Select comp-off</option>
+
+                  {availableCompOffs.map((item) => (
+                    <option key={item._id} value={item._id}>
+                      {item.earned_date} — {item.holiday_title || 'Holiday Work'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Claim Date
+                <input
+                  type="date"
+                  value={claimForm.claim_date}
+                  onChange={(event) =>
+                    setClaimForm({
+                      ...claimForm,
+                      claim_date: event.target.value,
+                    })
+                  }
+                  disabled={claimingCompOff}
+                />
+              </label>
+
+              <label>
+                Reason
+                <input
+                  value={claimForm.reason}
+                  placeholder="Reason / note"
+                  onChange={(event) =>
+                    setClaimForm({
+                      ...claimForm,
+                      reason: event.target.value,
+                    })
+                  }
+                  disabled={claimingCompOff}
+                />
+              </label>
+
+              <button
+                type="submit"
+                className="primary"
                 disabled={claimingCompOff}
               >
-                <option value="">Select comp-off</option>
+                {claimingCompOff ? 'Submitting...' : 'Claim Comp-Off'}
+              </button>
+            </form>
+          )}
 
-                {availableCompOffs.map((item) => (
-                  <option key={item._id} value={item._id}>
-                    {item.earned_date} — {item.holiday_title || 'Holiday Work'}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Claim Date
-              <input
-                type="date"
-                value={claimForm.claim_date}
-                onChange={(event) =>
-                  setClaimForm({
-                    ...claimForm,
-                    claim_date: event.target.value,
-                  })
-                }
-                disabled={claimingCompOff}
-              />
-            </label>
-
-            <label>
-              Reason
-              <input
-                value={claimForm.reason}
-                placeholder="Reason / note"
-                onChange={(event) =>
-                  setClaimForm({
-                    ...claimForm,
-                    reason: event.target.value,
-                  })
-                }
-                disabled={claimingCompOff}
-              />
-            </label>
-
-            <button
-              type="submit"
-              className="primary"
-              disabled={claimingCompOff}
-            >
-              {claimingCompOff ? 'Submitting...' : 'Claim Comp-Off'}
-            </button>
-          </form>
-        )}
-
-        <Table rows={compOffRows} maxColumns={8} />
+          <Table rows={compOffRows} maxColumns={8} />
+        </div>
       </section>
 
       {isMappedApprover && (
@@ -1517,50 +1827,26 @@ export default function EmployeeDashboard({ setPage }) {
       )}
 
       {isMappedApprover && (
-        <section className="two-col">
-          <div className="panel">
-            <div className="toolbar">
-              <div>
-                <h3>Pending Leave Approvals</h3>
-                <p>
-                  Shows only leave requests currently pending at your mapped
-                  approval stage.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => goTo('leave_requests')}
-              >
-                Open Leave Management
-              </button>
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Pending WFH / Field Approvals</h3>
+              <p>
+                Shows only WFH / Field requests currently pending at your
+                mapped approval stage.
+              </p>
             </div>
 
-            <Table rows={teamPendingLeaveRows} maxColumns={9} />
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('attendance')}
+            >
+              Open Attendance
+            </button>
           </div>
 
-          <div className="panel">
-            <div className="toolbar">
-              <div>
-                <h3>Pending WFH / Field Approvals</h3>
-                <p>
-                  Shows only WFH / Field requests currently pending at your
-                  mapped approval stage.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => goTo('attendance')}
-              >
-                Open Attendance
-              </button>
-            </div>
-
-            <Table rows={teamPendingModeRows} maxColumns={8} />
-          </div>
+          <Table rows={teamPendingModeRows} maxColumns={8} />
         </section>
       )}
 
@@ -1572,33 +1858,14 @@ export default function EmployeeDashboard({ setPage }) {
 
       <section className="two-col">
         <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>My Leaves</h3>
-              <p>Your recent leave requests and approval status.</p>
-            </div>
-
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
-              Apply Leave
-            </button>
-          </div>
-
-          <Table rows={leaveRows} maxColumns={8} />
-        </div>
-
-        <div className="panel">
           <h3>My Tickets</h3>
           <Table rows={data?.tickets || []} maxColumns={8} />
         </div>
-      </section>
 
-      <section className="panel">
-        <h3>My Notifications</h3>
-        <Table rows={notificationRows} maxColumns={8} />
+        <div className="panel">
+          <h3>My Notifications</h3>
+          <Table rows={notificationRows} maxColumns={8} />
+        </div>
       </section>
     </div>
   );

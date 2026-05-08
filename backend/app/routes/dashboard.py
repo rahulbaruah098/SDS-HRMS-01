@@ -211,6 +211,145 @@ def project_name(project):
     )
 
 
+def normalize_leave_type(value):
+    value = normalize_text(value).upper()
+
+    aliases = {
+        "CASUAL LEAVE": "CL",
+        "CASUAL": "CL",
+        "CL": "CL",
+        "EARNED LEAVE": "EL",
+        "EARNED": "EL",
+        "EL": "EL",
+        "COMP OFF": "COMP-OFF",
+        "COMPOFF": "COMP-OFF",
+        "COMP-OFF": "COMP-OFF",
+        "COMPENSATORY LEAVE": "COMP-OFF",
+        "COMPENSATORY OFF": "COMP-OFF",
+    }
+
+    return aliases.get(value, value)
+
+
+def leave_type_label(value):
+    leave_type = normalize_leave_type(value)
+
+    labels = {
+        "CL": "Casual Leave",
+        "EL": "Earned Leave",
+        "COMP-OFF": "Comp-Off",
+    }
+
+    return labels.get(leave_type, normalize_text(value) or "Leave")
+
+
+def leave_stage_label(stage):
+    labels = {
+        "team_leader": "Team Leader",
+        "reporting_officer": "Reporting Officer",
+        "hr": "HR",
+        "final": "Final Approval",
+        "approved": "Approved",
+        "rejected": "Rejected",
+    }
+
+    return labels.get(stage, stage or "Approval")
+
+
+def leave_request_live_status(row):
+    status = normalize_text(row.get("status")).lower()
+    stage = normalize_text(row.get("approval_stage")).lower()
+
+    if status == "approved" or stage == "approved":
+        return "Approved"
+
+    if status == "rejected" or stage == "rejected":
+        return "Rejected"
+
+    if stage == "team_leader":
+        return "Pending with Team Leader"
+
+    if stage == "reporting_officer":
+        return "Pending with Reporting Officer"
+
+    if stage == "hr":
+        return "Pending with HR"
+
+    if stage:
+        return leave_stage_label(stage)
+
+    return "Pending" if status == "pending" else status.title() if status else "—"
+
+
+def enrich_leave_request(row):
+    row = dict(row or {})
+    live_status = leave_request_live_status(row)
+
+    row["live_status"] = live_status
+    row["status_text"] = live_status
+    row["status_display"] = live_status
+    row["approval_stage_label"] = row.get("approval_stage_label") or leave_stage_label(row.get("approval_stage"))
+    row["leave_type_label"] = row.get("leave_type_label") or leave_type_label(row.get("leave_type"))
+
+    return row
+
+
+def enrich_leave_requests(rows):
+    return [enrich_leave_request(row) for row in rows]
+
+
+def leave_balance_summary(leave_balances):
+    summary = {
+        "casual_leave": {
+            "opening_balance": 0,
+            "credited": 0,
+            "used": 0,
+            "available": 0,
+        },
+        "earned_leave": {
+            "opening_balance": 0,
+            "credited": 0,
+            "used": 0,
+            "available": 0,
+        },
+        "total_opening_balance": 0,
+        "total_credited": 0,
+        "total_used": 0,
+        "total_available": 0,
+    }
+
+    for row in leave_balances:
+        leave_type = normalize_leave_type(row.get("leave_type") or row.get("leave_type_label"))
+
+        target = None
+
+        if leave_type == "CL":
+            target = summary["casual_leave"]
+
+        if leave_type == "EL":
+            target = summary["earned_leave"]
+
+        if target is None:
+            continue
+
+        opening = float(row.get("opening_balance", 0) or 0)
+        credited = float(row.get("credited", 0) or 0)
+        used = float(row.get("used", 0) or 0)
+        available = float(row.get("available", 0) or 0)
+
+        target["opening_balance"] = opening
+        target["credited"] = credited
+        target["used"] = used
+        target["available"] = available
+
+        summary["total_opening_balance"] += opening
+        summary["total_credited"] += credited
+        summary["total_used"] += used
+        summary["total_available"] += available
+
+    return summary
+
+
 def is_second_or_fourth_saturday(check_date):
     if check_date.weekday() != 5:
         return False
@@ -1175,6 +1314,13 @@ def superadmin_dashboard():
         .limit(8)
     )
 
+    pending_leave_requests = list(
+        db.leave_requests
+        .find({"status": "pending", "is_deleted": {"$ne": True}})
+        .sort("created_at", -1)
+        .limit(8)
+    )
+
     default_tenant_id = current_tenant_id()
     project_analytics = tenant_project_analytics(db, default_tenant_id)
 
@@ -1185,6 +1331,7 @@ def superadmin_dashboard():
         "recent_audit": clean_doc(recent_audit),
         "recent_attendance": clean_doc(recent_attendance),
         "pending_mode_requests": clean_doc(pending_mode_requests),
+        "pending_leave_requests": clean_doc(enrich_leave_requests(pending_leave_requests)),
         "project_analytics": clean_doc(project_analytics),
         "department_project_performance": clean_doc(project_analytics.get("department_performance", [])),
         "top_performing_departments": clean_doc(project_analytics.get("top_performing_departments", [])),
@@ -1400,17 +1547,19 @@ def admin_dashboard():
         .limit(8)
     )
 
+    pending_leave_requests = list(
+        db.leave_requests
+        .find({
+            "tenant_id": tenant_id,
+            "status": "pending",
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(5)
+    )
+
     pending = {
-        "leave_requests": list(
-            db.leave_requests
-            .find({
-                "tenant_id": tenant_id,
-                "status": "pending",
-                "is_deleted": {"$ne": True},
-            })
-            .sort("created_at", -1)
-            .limit(5)
-        ),
+        "leave_requests": enrich_leave_requests(pending_leave_requests),
         "attendance_mode_requests": list(
             db.attendance_mode_requests
             .find({
@@ -1509,6 +1658,8 @@ def admin_dashboard():
                 .limit(8)
             )
 
+    my_pending_leave_approvals = enrich_leave_requests(my_pending_leave_approvals)
+
     if my_pending_leave_approvals:
         stats["My Pending Leave Approvals"] = len(my_pending_leave_approvals)
 
@@ -1570,6 +1721,7 @@ def employee_dashboard():
             "available_attendance_modes": ["office"],
             "attendance_mode_requests": [],
             "leave_balances": [],
+            "leave_balance_summary": leave_balance_summary([]),
             "compoff_credits": [],
             "leaves": [],
             "tickets": [],
@@ -1693,8 +1845,10 @@ def employee_dashboard():
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
-        .limit(5)
+        .limit(20)
     )
+
+    leaves = enrich_leave_requests(leaves)
 
     tickets = list(
         db.tickets
@@ -1733,8 +1887,10 @@ def employee_dashboard():
             db.leave_requests
             .find(leave_approval_scope)
             .sort("created_at", -1)
-            .limit(10)
+            .limit(20)
         )
+
+    team_pending_leaves = enrich_leave_requests(team_pending_leaves)
 
     mode_approval_scope = pending_attendance_mode_scope_for_employee_capability(
         tenant_id,
@@ -1760,6 +1916,8 @@ def employee_dashboard():
         team_member_ids,
         reporting_member_ids,
     )
+
+    balance_summary = leave_balance_summary(leave_balances)
 
     return jsonify({
         "employee": clean_doc(emp),
@@ -1798,6 +1956,10 @@ def employee_dashboard():
         "available_attendance_modes": available_modes,
         "attendance_mode_requests": clean_doc(attendance_mode_requests),
         "leave_balances": clean_doc(leave_balances),
+        "leave_balance_summary": clean_doc(balance_summary),
+        "total_leave_available": balance_summary.get("total_available", 0),
+        "total_leave_used": balance_summary.get("total_used", 0),
+        "total_leave_credited": balance_summary.get("total_credited", 0),
         "compoff_credits": clean_doc(compoff_credits),
         "leaves": clean_doc(leaves),
         "tickets": clean_doc(tickets),

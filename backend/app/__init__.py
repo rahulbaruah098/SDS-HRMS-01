@@ -7,12 +7,12 @@ from .extensions import init_db
 from .routes.auth import auth_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
-from .routes.crud import crud_bp
 from .routes.workflow import workflow_bp
+from .routes.projects import projects_bp
+from .routes.crud import crud_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
 from .routes.password_requests import password_requests_bp
-from .routes.projects import projects_bp
 
 
 def _get_allowed_origins():
@@ -111,30 +111,42 @@ def create_app():
     # state-wise holiday calendar, comp-off generation and comp-off claim.
     app.register_blueprint(attendance_bp, url_prefix="/api/v1/attendance")
 
-    # Generic CRUD APIs:
-    # employees, masters, leave_balances, leave_requests, holiday_calendar,
-    # attendance_logs, attendance_mode_requests, compoff_credits, etc.
-    # Employee Master creates every staff profile as Employee.
-    # Team Leader / Reporting Officer are stored as employee capability mappings.
-    app.register_blueprint(crud_bp, url_prefix="/api/v1")
-
     # Dedicated Project APIs:
     # project detail, project assignment, daily progress submission,
     # project progress history, and project analytics.
+    # Keep this before generic CRUD so project-specific routes are preferred.
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
 
     # Workflow APIs:
-    # leave apply/approval, leave balance updates, performance review,
-    # payroll run, expense decisions and ticket workflow.
+    # leave apply/approval, combined CL + EL leave balance updates,
+    # notification bell APIs, performance review, payroll run, expense decisions,
+    # and ticket workflow.
+    #
+    # Keep this before generic CRUD so dedicated workflow routes are preferred:
+    # /leave_balances
+    # /leave_requests/options
+    # /leave_requests/apply
+    # /leave_requests/<id>/decision
+    # /notifications
+    #
     # Leave approval flow:
     # Team Leader -> Reporting Officer -> Final approval.
     # If no Team Leader exists, it goes to Reporting Officer.
     # If neither exists, it goes to HR.
     app.register_blueprint(workflow_bp, url_prefix="/api/v1")
 
+    # Generic CRUD APIs:
+    # employees, masters, projects fallback, leave_balances fallback,
+    # leave_requests list fallback, holiday_calendar, attendance_logs,
+    # attendance_mode_requests, compoff_credits, notifications fallback, etc.
+    #
+    # Employee Master creates every staff profile as Employee.
+    # Team Leader / Reporting Officer are stored as employee capability mappings.
+    app.register_blueprint(crud_bp, url_prefix="/api/v1")
+
     # Report APIs:
     # attendance, WFH/Field, holidays, comp-off, leave balances,
-    # leave requests, leave records and audit reports.
+    # leave requests, leave approvals, leave deductions, leave records and audit.
     app.register_blueprint(reports_bp, url_prefix="/api/v1/reports")
 
     # Super Admin APIs:
@@ -165,6 +177,8 @@ def create_app():
                 "reporting_officer": "Reporting Officer is an employee capability, not a separate login identity.",
                 "leave_approval": "Team Leader -> Reporting Officer -> Final approval; HR fallback when no approver mapping exists.",
                 "leave_types": ["Casual Leave", "Earned Leave"],
+                "leave_balance": "Casual Leave and Earned Leave balances are managed together by HR/Admin/Super Admin.",
+                "notifications": "Leave workflow notifications are available through the notification bell APIs.",
             },
             "modules": [
                 "Authentication",
@@ -179,6 +193,7 @@ def create_app():
                 "Projects",
                 "Project Progress",
                 "Reports",
+                "Notifications",
                 "Super Admin",
                 "Password Requests",
             ],
@@ -197,6 +212,8 @@ def create_app():
             },
             "attendance_module": True,
             "leave_module": True,
+            "leave_balance_module": True,
+            "notification_module": True,
             "project_module": True,
             "project_progress_module": True,
             "reports_module": True,
@@ -207,6 +224,22 @@ def create_app():
                 "casual_leave": "CL",
                 "earned_leave": "EL",
             },
+            "leave_approval_flow": [
+                "Team Leader",
+                "Reporting Officer",
+                "Final Approval",
+            ],
+            "route_order": [
+                "auth",
+                "dashboard",
+                "attendance",
+                "projects",
+                "workflow",
+                "crud",
+                "reports",
+                "superadmin",
+                "password_requests",
+            ],
         })
 
     @app.errorhandler(400)

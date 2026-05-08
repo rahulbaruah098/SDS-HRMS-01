@@ -1,7 +1,9 @@
 import {
   BarChart3,
+  Bell,
   Briefcase,
   CalendarDays,
+  CheckCheck,
   Clock,
   LayoutDashboard,
   LogOut,
@@ -9,35 +11,45 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { clearSession } from '../api/client';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api, clearSession } from '../api/client';
 import {
   moduleList,
   getDisplayRole,
   getEmployeeCapabilities,
 } from '../data/modules';
 
+function normalizeRoleValue(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
 function normalizeRoles(user) {
   const userRoles = user?.roles;
 
   if (Array.isArray(userRoles)) {
     return userRoles
-      .map((role) => String(role || '').trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
   if (typeof userRoles === 'string') {
     return userRoles
       .split(',')
-      .map((role) => role.trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
-  return [];
+  const singleRole = normalizeRoleValue(user?.role);
+
+  return singleRole ? [singleRole] : [];
 }
 
 function roleLabel(role = '') {
-  const normalized = String(role || '').trim();
+  const normalized = normalizeRoleValue(role);
 
   if (normalized === 'team_leader') {
     return 'Team Leader Capability';
@@ -94,6 +106,7 @@ function moduleGroup(key) {
       'leave_requests',
       'leave_balances',
       'leave_types',
+      'application_status',
     ].includes(key)
   ) {
     return 'Attendance & Leave';
@@ -169,8 +182,70 @@ function buildCapabilityText(user) {
   return items.length ? items.join(' + ') : '';
 }
 
+function formatNotificationTime(value) {
+  if (!value) {
+    return '';
+  }
+
+  try {
+    const date = new Date(value);
+    return date.toLocaleString();
+  } catch {
+    return '';
+  }
+}
+
+function notificationTarget(meta = {}) {
+  const target = String(meta.target || meta.page || '').trim();
+
+  if (
+    [
+      'application_status',
+      'application-status',
+      'request_status',
+      'request-status',
+      'my_requests',
+      'my-requests',
+    ].includes(target)
+  ) {
+    return 'application_status';
+  }
+
+  if (meta.leave_request_id) {
+    return 'application_status';
+  }
+
+  if (meta.attendance_mode_request_id) {
+    return 'application_status';
+  }
+
+  if (meta.password_request_id) {
+    return 'application_status';
+  }
+
+  if (meta.ticket_id) {
+    return 'application_status';
+  }
+
+  if (meta.compoff_id || meta.compoff_credit_id) {
+    return 'application_status';
+  }
+
+  if (meta.project_id) {
+    return 'projects';
+  }
+
+  return '';
+}
+
 export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('');
+  const notificationRef = useRef(null);
 
   const safeUser = {
     ...(user || {}),
@@ -218,7 +293,12 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   ).length;
 
   const leaveCount = modules.filter(([key]) =>
-    ['leave_requests', 'leave_balances', 'leave_types'].includes(key),
+    [
+      'leave_requests',
+      'leave_balances',
+      'leave_types',
+      'application_status',
+    ].includes(key),
   ).length;
 
   const projectCount = modules.filter(([key]) => key === 'projects').length;
@@ -228,12 +308,63 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
 
+  async function loadNotifications({ silent = false } = {}) {
+    if (!safeUser?._id && !safeUser?.email) {
+      return;
+    }
+
+    try {
+      if (!silent) {
+        setNotificationLoading(true);
+      }
+
+      const data = await api('/notifications?limit=20');
+
+      setNotifications(data.items || []);
+      setNotificationCount(Number(data.unread_count || 0));
+      setNotificationMessage('');
+    } catch (error) {
+      setNotificationMessage(error.message || 'Unable to load notifications');
+    } finally {
+      setNotificationLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadNotifications({ silent: true });
+
+    const interval = window.setInterval(() => {
+      loadNotifications({ silent: true });
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeUser?._id, safeUser?.email]);
+
+  useEffect(() => {
+    function handleOutsideClick(event) {
+      if (
+        notificationRef.current &&
+        !notificationRef.current.contains(event.target)
+      ) {
+        setNotificationOpen(false);
+      }
+    }
+
+    if (notificationOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [notificationOpen]);
+
   function goTo(nextPage) {
     if (typeof setPage === 'function') {
       setPage(nextPage || 'dashboard');
     }
 
     setSidebarOpen(false);
+    setNotificationOpen(false);
   }
 
   function logout() {
@@ -248,6 +379,50 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     }
 
     setSidebarOpen(false);
+    setNotificationOpen(false);
+  }
+
+  async function toggleNotifications() {
+    const nextOpen = !notificationOpen;
+    setNotificationOpen(nextOpen);
+
+    if (nextOpen) {
+      await loadNotifications();
+    }
+  }
+
+  async function markNotificationRead(notification) {
+    if (!notification?._id) {
+      return;
+    }
+
+    try {
+      await api(`/notifications/${notification._id}/read`, {
+        method: 'PATCH',
+      });
+
+      const target = notificationTarget(notification.meta || {});
+
+      if (target) {
+        goTo(target);
+      }
+
+      await loadNotifications({ silent: true });
+    } catch (error) {
+      setNotificationMessage(error.message || 'Unable to update notification');
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await api('/notifications/read_all', {
+        method: 'PATCH',
+      });
+
+      await loadNotifications({ silent: true });
+    } catch (error) {
+      setNotificationMessage(error.message || 'Unable to mark all as read');
+    }
   }
 
   return (
@@ -362,9 +537,87 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             )}
           </div>
 
-          <div className="user-chip">
-            <User size={16} />
-            <span>{safeUser?.name || safeUser?.email || 'User'}</span>
+          <div className="topbar-actions">
+            <div className="notification-wrap" ref={notificationRef}>
+              <button
+                type="button"
+                className={`notification-btn ${notificationOpen ? 'active' : ''}`}
+                onClick={toggleNotifications}
+                aria-label="Notifications"
+              >
+                <Bell size={17} />
+
+                {notificationCount > 0 && (
+                  <span className="notification-badge">
+                    {notificationCount > 99 ? '99+' : notificationCount}
+                  </span>
+                )}
+              </button>
+
+              {notificationOpen && (
+                <div className="notification-panel">
+                  <div className="notification-head">
+                    <div>
+                      <b>Notifications</b>
+                      <small>{notificationCount} unread</small>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="notification-mark-all"
+                      onClick={markAllNotificationsRead}
+                      disabled={!notificationCount}
+                    >
+                      <CheckCheck size={14} />
+                      Mark all read
+                    </button>
+                  </div>
+
+                  {notificationMessage && (
+                    <div className="notification-message">
+                      {notificationMessage}
+                    </div>
+                  )}
+
+                  <div className="notification-list">
+                    {notificationLoading && (
+                      <div className="notification-empty">
+                        Loading notifications...
+                      </div>
+                    )}
+
+                    {!notificationLoading && !notifications.length && (
+                      <div className="notification-empty">
+                        No notifications found.
+                      </div>
+                    )}
+
+                    {!notificationLoading &&
+                      notifications.map((notification) => (
+                        <button
+                          type="button"
+                          key={notification._id}
+                          className={`notification-item ${notification.read ? 'read' : 'unread'}`}
+                          onClick={() => markNotificationRead(notification)}
+                        >
+                          <span className="notification-dot" />
+
+                          <span>
+                            <b>{notification.title || 'Notification'}</b>
+                            <small>{notification.body || 'No details available.'}</small>
+                            <em>{formatNotificationTime(notification.created_at)}</em>
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="user-chip">
+              <User size={16} />
+              <span>{safeUser?.name || safeUser?.email || 'User'}</span>
+            </div>
           </div>
         </header>
 
