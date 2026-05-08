@@ -80,6 +80,33 @@ def normalize_status(value):
     return normalize_text(value).lower()
 
 
+def normalize_project_status(value):
+    status = normalize_text(value).lower()
+
+    if status in {"completed", "complete", "done", "closed", "inactive"}:
+        return "completed"
+
+    if status in {"on_hold", "on-hold", "hold"}:
+        return "on_hold"
+
+    if status in {"active", "ongoing", "in_progress", "in-progress", "open"}:
+        return "active"
+
+    return status or "active"
+
+
+def is_active_project(project):
+    if not project:
+        return False
+
+    status = normalize_project_status(project.get("status"))
+
+    return (
+        status == "active"
+        and project.get("is_deleted") is not True
+    )
+
+
 def normalize_leave_type(value):
     value = normalize_text(value).upper()
 
@@ -669,14 +696,15 @@ def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name="")
             "_id": project_obj_id,
             "tenant_id": tenant_id,
             "is_deleted": {"$ne": True},
+            "status": "active",
         })
 
         if not project:
-            raise ValueError("Selected project was not found")
+            raise ValueError("Selected project was not found or is already completed")
 
         return {
             "project_handover_id": str(project["_id"]),
-            "project_handover_name": project.get("name", ""),
+            "project_handover_name": project.get("name") or project.get("project_name") or project.get("title") or "",
         }
 
     return {
@@ -938,6 +966,7 @@ def leave_request_options():
         db.employees
         .find(member_query, {
             "name": 1,
+            "employee_name": 1,
             "employee_id": 1,
             "emp_code": 1,
             "department": 1,
@@ -947,13 +976,34 @@ def leave_request_options():
         .limit(500)
     )
 
+    project_query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": "active",
+    }
+
+    if employee.get("department"):
+        project_query["$or"] = [
+            {"department": employee.get("department")},
+            {"department": ""},
+            {"department": {"$exists": False}},
+        ]
+
     projects = list(
         db.projects
-        .find({
-            "tenant_id": tenant_id,
-            "is_deleted": {"$ne": True},
-            "status": {"$ne": "inactive"},
-        }, {"name": 1, "status": 1})
+        .find(project_query, {
+            "name": 1,
+            "project_name": 1,
+            "title": 1,
+            "status": 1,
+            "department": 1,
+            "team_leader_id": 1,
+            "team_leader_name": 1,
+            "assigned_employee_ids": 1,
+            "assigned_members": 1,
+            "collaborator_ids": 1,
+            "collaborators": 1,
+        })
         .sort("name", 1)
         .limit(500)
     )

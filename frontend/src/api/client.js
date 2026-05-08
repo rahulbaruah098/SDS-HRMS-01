@@ -1,5 +1,37 @@
-const API_BASE =
-  import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000/api/v1';
+const DEFAULT_BACKEND_PORT = '5000';
+const DEFAULT_API_PREFIX = '/api/v1';
+
+function normalizeApiBase(base = '') {
+  const value = String(base || '').trim();
+
+  if (!value) {
+    return '';
+  }
+
+  return value.replace(/\/+$/, '');
+}
+
+function buildRuntimeApiBase() {
+  const envBase = normalizeApiBase(import.meta.env.VITE_API_BASE);
+
+  if (envBase) {
+    return envBase;
+  }
+
+  if (typeof window === 'undefined') {
+    return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}${DEFAULT_API_PREFIX}`;
+  }
+
+  const { protocol, hostname } = window.location;
+
+  if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}${DEFAULT_API_PREFIX}`;
+  }
+
+  return `${protocol}//${hostname}:${DEFAULT_BACKEND_PORT}${DEFAULT_API_PREFIX}`;
+}
+
+const API_BASE = buildRuntimeApiBase();
 
 export function getToken() {
   return localStorage.getItem('sds_hrms_token');
@@ -51,6 +83,15 @@ export function buildQuery(params = {}) {
       return;
     }
 
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== '') {
+          query.append(key, item);
+        }
+      });
+      return;
+    }
+
     query.append(key, value);
   });
 
@@ -82,12 +123,22 @@ async function parseResponse(response) {
   }
 }
 
+function getConnectionErrorMessage() {
+  return [
+    'Unable to connect to backend server.',
+    `Frontend is trying: ${API_BASE}`,
+    'Check that Flask is running on port 5000 and backend CORS allows this frontend origin.',
+  ].join(' ');
+}
+
 export async function api(path, options = {}) {
   const token = getToken();
   const isFormData = options.body instanceof FormData;
+  const timeoutMs = options.timeoutMs || 30000;
 
   const headers = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    Accept: 'application/json',
     ...(options.headers || {}),
   };
 
@@ -95,15 +146,27 @@ export async function api(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
   let response;
 
   try {
+    const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+
     response = await fetch(buildUrl(path), {
-      ...options,
+      ...fetchOptions,
       headers,
+      signal: controller.signal,
     });
-  } catch {
-    throw new Error('Unable to connect to backend server');
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Backend request timed out. Tried: ${API_BASE}`);
+    }
+
+    throw new Error(getConnectionErrorMessage());
+  } finally {
+    clearTimeout(timeout);
   }
 
   const data = await parseResponse(response);
@@ -126,6 +189,17 @@ export async function api(path, options = {}) {
 
 export function getApiBase() {
   return API_BASE;
+}
+
+export function getApiUrl(path = '') {
+  return buildUrl(path);
+}
+
+export function checkBackendHealth() {
+  return api('/health', {
+    method: 'GET',
+    timeoutMs: 10000,
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -170,6 +244,80 @@ export function getAdminDashboard() {
 
 export function getEmployeeDashboard() {
   return api('/dashboard/employee');
+}
+
+/* -------------------------------------------------------------------------- */
+/* Project APIs                                                               */
+/* -------------------------------------------------------------------------- */
+
+export function getProjects(params = {}) {
+  return api(`/projects${buildQuery(params)}`);
+}
+
+export function getActiveProjects(params = {}) {
+  return api(`/projects${buildQuery({ ...params, status: 'active' })}`);
+}
+
+export function getCompletedProjects(params = {}) {
+  return api(`/projects${buildQuery({ ...params, status: 'completed' })}`);
+}
+
+export function getProject(projectId) {
+  return api(`/projects/${projectId}`);
+}
+
+export function createProject(payload = {}) {
+  return api('/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateProject(projectId, payload = {}) {
+  return api(`/projects/${projectId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateProjectStatus(projectId, status) {
+  return api(`/projects/${projectId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function assignProject(projectId, payload = {}) {
+  return api(`/projects/${projectId}/assign`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function addProjectCollaborators(projectId, collaboratorIds = []) {
+  return api(`/projects/${projectId}/collaborators`, {
+    method: 'PATCH',
+    body: JSON.stringify({ collaborator_ids: collaboratorIds }),
+  });
+}
+
+export function getProjectProgress(projectId, params = {}) {
+  return api(`/projects/${projectId}/progress${buildQuery(params)}`);
+}
+
+export function addProjectProgress(projectId, payload = {}) {
+  return api(`/projects/${projectId}/progress`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getMyProjectProgress(params = {}) {
+  return api(`/projects/my-progress${buildQuery(params)}`);
+}
+
+export function getProjectAnalytics(params = {}) {
+  return api(`/projects/analytics${buildQuery(params)}`);
 }
 
 /* -------------------------------------------------------------------------- */

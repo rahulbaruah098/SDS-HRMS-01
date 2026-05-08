@@ -14,6 +14,7 @@ import ModuleCrud from './pages/ModuleCrud';
 import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
+import Projects from './pages/Projects';
 
 import './styles.css';
 
@@ -139,6 +140,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (page === 'users') {
     return <UserControl setPage={setPage} />;
+  }
+
+  if (page === 'projects') {
+    return <Projects setPage={setPage} />;
   }
 
   if (page === 'profile') {

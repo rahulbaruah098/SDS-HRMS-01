@@ -51,6 +51,83 @@ function rolesLabel(value) {
   return value ? statusLabel(value) : '—';
 }
 
+function percentValue(value) {
+  const number = Number(value || 0);
+
+  if (Number.isNaN(number)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(number, 0), 100);
+}
+
+function projectName(project = {}) {
+  return project.name || project.project_name || project.title || 'Untitled Project';
+}
+
+function ProjectProgressChart({ rows = [] }) {
+  if (!rows.length) {
+    return <div className="empty">No project progress chart data found.</div>;
+  }
+
+  return (
+    <div className="sa-project-chart">
+      {rows.map((row) => {
+        const value = percentValue(row.average_progress);
+
+        return (
+          <div className="sa-project-chart-row" key={row.date}>
+            <span>{String(row.date || '').slice(5) || '—'}</span>
+
+            <div className="sa-project-chart-track">
+              <div
+                className="sa-project-chart-fill"
+                style={{ width: `${value}%` }}
+              />
+            </div>
+
+            <strong>{value}%</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DepartmentPerformanceBars({ rows = [] }) {
+  if (!rows.length) {
+    return <div className="empty">No department project performance data found.</div>;
+  }
+
+  return (
+    <div className="sa-dept-bars">
+      {rows.slice(0, 8).map((row) => {
+        const value = percentValue(row.completion_rate);
+
+        return (
+          <div className="sa-dept-bar-card" key={row.department}>
+            <div className="sa-dept-bar-head">
+              <strong>{row.department || 'Unassigned'}</strong>
+              <span>{value}%</span>
+            </div>
+
+            <div className="sa-dept-track">
+              <div
+                className="sa-dept-fill"
+                style={{ width: `${value}%` }}
+              />
+            </div>
+
+            <p>
+              {row.completed_projects || 0} completed / {row.total_projects || 0} total projects
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function SuperAdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
@@ -87,6 +164,23 @@ export default function SuperAdminDashboard({ setPage }) {
   const recentAudit = data?.recent_audit || [];
   const recentAttendance = data?.recent_attendance || [];
   const pendingModeRequests = data?.pending_mode_requests || [];
+  const projectAnalytics = data?.project_analytics || {};
+  const projectSummary = projectAnalytics?.summary || {};
+  const topDepartments =
+    data?.top_performing_departments ||
+    projectAnalytics?.top_performing_departments ||
+    [];
+  const departmentPerformance =
+    data?.department_project_performance ||
+    projectAnalytics?.department_performance ||
+    [];
+  const projectDailyChart =
+    data?.project_daily_progress_chart ||
+    projectAnalytics?.daily_progress_chart ||
+    [];
+  const teamLeaderPerformance = projectAnalytics?.team_leader_performance || [];
+  const activeProjects = projectAnalytics?.active_projects || [];
+  const completedProjects = projectAnalytics?.completed_projects || [];
 
   const dashboardModules = allModules.filter(
     ([key]) => !['profile'].includes(key),
@@ -98,11 +192,11 @@ export default function SuperAdminDashboard({ setPage }) {
     status: statusLabel(row.status),
     users: row.users || 0,
     employees: row.employees || 0,
+    projects: row.projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
     present_today: row.present_today || 0,
-    late_today: row.late_today || 0,
-    pending_wfh_field: row.pending_wfh_field || 0,
     pending_leaves: row.pending_leaves || 0,
-    open_tickets: row.open_tickets || 0,
   }));
 
   const recentUserRows = recentUsers.map((row) => ({
@@ -146,8 +240,214 @@ export default function SuperAdminDashboard({ setPage }) {
     created_at: formatDateTime(row.created_at),
   }));
 
+  const topDepartmentRows = topDepartments.map((row) => ({
+    department: row.department || 'Unassigned',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+    score: row.score || 0,
+  }));
+
+  const departmentPerformanceRows = departmentPerformance.map((row) => ({
+    department: row.department || 'Unassigned',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+    performance_score: row.score || 0,
+  }));
+
+  const teamLeaderPerformanceRows = teamLeaderPerformance.map((row) => ({
+    team_leader: row.team_leader_name || 'Unassigned',
+    department: row.department || '—',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+  }));
+
+  const activeProjectRows = activeProjects.slice(0, 10).map((project) => ({
+    project_name: projectName(project),
+    department: project.department || '—',
+    team_leader: project.team_leader_name || '—',
+    progress: `${percentValue(project.latest_progress)}%`,
+    last_update: project.latest_progress_date || '—',
+    updated_by: project.latest_progress_by_name || '—',
+  }));
+
+  const completedProjectRows = completedProjects.slice(0, 10).map((project) => ({
+    project_name: projectName(project),
+    department: project.department || '—',
+    team_leader: project.team_leader_name || '—',
+    completed_at: project.completed_at ? formatDateTime(project.completed_at) : '—',
+    final_progress: `${percentValue(project.latest_progress)}%`,
+  }));
+
   return (
     <div className="page-grid">
+      <style>{`
+        .sa-project-hero {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid #e2e8f0;
+          border-radius: 28px;
+          padding: 24px;
+          background:
+            radial-gradient(circle at 8% 0%, rgba(79, 70, 229, .13), transparent 34%),
+            radial-gradient(circle at 92% 10%, rgba(5, 150, 105, .13), transparent 34%),
+            #ffffff;
+          box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
+        }
+
+        .sa-project-hero h2 {
+          margin: 0;
+          color: #0f172a;
+          font-size: clamp(24px, 3vw, 36px);
+          letter-spacing: -.04em;
+        }
+
+        .sa-project-hero p {
+          margin: 8px 0 0;
+          max-width: 860px;
+          color: #64748b;
+          line-height: 1.7;
+        }
+
+        .sa-project-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          margin-top: 20px;
+        }
+
+        .sa-project-stat {
+          border: 1px solid #e2e8f0;
+          border-radius: 22px;
+          background: #ffffff;
+          padding: 18px;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, .07);
+        }
+
+        .sa-project-stat span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .sa-project-stat strong {
+          display: block;
+          margin-top: 8px;
+          color: #0f172a;
+          font-size: 30px;
+          line-height: 1;
+        }
+
+        .sa-dept-bars {
+          display: grid;
+          gap: 12px;
+        }
+
+        .sa-dept-bar-card {
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+          padding: 14px;
+          background: #ffffff;
+        }
+
+        .sa-dept-bar-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .sa-dept-bar-head strong {
+          color: #0f172a;
+          font-size: 14px;
+        }
+
+        .sa-dept-bar-head span {
+          color: #4338ca;
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .sa-dept-track,
+        .sa-project-chart-track {
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e2e8f0;
+        }
+
+        .sa-dept-track {
+          height: 10px;
+          margin-top: 10px;
+        }
+
+        .sa-dept-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #059669);
+        }
+
+        .sa-dept-bar-card p {
+          margin: 8px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        .sa-project-chart {
+          display: grid;
+          gap: 10px;
+        }
+
+        .sa-project-chart-row {
+          display: grid;
+          grid-template-columns: 56px minmax(0, 1fr) 48px;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .sa-project-chart-row span,
+        .sa-project-chart-row strong {
+          color: #334155;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .sa-project-chart-track {
+          height: 12px;
+        }
+
+        .sa-project-chart-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
+        }
+
+        @media (max-width: 980px) {
+          .sa-project-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 620px) {
+          .sa-project-stats {
+            grid-template-columns: 1fr;
+          }
+
+          .sa-project-hero {
+            border-radius: 20px;
+            padding: 16px;
+          }
+        }
+      `}</style>
+
       <section className="hero">
         <div>
           <span className="kicker">Platform Super Admin</span>
@@ -158,7 +458,8 @@ export default function SuperAdminDashboard({ setPage }) {
             Create companies, manage every tenant, reset any user password,
             change designations, edit complete user profiles, monitor
             attendance, holidays, WFH/Field requests, leave approvals, comp-off
-            credits and audit every action across the SaaS platform.
+            credits, projects, department progress and audit every action across
+            the SaaS platform.
           </p>
         </div>
 
@@ -177,6 +478,14 @@ export default function SuperAdminDashboard({ setPage }) {
             onClick={() => goTo('users')}
           >
             Manage Users
+          </button>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('projects')}
+          >
+            Projects
           </button>
 
           <button
@@ -234,14 +543,150 @@ export default function SuperAdminDashboard({ setPage }) {
         )}
       </section>
 
+      <section className="sa-project-hero">
+        <div className="toolbar">
+          <div>
+            <span className="kicker">Managing Director Project Analytics</span>
+            <h2>Department Performance & Project Progress</h2>
+            <p>
+              Track top-performing departments, active projects, completed
+              projects, team leader performance and daily project progress from
+              one executive dashboard.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="primary"
+            onClick={() => goTo('projects')}
+          >
+            Open Projects
+          </button>
+        </div>
+
+        <div className="sa-project-stats">
+          <div className="sa-project-stat">
+            <span>Total Projects</span>
+            <strong>{projectSummary.total_projects || stats['Total Projects'] || 0}</strong>
+          </div>
+
+          <div className="sa-project-stat">
+            <span>Active Projects</span>
+            <strong>{projectSummary.active_projects || stats['Active Projects'] || 0}</strong>
+          </div>
+
+          <div className="sa-project-stat">
+            <span>Completed Projects</span>
+            <strong>{projectSummary.completed_projects || stats['Completed Projects'] || 0}</strong>
+          </div>
+
+          <div className="sa-project-stat">
+            <span>Avg. Progress</span>
+            <strong>{projectSummary.average_progress || 0}%</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Top Performing Departments</h3>
+              <p>
+                Ranking is based on project completion rate and active project
+                performance score.
+              </p>
+            </div>
+          </div>
+
+          <DepartmentPerformanceBars rows={topDepartments} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Daily Project Progress Graph</h3>
+              <p>
+                Average daily progress from all project progress updates.
+              </p>
+            </div>
+          </div>
+
+          <ProjectProgressChart rows={projectDailyChart} />
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Department Project Performance</h3>
+              <p>
+                Department-wise total, active, completed and completion rate.
+              </p>
+            </div>
+          </div>
+
+          <Table rows={departmentPerformanceRows} maxColumns={8} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Team Leader Project Performance</h3>
+              <p>
+                Project completion and active project status by Team Leader.
+              </p>
+            </div>
+          </div>
+
+          <Table rows={teamLeaderPerformanceRows} maxColumns={8} />
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Active Projects</h3>
+              <p>Current projects still open for daily progress updates.</p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('projects')}
+            >
+              Manage Projects
+            </button>
+          </div>
+
+          <Table rows={activeProjectRows} maxColumns={8} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Completed Projects</h3>
+              <p>
+                Completed projects are kept here for dashboard reporting and
+                removed from active handover dropdowns.
+              </p>
+            </div>
+          </div>
+
+          <Table rows={completedProjectRows} maxColumns={8} />
+        </div>
+      </section>
+
       <section className="two-col">
         <div className="panel">
           <div className="toolbar">
             <div>
               <h3>Companies / Tenants</h3>
               <p>
-                Tenant-wise overview including users, employees, attendance,
-                leaves, WFH/Field requests and open tickets.
+                Tenant-wise overview including users, employees, projects,
+                attendance, leaves, WFH/Field requests and open tickets.
               </p>
             </div>
 
@@ -374,6 +819,14 @@ export default function SuperAdminDashboard({ setPage }) {
               onClick={() => goTo('employees')}
             >
               Employee Master
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('projects')}
+            >
+              Project Management
             </button>
 
             <button

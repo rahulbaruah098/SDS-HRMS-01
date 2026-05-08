@@ -145,6 +145,90 @@ function capabilityLabel(data, employee) {
   return labels.length ? labels.join(' + ') : 'No additional capability mapped';
 }
 
+function normalizeProjectStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+
+  if (['completed', 'complete', 'done', 'closed', 'inactive'].includes(status)) {
+    return 'completed';
+  }
+
+  if (['on_hold', 'on-hold', 'hold'].includes(status)) {
+    return 'on_hold';
+  }
+
+  return 'active';
+}
+
+function projectName(project = {}) {
+  return project.name || project.project_name || project.title || 'Untitled Project';
+}
+
+function percentValue(value) {
+  const number = Number(value || 0);
+
+  if (Number.isNaN(number)) {
+    return 0;
+  }
+
+  return Math.min(Math.max(number, 0), 100);
+}
+
+function MiniProgressBar({ value }) {
+  const percentage = percentValue(value);
+
+  return (
+    <div className="emp-project-mini-progress">
+      <div className="emp-project-mini-progress-track">
+        <div
+          className="emp-project-mini-progress-fill"
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+      <strong>{percentage}%</strong>
+    </div>
+  );
+}
+
+function ProjectChart({ title, rows = [] }) {
+  const hasRows = rows.length > 0;
+
+  return (
+    <div className="panel emp-project-chart-card">
+      <div className="toolbar">
+        <div>
+          <h3>{title}</h3>
+          <p>Daily progress trend based on submitted project updates.</p>
+        </div>
+      </div>
+
+      {!hasRows && <div className="empty">No project progress data found.</div>}
+
+      {hasRows && (
+        <div className="emp-project-chart">
+          {rows.map((row) => {
+            const value = percentValue(row.average_progress);
+
+            return (
+              <div className="emp-project-bar-row" key={row.date}>
+                <span>{String(row.date || '').slice(5) || '—'}</span>
+
+                <div className="emp-project-bar-track">
+                  <div
+                    className="emp-project-bar-fill"
+                    style={{ width: `${value}%` }}
+                  />
+                </div>
+
+                <strong>{value}%</strong>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeeDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [attendanceStatus, setAttendanceStatus] = useState(null);
@@ -304,6 +388,11 @@ export default function EmployeeDashboard({ setPage }) {
       isTruthy(employee?.is_reporting_officer),
   );
 
+  const isTeamLeader = Boolean(data?.is_team_leader || isTruthy(employee?.is_team_leader));
+  const isReportingOfficer = Boolean(
+    data?.is_reporting_officer || isTruthy(employee?.is_reporting_officer),
+  );
+
   const holiday = attendanceStatus?.holiday || data?.holiday || {};
   const todayAttendance =
     attendanceStatus?.attendance || data?.today_attendance || null;
@@ -312,6 +401,31 @@ export default function EmployeeDashboard({ setPage }) {
     attendanceStatus?.available_modes ||
     data?.available_attendance_modes ||
     ['office'];
+
+  const projectDashboard = data?.project_dashboard || {};
+  const projectSummary = projectDashboard?.summary || {};
+  const activeProjects = data?.active_projects || projectDashboard?.active_projects || [];
+  const completedProjects = data?.completed_projects || projectDashboard?.completed_projects || [];
+  const myProjects = data?.projects || projectDashboard?.my_projects || [];
+  const teamLeaderProjects =
+    data?.team_leader_projects || projectDashboard?.team_leader_projects || [];
+  const reportingProjects =
+    data?.reporting_projects || projectDashboard?.reporting_projects || [];
+
+  const projectDailyChart =
+    data?.project_daily_progress_chart ||
+    projectDashboard?.daily_progress_chart ||
+    [];
+
+  const teamProjectDailyChart =
+    data?.team_project_daily_progress_chart ||
+    projectDashboard?.team_daily_progress_chart ||
+    [];
+
+  const reportingProjectDailyChart =
+    data?.reporting_project_daily_progress_chart ||
+    projectDashboard?.reporting_daily_progress_chart ||
+    [];
 
   const availableCompOffs = useMemo(
     () => compOffs.filter((item) => item.status === 'available'),
@@ -515,10 +629,254 @@ export default function EmployeeDashboard({ setPage }) {
     created_at: formatDateTime(row.created_at),
   }));
 
+  const projectRows = myProjects.map((project) => ({
+    project_name: projectName(project),
+    status: statusLabel(project.status),
+    department: project.department || '—',
+    team_leader: project.team_leader_name || '—',
+    progress: `${percentValue(project.latest_progress)}%`,
+    last_update: project.latest_progress_date || '—',
+    updated_by: project.latest_progress_by_name || '—',
+  }));
+
+  const teamProjectRows = teamLeaderProjects.map((project) => ({
+    project_name: projectName(project),
+    status: statusLabel(project.status),
+    department: project.department || '—',
+    assigned_members: Array.isArray(project.assigned_members)
+      ? project.assigned_members.map((member) => member.employee_name).filter(Boolean).join(', ') || '—'
+      : '—',
+    collaborators: Array.isArray(project.collaborators)
+      ? project.collaborators.map((member) => member.employee_name).filter(Boolean).join(', ') || '—'
+      : '—',
+    progress: `${percentValue(project.latest_progress)}%`,
+    last_update: project.latest_progress_date || '—',
+  }));
+
+  const reportingProjectRows = reportingProjects.map((project) => ({
+    project_name: projectName(project),
+    status: statusLabel(project.status),
+    department: project.department || '—',
+    team_leader: project.team_leader_name || '—',
+    progress: `${percentValue(project.latest_progress)}%`,
+    last_update: project.latest_progress_date || '—',
+  }));
+
+  const teamLeaderPerformanceRows = (
+    projectDashboard?.team_leader_performance ||
+    projectDashboard?.reporting_team_leader_performance ||
+    []
+  ).map((row) => ({
+    team_leader: row.team_leader_name || '—',
+    department: row.department || '—',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+  }));
+
+  const recentProjectProgressRows = (projectDashboard?.recent_progress || []).map((row) => ({
+    project: row.project_name || '—',
+    employee: row.employee_name || '—',
+    progress: `${percentValue(row.progress_percent)}%`,
+    note: row.note || row.description || '—',
+    date: row.date || '—',
+  }));
+
   const todayStatus = statusLabel(todayAttendance?.status || 'Not checked-in');
 
   return (
     <div className="page-grid employee-dashboard-page">
+      <style>{`
+        .emp-project-dashboard {
+          display: grid;
+          gap: 18px;
+        }
+
+        .emp-project-hero {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid #e2e8f0;
+          border-radius: 26px;
+          padding: 22px;
+          background:
+            radial-gradient(circle at 12% 0%, rgba(79, 70, 229, .12), transparent 34%),
+            radial-gradient(circle at 92% 10%, rgba(5, 150, 105, .12), transparent 34%),
+            #ffffff;
+          box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
+        }
+
+        .emp-project-hero h3 {
+          margin: 0;
+          color: #0f172a;
+          font-size: clamp(22px, 3vw, 32px);
+          letter-spacing: -.04em;
+        }
+
+        .emp-project-hero p {
+          margin: 8px 0 0;
+          color: #64748b;
+          line-height: 1.65;
+        }
+
+        .emp-project-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin-top: 18px;
+        }
+
+        .emp-project-stat {
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background: #ffffff;
+          padding: 16px;
+          box-shadow: 0 12px 28px rgba(15, 23, 42, .06);
+        }
+
+        .emp-project-stat span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .emp-project-stat strong {
+          display: block;
+          margin-top: 8px;
+          color: #0f172a;
+          font-size: 28px;
+          line-height: 1;
+        }
+
+        .emp-project-card-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .emp-project-card {
+          border: 1px solid #e2e8f0;
+          border-radius: 22px;
+          padding: 16px;
+          background: #ffffff;
+          box-shadow: 0 12px 32px rgba(15, 23, 42, .07);
+        }
+
+        .emp-project-card h4 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 16px;
+        }
+
+        .emp-project-card p {
+          margin: 6px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .emp-project-status {
+          display: inline-flex;
+          margin-top: 12px;
+          border-radius: 999px;
+          padding: 6px 10px;
+          font-size: 11px;
+          font-weight: 900;
+          color: #4338ca;
+          background: #eef2ff;
+        }
+
+        .emp-project-status.active {
+          color: #047857;
+          background: #ecfdf5;
+        }
+
+        .emp-project-status.completed {
+          color: #4338ca;
+          background: #eef2ff;
+        }
+
+        .emp-project-mini-progress {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          margin-top: 14px;
+        }
+
+        .emp-project-mini-progress-track {
+          height: 9px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e2e8f0;
+        }
+
+        .emp-project-mini-progress-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #059669);
+        }
+
+        .emp-project-mini-progress strong {
+          color: #0f172a;
+          font-size: 13px;
+        }
+
+        .emp-project-chart {
+          display: grid;
+          gap: 10px;
+        }
+
+        .emp-project-bar-row {
+          display: grid;
+          grid-template-columns: 56px minmax(0, 1fr) 48px;
+          gap: 10px;
+          align-items: center;
+        }
+
+        .emp-project-bar-row span,
+        .emp-project-bar-row strong {
+          color: #334155;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .emp-project-bar-track {
+          height: 12px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e2e8f0;
+        }
+
+        .emp-project-bar-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
+        }
+
+        @media (max-width: 1024px) {
+          .emp-project-stats,
+          .emp-project-card-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 640px) {
+          .emp-project-stats,
+          .emp-project-card-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .emp-project-hero {
+            border-radius: 20px;
+            padding: 16px;
+          }
+        }
+      `}</style>
+
       <section className="hero employee-hero">
         <div className="employee-identity">
           <span className="kicker">Employee Self Service</span>
@@ -529,7 +887,7 @@ export default function EmployeeDashboard({ setPage }) {
 
           <p className="employee-dashboard-subtitle">
             Employee dashboard for attendance, leave, profile, tickets,
-            notifications, and assigned approval responsibilities.
+            notifications, assigned approval responsibilities, and project progress.
           </p>
 
           <div className="employee-badges">
@@ -576,6 +934,14 @@ export default function EmployeeDashboard({ setPage }) {
               onClick={() => goTo('leave_requests')}
             >
               Apply Leave
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('projects')}
+            >
+              Projects
             </button>
 
             <button
@@ -629,6 +995,10 @@ export default function EmployeeDashboard({ setPage }) {
 
         <Stat label="Pending WFH/Field" value={pendingModeRequests.length} />
 
+        <Stat label="Active Projects" value={projectSummary.my_active_projects || activeProjects.length || 0} />
+
+        <Stat label="Completed Projects" value={projectSummary.my_completed_projects || completedProjects.length || 0} />
+
         <Stat label="Team Members" value={data?.team_members?.length || 0} />
 
         <Stat
@@ -657,6 +1027,164 @@ export default function EmployeeDashboard({ setPage }) {
             <p>No dashboard data available.</p>
           </div>
         )}
+      </section>
+
+      <section className="emp-project-dashboard">
+        <div className="emp-project-hero">
+          <div className="toolbar">
+            <div>
+              <span className="kicker">Project Progress</span>
+              <h3>My Projects & Daily Progress</h3>
+              <p>
+                Active projects stay visible for daily progress updates. Completed
+                projects are preserved here for dashboard reporting and analytics.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="primary"
+              onClick={() => goTo('projects')}
+            >
+              Open Projects
+            </button>
+          </div>
+
+          <div className="emp-project-stats">
+            <div className="emp-project-stat">
+              <span>My Total Projects</span>
+              <strong>{projectSummary.my_total_projects || myProjects.length || 0}</strong>
+            </div>
+
+            <div className="emp-project-stat">
+              <span>My Active</span>
+              <strong>{projectSummary.my_active_projects || activeProjects.length || 0}</strong>
+            </div>
+
+            <div className="emp-project-stat">
+              <span>My Completed</span>
+              <strong>{projectSummary.my_completed_projects || completedProjects.length || 0}</strong>
+            </div>
+
+            <div className="emp-project-stat">
+              <span>Average Progress</span>
+              <strong>{projectSummary.average_progress || 0}%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="emp-project-card-grid">
+          {activeProjects.slice(0, 6).map((project) => {
+            const status = normalizeProjectStatus(project.status);
+
+            return (
+              <div className="emp-project-card" key={project._id}>
+                <h4>{projectName(project)}</h4>
+                <p>
+                  {project.department || 'No department'}
+                  {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
+                </p>
+
+                <span className={`emp-project-status ${status}`}>
+                  {statusLabel(status)}
+                </span>
+
+                <MiniProgressBar value={project.latest_progress} />
+
+                <p>
+                  Last update: {project.latest_progress_date || 'No update yet'}
+                </p>
+              </div>
+            );
+          })}
+
+          {!activeProjects.length && (
+            <div className="panel">
+              <p>No active projects assigned yet.</p>
+            </div>
+          )}
+        </div>
+
+        <ProjectChart title="My Daily Project Progress" rows={projectDailyChart} />
+
+        {isTeamLeader && (
+          <>
+            <section className="panel">
+              <div className="toolbar">
+                <div>
+                  <h3>Team Leader Project View</h3>
+                  <p>
+                    Projects created or managed by you as Team Leader, including
+                    assigned members and collaborators.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => goTo('projects')}
+                >
+                  Manage Projects
+                </button>
+              </div>
+
+              <div className="stats-grid">
+                <Stat label="Team Projects" value={projectSummary.team_total_projects || 0} />
+                <Stat label="Team Active" value={projectSummary.team_active_projects || 0} />
+                <Stat label="Team Completed" value={projectSummary.team_completed_projects || 0} />
+                <Stat label="Team Members" value={data?.team_members?.length || 0} />
+              </div>
+
+              <Table rows={teamProjectRows} maxColumns={8} />
+            </section>
+
+            <ProjectChart title="Team Project Progress Graph" rows={teamProjectDailyChart} />
+          </>
+        )}
+
+        {isReportingOfficer && (
+          <>
+            <section className="panel">
+              <div className="toolbar">
+                <div>
+                  <h3>Reporting Officer Project View</h3>
+                  <p>
+                    Department/team-wise progress for team leaders mapped under
+                    your reporting officer assignment.
+                  </p>
+                </div>
+              </div>
+
+              <div className="stats-grid">
+                <Stat label="Reporting Projects" value={projectSummary.reporting_total_projects || 0} />
+                <Stat label="Reporting Active" value={projectSummary.reporting_active_projects || 0} />
+                <Stat label="Reporting Completed" value={projectSummary.reporting_completed_projects || 0} />
+                <Stat label="Reporting Members" value={data?.reporting_members?.length || 0} />
+              </div>
+
+              <Table rows={reportingProjectRows} maxColumns={8} />
+            </section>
+
+            <ProjectChart title="Reporting Team Project Progress Graph" rows={reportingProjectDailyChart} />
+
+            <section className="panel">
+              <h3>Team Leader Performance Under Reporting Officer</h3>
+              <Table rows={teamLeaderPerformanceRows} maxColumns={8} />
+            </section>
+          </>
+        )}
+
+        <section className="two-col">
+          <div className="panel">
+            <h3>My Project Records</h3>
+            <Table rows={projectRows} maxColumns={8} />
+          </div>
+
+          <div className="panel">
+            <h3>Recent Project Progress Updates</h3>
+            <Table rows={recentProjectProgressRows} maxColumns={8} />
+          </div>
+        </section>
       </section>
 
       {isMappedApprover && (

@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Briefcase,
   CalendarDays,
   Clock,
   LayoutDashboard,
@@ -73,11 +74,14 @@ function moduleGroup(key) {
       'employees',
       'departments',
       'designations',
-      'projects',
       'states',
     ].includes(key)
   ) {
     return 'Employee Setup';
+  }
+
+  if (key === 'projects') {
+    return 'Projects';
   }
 
   if (
@@ -137,12 +141,13 @@ function groupOrder(group) {
   const order = {
     Administration: 1,
     'Employee Setup': 2,
-    'Attendance & Leave': 3,
-    Reports: 4,
-    'Payroll & Finance': 5,
-    'Talent & Performance': 6,
-    'Support & Records': 7,
-    Account: 8,
+    Projects: 3,
+    'Attendance & Leave': 4,
+    Reports: 5,
+    'Payroll & Finance': 6,
+    'Talent & Performance': 7,
+    'Support & Records': 8,
+    Account: 9,
     Modules: 99,
   };
 
@@ -216,6 +221,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     ['leave_requests', 'leave_balances', 'leave_types'].includes(key),
   ).length;
 
+  const projectCount = modules.filter(([key]) => key === 'projects').length;
+
   const reportsCount = modules.filter(([key]) => key === 'reports').length;
 
   const displayRole = getDisplayRole(safeUser);
@@ -269,7 +276,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
           <div>
             <b>HRMS</b>
-            <small>Attendance • Leave • Payroll</small>
+            <small>Attendance • Leave • Projects</small>
           </div>
         </div>
 
@@ -311,6 +318,13 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <CalendarDays size={16} />
             <span>{leaveCount} Leave Modules</span>
           </div>
+
+          {projectCount > 0 && (
+            <div>
+              <Briefcase size={16} />
+              <span>{projectCount} Projects Module</span>
+            </div>
+          )}
 
           {reportsCount > 0 && (
             <div>

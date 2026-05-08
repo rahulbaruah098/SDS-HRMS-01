@@ -186,6 +186,41 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function normalizeProjectStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+
+  if (['completed', 'complete', 'done', 'closed', 'inactive'].includes(status)) {
+    return 'completed';
+  }
+
+  if (['on_hold', 'on-hold', 'hold'].includes(status)) {
+    return 'on_hold';
+  }
+
+  if (['active', 'ongoing', 'in_progress', 'in-progress', 'open'].includes(status)) {
+    return 'active';
+  }
+
+  return status || 'active';
+}
+
+function isActiveProject(project = {}) {
+  return (
+    normalizeProjectStatus(project.status) === 'active' &&
+    project.is_deleted !== true
+  );
+}
+
+function projectDisplayName(project = {}) {
+  return (
+    project.name ||
+    project.project_name ||
+    project.title ||
+    project._id ||
+    'Unnamed Project'
+  );
+}
+
 function leaveTypeLabel(value) {
   const normalized = String(value || '').trim().toUpperCase();
 
@@ -262,6 +297,11 @@ export default function ModuleCrud({ collection }) {
   const [saving, setSaving] = useState(false);
 
   const isSystemGenerated = SYSTEM_GENERATED_COLLECTIONS.has(collection);
+
+  const activeProjectOptions = useMemo(
+    () => projectOptions.filter((project) => isActiveProject(project)),
+    [projectOptions],
+  );
 
   const createFields = useMemo(() => {
     if (collection === 'leave_requests') {
@@ -356,14 +396,16 @@ export default function ModuleCrud({ collection }) {
   }
 
   async function loadProjectOptions(nextTenant = tenant) {
-    const params = {};
+    const params = {
+      status: 'active',
+    };
 
     if (isSuperAdmin() && nextTenant.trim()) {
       params.tenant_id = nextTenant.trim();
     }
 
     const data = await api(`/projects${buildQuery(params)}`);
-    const items = data.items || [];
+    const items = (data.items || []).filter((project) => isActiveProject(project));
 
     setProjectOptions(items);
     return items;
@@ -374,7 +416,7 @@ export default function ModuleCrud({ collection }) {
       const data = await api('/leave_requests/options');
 
       setTaskHandoverOptions(data.task_handover_options || []);
-      setProjectOptions(data.projects || []);
+      setProjectOptions((data.projects || []).filter((project) => isActiveProject(project)));
     } catch (error) {
       console.warn('Unable to load leave options:', error);
       setTaskHandoverOptions([]);
@@ -763,12 +805,12 @@ export default function ModuleCrud({ collection }) {
   }
 
   function applyProjectHandoverChange(state, setState, projectId) {
-    const selectedProject = projectOptions.find((project) => project._id === projectId);
+    const selectedProject = activeProjectOptions.find((project) => project._id === projectId);
 
     setState({
       ...state,
       project_handover_id: projectId,
-      project_handover_name: selectedProject?.name || '',
+      project_handover_name: selectedProject ? projectDisplayName(selectedProject) : '',
     });
   }
 
@@ -824,14 +866,19 @@ export default function ModuleCrud({ collection }) {
             applyProjectHandoverChange(state, setState, event.target.value)
           }
         >
-          <option value="">Select project</option>
+          <option value="">Select active project</option>
 
-          {projectOptions.map((project) => (
+          {activeProjectOptions.map((project) => (
             <option key={project._id} value={project._id}>
-              {project.name || project.title || project._id}
+              {projectDisplayName(project)}
+              {project.department ? ` — ${project.department}` : ''}
             </option>
           ))}
         </select>
+
+        {!activeProjectOptions.length && (
+          <small>No active project found. Completed projects are hidden from handover.</small>
+        )}
       </label>
     );
   }
@@ -1565,7 +1612,8 @@ export default function ModuleCrud({ collection }) {
           {collection === 'leave_requests' && (
             <p>
               Leave apply form is simplified to Leave Type, Reason, From Date,
-              Upto Date, Task Handover To, and Project Handover.
+              Upto Date, Task Handover To, and Project Handover. Only active
+              projects are shown in the Project Handover dropdown.
             </p>
           )}
         </div>

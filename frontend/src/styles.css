@@ -1213,6 +1213,128 @@ tr:hover td {
   text-transform: capitalize;
 }
 
+/* Project module global polish */
+
+.projects-page,
+.emp-project-dashboard {
+  animation: softFadeUp .28s ease both;
+}
+
+.projects-page .panel,
+.emp-project-dashboard .panel,
+.sa-project-hero,
+.projects-hero,
+.project-form,
+.project-card,
+.emp-project-hero {
+  position: relative;
+}
+
+.project-summary-card,
+.emp-project-stat,
+.sa-project-stat,
+.emp-project-card,
+.project-card,
+.project-form {
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+
+.project-summary-card:hover,
+.emp-project-stat:hover,
+.sa-project-stat:hover,
+.emp-project-card:hover,
+.project-card:hover,
+.project-form:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+.project-status,
+.emp-project-status,
+.table-project-status {
+  text-transform: capitalize;
+}
+
+.project-progress-track,
+.emp-project-mini-progress-track,
+.emp-project-bar-track,
+.sa-project-chart-track,
+.sa-dept-track {
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.project-progress-fill,
+.emp-project-mini-progress-fill,
+.emp-project-bar-fill,
+.sa-project-chart-fill,
+.sa-dept-fill {
+  min-width: 4px;
+  transition: width .35s ease;
+}
+
+.project-select-list::-webkit-scrollbar,
+.sidebar nav::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.project-select-list::-webkit-scrollbar-thumb,
+.sidebar nav::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 999px;
+}
+
+.project-select-list::-webkit-scrollbar-track,
+.sidebar nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.project-check:focus-visible,
+.project-btn:focus-visible,
+.project-tab:focus-visible,
+.sidebar button:focus-visible,
+.primary:focus-visible,
+.secondary:focus-visible,
+.danger:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, .22);
+  outline-offset: 2px;
+}
+
+.project-completed-note,
+.project-alert,
+.holiday-banner,
+.mode-note,
+.inline-message {
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .04);
+}
+
+.emp-project-chart-card,
+.sa-project-hero {
+  isolation: isolate;
+}
+
+.emp-project-chart-card::before,
+.sa-project-hero::before,
+.emp-project-hero::before,
+.projects-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .68), transparent 54%);
+  z-index: 0;
+}
+
+.emp-project-chart-card > *,
+.sa-project-hero > *,
+.emp-project-hero > *,
+.projects-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* Reports */
 
 .report-tab-row {
@@ -1356,6 +1478,18 @@ tr:hover td {
   scroll-margin-top: 24px;
 }
 
+@keyframes softFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Mobile menu */
 
 .mobile-menu-btn {
@@ -1460,6 +1594,21 @@ tr:hover td {
   }
 }
 
+@media (max-width: 980px) {
+  .project-summary-grid,
+  .emp-project-stats,
+  .sa-project-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .project-form-grid,
+  .project-grid-two,
+  .project-progress-form,
+  .emp-project-card-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 @media (max-width: 720px) {
   .main {
     padding: 14px;
@@ -1473,8 +1622,12 @@ tr:hover td {
   .attendance-hold-grid,
   .attendance-summary,
   .form-grid,
-  .report-summary-grid {
-    grid-template-columns: 1fr;
+  .report-summary-grid,
+  .project-summary-grid,
+  .emp-project-stats,
+  .sa-project-stats,
+  .emp-project-card-grid {
+    grid-template-columns: 1fr !important;
   }
 
   .dynamic-form label:has(textarea),
@@ -1569,6 +1722,39 @@ tr:hover td {
   .panel .dynamic-form {
     padding: 12px;
     border-radius: 16px;
+  }
+
+  .projects-hero,
+  .project-form,
+  .project-card,
+  .emp-project-hero,
+  .sa-project-hero {
+    border-radius: 20px !important;
+    padding: 16px !important;
+  }
+
+  .project-card-head,
+  .project-toolbar,
+  .toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .project-tabs,
+  .project-tab,
+  .project-btn,
+  .project-actions,
+  .hero-actions {
+    width: 100%;
+  }
+
+  .project-actions {
+    display: grid !important;
+  }
+
+  .emp-project-bar-row,
+  .sa-project-chart-row {
+    grid-template-columns: 46px minmax(0, 1fr) 42px !important;
   }
 
   table {

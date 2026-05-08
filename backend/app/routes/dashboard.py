@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, g
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required
@@ -121,6 +121,21 @@ def normalize_state(value):
     return state
 
 
+def normalize_project_status(value):
+    status = normalize_text(value).lower()
+
+    if status in {"completed", "complete", "done", "closed", "inactive"}:
+        return "completed"
+
+    if status in {"on_hold", "on-hold", "hold"}:
+        return "on_hold"
+
+    if status in {"active", "ongoing", "in_progress", "in-progress", "open"}:
+        return "active"
+
+    return status or "active"
+
+
 def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
@@ -184,6 +199,15 @@ def employee_code(employee):
         or employee.get("emp_code")
         or employee.get("code")
         or ""
+    )
+
+
+def project_name(project):
+    return (
+        project.get("name")
+        or project.get("project_name")
+        or project.get("title")
+        or "Untitled Project"
     )
 
 
@@ -465,6 +489,524 @@ def base_active_query(tenant_id):
     }
 
 
+# -----------------------------------------------------------------------------
+# Project analytics helpers
+# -----------------------------------------------------------------------------
+
+def active_project_query(tenant_id, extra=None):
+    q = {
+        "tenant_id": tenant_id,
+        "status": "active",
+        "is_deleted": {"$ne": True},
+    }
+    q.update(extra or {})
+    return q
+
+
+def completed_project_query(tenant_id, extra=None):
+    q = {
+        "tenant_id": tenant_id,
+        "status": "completed",
+        "is_deleted": {"$ne": True},
+    }
+    q.update(extra or {})
+    return q
+
+
+def project_scope_for_employee(tenant_id, emp_id):
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"created_by_employee_id": emp_id},
+            {"team_leader_id": emp_id},
+            {"assigned_to_id": emp_id},
+            {"assigned_employee_ids": emp_id},
+            {"collaborator_ids": emp_id},
+            {"collaborators.employee_id": emp_id},
+        ],
+    }
+
+
+def project_scope_for_team_leader(tenant_id, emp_id):
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"created_by_employee_id": emp_id},
+            {"team_leader_id": emp_id},
+        ],
+    }
+
+
+def project_scope_for_reporting_officer(tenant_id, team_leader_ids):
+    if not team_leader_ids:
+        return {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "_id": {"$exists": False},
+        }
+
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"created_by_employee_id": {"$in": team_leader_ids}},
+            {"team_leader_id": {"$in": team_leader_ids}},
+        ],
+    }
+
+
+def latest_project_progress_map(db, tenant_id, project_ids):
+    if not project_ids:
+        return {}
+
+    logs = list(
+        db.project_progress
+        .find({
+            "tenant_id": tenant_id,
+            "project_id": {"$in": project_ids},
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+    )
+
+    latest = {}
+
+    for log in logs:
+        project_id = log.get("project_id")
+
+        if project_id and project_id not in latest:
+            latest[project_id] = log
+
+    return latest
+
+
+def project_progress_average(db, tenant_id, project_ids):
+    if not project_ids:
+        return 0
+
+    logs = list(
+        db.project_progress
+        .find({
+            "tenant_id": tenant_id,
+            "project_id": {"$in": project_ids},
+            "is_deleted": {"$ne": True},
+        }, {"progress_percent": 1, "percentage": 1, "progress": 1})
+    )
+
+    values = []
+
+    for log in logs:
+        raw_value = (
+            log.get("progress_percent")
+            if log.get("progress_percent") is not None
+            else log.get("percentage")
+            if log.get("percentage") is not None
+            else log.get("progress")
+        )
+
+        try:
+            values.append(float(raw_value))
+        except Exception:
+            pass
+
+    if not values:
+        return 0
+
+    return round(sum(values) / len(values), 2)
+
+
+def project_daily_progress_chart(db, tenant_id, project_ids=None, days=14):
+    today = date.today()
+    start = today - timedelta(days=max(days - 1, 1))
+    match = {
+        "tenant_id": tenant_id,
+        "date": {
+            "$gte": start.isoformat(),
+            "$lte": today.isoformat(),
+        },
+        "is_deleted": {"$ne": True},
+    }
+
+    if project_ids is not None:
+        match["project_id"] = {"$in": project_ids}
+
+    logs = list(db.project_progress.find(match))
+
+    day_map = {}
+
+    for i in range(days):
+        cursor = start + timedelta(days=i)
+        day_map[cursor.isoformat()] = {
+            "date": cursor.isoformat(),
+            "updates": 0,
+            "average_progress": 0,
+            "_total": 0,
+        }
+
+    for log in logs:
+        log_date = normalize_text(log.get("date"))
+
+        if not log_date:
+            created_at = log.get("created_at")
+
+            if isinstance(created_at, datetime):
+                log_date = created_at.date().isoformat()
+
+        if log_date not in day_map:
+            continue
+
+        raw_progress = (
+            log.get("progress_percent")
+            if log.get("progress_percent") is not None
+            else log.get("percentage")
+            if log.get("percentage") is not None
+            else log.get("progress")
+        )
+
+        try:
+            progress_value = float(raw_progress)
+        except Exception:
+            progress_value = 0
+
+        day_map[log_date]["updates"] += 1
+        day_map[log_date]["_total"] += progress_value
+
+    chart = []
+
+    for row in day_map.values():
+        updates = row["updates"]
+        total = row.pop("_total", 0)
+        row["average_progress"] = round(total / updates, 2) if updates else 0
+        chart.append(row)
+
+    return chart
+
+
+def serialize_project_cards(db, tenant_id, projects):
+    project_ids = [str(project["_id"]) for project in projects]
+    latest_map = latest_project_progress_map(db, tenant_id, project_ids)
+
+    cards = []
+
+    for project in projects:
+        pid = str(project["_id"])
+        latest = latest_map.get(pid) or {}
+
+        latest_progress = (
+            latest.get("progress_percent")
+            if latest.get("progress_percent") is not None
+            else latest.get("percentage")
+            if latest.get("percentage") is not None
+            else latest.get("progress")
+        )
+
+        try:
+            latest_progress = float(latest_progress)
+        except Exception:
+            latest_progress = 0
+
+        cards.append({
+            "_id": pid,
+            "name": project_name(project),
+            "project_name": project_name(project),
+            "status": normalize_project_status(project.get("status")),
+            "department": project.get("department", ""),
+            "team_leader_id": project.get("team_leader_id", ""),
+            "team_leader_name": project.get("team_leader_name", ""),
+            "assigned_employee_ids": project.get("assigned_employee_ids", []),
+            "assigned_members": project.get("assigned_members", []),
+            "collaborator_ids": project.get("collaborator_ids", []),
+            "collaborators": project.get("collaborators", []),
+            "created_at": project.get("created_at"),
+            "completed_at": project.get("completed_at"),
+            "latest_progress": latest_progress,
+            "latest_progress_note": latest.get("note") or latest.get("description") or "",
+            "latest_progress_date": latest.get("date") or "",
+            "latest_progress_by_name": latest.get("employee_name") or latest.get("created_by_name") or "",
+        })
+
+    return cards
+
+
+def department_project_performance(db, tenant_id):
+    projects = list(
+        db.projects
+        .find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        }, {
+            "department": 1,
+            "status": 1,
+        })
+    )
+
+    department_map = {}
+
+    for project in projects:
+        department = normalize_text(project.get("department")) or "Unassigned"
+
+        if department not in department_map:
+            department_map[department] = {
+                "department": department,
+                "total_projects": 0,
+                "active_projects": 0,
+                "completed_projects": 0,
+                "completion_rate": 0,
+                "score": 0,
+            }
+
+        row = department_map[department]
+        row["total_projects"] += 1
+
+        status = normalize_project_status(project.get("status"))
+
+        if status == "active":
+            row["active_projects"] += 1
+
+        if status == "completed":
+            row["completed_projects"] += 1
+
+    for row in department_map.values():
+        total = row["total_projects"]
+        completed = row["completed_projects"]
+        active = row["active_projects"]
+
+        row["completion_rate"] = round((completed / total) * 100, 2) if total else 0
+        row["score"] = round(row["completion_rate"] + min(active * 2, 20), 2)
+
+    return sorted(
+        department_map.values(),
+        key=lambda item: (item["score"], item["completed_projects"], item["active_projects"]),
+        reverse=True,
+    )
+
+
+def team_leader_project_performance(db, tenant_id, team_leader_ids=None):
+    q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }
+
+    if team_leader_ids is not None:
+        q["team_leader_id"] = {"$in": team_leader_ids}
+
+    projects = list(
+        db.projects
+        .find(q, {
+            "team_leader_id": 1,
+            "team_leader_name": 1,
+            "status": 1,
+            "department": 1,
+        })
+    )
+
+    leader_map = {}
+
+    for project in projects:
+        leader_id = project.get("team_leader_id") or "unassigned"
+        leader_name = project.get("team_leader_name") or "Unassigned"
+
+        if leader_id not in leader_map:
+            leader_map[leader_id] = {
+                "team_leader_id": leader_id,
+                "team_leader_name": leader_name,
+                "department": project.get("department", ""),
+                "total_projects": 0,
+                "active_projects": 0,
+                "completed_projects": 0,
+                "completion_rate": 0,
+            }
+
+        row = leader_map[leader_id]
+        row["total_projects"] += 1
+
+        status = normalize_project_status(project.get("status"))
+
+        if status == "active":
+            row["active_projects"] += 1
+
+        if status == "completed":
+            row["completed_projects"] += 1
+
+    for row in leader_map.values():
+        total = row["total_projects"]
+        completed = row["completed_projects"]
+        row["completion_rate"] = round((completed / total) * 100, 2) if total else 0
+
+    return sorted(
+        leader_map.values(),
+        key=lambda item: (item["completion_rate"], item["completed_projects"]),
+        reverse=True,
+    )
+
+
+def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_member_ids=None, reporting_member_ids=None):
+    team_member_ids = team_member_ids or []
+    reporting_member_ids = reporting_member_ids or []
+
+    my_scope = project_scope_for_employee(tenant_id, emp_id)
+    my_projects = list(
+        db.projects
+        .find(my_scope)
+        .sort("created_at", -1)
+        .limit(50)
+    )
+
+    active_projects = [
+        project for project in my_projects
+        if normalize_project_status(project.get("status")) == "active"
+    ]
+
+    completed_projects = [
+        project for project in my_projects
+        if normalize_project_status(project.get("status")) == "completed"
+    ]
+
+    team_leader_projects = []
+    team_project_ids = []
+
+    if is_team_leader_capability(employee, roles):
+        team_leader_projects = list(
+            db.projects
+            .find(project_scope_for_team_leader(tenant_id, emp_id))
+            .sort("created_at", -1)
+            .limit(100)
+        )
+        team_project_ids = [str(project["_id"]) for project in team_leader_projects]
+
+    reporting_projects = []
+    reporting_project_ids = []
+
+    if is_reporting_officer_capability(employee, roles):
+        team_leaders = list(
+            db.employees
+            .find({
+                "tenant_id": tenant_id,
+                "reporting_officer_id": emp_id,
+                "status": {"$ne": "Inactive"},
+                "is_deleted": {"$ne": True},
+            }, {"_id": 1})
+        )
+
+        team_leader_ids = [str(row["_id"]) for row in team_leaders]
+        reporting_projects = list(
+            db.projects
+            .find(project_scope_for_reporting_officer(tenant_id, team_leader_ids))
+            .sort("created_at", -1)
+            .limit(200)
+        )
+        reporting_project_ids = [str(project["_id"]) for project in reporting_projects]
+
+    all_project_ids = list({
+        str(project["_id"])
+        for project in my_projects + team_leader_projects + reporting_projects
+    })
+
+    recent_progress = list(
+        db.project_progress
+        .find({
+            "tenant_id": tenant_id,
+            "project_id": {"$in": all_project_ids} if all_project_ids else [],
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(20)
+    )
+
+    return {
+        "my_projects": serialize_project_cards(db, tenant_id, my_projects),
+        "active_projects": serialize_project_cards(db, tenant_id, active_projects),
+        "completed_projects": serialize_project_cards(db, tenant_id, completed_projects),
+        "team_leader_projects": serialize_project_cards(db, tenant_id, team_leader_projects),
+        "reporting_projects": serialize_project_cards(db, tenant_id, reporting_projects),
+        "recent_progress": clean_doc(recent_progress),
+        "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
+        "team_daily_progress_chart": project_daily_progress_chart(db, tenant_id, team_project_ids, 14),
+        "reporting_daily_progress_chart": project_daily_progress_chart(db, tenant_id, reporting_project_ids, 14),
+        "team_leader_performance": team_leader_project_performance(
+            db,
+            tenant_id,
+            [emp_id] if is_team_leader_capability(employee, roles) else [],
+        ) if is_team_leader_capability(employee, roles) else [],
+        "reporting_team_leader_performance": team_leader_project_performance(
+            db,
+            tenant_id,
+            [
+                str(row["_id"])
+                for row in db.employees.find({
+                    "tenant_id": tenant_id,
+                    "reporting_officer_id": emp_id,
+                    "status": {"$ne": "Inactive"},
+                    "is_deleted": {"$ne": True},
+                }, {"_id": 1})
+            ],
+        ) if is_reporting_officer_capability(employee, roles) else [],
+        "summary": {
+            "my_total_projects": len(my_projects),
+            "my_active_projects": len(active_projects),
+            "my_completed_projects": len(completed_projects),
+            "team_total_projects": len(team_leader_projects),
+            "team_active_projects": len([
+                project for project in team_leader_projects
+                if normalize_project_status(project.get("status")) == "active"
+            ]),
+            "team_completed_projects": len([
+                project for project in team_leader_projects
+                if normalize_project_status(project.get("status")) == "completed"
+            ]),
+            "reporting_total_projects": len(reporting_projects),
+            "reporting_active_projects": len([
+                project for project in reporting_projects
+                if normalize_project_status(project.get("status")) == "active"
+            ]),
+            "reporting_completed_projects": len([
+                project for project in reporting_projects
+                if normalize_project_status(project.get("status")) == "completed"
+            ]),
+            "average_progress": project_progress_average(db, tenant_id, all_project_ids),
+        },
+    }
+
+
+def tenant_project_analytics(db, tenant_id):
+    all_projects = list(
+        db.projects
+        .find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(300)
+    )
+
+    all_project_ids = [str(project["_id"]) for project in all_projects]
+    active_projects = [
+        project for project in all_projects
+        if normalize_project_status(project.get("status")) == "active"
+    ]
+    completed_projects = [
+        project for project in all_projects
+        if normalize_project_status(project.get("status")) == "completed"
+    ]
+
+    return {
+        "summary": {
+            "total_projects": len(all_projects),
+            "active_projects": len(active_projects),
+            "completed_projects": len(completed_projects),
+            "average_progress": project_progress_average(db, tenant_id, all_project_ids),
+        },
+        "active_projects": serialize_project_cards(db, tenant_id, active_projects[:20]),
+        "completed_projects": serialize_project_cards(db, tenant_id, completed_projects[:20]),
+        "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
+        "department_performance": department_project_performance(db, tenant_id),
+        "top_performing_departments": department_project_performance(db, tenant_id)[:8],
+        "team_leader_performance": team_leader_project_performance(db, tenant_id)[:12],
+    }
+
+
 @dashboard_bp.get("/superadmin")
 @current_user_required
 def superadmin_dashboard():
@@ -488,6 +1030,9 @@ def superadmin_dashboard():
         "Total Users": db.users.count_documents({}),
         "Active Users": db.users.count_documents({"is_active": True}),
         "Total Employees": db.employees.count_documents(active_employee_filter()),
+        "Total Projects": db.projects.count_documents({"is_deleted": {"$ne": True}}),
+        "Active Projects": db.projects.count_documents({"status": "active", "is_deleted": {"$ne": True}}),
+        "Completed Projects": db.projects.count_documents({"status": "completed", "is_deleted": {"$ne": True}}),
         "Total Attendance Logs": db.attendance_logs.count_documents({
             "is_deleted": {"$ne": True},
         }),
@@ -549,6 +1094,20 @@ def superadmin_dashboard():
             "employees": db.employees.count_documents(
                 active_employee_filter({"tenant_id": tenant_id})
             ),
+            "projects": db.projects.count_documents({
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            }),
+            "active_projects": db.projects.count_documents({
+                "tenant_id": tenant_id,
+                "status": "active",
+                "is_deleted": {"$ne": True},
+            }),
+            "completed_projects": db.projects.count_documents({
+                "tenant_id": tenant_id,
+                "status": "completed",
+                "is_deleted": {"$ne": True},
+            }),
             "present_today": db.attendance_logs.count_documents({
                 "tenant_id": tenant_id,
                 "date": today,
@@ -616,6 +1175,9 @@ def superadmin_dashboard():
         .limit(8)
     )
 
+    default_tenant_id = current_tenant_id()
+    project_analytics = tenant_project_analytics(db, default_tenant_id)
+
     return jsonify({
         "stats": stats,
         "tenants": clean_doc(tenant_summary),
@@ -623,6 +1185,10 @@ def superadmin_dashboard():
         "recent_audit": clean_doc(recent_audit),
         "recent_attendance": clean_doc(recent_attendance),
         "pending_mode_requests": clean_doc(pending_mode_requests),
+        "project_analytics": clean_doc(project_analytics),
+        "department_project_performance": clean_doc(project_analytics.get("department_performance", [])),
+        "top_performing_departments": clean_doc(project_analytics.get("top_performing_departments", [])),
+        "project_daily_progress_chart": clean_doc(project_analytics.get("daily_progress_chart", [])),
     })
 
 
@@ -653,8 +1219,14 @@ def admin_dashboard():
         },
     )
 
+    project_analytics = tenant_project_analytics(db, tenant_id)
+
     stats = {
         "Total Employees": total_employees,
+        "Total Projects": project_analytics["summary"]["total_projects"],
+        "Active Projects": project_analytics["summary"]["active_projects"],
+        "Completed Projects": project_analytics["summary"]["completed_projects"],
+        "Average Project Progress": project_analytics["summary"]["average_progress"],
         "Present Today": count_collection(
             db,
             "attendance_logs",
@@ -960,6 +1532,10 @@ def admin_dashboard():
         "recent_attendance": clean_doc(recent_attendance),
         "recent_compoffs": clean_doc(compoff_recent),
         "pending": clean_doc(pending),
+        "project_analytics": clean_doc(project_analytics),
+        "department_project_performance": clean_doc(project_analytics.get("department_performance", [])),
+        "top_performing_departments": clean_doc(project_analytics.get("top_performing_departments", [])),
+        "project_daily_progress_chart": clean_doc(project_analytics.get("daily_progress_chart", [])),
     })
 
 
@@ -998,6 +1574,10 @@ def employee_dashboard():
             "leaves": [],
             "tickets": [],
             "notifications": [],
+            "project_dashboard": {},
+            "projects": [],
+            "active_projects": [],
+            "completed_projects": [],
         })
 
     tenant_id = emp.get("tenant_id") or current_tenant_id()
@@ -1171,6 +1751,16 @@ def employee_dashboard():
             .limit(10)
         )
 
+    project_dashboard = project_dashboard_for_employee(
+        db,
+        tenant_id,
+        emp_id,
+        emp,
+        roles,
+        team_member_ids,
+        reporting_member_ids,
+    )
+
     return jsonify({
         "employee": clean_doc(emp),
         "employee_summary": clean_doc(employee_snapshot(emp, roles)),
@@ -1188,6 +1778,8 @@ def employee_dashboard():
             "is_reporting_officer": bool(is_reporting_officer_role),
             "can_approve_leave": bool(team_pending_leaves),
             "can_approve_attendance_mode": bool(team_pending_attendance_mode_requests),
+            "can_manage_projects": bool(is_team_leader_role or is_reporting_officer_role),
+            "can_update_project_progress": True,
         },
         "team_members": clean_doc(team_members),
         "reporting_members": clean_doc(reporting_members),
@@ -1210,4 +1802,13 @@ def employee_dashboard():
         "leaves": clean_doc(leaves),
         "tickets": clean_doc(tickets),
         "notifications": clean_doc(notifications),
+        "project_dashboard": clean_doc(project_dashboard),
+        "projects": clean_doc(project_dashboard.get("my_projects", [])),
+        "active_projects": clean_doc(project_dashboard.get("active_projects", [])),
+        "completed_projects": clean_doc(project_dashboard.get("completed_projects", [])),
+        "team_leader_projects": clean_doc(project_dashboard.get("team_leader_projects", [])),
+        "reporting_projects": clean_doc(project_dashboard.get("reporting_projects", [])),
+        "project_daily_progress_chart": clean_doc(project_dashboard.get("daily_progress_chart", [])),
+        "team_project_daily_progress_chart": clean_doc(project_dashboard.get("team_daily_progress_chart", [])),
+        "reporting_project_daily_progress_chart": clean_doc(project_dashboard.get("reporting_daily_progress_chart", [])),
     })

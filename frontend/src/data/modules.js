@@ -40,10 +40,20 @@ import {
     WFH/Field approval requests and comp-off tracking.
   - Leave Management uses a simple employee form:
       Leave Type, Reason, From Date, Upto Date, Task Handover To, Project Handover.
+  - Leave project handover dropdown shows only active projects.
   - Leave types shown to employees should be Casual Leave and Earned Leave.
   - Leave balances are managed by HR/Admin/Super Admin.
   - Team Leader/Reporting Officer approval is based on employee mapping.
   - Reports page shows attendance, holiday, comp-off, leave and audit reports.
+
+  Project workflow:
+  - Team Leader can create projects.
+  - Team Leader can assign multiple team members and collaborators.
+  - Team members/collaborators update daily project progress.
+  - Active projects appear in handover dropdowns.
+  - Completed projects are hidden from handover dropdowns but remain visible in dashboards.
+  - Reporting Officer can see mapped Team Leader project progress.
+  - Super Admin / Managing Director can see department-wise and top-performing department analytics.
 */
 
 export const BASE_EMPLOYEE_ROLE = 'employee';
@@ -89,6 +99,12 @@ export const EMPLOYEE_PORTAL_ROLES = [
 
 export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
+export const PROJECT_ROLES = [
+  ...HR_ROLES,
+  ...CAPABILITY_ROLES,
+  BASE_EMPLOYEE_ROLE,
+];
+
 export const FINANCE_ROLES = [
   'super_admin',
   'admin',
@@ -118,6 +134,12 @@ export const LEAVE_TYPES_FOR_EMPLOYEE = [
 export const LEAVE_BALANCE_TYPES = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
+];
+
+export const PROJECT_STATUS_OPTIONS = [
+  { value: 'active', label: 'Active' },
+  { value: 'on_hold', label: 'On Hold' },
+  { value: 'completed', label: 'Completed' },
 ];
 
 export const superModules = [
@@ -158,6 +180,13 @@ export const coreModules = [
     Clock,
     'Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
     ATTENDANCE_ROLES,
+  ],
+  [
+    'projects',
+    'Projects',
+    Briefcase,
+    'Create projects, assign team members, add collaborators and submit daily progress.',
+    PROJECT_ROLES,
   ],
   [
     'leave_requests',
@@ -205,7 +234,7 @@ export const coreModules = [
     'reports',
     'Reports',
     BarChart3,
-    'Attendance, WFH/Field, holiday, comp-off, leave and audit reports.',
+    'Attendance, WFH/Field, holiday, comp-off, leave, project and audit reports.',
     REPORT_ROLES,
   ],
   [
@@ -307,13 +336,6 @@ export const coreModules = [
     HR_ROLES,
   ],
   [
-    'projects',
-    'Projects',
-    Settings,
-    'Project master.',
-    HR_ROLES,
-  ],
-  [
     'states',
     'States',
     Settings,
@@ -391,6 +413,11 @@ export function isFinanceUser(user) {
   return hasAnyRole(roles, FINANCE_ROLES);
 }
 
+export function canManageProjects(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  return hasAnyRole(roles, PROJECT_ROLES);
+}
+
 export function getEmployeeCapabilities(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = user?.employee_summary || user?.employee || user?.profile || {};
@@ -406,6 +433,10 @@ export function getEmployeeCapabilities(user) {
       roles.includes('reporting_officer') ||
       roles.includes('manager') ||
       roles.includes('ro'),
+    canManageProjects:
+      truthy(employee?.is_team_leader) ||
+      truthy(employee?.is_reporting_officer) ||
+      hasAnyRole(roles, PROJECT_ROLES),
     displayRole: 'Employee',
   };
 }
@@ -523,7 +554,33 @@ export const templates = {
   projects: {
     tenant_id: 'sds',
     name: '',
+    project_name: '',
+    title: '',
+    description: '',
+    department: '',
     status: 'active',
+
+    team_leader_id: '',
+    team_leader_name: '',
+
+    assigned_to_id: '',
+    assigned_to_name: '',
+    assigned_employee_ids: [],
+    assigned_members: [],
+
+    collaborator_ids: [],
+    collaborators: [],
+
+    latest_progress: 0,
+    latest_progress_note: '',
+    latest_progress_date: '',
+    latest_progress_by: '',
+    latest_progress_by_name: '',
+
+    start_date: '',
+    due_date: '',
+    completed_at: '',
+    priority: 'medium',
   },
 
   states: {

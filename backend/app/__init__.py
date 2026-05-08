@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
+import os
 
 from .config import Config
 from .extensions import init_db
@@ -11,27 +12,73 @@ from .routes.workflow import workflow_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
 from .routes.password_requests import password_requests_bp
+from .routes.projects import projects_bp
+
+
+def _get_allowed_origins():
+    """
+    Builds allowed frontend origins for local development, LAN testing,
+    and optional environment-based frontend URLs.
+
+    You can also add this in backend .env if needed:
+    FRONTEND_ORIGINS=http://192.168.29.85:5173,http://localhost:5173
+    """
+
+    default_origins = [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+
+        # Common LAN/dev origins.
+        # Keep these so frontend opened from another device can call backend.
+        "http://192.168.29.85:5173",
+        "http://192.168.29.85:3000",
+        "http://192.168.29.85:4173",
+    ]
+
+    env_origins = os.getenv("FRONTEND_ORIGINS", "")
+    extra_origins = [
+        origin.strip()
+        for origin in env_origins.split(",")
+        if origin.strip()
+    ]
+
+    origins = []
+    for origin in default_origins + extra_origins:
+        if origin not in origins:
+            origins.append(origin)
+
+    return origins
 
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    allowed_origins = [
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-    ]
+    allowed_origins = _get_allowed_origins()
 
     CORS(
         app,
         resources={
             r"/api/*": {
                 "origins": allowed_origins,
-            }
+            },
+            r"/api/v1/*": {
+                "origins": allowed_origins,
+            },
+            r"/": {
+                "origins": allowed_origins,
+            },
         },
         allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+        ],
+        expose_headers=[
             "Content-Type",
             "Authorization",
         ],
@@ -44,6 +91,7 @@ def create_app():
             "OPTIONS",
         ],
         supports_credentials=False,
+        max_age=86400,
     )
 
     init_db(app)
@@ -69,6 +117,11 @@ def create_app():
     # Employee Master creates every staff profile as Employee.
     # Team Leader / Reporting Officer are stored as employee capability mappings.
     app.register_blueprint(crud_bp, url_prefix="/api/v1")
+
+    # Dedicated Project APIs:
+    # project detail, project assignment, daily progress submission,
+    # project progress history, and project analytics.
+    app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
 
     # Workflow APIs:
     # leave apply/approval, leave balance updates, performance review,
@@ -101,6 +154,11 @@ def create_app():
             "frontend": "Run React Vite on port 5173",
             "backend": "Flask + MongoDB",
             "version": "v1",
+            "cors": {
+                "enabled": True,
+                "allowed_origins": allowed_origins,
+                "note": "Set FRONTEND_ORIGINS in backend .env for additional frontend URLs.",
+            },
             "workflow_rules": {
                 "employee_dashboard": "Every staff login opens as Employee unless Admin/HR/Finance/Super Admin.",
                 "team_leader": "Team Leader is an employee capability, not a separate login identity.",
@@ -118,6 +176,8 @@ def create_app():
                 "Comp-Off",
                 "Leave Management",
                 "Leave Balances",
+                "Projects",
+                "Project Progress",
                 "Reports",
                 "Super Admin",
                 "Password Requests",
@@ -131,8 +191,14 @@ def create_app():
             "service": "SDS HRMS API",
             "stack": "React Vite + Flask + MongoDB",
             "version": "v1",
+            "cors": {
+                "enabled": True,
+                "allowed_origins": allowed_origins,
+            },
             "attendance_module": True,
             "leave_module": True,
+            "project_module": True,
+            "project_progress_module": True,
             "reports_module": True,
             "employee_capability_mapping": True,
             "team_leader_as_capability": True,
