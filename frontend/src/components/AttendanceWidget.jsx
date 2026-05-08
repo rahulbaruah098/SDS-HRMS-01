@@ -245,6 +245,7 @@ export default function AttendanceWidget({ onSuccess }) {
   const availableModes = statusData?.available_modes || ['office'];
   const pendingRequests = statusData?.pending_mode_requests || [];
   const compOffs = statusData?.compoffs || [];
+  const employee = statusData?.employee || statusData?.employee_summary || {};
 
   const checkedIn = Boolean(attendance?.check_in);
   const checkedOut = Boolean(attendance?.check_out);
@@ -253,6 +254,26 @@ export default function AttendanceWidget({ onSuccess }) {
 
   const todayLabel = useMemo(() => formatTodayLabel(), []);
   const availableCompOffCount = compOffs.filter((item) => item.status === 'available').length;
+
+  const approverText = useMemo(() => {
+    const teamLeaderName = employee?.team_leader_name || statusData?.team_leader_name || '';
+    const reportingOfficerName =
+      employee?.reporting_officer_name || statusData?.reporting_officer_name || '';
+
+    if (teamLeaderName && reportingOfficerName) {
+      return `Approval will go to Team Leader ${teamLeaderName}, then Reporting Officer ${reportingOfficerName}.`;
+    }
+
+    if (teamLeaderName) {
+      return `Approval will go to Team Leader ${teamLeaderName}.`;
+    }
+
+    if (reportingOfficerName) {
+      return `Approval will go directly to Reporting Officer ${reportingOfficerName}.`;
+    }
+
+    return 'Approval will go to HR because Team Leader and Reporting Officer are not mapped.';
+  }, [employee, statusData]);
 
   async function loadStatus() {
     try {
@@ -469,8 +490,8 @@ export default function AttendanceWidget({ onSuccess }) {
 
       {!availableModes.includes('wfh') && !availableModes.includes('field') && (
         <div className="mode-note">
-          WFH and Field buttons will appear only after approval from your Team
-          Leader / Reporting Officer / HR.
+          WFH and Field buttons will appear only after approval from mapped
+          Team Leader, Reporting Officer, or HR fallback.
         </div>
       )}
 
@@ -589,6 +610,10 @@ export default function AttendanceWidget({ onSuccess }) {
             onChange={(e) => setRequestReason(e.target.value)}
             disabled={loadingType !== ''}
           />
+
+          <div className="mode-note">
+            {approverText}
+          </div>
 
           <button
             type="submit"

@@ -78,6 +78,24 @@ function modeLabel(mode) {
   return mode || 'Office';
 }
 
+function leaveTypeLabel(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+    return 'Casual Leave';
+  }
+
+  if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+    return 'Earned Leave';
+  }
+
+  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+    return 'Comp-Off';
+  }
+
+  return value || '—';
+}
+
 function statusLabel(value) {
   if (!value) return '—';
 
@@ -97,6 +115,10 @@ function boolLabel(value) {
   return 'No';
 }
 
+function isTruthy(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase());
+}
+
 function displayValue(value) {
   if (value === null || value === undefined || value === '') {
     return '—';
@@ -107,6 +129,20 @@ function displayValue(value) {
   }
 
   return String(value);
+}
+
+function capabilityLabel(data, employee) {
+  const labels = [];
+
+  if (data?.is_team_leader || isTruthy(employee?.is_team_leader)) {
+    labels.push('Team Leader');
+  }
+
+  if (data?.is_reporting_officer || isTruthy(employee?.is_reporting_officer)) {
+    labels.push('Reporting Officer');
+  }
+
+  return labels.length ? labels.join(' + ') : 'No additional capability mapped';
 }
 
 export default function EmployeeDashboard({ setPage }) {
@@ -166,24 +202,6 @@ export default function EmployeeDashboard({ setPage }) {
     if (typeof setPage === 'function') {
       setPage(page);
     }
-  }
-
-  function getRoleLabel() {
-    const labels = [];
-
-    if (data?.is_team_leader) {
-      labels.push('Team Leader');
-    }
-
-    if (data?.is_reporting_officer) {
-      labels.push('Reporting Officer');
-    }
-
-    if (!labels.length) {
-      labels.push('Employee');
-    }
-
-    return labels.join(' + ');
   }
 
   async function submitReview(event) {
@@ -270,13 +288,30 @@ export default function EmployeeDashboard({ setPage }) {
 
   const employee = data?.employee || {};
   const employeeSummary = data?.employee_summary || employee;
-  const roleLabel = getRoleLabel();
 
-  const holiday = attendanceStatus?.holiday || {};
+  const displayName =
+    data?.dashboard_display?.title ||
+    employee?.name ||
+    employeeSummary?.name ||
+    'Employee';
+
+  const mappedCapabilityLabel = capabilityLabel(data, employee);
+
+  const isMappedApprover = Boolean(
+    data?.is_team_leader ||
+      data?.is_reporting_officer ||
+      isTruthy(employee?.is_team_leader) ||
+      isTruthy(employee?.is_reporting_officer),
+  );
+
+  const holiday = attendanceStatus?.holiday || data?.holiday || {};
   const todayAttendance =
     attendanceStatus?.attendance || data?.today_attendance || null;
 
-  const availableModes = attendanceStatus?.available_modes || ['office'];
+  const availableModes =
+    attendanceStatus?.available_modes ||
+    data?.available_attendance_modes ||
+    ['office'];
 
   const availableCompOffs = useMemo(
     () => compOffs.filter((item) => item.status === 'available'),
@@ -300,6 +335,12 @@ export default function EmployeeDashboard({ setPage }) {
 
   const reviewableEmployees = Array.from(reviewableEmployeesMap.values());
 
+  const approvalCounts = data?.pending_approval_counts || {
+    leave_requests: data?.team_pending_leaves?.length || 0,
+    attendance_mode_requests:
+      data?.team_pending_attendance_mode_requests?.length || 0,
+  };
+
   const profileRows = [
     {
       field: 'Employee ID',
@@ -308,6 +349,18 @@ export default function EmployeeDashboard({ setPage }) {
         employee.employee_id ||
         employee.emp_code ||
         '',
+    },
+    {
+      field: 'Employee Name',
+      value: displayName,
+    },
+    {
+      field: 'Dashboard Role',
+      value: 'Employee',
+    },
+    {
+      field: 'Employee Capability',
+      value: mappedCapabilityLabel,
     },
     {
       field: 'Department',
@@ -347,11 +400,11 @@ export default function EmployeeDashboard({ setPage }) {
         '',
     },
     {
-      field: 'Team Leader',
+      field: 'Mapped Team Leader',
       value: employeeSummary.team_leader_name || employee.team_leader_name || '',
     },
     {
-      field: 'Reporting Officer',
+      field: 'Mapped Reporting Officer',
       value:
         employeeSummary.reporting_officer_name ||
         employee.reporting_officer_name ||
@@ -359,14 +412,24 @@ export default function EmployeeDashboard({ setPage }) {
     },
   ];
 
+  const leaveBalanceRows = (data?.leave_balances || []).map((row) => ({
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+    opening_balance: row.opening_balance ?? '—',
+    credited: row.credited ?? '—',
+    used: row.used ?? '—',
+    available: row.available ?? '—',
+    status: statusLabel(row.status),
+  }));
+
   const modeRequestRows = modeRequests.slice(0, 8).map((row) => ({
     mode: modeLabel(row.mode),
     date: row.date || '—',
     reason: row.reason || '—',
     field_location: row.field_location || '—',
+    approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
     status: statusLabel(row.status),
-    decided_by: row.decided_by_name || '—',
-    decided_at: formatDateTime(row.decided_at),
+    decided_by: row.decided_by_name || row.last_decided_by_name || '—',
+    decided_at: formatDateTime(row.decided_at || row.last_decided_at),
   }));
 
   const compOffRows = compOffs.slice(0, 8).map((row) => ({
@@ -378,12 +441,15 @@ export default function EmployeeDashboard({ setPage }) {
   }));
 
   const leaveRows = (data?.leaves || []).map((row) => ({
-    leave_type: row.leave_type || '—',
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
     from_date: row.from_date || '—',
-    to_date: row.to_date || '—',
+    upto_date: row.to_date || row.upto_date || '—',
     leave_days: row.leave_days ?? '—',
-    status: statusLabel(row.status),
+    reason: row.reason || '—',
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
     approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
+    status: statusLabel(row.status),
   }));
 
   const notificationRows = (data?.notifications || []).map((row) => ({
@@ -395,6 +461,7 @@ export default function EmployeeDashboard({ setPage }) {
 
   const teamMemberRows = (data?.team_members || []).map((row) => ({
     name: row.name || '—',
+    employee_id: row.employee_id || row.emp_code || '—',
     email: row.email || '—',
     department: row.department || '—',
     designation: row.designation || '—',
@@ -404,6 +471,7 @@ export default function EmployeeDashboard({ setPage }) {
 
   const reportingMemberRows = (data?.reporting_members || []).map((row) => ({
     name: row.name || '—',
+    employee_id: row.employee_id || row.emp_code || '—',
     email: row.email || '—',
     department: row.department || '—',
     designation: row.designation || '—',
@@ -413,10 +481,26 @@ export default function EmployeeDashboard({ setPage }) {
 
   const teamPendingLeaveRows = (data?.team_pending_leaves || []).map((row) => ({
     employee_name: row.employee_name || '—',
-    leave_type: row.leave_type || '—',
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
     from_date: row.from_date || '—',
-    to_date: row.to_date || '—',
+    upto_date: row.to_date || row.upto_date || '—',
     leave_days: row.leave_days ?? '—',
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
+    approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
+    status: statusLabel(row.status),
+  }));
+
+  const teamPendingModeRows = (
+    data?.team_pending_attendance_mode_requests || []
+  ).map((row) => ({
+    employee_name: row.employee_name || '—',
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+    mode: modeLabel(row.mode),
+    date: row.date || '—',
+    reason: row.reason || '—',
+    field_location: row.field_location || '—',
     approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
     status: statusLabel(row.status),
   }));
@@ -431,17 +515,37 @@ export default function EmployeeDashboard({ setPage }) {
     created_at: formatDateTime(row.created_at),
   }));
 
+  const todayStatus = statusLabel(todayAttendance?.status || 'Not checked-in');
+
   return (
-    <div className="page-grid">
+    <div className="page-grid employee-dashboard-page">
       <section className="hero employee-hero">
-        <div>
+        <div className="employee-identity">
           <span className="kicker">Employee Self Service</span>
 
-          <h1>Welcome, {employee?.name || 'Employee'}</h1>
+          <h1 className="employee-name-heading dashboard-display-name">
+            {displayName}
+          </h1>
 
-          <p>
-            Current Role: <b>{roleLabel}</b>
+          <p className="employee-dashboard-subtitle">
+            Employee dashboard for attendance, leave, profile, tickets,
+            notifications, and assigned approval responsibilities.
           </p>
+
+          <div className="employee-badges">
+            <span className="employee-badge primary-cap">
+              Dashboard: Employee
+            </span>
+
+            <span className="employee-badge success-cap">
+              Capability: {mappedCapabilityLabel}
+            </span>
+
+            <span className="employee-badge neutral-cap">
+              Department:{' '}
+              {displayValue(employeeSummary.department || employee.department)}
+            </span>
+          </div>
 
           {holiday?.is_holiday && (
             <div className="holiday-banner">
@@ -456,11 +560,6 @@ export default function EmployeeDashboard({ setPage }) {
               </div>
             </div>
           )}
-
-          <p>
-            Check attendance, apply leave, view payslips, raise tickets, track
-            notifications, and view your employee profile.
-          </p>
 
           <div className="hero-actions">
             <button
@@ -494,6 +593,15 @@ export default function EmployeeDashboard({ setPage }) {
             >
               My Profile
             </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={loadDashboard}
+              disabled={loading}
+            >
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
         </div>
 
@@ -503,12 +611,9 @@ export default function EmployeeDashboard({ setPage }) {
       {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
-        <Stat label="Dashboard Role" value={roleLabel} />
+        <Stat label="Dashboard" value="Employee" />
 
-        <Stat
-          label="Today Status"
-          value={statusLabel(todayAttendance?.status || 'Not checked-in')}
-        />
+        <Stat label="Today Status" value={todayStatus} />
 
         <Stat
           label="Attendance Mode"
@@ -532,8 +637,13 @@ export default function EmployeeDashboard({ setPage }) {
         />
 
         <Stat
-          label="Pending Team Leaves"
-          value={data?.team_pending_leaves?.length || 0}
+          label="Pending Leave Approvals"
+          value={approvalCounts.leave_requests || 0}
+        />
+
+        <Stat
+          label="Pending WFH/Field Approvals"
+          value={approvalCounts.attendance_mode_requests || 0}
         />
 
         {loading && (
@@ -548,6 +658,20 @@ export default function EmployeeDashboard({ setPage }) {
           </div>
         )}
       </section>
+
+      {isMappedApprover && (
+        <section className="capability-panel">
+          <div className="capability-card">
+            <span>Mapped as Team Leader</span>
+            <strong>{data?.is_team_leader ? 'Yes' : 'No'}</strong>
+          </div>
+
+          <div className="capability-card">
+            <span>Mapped as Reporting Officer</span>
+            <strong>{data?.is_reporting_officer ? 'Yes' : 'No'}</strong>
+          </div>
+        </section>
+      )}
 
       <section className="panel">
         <div className="toolbar">
@@ -571,7 +695,7 @@ export default function EmployeeDashboard({ setPage }) {
         <div className="attendance-summary">
           <div>
             <span>Status</span>
-            <strong>{statusLabel(todayAttendance?.status || 'Not checked-in')}</strong>
+            <strong>{todayStatus}</strong>
           </div>
 
           <div>
@@ -619,12 +743,19 @@ export default function EmployeeDashboard({ setPage }) {
 
               <tr>
                 <th>Is Team Leader</th>
-                <td>{boolLabel(employee.is_team_leader)}</td>
+                <td>
+                  {boolLabel(employee.is_team_leader || data?.is_team_leader)}
+                </td>
               </tr>
 
               <tr>
                 <th>Is Reporting Officer</th>
-                <td>{boolLabel(employee.is_reporting_officer)}</td>
+                <td>
+                  {boolLabel(
+                    employee.is_reporting_officer ||
+                      data?.is_reporting_officer,
+                  )}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -635,10 +766,29 @@ export default function EmployeeDashboard({ setPage }) {
         <div className="panel">
           <div className="toolbar">
             <div>
+              <h3>My Leave Balance</h3>
+              <p>Casual Leave and Earned Leave are maintained separately.</p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_balances')}
+            >
+              View Balance
+            </button>
+          </div>
+
+          <Table rows={leaveBalanceRows} maxColumns={8} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
               <h3>WFH / Field Requests</h3>
               <p>
-                Your request history. Approved requests unlock WFH or Field
-                check-in on the selected date.
+                Approved requests unlock WFH or Field check-in on the selected
+                date.
               </p>
             </div>
 
@@ -653,90 +803,93 @@ export default function EmployeeDashboard({ setPage }) {
 
           <Table rows={modeRequestRows} maxColumns={8} />
         </div>
-
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>My Comp-Off</h3>
-              <p>
-                If you work on a holiday, one compensatory off is generated and
-                can be claimed for one day.
-              </p>
-            </div>
-          </div>
-
-          {availableCompOffs.length > 0 && (
-            <form className="dynamic-form" onSubmit={submitCompOffClaim}>
-              <label>
-                Available Comp-Off
-                <select
-                  value={claimForm.compoff_id}
-                  onChange={(event) =>
-                    setClaimForm({
-                      ...claimForm,
-                      compoff_id: event.target.value,
-                    })
-                  }
-                  disabled={claimingCompOff}
-                >
-                  <option value="">Select comp-off</option>
-
-                  {availableCompOffs.map((item) => (
-                    <option key={item._id} value={item._id}>
-                      {item.earned_date} — {item.holiday_title || 'Holiday Work'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Claim Date
-                <input
-                  type="date"
-                  value={claimForm.claim_date}
-                  onChange={(event) =>
-                    setClaimForm({
-                      ...claimForm,
-                      claim_date: event.target.value,
-                    })
-                  }
-                  disabled={claimingCompOff}
-                />
-              </label>
-
-              <label>
-                Reason
-                <input
-                  value={claimForm.reason}
-                  placeholder="Reason / note"
-                  onChange={(event) =>
-                    setClaimForm({
-                      ...claimForm,
-                      reason: event.target.value,
-                    })
-                  }
-                  disabled={claimingCompOff}
-                />
-              </label>
-
-              <button
-                type="submit"
-                className="primary"
-                disabled={claimingCompOff}
-              >
-                {claimingCompOff ? 'Submitting...' : 'Claim Comp-Off'}
-              </button>
-            </form>
-          )}
-
-          <Table rows={compOffRows} maxColumns={8} />
-        </div>
       </section>
 
-      {(data?.is_team_leader || data?.is_reporting_officer) && (
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>My Comp-Off</h3>
+            <p>
+              If you work on a holiday, one compensatory off is generated and
+              can be claimed for one day.
+            </p>
+          </div>
+        </div>
+
+        {availableCompOffs.length > 0 && (
+          <form className="dynamic-form" onSubmit={submitCompOffClaim}>
+            <label>
+              Available Comp-Off
+              <select
+                value={claimForm.compoff_id}
+                onChange={(event) =>
+                  setClaimForm({
+                    ...claimForm,
+                    compoff_id: event.target.value,
+                  })
+                }
+                disabled={claimingCompOff}
+              >
+                <option value="">Select comp-off</option>
+
+                {availableCompOffs.map((item) => (
+                  <option key={item._id} value={item._id}>
+                    {item.earned_date} — {item.holiday_title || 'Holiday Work'}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Claim Date
+              <input
+                type="date"
+                value={claimForm.claim_date}
+                onChange={(event) =>
+                  setClaimForm({
+                    ...claimForm,
+                    claim_date: event.target.value,
+                  })
+                }
+                disabled={claimingCompOff}
+              />
+            </label>
+
+            <label>
+              Reason
+              <input
+                value={claimForm.reason}
+                placeholder="Reason / note"
+                onChange={(event) =>
+                  setClaimForm({
+                    ...claimForm,
+                    reason: event.target.value,
+                  })
+                }
+                disabled={claimingCompOff}
+              />
+            </label>
+
+            <button
+              type="submit"
+              className="primary"
+              disabled={claimingCompOff}
+            >
+              {claimingCompOff ? 'Submitting...' : 'Claim Comp-Off'}
+            </button>
+          </form>
+        )}
+
+        <Table rows={compOffRows} maxColumns={8} />
+      </section>
+
+      {isMappedApprover && (
         <section className="panel">
           <h3>Performance Rating</h3>
-          <p>Team Leader / Reporting Officer can rate assigned employees only.</p>
+          <p>
+            This section appears because this employee is mapped as Team Leader
+            and/or Reporting Officer for assigned employees.
+          </p>
 
           <form className="dynamic-form" onSubmit={submitReview}>
             <label>
@@ -821,34 +974,91 @@ export default function EmployeeDashboard({ setPage }) {
         </section>
       )}
 
-      <section className="two-col">
-        <div className="panel">
-          <h3>My Team Members</h3>
-          <Table rows={teamMemberRows} maxColumns={8} />
-        </div>
+      {isMappedApprover && (
+        <section className="two-col">
+          <div className="panel">
+            <h3>Employees Under My Team Leader Mapping</h3>
+            <Table rows={teamMemberRows} maxColumns={8} />
+          </div>
 
-        <div className="panel">
-          <h3>My Reporting Members</h3>
-          <Table rows={reportingMemberRows} maxColumns={8} />
-        </div>
-      </section>
+          <div className="panel">
+            <h3>Employees Under My Reporting Officer Mapping</h3>
+            <Table rows={reportingMemberRows} maxColumns={8} />
+          </div>
+        </section>
+      )}
 
-      {(data?.is_team_leader || data?.is_reporting_officer) && (
-        <section className="panel">
-          <h3>Pending Team Leaves</h3>
-          <Table rows={teamPendingLeaveRows} maxColumns={8} />
+      {isMappedApprover && (
+        <section className="two-col">
+          <div className="panel">
+            <div className="toolbar">
+              <div>
+                <h3>Pending Leave Approvals</h3>
+                <p>
+                  Shows only leave requests currently pending at your mapped
+                  approval stage.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => goTo('leave_requests')}
+              >
+                Open Leave Management
+              </button>
+            </div>
+
+            <Table rows={teamPendingLeaveRows} maxColumns={9} />
+          </div>
+
+          <div className="panel">
+            <div className="toolbar">
+              <div>
+                <h3>Pending WFH / Field Approvals</h3>
+                <p>
+                  Shows only WFH / Field requests currently pending at your
+                  mapped approval stage.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => goTo('attendance')}
+              >
+                Open Attendance
+              </button>
+            </div>
+
+            <Table rows={teamPendingModeRows} maxColumns={8} />
+          </div>
         </section>
       )}
 
       <section className="panel">
         <h3>My Performance Reviews</h3>
-        <p>This is visible to the employee, HR, and MD/Super Admin.</p>
+        <p>This is visible to the employee, HR, and Super Admin.</p>
         <Table rows={myReviewRows} maxColumns={8} />
       </section>
 
       <section className="two-col">
         <div className="panel">
-          <h3>My Leaves</h3>
+          <div className="toolbar">
+            <div>
+              <h3>My Leaves</h3>
+              <p>Your recent leave requests and approval status.</p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('leave_requests')}
+            >
+              Apply Leave
+            </button>
+          </div>
+
           <Table rows={leaveRows} maxColumns={8} />
         </div>
 

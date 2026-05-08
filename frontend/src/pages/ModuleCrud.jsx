@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Save, X } from 'lucide-react';
 import { api } from '../api/client';
-import { allModules, templates } from '../data/modules';
+import {
+  allModules,
+  templates,
+  LEAVE_TYPES_FOR_EMPLOYEE,
+  LEAVE_BALANCE_TYPES,
+} from '../data/modules';
 import { isSuperAdmin } from '../utils/authHelpers';
 
 const HOLIDAY_STATES = [
@@ -30,6 +35,7 @@ const DATE_FIELDS = new Set([
   'date',
   'from_date',
   'to_date',
+  'upto_date',
   'claim_date',
   'earned_date',
   'valid_until',
@@ -69,6 +75,49 @@ const HIDDEN_TABLE_KEYS = new Set([
   'password',
   'is_deleted',
   '__v',
+]);
+
+const SIMPLE_LEAVE_CREATE_FIELDS = [
+  'leave_type',
+  'reason',
+  'from_date',
+  'upto_date',
+  'task_handover_to_id',
+  'project_handover_id',
+];
+
+const SIMPLE_LEAVE_EDIT_FIELDS = [
+  'leave_type',
+  'reason',
+  'from_date',
+  'upto_date',
+  'task_handover_to_id',
+  'task_handover_to_name',
+  'project_handover_id',
+  'project_handover_name',
+  'status',
+  'approval_stage',
+  'approval_stage_label',
+];
+
+const LEAVE_BALANCE_CREATE_FIELDS = [
+  'employee_id',
+  'leave_type',
+  'opening_balance',
+  'credited',
+  'used',
+  'available',
+  'status',
+];
+
+const EMPLOYEE_READONLY_SNAPSHOT_FIELDS = new Set([
+  'employee_name',
+  'department',
+  'designation',
+  'team_leader_id',
+  'team_leader_name',
+  'reporting_officer_id',
+  'reporting_officer_name',
 ]);
 
 function titleCase(value = '') {
@@ -137,6 +186,63 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function leaveTypeLabel(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+    return 'Casual Leave';
+  }
+
+  if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+    return 'Earned Leave';
+  }
+
+  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+    return 'Comp-Off';
+  }
+
+  return value || '—';
+}
+
+function normalizeLeavePayload(payload) {
+  const nextPayload = { ...payload };
+
+  if (nextPayload.upto_date && !nextPayload.to_date) {
+    nextPayload.to_date = nextPayload.upto_date;
+  }
+
+  if (nextPayload.to_date && !nextPayload.upto_date) {
+    nextPayload.upto_date = nextPayload.to_date;
+  }
+
+  delete nextPayload.employee_id;
+  delete nextPayload.employee_name;
+  delete nextPayload.department;
+  delete nextPayload.designation;
+  delete nextPayload.team_leader_id;
+  delete nextPayload.team_leader_name;
+  delete nextPayload.reporting_officer_id;
+  delete nextPayload.reporting_officer_name;
+  delete nextPayload.status;
+  delete nextPayload.approval_stage;
+  delete nextPayload.approval_stage_label;
+  delete nextPayload.approval_history;
+  delete nextPayload.balance_deducted;
+  delete nextPayload.leave_days;
+
+  return nextPayload;
+}
+
+function normalizeBalancePayload(payload) {
+  const nextPayload = { ...payload };
+  const selected = LEAVE_BALANCE_TYPES.find((item) => item.value === nextPayload.leave_type);
+
+  nextPayload.leave_type = nextPayload.leave_type || 'CL';
+  nextPayload.leave_type_label = selected?.label || leaveTypeLabel(nextPayload.leave_type);
+
+  return nextPayload;
+}
+
 export default function ModuleCrud({ collection }) {
   const moduleInfo = allModules.find((m) => m[0] === collection);
   const template = templates[collection] || { title: '', status: 'active' };
@@ -150,18 +256,38 @@ export default function ModuleCrud({ collection }) {
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
+  const [projectOptions, setProjectOptions] = useState([]);
+  const [taskHandoverOptions, setTaskHandoverOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const isSystemGenerated = SYSTEM_GENERATED_COLLECTIONS.has(collection);
 
-  const createFields = useMemo(() => Object.keys(template), [template]);
+  const createFields = useMemo(() => {
+    if (collection === 'leave_requests') {
+      return SIMPLE_LEAVE_CREATE_FIELDS;
+    }
+
+    if (collection === 'leave_balances') {
+      return LEAVE_BALANCE_CREATE_FIELDS;
+    }
+
+    return Object.keys(template);
+  }, [collection, template]);
 
   const editFields = useMemo(() => {
     if (collection === 'employees') {
       return Object.keys(template).filter(
         (key) => key !== 'password' && key !== 'password_mode',
       );
+    }
+
+    if (collection === 'leave_requests') {
+      return SIMPLE_LEAVE_EDIT_FIELDS;
+    }
+
+    if (collection === 'leave_balances') {
+      return LEAVE_BALANCE_CREATE_FIELDS;
     }
 
     return Object.keys(template);
@@ -229,8 +355,39 @@ export default function ModuleCrud({ collection }) {
     return items;
   }
 
+  async function loadProjectOptions(nextTenant = tenant) {
+    const params = {};
+
+    if (isSuperAdmin() && nextTenant.trim()) {
+      params.tenant_id = nextTenant.trim();
+    }
+
+    const data = await api(`/projects${buildQuery(params)}`);
+    const items = data.items || [];
+
+    setProjectOptions(items);
+    return items;
+  }
+
+  async function loadLeaveOptions() {
+    try {
+      const data = await api('/leave_requests/options');
+
+      setTaskHandoverOptions(data.task_handover_options || []);
+      setProjectOptions(data.projects || []);
+    } catch (error) {
+      console.warn('Unable to load leave options:', error);
+      setTaskHandoverOptions([]);
+      await loadProjectOptions();
+    }
+  }
+
   async function reloadEmployeeHelpers(nextTenant = tenant) {
     if (!EMPLOYEE_OPTION_COLLECTIONS.has(collection)) {
+      if (collection === 'projects') {
+        await loadProjectOptions(nextTenant);
+      }
+
       return;
     }
 
@@ -239,6 +396,10 @@ export default function ModuleCrud({ collection }) {
     if (collection === 'employees') {
       await loadDesignationOptions(nextTenant);
       await loadDepartmentOptions(nextTenant);
+    }
+
+    if (collection === 'leave_requests') {
+      await loadLeaveOptions();
     }
   }
 
@@ -268,6 +429,8 @@ export default function ModuleCrud({ collection }) {
     setEmployeeOptions([]);
     setDesignationOptions([]);
     setDepartmentOptions([]);
+    setProjectOptions([]);
+    setTaskHandoverOptions([]);
 
     setLoading(true);
 
@@ -294,10 +457,19 @@ export default function ModuleCrud({ collection }) {
     try {
       setSaving(true);
 
-      const payload = { ...form };
+      let payload = { ...form };
 
       if (collection === 'employees') {
         delete payload.password_mode;
+        payload.role = 'Employee';
+      }
+
+      if (collection === 'leave_requests') {
+        payload = normalizeLeavePayload(payload);
+      }
+
+      if (collection === 'leave_balances') {
+        payload = normalizeBalancePayload(payload);
       }
 
       await api(`/${collection}`, {
@@ -332,12 +504,26 @@ export default function ModuleCrud({ collection }) {
         delete editData.password;
         delete editData.password_mode;
 
+        editData.role = 'Employee';
         editData.is_team_leader = String(row.is_team_leader || 'false');
         editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
         editData.team_leader_id = row.team_leader_id || '';
         editData.team_leader_name = row.team_leader_name || '';
         editData.reporting_officer_id = row.reporting_officer_id || '';
         editData.reporting_officer_name = row.reporting_officer_name || '';
+      }
+
+      if (collection === 'leave_requests') {
+        editData.upto_date = row.upto_date || row.to_date || '';
+        editData.task_handover_to_id = row.task_handover_to_id || '';
+        editData.task_handover_to_name = row.task_handover_to_name || '';
+        editData.project_handover_id = row.project_handover_id || '';
+        editData.project_handover_name = row.project_handover_name || '';
+      }
+
+      if (collection === 'leave_balances') {
+        editData.leave_type = row.leave_type || 'CL';
+        editData.leave_type_label = row.leave_type_label || leaveTypeLabel(row.leave_type);
       }
 
       setEdit(editData);
@@ -360,7 +546,7 @@ export default function ModuleCrud({ collection }) {
     try {
       setSaving(true);
 
-      const payload = { ...edit };
+      let payload = { ...edit };
 
       delete payload._id;
       delete payload.password_hash;
@@ -369,6 +555,18 @@ export default function ModuleCrud({ collection }) {
       delete payload.updated_at;
       delete payload.created_by;
       delete payload.updated_by;
+
+      if (collection === 'employees') {
+        payload.role = 'Employee';
+      }
+
+      if (collection === 'leave_requests') {
+        payload = normalizeLeavePayload(payload);
+      }
+
+      if (collection === 'leave_balances') {
+        payload = normalizeBalancePayload(payload);
+      }
 
       await api(`/${collection}/${edit._id}`, {
         method: 'PATCH',
@@ -514,33 +712,6 @@ export default function ModuleCrud({ collection }) {
     }
   }
 
-  function isReportingOfficerEligible(employee) {
-    const designation = String(employee?.designation || '').trim().toLowerCase();
-    const role = String(employee?.role || '').trim().toLowerCase();
-
-    return (
-      designation === 'managing director' ||
-      designation === 'manager' ||
-      role === 'reporting officer' ||
-      role === 'manager' ||
-      String(employee?.is_reporting_officer || '').toLowerCase() === 'true'
-    );
-  }
-
-  function applyDesignationChange(state, setState, nextDesignation) {
-    const nextDesignationLower = String(nextDesignation || '').trim().toLowerCase();
-    const canRemainReportingOfficer =
-      nextDesignationLower === 'managing director' || nextDesignationLower === 'manager';
-
-    setState({
-      ...state,
-      designation: nextDesignation,
-      is_reporting_officer: canRemainReportingOfficer
-        ? String(state.is_reporting_officer ?? 'false')
-        : 'false',
-    });
-  }
-
   function applyTeamLeaderChange(state, setState, employeeId) {
     const selectedEmployee = employeeOptions.find((emp) => emp._id === employeeId);
 
@@ -577,6 +748,30 @@ export default function ModuleCrud({ collection }) {
     });
   }
 
+  function applyTaskHandoverChange(state, setState, employeeId) {
+    const selectedEmployee =
+      taskHandoverOptions.find((emp) => emp._id === employeeId) ||
+      employeeOptions.find((emp) => emp._id === employeeId);
+
+    setState({
+      ...state,
+      task_handover_to_id: employeeId,
+      task_handover_to_name: selectedEmployee?.name || '',
+      task_handover_employee_id:
+        selectedEmployee?.employee_id || selectedEmployee?.emp_code || '',
+    });
+  }
+
+  function applyProjectHandoverChange(state, setState, projectId) {
+    const selectedProject = projectOptions.find((project) => project._id === projectId);
+
+    setState({
+      ...state,
+      project_handover_id: projectId,
+      project_handover_name: selectedProject?.name || '',
+    });
+  }
+
   function renderEmployeeSelect(state, setState, key, finalLabel) {
     return (
       <label key={key}>
@@ -589,7 +784,51 @@ export default function ModuleCrud({ collection }) {
 
           {employeeOptions.map((employee) => (
             <option key={employee._id} value={employee._id}>
-              {employee.name} — {employee.designation || employee.department || employee.email}
+              {employee.name} — {employee.employee_id || employee.emp_code || employee.designation || employee.department || employee.email}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  function renderTaskHandoverSelect(state, setState, key, finalLabel) {
+    return (
+      <label key={key}>
+        {finalLabel}
+        <select
+          value={state[key] ?? ''}
+          onChange={(event) =>
+            applyTaskHandoverChange(state, setState, event.target.value)
+          }
+        >
+          <option value="">Select department member</option>
+
+          {taskHandoverOptions.map((employee) => (
+            <option key={employee._id} value={employee._id}>
+              {employee.name} — {employee.employee_id || employee.emp_code || employee.designation || employee.department || employee.email}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  function renderProjectHandoverSelect(state, setState, key, finalLabel) {
+    return (
+      <label key={key}>
+        {finalLabel}
+        <select
+          value={state[key] ?? ''}
+          onChange={(event) =>
+            applyProjectHandoverChange(state, setState, event.target.value)
+          }
+        >
+          <option value="">Select project</option>
+
+          {projectOptions.map((project) => (
+            <option key={project._id} value={project._id}>
+              {project.name || project.title || project._id}
             </option>
           ))}
         </select>
@@ -626,9 +865,24 @@ export default function ModuleCrud({ collection }) {
       'reason',
       'from_date',
       'to_date',
+      'upto_date',
+      'task_handover_to_id',
+      'project_handover_id',
     ];
 
-    const labelText = titleCase(label);
+    let labelText = titleCase(label);
+
+    if (key === 'upto_date') {
+      labelText = 'Upto Date';
+    }
+
+    if (key === 'task_handover_to_id') {
+      labelText = 'Task Handover To';
+    }
+
+    if (key === 'project_handover_id') {
+      labelText = 'Project Handover';
+    }
 
     const finalLabel =
       (
@@ -650,10 +904,34 @@ export default function ModuleCrud({ collection }) {
       return null;
     }
 
+    if (collection === 'leave_requests' && key === 'task_handover_to_id') {
+      return renderTaskHandoverSelect(state, setState, key, finalLabel);
+    }
+
+    if (collection === 'leave_requests' && key === 'project_handover_id') {
+      return renderProjectHandoverSelect(state, setState, key, finalLabel);
+    }
+
+    if (
+      collection === 'leave_requests' &&
+      ['task_handover_to_name', 'project_handover_name', 'approval_stage', 'approval_stage_label'].includes(key)
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <input
+            type="text"
+            value={state[key] ?? ''}
+            readOnly
+            placeholder={labelText}
+          />
+        </label>
+      );
+    }
+
     if (
       [
         'leave_balances',
-        'leave_requests',
         'attendance_mode_requests',
         'expenses',
         'performance_reviews',
@@ -667,7 +945,6 @@ export default function ModuleCrud({ collection }) {
       ['employee_name', 'team_leader_name', 'reporting_officer_name'].includes(key) &&
       [
         'leave_balances',
-        'leave_requests',
         'attendance_mode_requests',
         'expenses',
         'performance_reviews',
@@ -687,10 +964,9 @@ export default function ModuleCrud({ collection }) {
     }
 
     if (
-      ['department', 'designation', 'team_leader_id', 'reporting_officer_id'].includes(key) &&
+      EMPLOYEE_READONLY_SNAPSHOT_FIELDS.has(key) &&
       [
         'leave_balances',
-        'leave_requests',
         'attendance_mode_requests',
         'expenses',
         'performance_reviews',
@@ -733,10 +1009,23 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={state[key] ?? 'CL'}
-            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+            onChange={(event) => {
+              const selected = LEAVE_BALANCE_TYPES.find(
+                (item) => item.value === event.target.value,
+              );
+
+              setState({
+                ...state,
+                leave_type: event.target.value,
+                leave_type_label: selected?.label || leaveTypeLabel(event.target.value),
+              });
+            }}
           >
-            <option value="CL">Casual Leave (CL)</option>
-            <option value="EL">Earned Leave (EL)</option>
+            {LEAVE_BALANCE_TYPES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
           </select>
         </label>
       );
@@ -748,11 +1037,23 @@ export default function ModuleCrud({ collection }) {
           {finalLabel}
           <select
             value={state[key] ?? 'CL'}
-            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+            onChange={(event) => {
+              const selected = LEAVE_TYPES_FOR_EMPLOYEE.find(
+                (item) => item.value === event.target.value,
+              );
+
+              setState({
+                ...state,
+                leave_type: event.target.value,
+                leave_type_label: selected?.label || leaveTypeLabel(event.target.value),
+              });
+            }}
           >
-            <option value="CL">Casual Leave (CL)</option>
-            <option value="EL">Earned Leave (EL)</option>
-            <option value="COMP-OFF">Comp-Off</option>
+            {LEAVE_TYPES_FOR_EMPLOYEE.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
           </select>
         </label>
       );
@@ -783,10 +1084,12 @@ export default function ModuleCrud({ collection }) {
           <select
             value={state[key] ?? 'pending'}
             onChange={(event) => setState({ ...state, [key]: event.target.value })}
+            disabled={collection === 'leave_requests'}
           >
             <option value="pending">Pending</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
+            <option value="in_review">In Review</option>
           </select>
         </label>
       );
@@ -842,7 +1145,7 @@ export default function ModuleCrud({ collection }) {
           <select
             value={state[key] ?? ''}
             onChange={(event) =>
-              applyDesignationChange(state, setState, event.target.value)
+              setState({ ...state, designation: event.target.value })
             }
           >
             <option value="">Select designation</option>
@@ -921,6 +1224,24 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
+    if (collection === 'employees' && key === 'role') {
+      return (
+        <label key={key}>
+          Role *
+          <select
+            value="Employee"
+            onChange={() => setState({ ...state, role: 'Employee' })}
+          >
+            <option value="Employee">Employee</option>
+          </select>
+          <small>
+            Team Leader and Reporting Officer are selected below as employee
+            capabilities, not separate login roles.
+          </small>
+        </label>
+      );
+    }
+
     if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
       return (
         <label key={key}>
@@ -936,16 +1257,10 @@ export default function ModuleCrud({ collection }) {
       );
     }
 
-    if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
-      const filteredEmployees = employeeOptions
-        .filter((employee) => employee._id !== state._id)
-        .filter((employee) => {
-          if (key !== 'reporting_officer_id') {
-            return true;
-          }
-
-          return isReportingOfficerEligible(employee);
-        });
+    if (collection === 'employees' && ['team_leader_id', 'reporting_officer_id'].includes(key)) {
+      const filteredEmployees = employeeOptions.filter(
+        (employee) => employee._id !== state._id,
+      );
 
       return (
         <label key={key}>
@@ -963,15 +1278,9 @@ export default function ModuleCrud({ collection }) {
           >
             <option value="">Select {label}</option>
 
-            {key === 'reporting_officer_id' && !filteredEmployees.length && (
-              <option value="" disabled>
-                No eligible Reporting Officer found
-              </option>
-            )}
-
             {filteredEmployees.map((employee) => (
               <option key={employee._id} value={employee._id}>
-                {employee.name} — {employee.designation || employee.department || employee.email}
+                {employee.name} — {employee.employee_id || employee.emp_code || employee.designation || employee.department || employee.email}
               </option>
             ))}
           </select>
@@ -1006,14 +1315,6 @@ export default function ModuleCrud({ collection }) {
       employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
       skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
       payment_mode: ['Bank Transfer', 'Cash', 'UPI', 'Cheque'],
-      role: [
-        'Admin',
-        'HR',
-        'Manager',
-        'Team Leader',
-        'Reporting Officer',
-        'Employee',
-      ],
       shift: ['General', 'Morning', 'Evening', 'Night'],
       gender: ['Male', 'Female', 'Other'],
       religion: ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Other'],
@@ -1049,7 +1350,19 @@ export default function ModuleCrud({ collection }) {
           <input
             type="date"
             value={state[key] ?? ''}
-            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+            onChange={(event) => {
+              const nextState = { ...state, [key]: event.target.value };
+
+              if (collection === 'leave_requests' && key === 'upto_date') {
+                nextState.to_date = event.target.value;
+              }
+
+              if (collection === 'leave_requests' && key === 'to_date') {
+                nextState.upto_date = event.target.value;
+              }
+
+              setState(nextState);
+            }}
           />
         </label>
       );
@@ -1108,9 +1421,50 @@ export default function ModuleCrud({ collection }) {
   }
 
   function visibleTableKeys(row) {
+    if (collection === 'leave_requests') {
+      return [
+        'employee_name',
+        'leave_type',
+        'from_date',
+        'to_date',
+        'task_handover_to_name',
+        'project_handover_name',
+        'approval_stage_label',
+        'status',
+      ];
+    }
+
+    if (collection === 'leave_balances') {
+      return [
+        'employee_name',
+        'leave_type',
+        'opening_balance',
+        'credited',
+        'used',
+        'available',
+        'status',
+      ];
+    }
+
     return Object.keys(row || {})
       .filter((key) => !HIDDEN_TABLE_KEYS.has(key))
       .slice(0, 8);
+  }
+
+  function tableCellValue(row, key) {
+    if (key === 'leave_type') {
+      return leaveTypeLabel(row.leave_type_label || row.leave_type);
+    }
+
+    if (key === 'approval_stage_label') {
+      return row.approval_stage_label || statusLabel(row.approval_stage);
+    }
+
+    if (key === 'status') {
+      return statusLabel(row.status);
+    }
+
+    return displayValue(row[key]);
   }
 
   function renderRowActions(row) {
@@ -1200,6 +1554,20 @@ export default function ModuleCrud({ collection }) {
           <span className="kicker">Module</span>
           <h1>{moduleInfo?.[1] || collection}</h1>
           <p>{moduleInfo?.[3]}</p>
+
+          {collection === 'employees' && (
+            <p>
+              Create every staff member as an Employee. Mark Team Leader or
+              Reporting Officer only through capability mapping.
+            </p>
+          )}
+
+          {collection === 'leave_requests' && (
+            <p>
+              Leave apply form is simplified to Leave Type, Reason, From Date,
+              Upto Date, Task Handover To, and Project Handover.
+            </p>
+          )}
         </div>
 
         {collection === 'payroll_runs' && (
@@ -1296,7 +1664,7 @@ export default function ModuleCrud({ collection }) {
                 return (
                   <tr key={row._id}>
                     {keys.map((key) => (
-                      <td key={key}>{displayValue(row[key])}</td>
+                      <td key={key}>{tableCellValue(row, key)}</td>
                     ))}
 
                     <td>{renderRowActions(row)}</td>
@@ -1322,8 +1690,15 @@ export default function ModuleCrud({ collection }) {
 
               {collection === 'employees' && (
                 <p>
-                  HR can change employee details, designation, team leader and
-                  reporting officer from here.
+                  HR/Admin/Super Admin can change employee details, Team Leader
+                  mapping, and Reporting Officer mapping from here.
+                </p>
+              )}
+
+              {collection === 'leave_requests' && (
+                <p>
+                  Leave approval should be handled using Approve/Reject actions.
+                  Form edit is kept only for correction of basic leave details.
                 </p>
               )}
             </div>

@@ -23,15 +23,37 @@ import {
   Module format:
   [key, title, Icon, description, allowedRoles]
 
+  Important workflow rule:
+  - Every staff login created from Employee Master remains an employee login.
+  - Team Leader and Reporting Officer are not separate login identities.
+  - They are employee capabilities/mappings controlled from Employee Master:
+      is_team_leader
+      is_reporting_officer
+      team_leader_id
+      reporting_officer_id
+  - Capability roles are still kept below for backward compatibility with older
+    users/tokens and for approval-scoped pages, but the dashboard should display
+    the person as Employee unless they are an admin/HR/finance user.
+
   Attendance + Leave rules:
   - Attendance main page handles Office/WFH/Field check-in, holiday calendar,
     WFH/Field approval requests and comp-off tracking.
-  - Leave Management handles CL, EL and COMP-OFF requests.
-  - Leave Balances are managed by HR/Admin.
-  - Holiday Calendar is managed by HR/Admin.
-  - Attendance Logs and Comp-Off Credits are system generated/view-only.
+  - Leave Management uses a simple employee form:
+      Leave Type, Reason, From Date, Upto Date, Task Handover To, Project Handover.
+  - Leave types shown to employees should be Casual Leave and Earned Leave.
+  - Leave balances are managed by HR/Admin/Super Admin.
+  - Team Leader/Reporting Officer approval is based on employee mapping.
   - Reports page shows attendance, holiday, comp-off, leave and audit reports.
 */
+
+export const BASE_EMPLOYEE_ROLE = 'employee';
+
+export const CAPABILITY_ROLES = [
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+];
 
 export const ALL_COMMON_ROLES = [
   'super_admin',
@@ -41,11 +63,8 @@ export const ALL_COMMON_ROLES = [
   'hr',
   'finance',
   'accounts_finance',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
+  ...CAPABILITY_ROLES,
+  BASE_EMPLOYEE_ROLE,
 ];
 
 export const HR_ROLES = [
@@ -56,18 +75,19 @@ export const HR_ROLES = [
   'hr',
 ];
 
-export const TEAM_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
+export const ADMIN_HR_FINANCE_ROLES = [
+  ...HR_ROLES,
+  'finance',
+  'accounts_finance',
 ];
+
+export const EMPLOYEE_PORTAL_ROLES = [
+  ...HR_ROLES,
+  ...CAPABILITY_ROLES,
+  BASE_EMPLOYEE_ROLE,
+];
+
+export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
 export const FINANCE_ROLES = [
   'super_admin',
@@ -76,43 +96,28 @@ export const FINANCE_ROLES = [
   'accounts_finance',
 ];
 
-export const ATTENDANCE_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
-];
+export const ATTENDANCE_ROLES = EMPLOYEE_PORTAL_ROLES;
 
 export const ATTENDANCE_MANAGER_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
+  ...HR_ROLES,
+  ...CAPABILITY_ROLES,
 ];
 
 export const REPORT_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
+  ...HR_ROLES,
   'finance',
   'accounts_finance',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
+  ...CAPABILITY_ROLES,
+];
+
+export const LEAVE_TYPES_FOR_EMPLOYEE = [
+  { value: 'CL', label: 'Casual Leave' },
+  { value: 'EL', label: 'Earned Leave' },
+];
+
+export const LEAVE_BALANCE_TYPES = [
+  { value: 'CL', label: 'Casual Leave' },
+  { value: 'EL', label: 'Earned Leave' },
 ];
 
 export const superModules = [
@@ -144,29 +149,29 @@ export const coreModules = [
     'employees',
     'Employee Master',
     Users,
-    'Employee database, designation, team leader and reporting officer mapping.',
+    'Employee database with Team Leader and Reporting Officer capability mapping.',
     HR_ROLES,
   ],
   [
     'attendance',
     'Attendance',
     Clock,
-    'Press-and-hold Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
+    'Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
     ATTENDANCE_ROLES,
   ],
   [
     'leave_requests',
     'Leave Management',
     CalendarDays,
-    'Apply CL, EL and COMP-OFF with Team Leader, Reporting Officer and HR approval stages.',
+    'Apply Casual Leave or Earned Leave with mapped Team Leader / Reporting Officer approval.',
     TEAM_ROLES,
   ],
   [
     'leave_balances',
     'Leave Balances',
     CalendarDays,
-    'HR/Admin can assign and update employee CL and EL balances.',
-    TEAM_ROLES,
+    'HR/Admin can assign and update employee Casual Leave and Earned Leave balances.',
+    [...HR_ROLES, BASE_EMPLOYEE_ROLE, ...CAPABILITY_ROLES],
   ],
   [
     'holiday_calendar',
@@ -215,7 +220,7 @@ export const coreModules = [
     'Payslips',
     FileText,
     'Generated employee payslips.',
-    [...FINANCE_ROLES, 'employee'],
+    [...FINANCE_ROLES, BASE_EMPLOYEE_ROLE],
   ],
   [
     'job_openings',
@@ -255,11 +260,8 @@ export const coreModules = [
       'admin',
       'finance',
       'accounts_finance',
-      'manager',
-      'ro',
-      'team_leader',
-      'reporting_officer',
-      'employee',
+      ...CAPABILITY_ROLES,
+      BASE_EMPLOYEE_ROLE,
     ],
   ],
   [
@@ -288,7 +290,7 @@ export const coreModules = [
     'Policies',
     ShieldCheck,
     'Policy register.',
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr', 'employee'],
+    [...HR_ROLES, BASE_EMPLOYEE_ROLE],
   ],
   [
     'departments',
@@ -365,6 +367,62 @@ export function hasAnyRole(userRoles = [], allowedRoles = []) {
   return allowedRoles.some((role) => normalizedUserRoles.includes(role));
 }
 
+export function isCapabilityRole(role) {
+  return CAPABILITY_ROLES.includes(String(role || '').trim());
+}
+
+export function isEmployeePortalUser(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+
+  if (!roles.length) {
+    return false;
+  }
+
+  return roles.includes(BASE_EMPLOYEE_ROLE) || roles.some(isCapabilityRole);
+}
+
+export function isAdminHrUser(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  return hasAnyRole(roles, HR_ROLES);
+}
+
+export function isFinanceUser(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  return hasAnyRole(roles, FINANCE_ROLES);
+}
+
+export function getEmployeeCapabilities(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+  const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
+
+  return {
+    isEmployee: isEmployeePortalUser(user),
+    isTeamLeader:
+      truthy(employee?.is_team_leader) ||
+      roles.includes('team_leader'),
+    isReportingOfficer:
+      truthy(employee?.is_reporting_officer) ||
+      roles.includes('reporting_officer') ||
+      roles.includes('manager') ||
+      roles.includes('ro'),
+    displayRole: 'Employee',
+  };
+}
+
+export function getDisplayRole(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+
+  if (roles.includes('super_admin')) return 'Super Admin';
+  if (roles.includes('admin')) return 'Admin';
+  if (roles.includes('hr_admin')) return 'HR Admin';
+  if (roles.includes('hr_manager')) return 'HR Manager';
+  if (roles.includes('hr')) return 'HR';
+  if (roles.includes('finance') || roles.includes('accounts_finance')) return 'Finance';
+
+  return 'Employee';
+}
+
 export function moduleList(user) {
   const roles = normalizeRoleList(user?.roles || []);
 
@@ -411,11 +469,15 @@ export const templates = {
     are_parents_senior_citizen: 'false',
     number_of_children: '',
     payment_mode: 'Bank Transfer',
-    previous_designation: 'Manager',
+    previous_designation: '',
     previous_employment_tenure_end_date: '',
     password: '12345678',
     password_mode: 'default',
+
+    // Always keep the account as an employee. Team Leader / Reporting Officer
+    // are controlled using the capability fields below.
     role: 'Employee',
+
     designation: 'Employee',
     department: 'HR & Admin',
     shift: 'General',
@@ -485,6 +547,7 @@ export const templates = {
     department: '',
     designation: '',
     leave_type: 'CL',
+    leave_type_label: 'Casual Leave',
     opening_balance: 0,
     credited: 0,
     used: 0,
@@ -502,13 +565,20 @@ export const templates = {
     reporting_officer_id: '',
     reporting_officer_name: '',
     leave_type: 'CL',
+    leave_type_label: 'Casual Leave',
     from_date: '',
     to_date: '',
+    upto_date: '',
     leave_days: 1,
     reason: '',
+    task_handover_to_id: '',
+    task_handover_to_name: '',
+    task_handover_employee_id: '',
+    project_handover_id: '',
+    project_handover_name: '',
     status: 'pending',
-    approval_stage: 'team_leader',
-    approval_stage_label: 'Team Leader',
+    approval_stage: '',
+    approval_stage_label: '',
     approval_history: [],
     balance_deducted: false,
   },
@@ -706,7 +776,10 @@ export const emptyUser = {
   name: '',
   email: '',
   password: 'User@123',
-  roles: 'employee',
+
+  // Keep created staff as employee. Do not create a separate Team Leader login.
+  roles: BASE_EMPLOYEE_ROLE,
+
   emp_code: '',
   department: 'HR & Admin',
   designation: 'Employee',

@@ -36,6 +36,11 @@ const REPORT_TABS = [
     endpoint: '/reports/leave-requests',
   },
   {
+    key: 'leave-records',
+    title: 'Leave Records',
+    endpoint: '/reports/leave-records',
+  },
+  {
     key: 'audit',
     title: 'Audit Logs',
     endpoint: '/reports/audit',
@@ -57,6 +62,11 @@ const EMPTY_FILTERS = {
   mode: '',
   state: '',
   leave_type: '',
+  approval_stage: '',
+  task_handover_to_id: '',
+  project_handover_id: '',
+  period: '',
+  on_date: '',
   date_from: '',
   date_to: '',
   action: '',
@@ -77,6 +87,26 @@ function buildQuery(params = {}) {
 
   const queryString = query.toString();
   return queryString ? `?${queryString}` : '';
+}
+
+function formatDate(value) {
+  if (!value) return '—';
+
+  try {
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return value;
+  }
 }
 
 function formatDateTime(value) {
@@ -108,6 +138,24 @@ function modeLabel(mode) {
   return mode || '—';
 }
 
+function leaveTypeLabel(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+    return 'Casual Leave';
+  }
+
+  if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+    return 'Earned Leave';
+  }
+
+  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+    return 'Comp-Off';
+  }
+
+  return value || '—';
+}
+
 function statusLabel(value) {
   if (!value) return '—';
 
@@ -124,7 +172,7 @@ function normalizeRows(tab, rows = []) {
       department: row.department || '—',
       designation: row.designation || '—',
       state: row.state || '—',
-      date: row.date || '—',
+      date: formatDate(row.date),
       mode: modeLabel(row.mode),
       status: statusLabel(row.status),
       check_in: formatDateTime(row.check_in),
@@ -142,7 +190,7 @@ function normalizeRows(tab, rows = []) {
       department: row.department || '—',
       designation: row.designation || '—',
       mode: modeLabel(row.mode),
-      date: row.date || '—',
+      date: formatDate(row.date),
       reason: row.reason || '—',
       field_location: row.field_location || '—',
       status: statusLabel(row.status),
@@ -154,7 +202,7 @@ function normalizeRows(tab, rows = []) {
   if (tab === 'holidays') {
     return rows.map((row) => ({
       state: row.state || '—',
-      date: row.date || '—',
+      date: formatDate(row.date),
       title: row.title || '—',
       message: row.message || '—',
       status: statusLabel(row.status),
@@ -167,9 +215,9 @@ function normalizeRows(tab, rows = []) {
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
-      earned_date: row.earned_date || '—',
-      valid_until: row.valid_until || '—',
-      claimed_date: row.claimed_date || '—',
+      earned_date: formatDate(row.earned_date),
+      valid_until: formatDate(row.valid_until),
+      claimed_date: formatDate(row.claimed_date),
       holiday: row.holiday_title || '—',
       status: statusLabel(row.status),
     }));
@@ -180,7 +228,7 @@ function normalizeRows(tab, rows = []) {
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
-      leave_type: row.leave_type || '—',
+      leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
       opening_balance: row.opening_balance ?? '—',
       credited: row.credited ?? '—',
       used: row.used ?? '—',
@@ -189,18 +237,24 @@ function normalizeRows(tab, rows = []) {
     }));
   }
 
-  if (tab === 'leave-requests') {
+  if (tab === 'leave-requests' || tab === 'leave-records') {
     return rows.map((row) => ({
+      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
-      leave_type: row.leave_type || '—',
-      from_date: row.from_date || '—',
-      to_date: row.to_date || '—',
+      leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+      from_date: formatDate(row.from_date),
+      upto_date: formatDate(row.to_date || row.upto_date),
       leave_days: row.leave_days ?? '—',
       reason: row.reason || '—',
+      task_handover_to: row.task_handover_to_name || '—',
+      project_handover: row.project_handover_name || '—',
+      team_leader: row.team_leader_name || '—',
+      reporting_officer: row.reporting_officer_name || '—',
       stage: row.approval_stage_label || statusLabel(row.approval_stage) || '—',
       status: statusLabel(row.status),
+      created_at: formatDateTime(row.created_at),
     }));
   }
 
@@ -218,10 +272,24 @@ function normalizeRows(tab, rows = []) {
   return rows;
 }
 
+function normalizeLeaveSummary(summary = {}) {
+  return {
+    total: summary.total || 0,
+    pending: summary.pending || 0,
+    approved: summary.approved || 0,
+    rejected: summary.rejected || 0,
+    casual_leave: summary.casual_leave || 0,
+    earned_leave: summary.earned_leave || 0,
+    comp_off: summary.comp_off || 0,
+    total_days: summary.total_days || 0,
+  };
+}
+
 export default function Reports() {
   const [summary, setSummary] = useState(null);
   const [activeTab, setActiveTab] = useState('attendance');
   const [rows, setRows] = useState([]);
+  const [tabSummary, setTabSummary] = useState(null);
   const [message, setMessage] = useState('');
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
@@ -232,6 +300,38 @@ export default function Reports() {
   const hasActiveFilters = useMemo(() => {
     return Object.values(filters).some((value) => String(value || '').trim());
   }, [filters]);
+
+  function activeTabFilters(nextFilters = filters) {
+    const payload = { ...nextFilters };
+
+    if (!['leave-requests', 'leave-records'].includes(activeTab)) {
+      delete payload.approval_stage;
+      delete payload.task_handover_to_id;
+      delete payload.project_handover_id;
+      delete payload.period;
+      delete payload.on_date;
+    }
+
+    if (!['attendance', 'attendance-mode-requests'].includes(activeTab)) {
+      delete payload.mode;
+    }
+
+    if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(activeTab)) {
+      delete payload.state;
+    }
+
+    if (!['leave-requests', 'leave-records', 'leave-balances'].includes(activeTab)) {
+      delete payload.leave_type;
+    }
+
+    if (activeTab !== 'audit') {
+      delete payload.action;
+      delete payload.entity;
+      delete payload.actor_email;
+    }
+
+    return payload;
+  }
 
   async function loadSummary(nextFilters = filters) {
     try {
@@ -262,11 +362,16 @@ export default function Reports() {
     try {
       setLoadingRows(true);
       setMessage('');
+      setTabSummary(null);
 
-      const data = await api(`${selectedTab.endpoint}${buildQuery(nextFilters)}`);
+      const filteredPayload = activeTabFilters(nextFilters);
+      const data = await api(`${selectedTab.endpoint}${buildQuery(filteredPayload)}`);
+
       setRows(normalizeRows(tabKey, data.items || []));
+      setTabSummary(data.summary || null);
     } catch (error) {
       setRows([]);
+      setTabSummary(null);
       setMessage(error.message || 'Unable to load report');
     } finally {
       setLoadingRows(false);
@@ -288,7 +393,57 @@ export default function Reports() {
   async function changeTab(tabKey) {
     setActiveTab(tabKey);
     setRows([]);
-    await loadRows(tabKey, filters);
+    setTabSummary(null);
+
+    const selectedTab = REPORT_TABS.find((tab) => tab.key === tabKey);
+
+    if (!selectedTab) {
+      return;
+    }
+
+    try {
+      setLoadingRows(true);
+      setMessage('');
+
+      const filteredPayload = { ...filters };
+
+      if (!['leave-requests', 'leave-records'].includes(tabKey)) {
+        delete filteredPayload.approval_stage;
+        delete filteredPayload.task_handover_to_id;
+        delete filteredPayload.project_handover_id;
+        delete filteredPayload.period;
+        delete filteredPayload.on_date;
+      }
+
+      if (!['attendance', 'attendance-mode-requests'].includes(tabKey)) {
+        delete filteredPayload.mode;
+      }
+
+      if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(tabKey)) {
+        delete filteredPayload.state;
+      }
+
+      if (!['leave-requests', 'leave-records', 'leave-balances'].includes(tabKey)) {
+        delete filteredPayload.leave_type;
+      }
+
+      if (tabKey !== 'audit') {
+        delete filteredPayload.action;
+        delete filteredPayload.entity;
+        delete filteredPayload.actor_email;
+      }
+
+      const data = await api(`${selectedTab.endpoint}${buildQuery(filteredPayload)}`);
+
+      setRows(normalizeRows(tabKey, data.items || []));
+      setTabSummary(data.summary || null);
+    } catch (error) {
+      setRows([]);
+      setTabSummary(null);
+      setMessage(error.message || 'Unable to load report');
+    } finally {
+      setLoadingRows(false);
+    }
   }
 
   async function searchReport(event) {
@@ -313,6 +468,7 @@ export default function Reports() {
 
   const counts = summary?.counts || {};
   const extra = summary?.extra || {};
+  const leaveSummary = normalizeLeaveSummary(tabSummary);
 
   const statItems = [
     ['Employees', counts.employees || 0],
@@ -327,6 +483,8 @@ export default function Reports() {
     ['Audit Logs', counts.audit_logs || 0],
   ];
 
+  const showLeaveAdvancedFilters = ['leave-requests', 'leave-records'].includes(activeTab);
+
   return (
     <div className="page-grid">
       <section className="hero compact">
@@ -335,7 +493,8 @@ export default function Reports() {
           <h1>HRMS Reports Center</h1>
           <p>
             View attendance, WFH/Field requests, holidays, comp-off, leave
-            balances, leave requests and audit logs from one reporting screen.
+            balances, leave requests, leave records and audit logs from one
+            reporting screen.
           </p>
         </div>
 
@@ -412,13 +571,25 @@ export default function Reports() {
         </div>
       </section>
 
+      {showLeaveAdvancedFilters && (
+        <section className="stats-grid">
+          <Stat label="Filtered Leaves" value={leaveSummary.total} />
+          <Stat label="Pending" value={leaveSummary.pending} />
+          <Stat label="Approved" value={leaveSummary.approved} />
+          <Stat label="Rejected" value={leaveSummary.rejected} />
+          <Stat label="Casual Leave" value={leaveSummary.casual_leave} />
+          <Stat label="Earned Leave" value={leaveSummary.earned_leave} />
+          <Stat label="Total Leave Days" value={leaveSummary.total_days} />
+        </section>
+      )}
+
       <section className="panel">
         <div className="toolbar">
           <div>
             <h3>Report Filters</h3>
             <p>
-              Use filters according to the active report. Empty fields are
-              ignored.
+              Use filters according to the active report. For Leave Records,
+              use Today, Day, Week, Month or Year period filters.
             </p>
           </div>
 
@@ -465,11 +636,22 @@ export default function Reports() {
 
           <label>
             Status
-            <input
+            <select
               value={filters.status}
               onChange={(e) => updateFilter('status', e.target.value)}
-              placeholder="present / pending / approved"
-            />
+            >
+              <option value="">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="in_review">In Review</option>
+              <option value="present">Present</option>
+              <option value="late">Late</option>
+              <option value="early_checkout">Early Checkout</option>
+              <option value="holiday_work">Holiday Work</option>
+              <option value="available">Available</option>
+              <option value="claimed">Claimed</option>
+            </select>
           </label>
 
           <label>
@@ -507,11 +689,54 @@ export default function Reports() {
               onChange={(e) => updateFilter('leave_type', e.target.value)}
             >
               <option value="">All Leave Types</option>
-              <option value="CL">Casual Leave (CL)</option>
-              <option value="EL">Earned Leave (EL)</option>
+              <option value="CL">Casual Leave</option>
+              <option value="EL">Earned Leave</option>
               <option value="COMP-OFF">Comp-Off</option>
             </select>
           </label>
+
+          {showLeaveAdvancedFilters && (
+            <>
+              <label>
+                Period
+                <select
+                  value={filters.period}
+                  onChange={(e) => updateFilter('period', e.target.value)}
+                >
+                  <option value="">Custom Date Range</option>
+                  <option value="today">Today</option>
+                  <option value="day">Specific Day</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="year">This Year</option>
+                </select>
+              </label>
+
+              <label>
+                On Date
+                <input
+                  type="date"
+                  value={filters.on_date}
+                  onChange={(e) => updateFilter('on_date', e.target.value)}
+                />
+              </label>
+
+              <label>
+                Approval Stage
+                <select
+                  value={filters.approval_stage}
+                  onChange={(e) => updateFilter('approval_stage', e.target.value)}
+                >
+                  <option value="">All Stages</option>
+                  <option value="team_leader">Team Leader</option>
+                  <option value="reporting_officer">Reporting Officer</option>
+                  <option value="hr">HR</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+            </>
+          )}
 
           <label>
             Date From
@@ -608,7 +833,7 @@ export default function Reports() {
 
         {loadingRows && <div className="inline-message">Loading report...</div>}
 
-        <Table rows={rows} maxColumns={12} />
+        <Table rows={rows} maxColumns={14} />
       </section>
     </div>
   );

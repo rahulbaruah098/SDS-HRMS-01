@@ -1,21 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCcw, Search, X } from 'lucide-react';
 import { api } from '../api/client';
-import { roles } from '../utils/authHelpers';
+import {
+  roles,
+  isHRUser,
+  isTeamLeader,
+  isReportingOfficer,
+} from '../utils/authHelpers';
 import AttendanceWidget from '../components/AttendanceWidget';
 import Table from '../components/Table';
-
-const MANAGER_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-];
 
 const HOLIDAY_STATES = [
   'Assam(HO)',
@@ -68,6 +61,26 @@ function buildQuery(params = {}) {
   return queryString ? `?${queryString}` : '';
 }
 
+function formatDate(value) {
+  if (!value) return '—';
+
+  try {
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return value;
+  }
+}
+
 function formatDateTime(value) {
   if (!value) return '—';
 
@@ -109,10 +122,11 @@ function statusLabel(value) {
 function normalizeAttendanceRows(rows = []) {
   return rows.map((row) => ({
     employee_name: row.employee_name || '—',
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     department: row.department || '—',
     designation: row.designation || '—',
     state: row.state || '—',
-    date: row.date || '—',
+    date: formatDate(row.date),
     mode: modeLabel(row.mode),
     status: statusLabel(row.status),
     check_in: formatDateTime(row.check_in),
@@ -129,10 +143,13 @@ function normalizeAttendanceRows(rows = []) {
 function normalizeModeRequestRows(rows = []) {
   return rows.map((row) => ({
     employee_name: row.employee_name || '—',
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     department: row.department || '—',
     designation: row.designation || '—',
+    team_leader: row.team_leader_name || '—',
+    reporting_officer: row.reporting_officer_name || '—',
     mode: modeLabel(row.mode),
-    date: row.date || '—',
+    date: formatDate(row.date),
     reason: row.reason || '—',
     field_location: row.field_location || '—',
     status: statusLabel(row.status),
@@ -146,7 +163,7 @@ function normalizeModeRequestRows(rows = []) {
 function normalizeHolidayRows(rows = []) {
   return rows.map((row) => ({
     state: row.state || '—',
-    date: row.date || '—',
+    date: formatDate(row.date),
     title: row.title || '—',
     message: row.message || '—',
     status: statusLabel(row.status),
@@ -158,11 +175,12 @@ function normalizeHolidayRows(rows = []) {
 function normalizeCompOffRows(rows = []) {
   return rows.map((row) => ({
     employee_name: row.employee_name || '—',
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     department: row.department || '—',
     designation: row.designation || '—',
-    earned_date: row.earned_date || '—',
-    valid_until: row.valid_until || '—',
-    claimed_date: row.claimed_date || '—',
+    earned_date: formatDate(row.earned_date),
+    valid_until: formatDate(row.valid_until),
+    claimed_date: formatDate(row.claimed_date),
     holiday: row.holiday_title || '—',
     status: statusLabel(row.status),
     _id: row._id,
@@ -196,7 +214,13 @@ export default function Attendance() {
 
   const userRoles = roles();
 
-  const canViewReport = userRoles.some((role) => MANAGER_ROLES.includes(role));
+  const canViewReport =
+    isHRUser() ||
+    isTeamLeader() ||
+    isReportingOfficer() ||
+    userRoles.some((role) =>
+      ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
+    );
 
   const canManageHoliday = userRoles.some((role) =>
     ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
@@ -421,6 +445,7 @@ export default function Attendance() {
 
       setMessage(data.message || `Request ${status}`);
       await loadModeRequests();
+      await loadMyModeRequests();
     } catch (error) {
       setMessage(error.message || 'Unable to update request');
     } finally {
@@ -541,7 +566,8 @@ export default function Attendance() {
           <h3>Request Work From Home / Field</h3>
           <p>
             WFH and Field check-in buttons will appear only after approval for
-            the selected date.
+            the selected date. Approval follows your mapped Team Leader /
+            Reporting Officer workflow.
           </p>
 
           <form className="dynamic-form" onSubmit={submitModeRequest}>
@@ -698,8 +724,9 @@ export default function Attendance() {
             <div>
               <h3>Attendance Report</h3>
               <p>
-                Review attendance records by employee, department, mode, status
-                and date range.
+                HR/Admin can view records across the company. Mapped Team
+                Leaders and Reporting Officers can view records for employees
+                assigned under them.
               </p>
             </div>
 
@@ -756,13 +783,18 @@ export default function Attendance() {
 
             <label>
               Status
-              <input
+              <select
                 value={filters.status}
                 onChange={(e) =>
                   setFilters({ ...filters, status: e.target.value })
                 }
-                placeholder="present / late / early_checkout"
-              />
+              >
+                <option value="">All Status</option>
+                <option value="present">Present</option>
+                <option value="late">Late</option>
+                <option value="early_checkout">Early Checkout</option>
+                <option value="holiday_work">Holiday Work</option>
+              </select>
             </label>
 
             <label>
@@ -809,7 +841,11 @@ export default function Attendance() {
       {canViewReport && (
         <section className="panel">
           <h3>WFH / Field Approval Requests</h3>
-          <Table rows={modeRequestRows} maxColumns={11} />
+          <p>
+            Approval access is based on HR/Admin permission or employee mapping
+            as Team Leader / Reporting Officer.
+          </p>
+          <Table rows={modeRequestRows} maxColumns={12} />
         </section>
       )}
 

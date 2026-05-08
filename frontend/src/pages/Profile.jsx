@@ -46,6 +46,48 @@ function boolLabel(value) {
   return 'No';
 }
 
+function roleLabel(role = '') {
+  const normalized = String(role || '').trim();
+
+  if (normalized === 'team_leader') {
+    return 'Team Leader Capability';
+  }
+
+  if (normalized === 'reporting_officer') {
+    return 'Reporting Officer Capability';
+  }
+
+  if (normalized === 'ro' || normalized === 'manager') {
+    return 'Reporting Officer Capability';
+  }
+
+  return normalized
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function capabilityLabel(employee = {}, roles = []) {
+  const labels = [];
+
+  if (
+    boolLabel(employee.is_team_leader) === 'Yes' ||
+    roles.includes('team_leader')
+  ) {
+    labels.push('Team Leader');
+  }
+
+  if (
+    boolLabel(employee.is_reporting_officer) === 'Yes' ||
+    roles.includes('reporting_officer') ||
+    roles.includes('manager') ||
+    roles.includes('ro')
+  ) {
+    labels.push('Reporting Officer');
+  }
+
+  return labels.length ? labels.join(' + ') : 'No additional capability mapped';
+}
+
 function ProfileTable({ title, rows }) {
   return (
     <section className="panel">
@@ -112,6 +154,7 @@ export default function Profile() {
       });
 
       setMessage(data.message || 'Password change request submitted');
+
       setForm({
         current_password: '',
         new_password: '',
@@ -123,6 +166,10 @@ export default function Profile() {
       setSubmitting(false);
     }
   }
+
+  const mainName = user.name || employee.name || user.email || 'My Profile';
+  const mainRole = 'Employee';
+  const capabilities = capabilityLabel(employee, userRoles);
 
   const personalRows = [
     ['Name', user.name || employee.name || ''],
@@ -142,8 +189,10 @@ export default function Profile() {
     ['Employee ID', employee.employee_id || ''],
     ['Employee Code', employee.emp_code || ''],
     ['Tenant', user.tenant_id || employee.tenant_id || ''],
-    ['Roles', userRoles.join(', ')],
-    ['Role', employee.role || ''],
+    ['Dashboard Role', mainRole],
+    ['Login Access', userRoles.map(roleLabel).join(', ')],
+    ['Employee Capability', capabilities],
+    ['Profile Role', 'Employee'],
     ['Department', employee.department || ''],
     ['Designation', employee.designation || ''],
     ['Branch', employee.branch || ''],
@@ -187,12 +236,12 @@ export default function Profile() {
   ];
 
   const reportingRows = [
-    ['Is Team Leader', boolLabel(employee.is_team_leader)],
-    ['Is Reporting Officer', boolLabel(employee.is_reporting_officer)],
-    ['Team Leader ID', employee.team_leader_id || ''],
-    ['Team Leader Name', employee.team_leader_name || ''],
-    ['Reporting Officer ID', employee.reporting_officer_id || ''],
-    ['Reporting Officer Name', employee.reporting_officer_name || ''],
+    ['Team Leader Capability', boolLabel(employee.is_team_leader)],
+    ['Reporting Officer Capability', boolLabel(employee.is_reporting_officer)],
+    ['Mapped Team Leader ID', employee.team_leader_id || ''],
+    ['Mapped Team Leader Name', employee.team_leader_name || ''],
+    ['Mapped Reporting Officer ID', employee.reporting_officer_id || ''],
+    ['Mapped Reporting Officer Name', employee.reporting_officer_name || ''],
   ];
 
   return (
@@ -201,10 +250,13 @@ export default function Profile() {
         <div>
           <span className="kicker">My Profile</span>
 
-          <h1>{user.name || employee.name || user.email || 'My Profile'}</h1>
+          <h1>{mainName}</h1>
 
           <p>
-            {userRoles.join(', ')}
+            {mainRole}
+            {capabilities !== 'No additional capability mapped'
+              ? ` • ${capabilities}`
+              : ''}
             {user.tenant_id || employee.tenant_id
               ? ` • ${user.tenant_id || employee.tenant_id}`
               : ''}

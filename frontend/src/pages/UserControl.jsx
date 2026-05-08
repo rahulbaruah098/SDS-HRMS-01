@@ -28,9 +28,14 @@ const USER_CREATE_TEMPLATE = {
   are_parents_senior_citizen: 'false',
   number_of_children: '',
   payment_mode: 'Bank Transfer',
-  previous_designation: 'Manager',
+  previous_designation: '',
   previous_employment_tenure_end_date: '',
+
+  // Main employee profile role must remain Employee.
+  // Team Leader / Reporting Officer are handled by mapping fields below.
   role: 'Employee',
+  roles: 'employee',
+
   designation: 'Employee',
   department: 'HR & Admin',
   shift: 'General',
@@ -213,7 +218,10 @@ const SELECT_OPTIONS = {
   employee_type: ['', 'Permanent', 'Contractual', 'Intern', 'Consultant'],
   skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
   payment_mode: ['Cash', 'Bank Transfer', 'UPI', 'Cheque'],
-  role: ['Admin', 'HR', 'Manager', 'Team Leader', 'Reporting Officer', 'Employee'],
+
+  // Do not create Team Leader / Reporting Officer as separate employee roles.
+  role: ['Employee'],
+
   shift: ['General', 'Morning', 'Evening', 'Night'],
   gender: ['Male', 'Female', 'Other'],
   religion: ['', 'Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Other'],
@@ -226,6 +234,16 @@ const SELECT_OPTIONS = {
   state: HOLIDAY_STATES,
   branch: HOLIDAY_STATES,
 };
+
+const LOGIN_ROLE_OPTIONS = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'hr_admin', label: 'HR Admin' },
+  { value: 'hr_manager', label: 'HR Manager' },
+  { value: 'hr', label: 'HR' },
+  { value: 'finance', label: 'Finance' },
+  { value: 'accounts_finance', label: 'Accounts Finance' },
+  { value: 'employee', label: 'Employee' },
+];
 
 const DATE_FIELDS = [
   'joining_date',
@@ -267,10 +285,49 @@ function normalizeState(value) {
 
 function normalizeRolesInput(value) {
   if (Array.isArray(value)) {
-    return value.join(', ');
+    const cleanRoles = value.filter(
+      (role) =>
+        !['team_leader', 'reporting_officer', 'manager', 'ro'].includes(role),
+    );
+
+    return cleanRoles.length ? cleanRoles.join(', ') : 'employee';
   }
 
-  return String(value || 'employee');
+  const text = String(value || 'employee');
+
+  if (['team_leader', 'reporting_officer', 'manager', 'ro'].includes(text)) {
+    return 'employee';
+  }
+
+  return text;
+}
+
+function displayRoles(value) {
+  if (!value) return 'employee';
+
+  const roles = Array.isArray(value)
+    ? value
+    : String(value)
+        .split(',')
+        .map((role) => role.trim())
+        .filter(Boolean);
+
+  const cleaned = roles.map((role) => {
+    if (role === 'team_leader') return 'employee + team leader capability';
+    if (role === 'reporting_officer') return 'employee + reporting officer capability';
+    if (role === 'manager') return 'employee + manager capability';
+    if (role === 'ro') return 'employee + reporting officer capability';
+
+    return role;
+  });
+
+  return cleaned.join(', ');
+}
+
+function boolLabel(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase())
+    ? 'Yes'
+    : 'No';
 }
 
 export default function UserControl() {
@@ -430,26 +487,32 @@ export default function UserControl() {
       }
     }
 
-    if (payload.is_reporting_officer === 'true') {
-      const designation = String(payload.designation || '').trim().toLowerCase();
+    return '';
+  }
 
-      if (!['managing director', 'manager'].includes(designation)) {
-        return 'Only Managing Director or Manager can be Reporting Officer';
-      }
+  function cleanUserPayload(sourcePayload) {
+    const payload = {
+      ...sourcePayload,
+      state: normalizeState(sourcePayload.state),
+      branch: normalizeState(sourcePayload.branch || sourcePayload.state),
+      role: 'Employee',
+    };
+
+    if (
+      ['team_leader', 'reporting_officer', 'manager', 'ro'].includes(
+        String(payload.roles || '').trim(),
+      )
+    ) {
+      payload.roles = 'employee';
     }
 
-    return '';
+    return payload;
   }
 
   async function create(e) {
     e.preventDefault();
 
-    const payload = {
-      ...form,
-      state: normalizeState(form.state),
-      branch: normalizeState(form.branch || form.state),
-    };
-
+    const payload = cleanUserPayload(form);
     const validationMessage = validateUserPayload(payload, 'create');
 
     if (validationMessage) {
@@ -512,10 +575,10 @@ export default function UserControl() {
         ),
         number_of_children: employee.number_of_children || '',
         payment_mode: employee.payment_mode || 'Bank Transfer',
-        previous_designation: employee.previous_designation || 'Manager',
+        previous_designation: employee.previous_designation || '',
         previous_employment_tenure_end_date:
           employee.previous_employment_tenure_end_date || '',
-        role: employee.role || 'Employee',
+        role: 'Employee',
         designation: employee.designation || '',
         department: employee.department || '',
         shift: employee.shift || 'General',
@@ -572,12 +635,7 @@ export default function UserControl() {
   async function save(e) {
     e.preventDefault();
 
-    const payload = {
-      ...edit,
-      state: normalizeState(edit.state),
-      branch: normalizeState(edit.branch || edit.state),
-    };
-
+    const payload = cleanUserPayload(edit);
     const validationMessage = validateUserPayload(payload, 'edit');
 
     if (validationMessage) {
@@ -672,11 +730,6 @@ export default function UserControl() {
     }
   }
 
-  function isReportingOfficerEligible(employee) {
-    const designation = String(employee?.designation || '').trim().toLowerCase();
-    return designation === 'managing director' || designation === 'manager';
-  }
-
   function formatLabel(key) {
     const labelText = key
       .replaceAll('_', ' ')
@@ -685,22 +738,6 @@ export default function UserControl() {
       .join(' ');
 
     return REQUIRED_FIELDS.includes(key) ? `${labelText} *` : labelText;
-  }
-
-  function applyDesignationChange(state, setState, designation) {
-    const designationLower = String(designation || '').trim().toLowerCase();
-    const canRemainReportingOfficer =
-      designationLower === 'managing director' || designationLower === 'manager';
-
-    setState({
-      ...state,
-      designation,
-      is_reporting_officer: canRemainReportingOfficer
-        ? String(state.is_reporting_officer || 'false')
-        : 'false',
-      reporting_officer_id: canRemainReportingOfficer ? state.reporting_officer_id : '',
-      reporting_officer_name: canRemainReportingOfficer ? state.reporting_officer_name : '',
-    });
   }
 
   function applyTeamLeaderChange(state, setState, employeeId) {
@@ -760,7 +797,7 @@ export default function UserControl() {
           {label}
           <select
             value={state[key] ?? ''}
-            onChange={(e) => applyDesignationChange(state, setState, e.target.value)}
+            onChange={(e) => setState({ ...state, designation: e.target.value })}
           >
             <option value="">Select designation</option>
 
@@ -785,23 +822,39 @@ export default function UserControl() {
     if (key === 'roles') {
       return (
         <label key={key}>
-          {label}
+          Login Access Role *
           <select
             value={state[key] ?? 'employee'}
             onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
-            <option value="admin">Admin</option>
-            <option value="hr_admin">HR Admin</option>
-            <option value="hr_manager">HR Manager</option>
-            <option value="hr">HR</option>
-            <option value="finance">Finance</option>
-            <option value="accounts_finance">Accounts Finance</option>
-            <option value="manager">Manager</option>
-            <option value="ro">RO</option>
-            <option value="team_leader">Team Leader</option>
-            <option value="reporting_officer">Reporting Officer</option>
-            <option value="employee">Employee</option>
+            {LOGIN_ROLE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
+          <small>
+            Team Leader and Reporting Officer are not login roles. Use the
+            mapping fields below to mark those responsibilities.
+          </small>
+        </label>
+      );
+    }
+
+    if (key === 'role') {
+      return (
+        <label key={key}>
+          Employee Profile Role *
+          <select
+            value="Employee"
+            onChange={() => setState({ ...state, role: 'Employee' })}
+          >
+            <option value="Employee">Employee</option>
+          </select>
+          <small>
+            Every staff profile remains Employee. Leadership responsibility is
+            managed by Team Leader / Reporting Officer mapping.
+          </small>
         </label>
       );
     }
@@ -852,15 +905,9 @@ export default function UserControl() {
     }
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
-      const filteredEmployees = employeeOptions
-        .filter((emp) => emp._id !== state.employee_id_for_edit)
-        .filter((emp) => {
-          if (key !== 'reporting_officer_id') {
-            return true;
-          }
-
-          return isReportingOfficerEligible(emp);
-        });
+      const filteredEmployees = employeeOptions.filter(
+        (emp) => emp._id !== state.employee_id_for_edit,
+      );
 
       return (
         <label key={key}>
@@ -878,15 +925,9 @@ export default function UserControl() {
           >
             <option value="">Select {key.replaceAll('_', ' ')}</option>
 
-            {key === 'reporting_officer_id' && !filteredEmployees.length && (
-              <option value="" disabled>
-                No eligible Reporting Officer found
-              </option>
-            )}
-
             {filteredEmployees.map((emp) => (
               <option key={emp._id} value={emp._id}>
-                {emp.name} — {emp.designation || emp.department || emp.email}
+                {emp.name} — {emp.employee_id || emp.emp_code || emp.designation || emp.department || emp.email}
               </option>
             ))}
           </select>
@@ -1017,9 +1058,9 @@ export default function UserControl() {
           <h1>User Control</h1>
           <p>
             Super Admin can create users, update employee profile, assign team
-            leader, assign reporting officer, change roles and reset passwords.
-            Employees are linked with state-wise attendance holidays and CL/EL
-            leave balance setup.
+            leader, assign reporting officer, change login access and reset
+            passwords. Team Leader and Reporting Officer are employee mappings,
+            not separate login roles.
           </p>
         </div>
       </section>
@@ -1075,12 +1116,14 @@ export default function UserControl() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Tenant</th>
-                <th>Roles</th>
+                <th>Login Access</th>
                 <th>Department</th>
                 <th>Designation</th>
                 <th>State</th>
-                <th>Team Leader</th>
-                <th>Reporting Officer</th>
+                <th>Team Leader Capability</th>
+                <th>Reporting Officer Capability</th>
+                <th>Mapped Team Leader</th>
+                <th>Mapped Reporting Officer</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -1092,10 +1135,12 @@ export default function UserControl() {
                   <td>{user.name || ''}</td>
                   <td>{user.email || ''}</td>
                   <td>{user.tenant_id || ''}</td>
-                  <td>{(user.roles || []).join(', ')}</td>
+                  <td>{displayRoles(user.roles)}</td>
                   <td>{user.employee_profile?.department || ''}</td>
                   <td>{user.employee_profile?.designation || ''}</td>
                   <td>{user.employee_profile?.state || user.employee_profile?.branch || ''}</td>
+                  <td>{boolLabel(user.employee_profile?.is_team_leader)}</td>
+                  <td>{boolLabel(user.employee_profile?.is_reporting_officer)}</td>
                   <td>{user.employee_profile?.team_leader_name || ''}</td>
                   <td>{user.employee_profile?.reporting_officer_name || ''}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
@@ -1139,7 +1184,8 @@ export default function UserControl() {
               <h3>Edit Complete User Profile</h3>
               <p>
                 Update login details, employee profile, designation, state,
-                team leader and reporting officer.
+                Team Leader capability, Reporting Officer capability and
+                employee reporting mapping.
               </p>
             </div>
 

@@ -43,7 +43,7 @@ function buildUrl(path = '') {
   return `${cleanBase}${cleanPath}`;
 }
 
-function buildQuery(params = {}) {
+export function buildQuery(params = {}) {
   const query = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -293,10 +293,24 @@ export function setLeaveBalance(employeeId, payload = {}) {
   });
 }
 
+export function getLeaveOptions(params = {}) {
+  return api(`/leave_requests/options${buildQuery(params)}`);
+}
+
 export function applyLeaveRequest(payload = {}) {
+  const normalizedPayload = { ...payload };
+
+  if (normalizedPayload.upto_date && !normalizedPayload.to_date) {
+    normalizedPayload.to_date = normalizedPayload.upto_date;
+  }
+
+  if (normalizedPayload.to_date && !normalizedPayload.upto_date) {
+    normalizedPayload.upto_date = normalizedPayload.to_date;
+  }
+
   return api('/leave_requests/apply', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(normalizedPayload),
   });
 }
 
@@ -307,8 +321,26 @@ export function decideLeaveRequest(requestId, payload = {}) {
   });
 }
 
+export function approveLeaveRequest(requestId, reason = '') {
+  return decideLeaveRequest(requestId, {
+    status: 'approved',
+    reason,
+  });
+}
+
+export function rejectLeaveRequest(requestId, reason = '') {
+  return decideLeaveRequest(requestId, {
+    status: 'rejected',
+    reason,
+  });
+}
+
 export function getLeaveRequests(params = {}) {
   return listCollection('leave_requests', params);
+}
+
+export function getLeaveRecords(params = {}) {
+  return api(`/reports/leave-records${buildQuery(params)}`);
 }
 
 export function getHolidayRecords(params = {}) {
@@ -353,6 +385,10 @@ export function getLeaveBalanceReports(params = {}) {
 
 export function getLeaveRequestReports(params = {}) {
   return api(`/reports/leave-requests${buildQuery(params)}`);
+}
+
+export function getLeaveRecordReports(params = {}) {
+  return api(`/reports/leave-records${buildQuery(params)}`);
 }
 
 export function getAuditReports(params = {}) {
@@ -421,11 +457,35 @@ export function getPasswordRequests(params = {}) {
   return api(`/password-requests${buildQuery(params)}`);
 }
 
-export function decidePasswordRequest(requestId, payload = {}) {
-  return api(`/password-requests/${requestId}/decision`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
+export function approvePasswordRequest(requestId) {
+  return api(`/password-requests/${requestId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({}),
   });
+}
+
+export function rejectPasswordRequest(requestId, reason = '') {
+  return api(`/password-requests/${requestId}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function decidePasswordRequest(requestId, payload = {}) {
+  const status = String(payload.status || payload.decision || '').toLowerCase();
+
+  if (status === 'approved' || status === 'approve') {
+    return approvePasswordRequest(requestId);
+  }
+
+  if (status === 'rejected' || status === 'reject') {
+    return rejectPasswordRequest(
+      requestId,
+      payload.reason || payload.note || payload.decision_reason || '',
+    );
+  }
+
+  throw new Error('Password request status must be approved or rejected');
 }
 
 /* -------------------------------------------------------------------------- */

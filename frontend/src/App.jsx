@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { currentUser } from './api/client';
-import { isEmployeeOnly } from './utils/authHelpers';
 import { canAccessModule } from './data/modules';
 
 import AppLayout from './layouts/AppLayout';
@@ -17,6 +16,23 @@ import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 
 import './styles.css';
+
+const ADMIN_DASHBOARD_ROLES = [
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+];
+
+const EMPLOYEE_CAPABILITY_ROLES = [
+  'employee',
+  'manager',
+  'ro',
+  'team_leader',
+  'reporting_officer',
+];
 
 function normalizeRoles(user) {
   const userRoles = user?.roles;
@@ -37,6 +53,22 @@ function normalizeRoles(user) {
   return [];
 }
 
+function hasAnyRole(userRoles = [], allowedRoles = []) {
+  return allowedRoles.some((role) => userRoles.includes(role));
+}
+
+function shouldUseEmployeeDashboard(userRoles = []) {
+  if (userRoles.includes('super_admin')) {
+    return false;
+  }
+
+  if (hasAnyRole(userRoles, ADMIN_DASHBOARD_ROLES)) {
+    return false;
+  }
+
+  return hasAnyRole(userRoles, EMPLOYEE_CAPABILITY_ROLES);
+}
+
 function DashboardRouter({ user, setPage }) {
   const userRoles = normalizeRoles(user);
 
@@ -44,7 +76,13 @@ function DashboardRouter({ user, setPage }) {
     return <SuperAdminDashboard setPage={setPage} />;
   }
 
-  if (isEmployeeOnly()) {
+  /*
+    Important:
+    Team Leader / Reporting Officer are employee capabilities, not separate
+    dashboard/login identities. So if a login has employee + team_leader or
+    employee + reporting_officer, it must still open EmployeeDashboard.
+  */
+  if (shouldUseEmployeeDashboard(userRoles)) {
     return <EmployeeDashboard setPage={setPage} />;
   }
 

@@ -10,7 +10,11 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { clearSession } from '../api/client';
-import { moduleList } from '../data/modules';
+import {
+  moduleList,
+  getDisplayRole,
+  getEmployeeCapabilities,
+} from '../data/modules';
 
 function normalizeRoles(user) {
   const userRoles = user?.roles;
@@ -32,7 +36,21 @@ function normalizeRoles(user) {
 }
 
 function roleLabel(role = '') {
-  return String(role || '')
+  const normalized = String(role || '').trim();
+
+  if (normalized === 'team_leader') {
+    return 'Team Leader Capability';
+  }
+
+  if (normalized === 'reporting_officer') {
+    return 'Reporting Officer Capability';
+  }
+
+  if (normalized === 'ro') {
+    return 'Reporting Officer Capability';
+  }
+
+  return normalized
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -131,6 +149,21 @@ function groupOrder(group) {
   return order[group] || 99;
 }
 
+function buildCapabilityText(user) {
+  const capabilities = getEmployeeCapabilities(user);
+  const items = [];
+
+  if (capabilities.isTeamLeader) {
+    items.push('Team Leader');
+  }
+
+  if (capabilities.isReportingOfficer) {
+    items.push('Reporting Officer');
+  }
+
+  return items.length ? items.join(' + ') : '';
+}
+
 export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -184,6 +217,9 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   ).length;
 
   const reportsCount = modules.filter(([key]) => key === 'reports').length;
+
+  const displayRole = getDisplayRole(safeUser);
+  const capabilityText = buildCapabilityText(safeUser);
 
   function goTo(nextPage) {
     if (typeof setPage === 'function') {
@@ -300,11 +336,16 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <h2>{currentTitle}</h2>
 
             <p>
-              {safeUser.roles.length
-                ? safeUser.roles.map(roleLabel).join(', ')
-                : 'User'}
+              {displayRole}
+              {capabilityText ? ` • ${capabilityText}` : ''}
               {safeUser?.tenant_id ? ` • ${safeUser.tenant_id}` : ''}
             </p>
+
+            {safeUser.roles.length > 0 && (
+              <small>
+                Access: {safeUser.roles.map(roleLabel).join(', ')}
+              </small>
+            )}
           </div>
 
           <div className="user-chip">

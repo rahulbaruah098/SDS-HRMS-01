@@ -30,8 +30,6 @@ ATTENDANCE_MANAGER_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 )
@@ -57,8 +55,6 @@ TEAM_SCOPE_ROLES = {
 }
 
 REPORTING_SCOPE_ROLES = {
-    "manager",
-    "ro",
     "reporting_officer",
 }
 
@@ -76,6 +72,10 @@ def normalize_text(value):
 
 def normalize_mode(value):
     return normalize_text(value).lower()
+
+
+def truthy(value):
+    return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
 
 def normalize_state(value):
@@ -181,6 +181,38 @@ def employee_display_name(employee):
     )
 
 
+def employee_code(employee):
+    return (
+        employee.get("employee_id")
+        or employee.get("emp_code")
+        or employee.get("code")
+        or ""
+    )
+
+
+def employee_snapshot(employee):
+    if not employee:
+        return None
+
+    return {
+        "_id": str(employee.get("_id")),
+        "employee_id": employee_code(employee),
+        "name": employee_display_name(employee),
+        "email": employee.get("email", ""),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "state": employee_state(employee),
+        "branch": employee.get("branch", ""),
+        "role": "Employee",
+        "is_team_leader": str(employee.get("is_team_leader", "false")).lower(),
+        "is_reporting_officer": str(employee.get("is_reporting_officer", "false")).lower(),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
+    }
+
+
 def scoped_employee_ids_for_manager(db):
     roles = current_user_roles()
 
@@ -195,10 +227,10 @@ def scoped_employee_ids_for_manager(db):
     current_emp_id = str(current_emp["_id"])
     scope_or = []
 
-    if roles.intersection(TEAM_SCOPE_ROLES):
+    if roles.intersection(TEAM_SCOPE_ROLES) or truthy(current_emp.get("is_team_leader")):
         scope_or.append({"team_leader_id": current_emp_id})
 
-    if roles.intersection(REPORTING_SCOPE_ROLES):
+    if roles.intersection(REPORTING_SCOPE_ROLES) or truthy(current_emp.get("is_reporting_officer")):
         scope_or.append({"reporting_officer_id": current_emp_id})
 
     if not scope_or:
@@ -439,18 +471,43 @@ def approval_target_user_ids(db, employee):
     tenant_id = employee.get("tenant_id") or current_tenant_id()
     user_ids = []
 
-    for employee_field in ["team_leader_id", "reporting_officer_id"]:
-        manager_user_id = employee_user_id(
-            db,
-            employee.get(employee_field),
-            tenant_id,
-        )
-        if manager_user_id:
-            user_ids.append(manager_user_id)
+    team_leader_user_id = employee_user_id(
+        db,
+        employee.get("team_leader_id"),
+        tenant_id,
+    )
 
-    user_ids.extend(users_for_roles(db, FULL_TENANT_REPORT_ROLES, tenant_id))
+    reporting_officer_user_id = employee_user_id(
+        db,
+        employee.get("reporting_officer_id"),
+        tenant_id,
+    )
+
+    if team_leader_user_id:
+        user_ids.append(team_leader_user_id)
+    elif reporting_officer_user_id:
+        user_ids.append(reporting_officer_user_id)
+    else:
+        user_ids.extend(users_for_roles(db, FULL_TENANT_REPORT_ROLES, tenant_id))
 
     return user_ids
+
+
+def first_approval_stage(employee):
+    if employee.get("team_leader_id"):
+        return "team_leader", "Team Leader"
+
+    if employee.get("reporting_officer_id"):
+        return "reporting_officer", "Reporting Officer"
+
+    return "hr", "HR"
+
+
+def next_approval_stage_after_team_leader(request_doc):
+    if request_doc.get("reporting_officer_id"):
+        return "reporting_officer", "Reporting Officer"
+
+    return "approved", "Approved"
 
 
 def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
@@ -476,6 +533,8 @@ def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
     compoff_doc = {
         "tenant_id": tenant_id,
         "employee_id": str(employee["_id"]),
+        "employee_code": employee_code(employee),
+        "emp_code": employee.get("emp_code", ""),
         "employee_name": employee_display_name(employee),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
@@ -555,14 +614,23 @@ def can_decide_mode_request(db, request_doc):
 
     reviewer_id = str(reviewer["_id"])
 
-    if "team_leader" in roles and request_doc.get("team_leader_id") == reviewer_id:
-        return True
+    if request_doc.get("approval_stage") == "team_leader":
+        return (
+            request_doc.get("team_leader_id") == reviewer_id
+            and (
+                "team_leader" in roles
+                or truthy(reviewer.get("is_team_leader"))
+            )
+        )
 
-    if (
-        roles.intersection(REPORTING_SCOPE_ROLES)
-        and request_doc.get("reporting_officer_id") == reviewer_id
-    ):
-        return True
+    if request_doc.get("approval_stage") == "reporting_officer":
+        return (
+            request_doc.get("reporting_officer_id") == reviewer_id
+            and (
+                "reporting_officer" in roles
+                or truthy(reviewer.get("is_reporting_officer"))
+            )
+        )
 
     return False
 
@@ -621,7 +689,13 @@ def attendance_status():
         "office_start": "09:30",
         "late_cutoff": "09:50",
         "office_end": "18:00",
+        "employee": clean_doc(employee_snapshot(e)),
+        "employee_summary": clean_doc(employee_snapshot(e)),
         "employee_state": employee_state(e),
+        "team_leader_id": e.get("team_leader_id", ""),
+        "team_leader_name": e.get("team_leader_name", ""),
+        "reporting_officer_id": e.get("reporting_officer_id", ""),
+        "reporting_officer_name": e.get("reporting_officer_name", ""),
         "holiday": holiday_info,
         "available_modes": modes,
         "attendance": clean_doc(rec),
@@ -700,6 +774,8 @@ def check_in():
     doc = {
         "tenant_id": tenant_id,
         "employee_id": str(e["_id"]),
+        "employee_code": employee_code(e),
+        "emp_code": e.get("emp_code", ""),
         "employee_name": employee_display_name(e),
         "department": e.get("department", ""),
         "designation": e.get("designation", ""),
@@ -1250,11 +1326,14 @@ def create_mode_request():
             "message": "A pending or approved request already exists for this date and mode"
         }), 409
 
+    approval_stage, approval_stage_label = first_approval_stage(e)
     now = datetime.utcnow()
 
     doc = {
         "tenant_id": tenant_id,
         "employee_id": str(e["_id"]),
+        "employee_code": employee_code(e),
+        "emp_code": e.get("emp_code", ""),
         "employee_name": employee_display_name(e),
         "department": e.get("department", ""),
         "designation": e.get("designation", ""),
@@ -1267,6 +1346,9 @@ def create_mode_request():
         "reason": reason,
         "field_location": field_location,
         "status": "pending",
+        "approval_stage": approval_stage,
+        "approval_stage_label": approval_stage_label,
+        "approval_history": [],
         "created_at": now,
         "updated_at": now,
         "created_by": str(g.current_user["_id"]),
@@ -1285,6 +1367,7 @@ def create_mode_request():
             "employee_id": str(e["_id"]),
             "mode": mode,
             "date": request_date.isoformat(),
+            "approval_stage": approval_stage,
         },
         tenant_id=tenant_id,
     )
@@ -1338,6 +1421,25 @@ def list_mode_requests():
 
         if scoped_employee_ids is not None:
             q["employee_id"] = {"$in": scoped_employee_ids}
+
+        reviewer = emp(db)
+
+        if reviewer:
+            reviewer_id = str(reviewer["_id"])
+
+            if "team_leader" in roles or truthy(reviewer.get("is_team_leader")):
+                q.setdefault("$or", [])
+                q["$or"].append({
+                    "approval_stage": "team_leader",
+                    "team_leader_id": reviewer_id,
+                })
+
+            if "reporting_officer" in roles or truthy(reviewer.get("is_reporting_officer")):
+                q.setdefault("$or", [])
+                q["$or"].append({
+                    "approval_stage": "reporting_officer",
+                    "reporting_officer_id": reviewer_id,
+                })
 
     items = list(
         db.attendance_mode_requests
@@ -1417,45 +1519,122 @@ def decide_mode_request(request_id):
 
     now = datetime.utcnow()
 
-    db.attendance_mode_requests.update_one(
-        {"_id": request_obj_id},
-        {
-            "$set": {
-                "status": status,
-                "decision_note": decision_note,
+    history_entry = {
+        "stage": request_doc.get("approval_stage") or "",
+        "stage_label": request_doc.get("approval_stage_label") or "",
+        "status": status,
+        "decision_note": decision_note,
+        "decided_at": now,
+        "decided_by": str(g.current_user["_id"]),
+        "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+    }
+
+    set_data = {
+        "decision_note": decision_note,
+        "last_decided_at": now,
+        "last_decided_by": str(g.current_user["_id"]),
+        "last_decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "updated_at": now,
+    }
+
+    if status == "rejected":
+        set_data.update({
+            "status": "rejected",
+            "approval_stage": "rejected",
+            "approval_stage_label": "Rejected",
+            "decided_at": now,
+            "decided_by": str(g.current_user["_id"]),
+            "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        })
+    else:
+        if request_doc.get("approval_stage") == "team_leader":
+            next_stage, next_stage_label = next_approval_stage_after_team_leader(request_doc)
+
+            if next_stage == "approved":
+                set_data.update({
+                    "status": "approved",
+                    "approval_stage": "approved",
+                    "approval_stage_label": "Approved",
+                    "decided_at": now,
+                    "decided_by": str(g.current_user["_id"]),
+                    "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+                })
+            else:
+                set_data.update({
+                    "status": "pending",
+                    "approval_stage": next_stage,
+                    "approval_stage_label": next_stage_label,
+                })
+
+                reporting_user_id = employee_user_id(
+                    db,
+                    request_doc.get("reporting_officer_id"),
+                    request_doc.get("tenant_id") or current_tenant_id(),
+                )
+
+                notify_users(
+                    db,
+                    [reporting_user_id],
+                    "Attendance Mode Request",
+                    f"{request_doc.get('employee_name', 'Employee')} request is pending for Reporting Officer approval.",
+                    {
+                        "request_id": str(request_obj_id),
+                        "employee_id": request_doc.get("employee_id"),
+                        "mode": request_doc.get("mode"),
+                        "date": request_doc.get("date"),
+                        "approval_stage": next_stage,
+                    },
+                    tenant_id=request_doc.get("tenant_id") or current_tenant_id(),
+                )
+        else:
+            set_data.update({
+                "status": "approved",
+                "approval_stage": "approved",
+                "approval_stage_label": "Approved",
                 "decided_at": now,
                 "decided_by": str(g.current_user["_id"]),
                 "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
-                "updated_at": now,
-            }
-        },
-    )
+            })
 
-    employee_user = employee_user_id(
-        db,
-        request_doc.get("employee_id"),
-        request_doc.get("tenant_id") or current_tenant_id(),
-    )
-
-    notify_users(
-        db,
-        [employee_user],
-        "Attendance Mode Request Updated",
-        f"Your {request_doc.get('mode', '').upper()} request for {request_doc.get('date')} was {status}.",
+    db.attendance_mode_requests.update_one(
+        {"_id": request_obj_id},
         {
-            "request_id": str(request_obj_id),
-            "status": status,
+            "$set": set_data,
+            "$push": {
+                "approval_history": history_entry,
+            },
         },
-        tenant_id=request_doc.get("tenant_id") or current_tenant_id(),
     )
+
+    updated_doc = db.attendance_mode_requests.find_one({"_id": request_obj_id})
+
+    if updated_doc and updated_doc.get("status") in ["approved", "rejected"]:
+        employee_user = employee_user_id(
+            db,
+            request_doc.get("employee_id"),
+            request_doc.get("tenant_id") or current_tenant_id(),
+        )
+
+        notify_users(
+            db,
+            [employee_user],
+            "Attendance Mode Request Updated",
+            f"Your {request_doc.get('mode', '').upper()} request for {request_doc.get('date')} was {updated_doc.get('status')}.",
+            {
+                "request_id": str(request_obj_id),
+                "status": updated_doc.get("status"),
+            },
+            tenant_id=request_doc.get("tenant_id") or current_tenant_id(),
+        )
 
     audit(status, "attendance_mode_requests", request_id, {
         "decision_note": decision_note,
+        "approval_stage": request_doc.get("approval_stage"),
     })
 
     return jsonify({
-        "message": f"Request {status}",
-        "item": clean_doc(db.attendance_mode_requests.find_one({"_id": request_obj_id})),
+        "message": f"Request {updated_doc.get('status') if updated_doc else status}",
+        "item": clean_doc(updated_doc),
     })
 
 
@@ -1540,20 +1719,13 @@ def claim_compoff(compoff_id):
         }), 409
 
     now = datetime.utcnow()
-
-    if e.get("team_leader_id"):
-        approval_stage = "team_leader"
-        approval_stage_label = "Team Leader"
-    elif e.get("reporting_officer_id"):
-        approval_stage = "reporting_officer"
-        approval_stage_label = "Reporting Officer"
-    else:
-        approval_stage = "hr"
-        approval_stage_label = "HR"
+    approval_stage, approval_stage_label = first_approval_stage(e)
 
     leave_doc = {
         "tenant_id": tenant_id,
         "employee_id": str(e["_id"]),
+        "employee_code": employee_code(e),
+        "emp_code": e.get("emp_code", ""),
         "employee_name": employee_display_name(e),
         "department": e.get("department", ""),
         "designation": e.get("designation", ""),
@@ -1562,10 +1734,17 @@ def claim_compoff(compoff_id):
         "reporting_officer_id": e.get("reporting_officer_id", ""),
         "reporting_officer_name": e.get("reporting_officer_name", ""),
         "leave_type": "COMP-OFF",
+        "leave_type_label": "Comp-Off",
         "leave_days": 1.0,
         "from_date": claim_date.isoformat(),
         "to_date": claim_date.isoformat(),
+        "upto_date": claim_date.isoformat(),
         "reason": reason or "Comp-off claim",
+        "task_handover_to_id": "",
+        "task_handover_to_name": "",
+        "task_handover_employee_id": "",
+        "project_handover_id": "",
+        "project_handover_name": "",
         "status": "pending",
         "approval_stage": approval_stage,
         "approval_stage_label": approval_stage_label,
@@ -1601,6 +1780,7 @@ def claim_compoff(compoff_id):
             "employee_id": str(e["_id"]),
             "compoff_id": str(compoff_obj_id),
             "leave_request_id": str(leave_res.inserted_id),
+            "approval_stage": approval_stage,
         },
         tenant_id=tenant_id,
     )

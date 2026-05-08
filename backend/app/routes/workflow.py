@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from bson import ObjectId
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
@@ -19,8 +19,6 @@ ADMIN_HR_ROLES = {
 }
 
 TEAM_APPROVAL_ROLES = {
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 }
@@ -38,8 +36,6 @@ TICKET_MANAGER_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 }
@@ -50,8 +46,6 @@ LEAVE_APPROVAL_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 }
@@ -91,14 +85,29 @@ def normalize_leave_type(value):
 
     aliases = {
         "CASUAL LEAVE": "CL",
+        "CASUAL": "CL",
+        "CL": "CL",
         "EARNED LEAVE": "EL",
+        "EARNED": "EL",
+        "EL": "EL",
         "COMP OFF": "COMP-OFF",
         "COMPOFF": "COMP-OFF",
+        "COMP-OFF": "COMP-OFF",
         "COMPENSATORY LEAVE": "COMP-OFF",
         "COMPENSATORY OFF": "COMP-OFF",
     }
 
     return aliases.get(value, value)
+
+
+def leave_type_label(leave_type):
+    labels = {
+        "CL": "Casual Leave",
+        "EL": "Earned Leave",
+        "COMP-OFF": "Comp-Off",
+    }
+
+    return labels.get(normalize_leave_type(leave_type), normalize_text(leave_type))
 
 
 def parse_date(value):
@@ -116,7 +125,7 @@ def date_to_str(value):
 
 
 def truthy(value):
-    return str(value).strip().lower() in [
+    return str(value or "").strip().lower() in [
         "1",
         "true",
         "yes",
@@ -176,6 +185,15 @@ def employee_display_name(employee):
         or employee.get("employee_name")
         or employee.get("email")
         or "Employee"
+    )
+
+
+def employee_code(employee):
+    return (
+        employee.get("employee_id")
+        or employee.get("emp_code")
+        or employee.get("code")
+        or ""
     )
 
 
@@ -243,10 +261,12 @@ def can_manage_employee_record(db, employee_id):
     if roles.intersection(ADMIN_HR_ROLES):
         return True
 
-    reviewer_emp_id = current_employee_id(db)
+    reviewer_emp = current_employee(db)
 
-    if not reviewer_emp_id:
+    if not reviewer_emp:
         return False
+
+    reviewer_emp_id = str(reviewer_emp["_id"])
 
     employee_obj_id = safe_object_id(employee_id)
 
@@ -262,11 +282,14 @@ def can_manage_employee_record(db, employee_id):
     if not employee:
         return False
 
-    if "team_leader" in roles and employee.get("team_leader_id") == reviewer_emp_id:
+    if (
+        ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")))
+        and employee.get("team_leader_id") == reviewer_emp_id
+    ):
         return True
 
     if (
-        roles.intersection({"reporting_officer", "manager", "ro"})
+        ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")))
         and employee.get("reporting_officer_id") == reviewer_emp_id
     ):
         return True
@@ -277,16 +300,6 @@ def can_manage_employee_record(db, employee_id):
 # -----------------------------------------------------------------------------
 # Leave helpers
 # -----------------------------------------------------------------------------
-
-def is_md_employee(employee):
-    text = " ".join([
-        normalize_text(employee.get("designation")),
-        normalize_text(employee.get("role")),
-        normalize_text(employee.get("name")),
-    ]).lower()
-
-    return "managing director" in text or text == "md" or " md " in f" {text} "
-
 
 def calculate_leave_days(data):
     if data.get("leave_days") not in [None, ""]:
@@ -309,9 +322,6 @@ def calculate_leave_days(data):
 
 
 def build_initial_leave_stage(employee):
-    if is_md_employee(employee):
-        return "hr"
-
     if employee.get("team_leader_id"):
         return "team_leader"
 
@@ -325,10 +335,13 @@ def next_leave_stage(employee, current_stage):
     if current_stage == "team_leader":
         if employee.get("reporting_officer_id"):
             return "reporting_officer"
-        return "hr"
+        return "final"
 
     if current_stage == "reporting_officer":
-        return "hr"
+        return "final"
+
+    if current_stage == "hr":
+        return "final"
 
     return "final"
 
@@ -353,18 +366,29 @@ def reviewer_can_decide_leave(db, leave_doc):
     if stage == "hr":
         return bool(roles.intersection(ADMIN_HR_ROLES))
 
-    reviewer_emp_id = current_employee_id(db)
+    reviewer_emp = current_employee(db)
 
-    if not reviewer_emp_id:
+    if not reviewer_emp:
         return False
 
+    reviewer_emp_id = str(reviewer_emp["_id"])
+
     if stage == "team_leader":
-        return "team_leader" in roles and leave_doc.get("team_leader_id") == reviewer_emp_id
+        return (
+            leave_doc.get("team_leader_id") == reviewer_emp_id
+            and (
+                "team_leader" in roles
+                or truthy(reviewer_emp.get("is_team_leader"))
+            )
+        )
 
     if stage == "reporting_officer":
         return (
-            roles.intersection({"reporting_officer", "manager", "ro"})
-            and leave_doc.get("reporting_officer_id") == reviewer_emp_id
+            leave_doc.get("reporting_officer_id") == reviewer_emp_id
+            and (
+                "reporting_officer" in roles
+                or truthy(reviewer_emp.get("is_reporting_officer"))
+            )
         )
 
     return False
@@ -384,23 +408,26 @@ def scoped_leave_query(db, leave_obj_id):
     if roles.intersection(ADMIN_HR_ROLES):
         return q
 
-    reviewer_emp_id = current_employee_id(db)
+    reviewer_emp = current_employee(db)
 
-    if not reviewer_emp_id:
+    if not reviewer_emp:
         q["employee_id"] = "__none__"
         return q
 
-    scope_or = []
+    reviewer_emp_id = str(reviewer_emp["_id"])
+    scope_or = [{"employee_id": reviewer_emp_id}]
 
-    if "team_leader" in roles:
-        scope_or.append({"team_leader_id": reviewer_emp_id})
+    if "team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")):
+        scope_or.append({
+            "team_leader_id": reviewer_emp_id,
+            "approval_stage": "team_leader",
+        })
 
-    if roles.intersection({"reporting_officer", "manager", "ro"}):
-        scope_or.append({"reporting_officer_id": reviewer_emp_id})
-
-    if not scope_or:
-        q["employee_id"] = "__none__"
-        return q
+    if "reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")):
+        scope_or.append({
+            "reporting_officer_id": reviewer_emp_id,
+            "approval_stage": "reporting_officer",
+        })
 
     q["$or"] = scope_or
     return q
@@ -430,10 +457,13 @@ def ensure_leave_balance(db, employee, leave_type):
     doc = {
         "tenant_id": tenant_id,
         "employee_id": str(employee["_id"]),
+        "employee_code": employee_code(employee),
+        "emp_code": employee.get("emp_code", ""),
         "employee_name": employee_display_name(employee),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "leave_type": leave_type,
+        "leave_type_label": leave_type_label(leave_type),
         "opening_balance": 0.0,
         "credited": 0.0,
         "used": 0.0,
@@ -575,6 +605,185 @@ def notify_employee_leave_decision(db, employee, leave_doc, status):
     )
 
 
+def resolve_handover_employee(db, tenant_id, employee, raw_employee_id):
+    handover_id = normalize_text(raw_employee_id)
+
+    if not handover_id:
+        return {
+            "task_handover_to_id": "",
+            "task_handover_to_name": "",
+            "task_handover_employee_id": "",
+            "task_handover_to_employee_code": "",
+        }
+
+    handover_obj_id = safe_object_id(handover_id)
+
+    if not handover_obj_id:
+        raise ValueError("Invalid task handover employee")
+
+    q = {
+        "_id": handover_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+
+    if employee.get("department"):
+        q["department"] = employee.get("department")
+
+    handover_employee = db.employees.find_one(q)
+
+    if not handover_employee:
+        raise ValueError("Task handover employee must be an active member of the same department")
+
+    if str(handover_employee.get("_id")) == str(employee.get("_id")):
+        raise ValueError("Task handover cannot be assigned to yourself")
+
+    handover_code = employee_code(handover_employee)
+
+    return {
+        "task_handover_to_id": str(handover_employee["_id"]),
+        "task_handover_to_name": employee_display_name(handover_employee),
+        "task_handover_employee_id": handover_code,
+        "task_handover_to_employee_code": handover_code,
+    }
+
+
+def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name=""):
+    project_id = normalize_text(raw_project_id)
+    project_name = normalize_text(raw_project_name)
+
+    if not project_id and not project_name:
+        return {
+            "project_handover_id": "",
+            "project_handover_name": "",
+        }
+
+    if project_id:
+        project_obj_id = safe_object_id(project_id)
+
+        if not project_obj_id:
+            raise ValueError("Invalid project handover selection")
+
+        project = db.projects.find_one({
+            "_id": project_obj_id,
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
+
+        if not project:
+            raise ValueError("Selected project was not found")
+
+        return {
+            "project_handover_id": str(project["_id"]),
+            "project_handover_name": project.get("name", ""),
+        }
+
+    return {
+        "project_handover_id": "",
+        "project_handover_name": project_name,
+    }
+
+
+def leave_stage_status_fields(initial_stage):
+    return {
+        "team_leader_status": "pending" if initial_stage == "team_leader" else "not_applicable",
+        "reporting_officer_status": "pending" if initial_stage == "reporting_officer" else "not_applicable",
+        "hr_status": "pending" if initial_stage == "hr" else "view_only",
+    }
+
+
+def approval_stage_update_fields(stage, status, note):
+    now = datetime.utcnow()
+    actor_id = str(g.current_user["_id"])
+    actor_name = g.current_user.get("name") or g.current_user.get("email")
+
+    prefix_map = {
+        "team_leader": "team_leader",
+        "reporting_officer": "reporting_officer",
+        "hr": "hr",
+    }
+
+    prefix = prefix_map.get(stage)
+
+    if not prefix:
+        return {}
+
+    return {
+        f"{prefix}_status": status,
+        f"{prefix}_decision_note": note,
+        f"{prefix}_decision_by": actor_id,
+        f"{prefix}_decision_by_name": actor_name,
+        f"{prefix}_decision_at": now,
+    }
+
+
+def date_range_for_period(period, base_value=None):
+    base = parse_date(base_value) or date.today()
+    period = normalize_text(period).lower()
+
+    if period in ["day", "today"]:
+        return base, base
+
+    if period in ["week", "this_week"]:
+        start = base - timedelta(days=base.weekday())
+        return start, start + timedelta(days=6)
+
+    if period in ["month", "this_month"]:
+        start = base.replace(day=1)
+        if start.month == 12:
+            next_month = start.replace(year=start.year + 1, month=1, day=1)
+        else:
+            next_month = start.replace(month=start.month + 1, day=1)
+        return start, next_month - timedelta(days=1)
+
+    if period in ["year", "this_year"]:
+        return date(base.year, 1, 1), date(base.year, 12, 31)
+
+    return None, None
+
+
+def leave_list_scope_query(db):
+    roles = current_user_roles()
+    tenant_arg = normalize_text(request.args.get("tenant_id"))
+
+    if "super_admin" in roles and tenant_arg:
+        q = {"tenant_id": tenant_arg}
+    elif "super_admin" in roles and not tenant_arg:
+        q = {}
+    else:
+        q = {"tenant_id": current_tenant_id()}
+
+    q["is_deleted"] = {"$ne": True}
+
+    if roles.intersection(ADMIN_HR_ROLES):
+        return q
+
+    employee = current_employee(db)
+
+    if not employee:
+        q["employee_id"] = "__none__"
+        return q
+
+    emp_id = str(employee["_id"])
+    scope_or = [{"employee_id": emp_id}]
+
+    if "team_leader" in roles or truthy(employee.get("is_team_leader")):
+        scope_or.append({
+            "team_leader_id": emp_id,
+            "approval_stage": "team_leader",
+        })
+
+    if "reporting_officer" in roles or truthy(employee.get("is_reporting_officer")):
+        scope_or.append({
+            "reporting_officer_id": emp_id,
+            "approval_stage": "reporting_officer",
+        })
+
+    q["$or"] = scope_or
+    return q
+
+
 # -----------------------------------------------------------------------------
 # Leave management APIs
 # -----------------------------------------------------------------------------
@@ -665,9 +874,12 @@ def set_leave_balance(employee_id):
             {"_id": existing["_id"]},
             {
                 "$set": {
+                    "employee_code": employee_code(employee),
+                    "emp_code": employee.get("emp_code", ""),
                     "employee_name": employee_display_name(employee),
                     "department": employee.get("department", ""),
                     "designation": employee.get("designation", ""),
+                    "leave_type_label": leave_type_label(leave_type),
                     "opening_balance": total,
                     "credited": total,
                     "available": available,
@@ -697,6 +909,128 @@ def set_leave_balance(employee_id):
     })
 
 
+@workflow_bp.get("/leave_requests/options")
+@current_user_required
+def leave_request_options():
+    db = get_db()
+    employee = current_employee(db)
+
+    if not employee:
+        return jsonify({
+            "members": [],
+            "task_handover_options": [],
+            "projects": [],
+        })
+
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+
+    member_query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+        "_id": {"$ne": employee["_id"]},
+    }
+
+    if employee.get("department"):
+        member_query["department"] = employee.get("department")
+
+    members = list(
+        db.employees
+        .find(member_query, {
+            "name": 1,
+            "employee_id": 1,
+            "emp_code": 1,
+            "department": 1,
+            "designation": 1,
+        })
+        .sort("name", 1)
+        .limit(500)
+    )
+
+    projects = list(
+        db.projects
+        .find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "status": {"$ne": "inactive"},
+        }, {"name": 1, "status": 1})
+        .sort("name", 1)
+        .limit(500)
+    )
+
+    return jsonify({
+        "members": clean_doc(members),
+        "task_handover_options": clean_doc(members),
+        "projects": clean_doc(projects),
+    })
+
+
+@workflow_bp.get("/leave_requests")
+@current_user_required
+def list_leave_requests():
+    db = get_db()
+    q = leave_list_scope_query(db)
+
+    status = normalize_text(request.args.get("status"))
+    employee_id = normalize_text(request.args.get("employee_id"))
+    department = normalize_text(request.args.get("department"))
+    approval_stage = normalize_text(request.args.get("approval_stage"))
+    task_handover_to_id = normalize_text(request.args.get("task_handover_to_id"))
+    project_handover_id = normalize_text(request.args.get("project_handover_id"))
+    leave_type = normalize_leave_type(request.args.get("leave_type")) if request.args.get("leave_type") else ""
+    period = normalize_text(request.args.get("period"))
+    base_date = (
+        normalize_text(request.args.get("on_date"))
+        or normalize_text(request.args.get("date"))
+    )
+    date_from = parse_date(request.args.get("date_from"))
+    date_to = parse_date(request.args.get("date_to"))
+
+    if status:
+        q["status"] = status
+
+    if employee_id:
+        q["employee_id"] = employee_id
+
+    if department:
+        q["department"] = department
+
+    if approval_stage:
+        q["approval_stage"] = approval_stage
+
+    if task_handover_to_id:
+        q["task_handover_to_id"] = task_handover_to_id
+
+    if project_handover_id:
+        q["project_handover_id"] = project_handover_id
+
+    if leave_type:
+        q["leave_type"] = leave_type
+
+    if period and not (date_from or date_to):
+        date_from, date_to = date_range_for_period(period, base_date)
+
+    if date_from or date_to:
+        overlap = {}
+
+        if date_to:
+            overlap["from_date"] = {"$lte": date_to.isoformat()}
+
+        if date_from:
+            overlap["to_date"] = {"$gte": date_from.isoformat()}
+
+        q.update(overlap)
+
+    items = list(
+        db.leave_requests
+        .find(q)
+        .sort([("from_date", -1), ("created_at", -1)])
+        .limit(1000)
+    )
+
+    return jsonify({"items": clean_doc(items)})
+
+
 @workflow_bp.post("/leave_requests/apply")
 @current_user_required
 def apply_leave_request():
@@ -709,19 +1043,24 @@ def apply_leave_request():
     data = request.get_json(silent=True) or {}
     leave_type = normalize_leave_type(data.get("leave_type"))
     from_date = parse_date(data.get("from_date"))
-    to_date = parse_date(data.get("to_date")) or from_date
+    to_date = parse_date(data.get("to_date") or data.get("upto_date")) or from_date
     reason = normalize_text(data.get("reason"))
-    leave_days = calculate_leave_days(data)
     tenant_id = employee.get("tenant_id") or current_tenant_id()
 
+    leave_days = calculate_leave_days({
+        "from_date": from_date.isoformat() if from_date else "",
+        "to_date": to_date.isoformat() if to_date else "",
+        "leave_days": data.get("leave_days"),
+    })
+
     if leave_type not in ["CL", "EL", "COMP-OFF"]:
-        return jsonify({"message": "Leave type must be CL, EL, or COMP-OFF"}), 400
+        return jsonify({"message": "Leave type must be Casual Leave or Earned Leave"}), 400
 
     if not from_date or not to_date:
-        return jsonify({"message": "From date and to date are required"}), 400
+        return jsonify({"message": "From date and upto date are required"}), 400
 
     if to_date < from_date:
-        return jsonify({"message": "To date cannot be before from date"}), 400
+        return jsonify({"message": "Upto date cannot be before from date"}), 400
 
     if from_date < date.today():
         return jsonify({"message": "Leave date cannot be in the past"}), 400
@@ -729,11 +1068,21 @@ def apply_leave_request():
     if not reason:
         return jsonify({"message": "Leave reason is required"}), 400
 
-    if leave_type == "EL" and leave_days == 0.5:
-        return jsonify({"message": "Half-day leave is deducted from CL, not EL"}), 400
-
-    if leave_days == 0.5:
-        leave_type = "CL"
+    try:
+        handover_data = resolve_handover_employee(
+            db,
+            tenant_id,
+            employee,
+            data.get("task_handover_to_id") or data.get("task_handover_to") or data.get("handover_employee_id"),
+        )
+        project_data = resolve_project_handover(
+            db,
+            tenant_id,
+            data.get("project_handover_id") or data.get("project_id"),
+            data.get("project_handover_name") or data.get("project_name") or data.get("project"),
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     existing_leave = db.leave_requests.find_one({
         "tenant_id": tenant_id,
@@ -753,7 +1102,7 @@ def apply_leave_request():
 
     if not sufficient:
         return jsonify({
-            "message": f"Insufficient {leave_type} balance",
+            "message": f"Insufficient {leave_type_label(leave_type)} balance",
             "available": float(balance.get("available", 0) or 0) if balance else 0,
         }), 400
 
@@ -763,7 +1112,10 @@ def apply_leave_request():
     doc = {
         "tenant_id": tenant_id,
         "employee_id": str(employee["_id"]),
+        "employee_code": employee_code(employee),
+        "emp_code": employee.get("emp_code", ""),
         "employee_name": employee_display_name(employee),
+        "employee_email": employee.get("email", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "team_leader_id": employee.get("team_leader_id", ""),
@@ -771,14 +1123,18 @@ def apply_leave_request():
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
         "leave_type": leave_type,
+        "leave_type_label": leave_type_label(leave_type),
         "leave_days": leave_days,
-        "is_half_day": leave_days == 0.5,
         "from_date": from_date.isoformat(),
         "to_date": to_date.isoformat(),
+        "upto_date": to_date.isoformat(),
         "reason": reason,
+        **handover_data,
+        **project_data,
         "status": "pending",
         "approval_stage": initial_stage,
         "approval_stage_label": leave_stage_label(initial_stage),
+        **leave_stage_status_fields(initial_stage),
         "approval_history": [],
         "balance_deducted": False,
         "created_at": now,
@@ -849,23 +1205,28 @@ def leave_decision(req_id):
     if status == "rejected":
         rollback_compoff_claim_if_needed(db, existing)
 
-        update = {
-            "$set": {
-                "status": "rejected",
-                "approval_stage": "rejected",
-                "approval_stage_label": "Rejected",
-                "decision_reason": note,
-                "rejected_at": now,
-                "rejected_by": str(g.current_user["_id"]),
-                "rejected_by_name": g.current_user.get("name") or g.current_user.get("email"),
-                "updated_at": now,
-            },
-            "$push": {
-                "approval_history": create_leave_history_entry("rejected", current_stage, note),
-            },
+        stage_fields = approval_stage_update_fields(current_stage, "rejected", note)
+        update_set = {
+            "status": "rejected",
+            "approval_stage": "rejected",
+            "approval_stage_label": "Rejected",
+            "decision_reason": note,
+            "rejected_at": now,
+            "rejected_by": str(g.current_user["_id"]),
+            "rejected_by_name": g.current_user.get("name") or g.current_user.get("email"),
+            "updated_at": now,
+            **stage_fields,
         }
 
-        db.leave_requests.update_one({"_id": leave_obj_id}, update)
+        db.leave_requests.update_one(
+            {"_id": leave_obj_id},
+            {
+                "$set": update_set,
+                "$push": {
+                    "approval_history": create_leave_history_entry("rejected", current_stage, note),
+                },
+            },
+        )
         updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
         notify_employee_leave_decision(db, employee, updated, "rejected")
@@ -877,21 +1238,34 @@ def leave_decision(req_id):
         })
 
     next_stage = next_leave_stage(employee, current_stage)
+    current_stage_fields = approval_stage_update_fields(current_stage, "approved", note)
 
     if next_stage != "final":
-        update = {
-            "$set": {
-                "status": "pending",
-                "approval_stage": next_stage,
-                "approval_stage_label": leave_stage_label(next_stage),
-                "updated_at": now,
-            },
-            "$push": {
-                "approval_history": create_leave_history_entry("approved", current_stage, note),
-            },
+        next_pending_fields = {}
+
+        if next_stage == "reporting_officer":
+            next_pending_fields["reporting_officer_status"] = "pending"
+        elif next_stage == "hr":
+            next_pending_fields["hr_status"] = "pending"
+
+        update_set = {
+            "status": "pending",
+            "approval_stage": next_stage,
+            "approval_stage_label": leave_stage_label(next_stage),
+            "updated_at": now,
+            **current_stage_fields,
+            **next_pending_fields,
         }
 
-        db.leave_requests.update_one({"_id": leave_obj_id}, update)
+        db.leave_requests.update_one(
+            {"_id": leave_obj_id},
+            {
+                "$set": update_set,
+                "$push": {
+                    "approval_history": create_leave_history_entry("approved", current_stage, note),
+                },
+            },
+        )
         updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
         notify_next_leave_approvers(db, employee, updated, next_stage)
@@ -913,30 +1287,34 @@ def leave_decision(req_id):
 
         if not sufficient:
             return jsonify({
-                "message": f"Insufficient {leave_type} balance at final approval",
+                "message": f"Insufficient {leave_type_label(leave_type)} balance at final approval",
                 "available": float(balance.get("available", 0) or 0) if balance else 0,
             }), 400
 
         deduct_leave_balance(db, employee, existing)
 
-    update = {
-        "$set": {
-            "status": "approved",
-            "approval_stage": "approved",
-            "approval_stage_label": "Approved",
-            "decision_reason": note,
-            "approved_at": now,
-            "approved_by": str(g.current_user["_id"]),
-            "approved_by_name": g.current_user.get("name") or g.current_user.get("email"),
-            "balance_deducted": leave_type in LEAVE_TYPES_WITH_BALANCE,
-            "updated_at": now,
-        },
-        "$push": {
-            "approval_history": create_leave_history_entry("approved", current_stage, note),
-        },
+    update_set = {
+        "status": "approved",
+        "approval_stage": "approved",
+        "approval_stage_label": "Approved",
+        "decision_reason": note,
+        "approved_at": now,
+        "approved_by": str(g.current_user["_id"]),
+        "approved_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "balance_deducted": leave_type in LEAVE_TYPES_WITH_BALANCE,
+        "updated_at": now,
+        **current_stage_fields,
     }
 
-    db.leave_requests.update_one({"_id": leave_obj_id}, update)
+    db.leave_requests.update_one(
+        {"_id": leave_obj_id},
+        {
+            "$set": update_set,
+            "$push": {
+                "approval_history": create_leave_history_entry("approved", current_stage, note),
+            },
+        },
+    )
     updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
     notify_employee_leave_decision(db, employee, updated, "approved")
@@ -958,8 +1336,6 @@ def leave_decision(req_id):
     "admin",
     "finance",
     "accounts_finance",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 )
@@ -1123,6 +1499,7 @@ def payroll_run():
                 "$set": {
                     "tenant_id": tenant_id,
                     "employee_id": str(employee["_id"]),
+                    "employee_code": employee_code(employee),
                     "employee_name": employee.get("name"),
                     "month": month,
                     "gross": gross,
@@ -1165,8 +1542,6 @@ def payroll_run():
     "hr_admin",
     "hr_manager",
     "hr",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
 )
@@ -1212,11 +1587,14 @@ def create_performance_review():
     if not roles.intersection(ADMIN_HR_ROLES):
         can_review = False
 
-        if "team_leader" in roles and employee.get("team_leader_id") == reviewer_emp_id:
+        if (
+            ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader") if reviewer_emp else False))
+            and employee.get("team_leader_id") == reviewer_emp_id
+        ):
             can_review = True
 
         if (
-            roles.intersection({"reporting_officer", "manager", "ro"})
+            ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer") if reviewer_emp else False))
             and employee.get("reporting_officer_id") == reviewer_emp_id
         ):
             can_review = True
@@ -1226,11 +1604,16 @@ def create_performance_review():
 
     reviewer_role = "admin_hr"
 
-    if "team_leader" in roles and employee.get("team_leader_id") == reviewer_emp_id:
+    if (
+        reviewer_emp
+        and ("team_leader" in roles or truthy(reviewer_emp.get("is_team_leader")))
+        and employee.get("team_leader_id") == reviewer_emp_id
+    ):
         reviewer_role = "team_leader"
 
     if (
-        roles.intersection({"reporting_officer", "manager", "ro"})
+        reviewer_emp
+        and ("reporting_officer" in roles or truthy(reviewer_emp.get("is_reporting_officer")))
         and employee.get("reporting_officer_id") == reviewer_emp_id
     ):
         reviewer_role = "reporting_officer"
@@ -1238,6 +1621,7 @@ def create_performance_review():
     review = {
         "tenant_id": employee.get("tenant_id") or current_tenant_id(),
         "employee_id": employee_id,
+        "employee_code": employee_code(employee),
         "employee_name": employee.get("name"),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),

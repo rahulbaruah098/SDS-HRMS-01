@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, g, request
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from bson import ObjectId
 
 from app.extensions import get_db
@@ -40,10 +40,9 @@ REPORT_ROLES = (
     "hr",
     "accounts_finance",
     "finance",
-    "manager",
-    "ro",
     "team_leader",
     "reporting_officer",
+    "employee",
 )
 
 
@@ -65,11 +64,21 @@ HR_ADMIN_ROLES = {
 }
 
 
-MANAGER_ROLES = {
-    "manager",
-    "ro",
+TEAM_CAPABILITY_ROLES = {
     "team_leader",
     "reporting_officer",
+}
+
+
+SELF_REPORT_COLLECTIONS = {
+    "attendance_logs",
+    "attendance_mode_requests",
+    "compoff_credits",
+    "leave_balances",
+    "leave_requests",
+    "payslips",
+    "performance_reviews",
+    "expenses",
 }
 
 
@@ -88,6 +97,27 @@ SUPPORTED_HOLIDAY_STATES = [
     "Arunachal Pradesh",
 ]
 
+
+LEAVE_TYPE_ALIASES = {
+    "CL": "CL",
+    "CASUAL LEAVE": "CL",
+    "CASUAL": "CL",
+    "CASUAL_LEAVE": "CL",
+    "EL": "EL",
+    "EARNED LEAVE": "EL",
+    "EARNED": "EL",
+    "EARNED_LEAVE": "EL",
+    "COMP OFF": "COMP-OFF",
+    "COMPOFF": "COMP-OFF",
+    "COMP-OFF": "COMP-OFF",
+    "COMPENSATORY LEAVE": "COMP-OFF",
+    "COMPENSATORY OFF": "COMP-OFF",
+}
+
+
+# -----------------------------------------------------------------------------
+# Common helpers
+# -----------------------------------------------------------------------------
 
 def safe_object_id(value):
     try:
@@ -137,6 +167,15 @@ def normalize_roles(value):
     return []
 
 
+def normalize_leave_type(value):
+    key = normalize_text(value).upper()
+    return LEAVE_TYPE_ALIASES.get(key, key)
+
+
+def truthy(value):
+    return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
+
+
 def current_roles():
     return set(normalize_roles(g.current_user.get("roles", [])))
 
@@ -156,6 +195,61 @@ def parse_date(value):
         return None
 
 
+def month_bounds(target):
+    first = target.replace(day=1)
+
+    if first.month == 12:
+        next_month = first.replace(year=first.year + 1, month=1)
+    else:
+        next_month = first.replace(month=first.month + 1)
+
+    last = next_month - timedelta(days=1)
+    return first, last
+
+
+def year_bounds(target):
+    return date(target.year, 1, 1), date(target.year, 12, 31)
+
+
+def resolve_date_range_from_request(default_period=""):
+    date_from = parse_date(request.args.get("date_from"))
+    date_to = parse_date(request.args.get("date_to"))
+
+    if date_from or date_to:
+        start = date_from or date_to
+        end = date_to or date_from
+        return start, end
+
+    period = normalize_text(
+        request.args.get("period")
+        or request.args.get("range")
+        or request.args.get("view")
+        or default_period
+    ).lower()
+
+    target = (
+        parse_date(request.args.get("on_date"))
+        or parse_date(request.args.get("date"))
+        or date.today()
+    )
+
+    if period in ["today", "day", "daily"]:
+        return target, target
+
+    if period in ["week", "weekly"]:
+        start = target - timedelta(days=target.weekday())
+        end = start + timedelta(days=6)
+        return start, end
+
+    if period in ["month", "monthly"]:
+        return month_bounds(target)
+
+    if period in ["year", "yearly"]:
+        return year_bounds(target)
+
+    return None, None
+
+
 def build_report_query():
     roles = current_roles()
     tenant_arg = normalize_text(request.args.get("tenant_id"))
@@ -163,6 +257,7 @@ def build_report_query():
     if "super_admin" in roles:
         if tenant_arg:
             return {"tenant_id": tenant_arg}
+
         return {}
 
     return {"tenant_id": current_tenant_id()}
@@ -186,6 +281,19 @@ def current_employee(db):
     })
 
 
+def current_employee_id(db):
+    employee = current_employee(db)
+    return str(employee["_id"]) if employee else ""
+
+
+def employee_is_team_leader(employee):
+    return truthy(employee.get("is_team_leader")) if employee else False
+
+
+def employee_is_reporting_officer(employee):
+    return truthy(employee.get("is_reporting_officer")) if employee else False
+
+
 def scoped_employee_ids(db):
     roles = current_roles()
 
@@ -200,25 +308,30 @@ def scoped_employee_ids(db):
     employee_id = str(employee["_id"])
     scope_or = []
 
-    if "team_leader" in roles:
+    if "team_leader" in roles or employee_is_team_leader(employee):
         scope_or.append({"team_leader_id": employee_id})
 
-    if roles.intersection({"manager", "ro", "reporting_officer"}):
+    if "reporting_officer" in roles or employee_is_reporting_officer(employee):
         scope_or.append({"reporting_officer_id": employee_id})
 
     if not scope_or:
-        return []
+        return [employee_id]
 
     rows = list(
         db.employees.find({
-            "tenant_id": current_tenant_id(),
+            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
             "status": {"$ne": "Inactive"},
             "is_deleted": {"$ne": True},
             "$or": scope_or,
         })
     )
 
-    return [str(row["_id"]) for row in rows]
+    ids = [str(row["_id"]) for row in rows]
+
+    if employee_id not in ids:
+        ids.append(employee_id)
+
+    return ids
 
 
 def apply_employee_scope(db, q, employee_field="employee_id"):
@@ -235,18 +348,30 @@ def apply_employee_scope(db, q, employee_field="employee_id"):
     return q
 
 
-def add_date_filter(q, date_field="date"):
-    date_from = normalize_text(request.args.get("date_from"))
-    date_to = normalize_text(request.args.get("date_to"))
+def add_date_filter(q, date_field="date", default_period=""):
+    start, end = resolve_date_range_from_request(default_period)
 
-    if date_from or date_to:
+    if start or end:
         q[date_field] = {}
 
-        if date_from:
-            q[date_field]["$gte"] = date_from
+        if start:
+            q[date_field]["$gte"] = start.isoformat()
 
-        if date_to:
-            q[date_field]["$lte"] = date_to
+        if end:
+            q[date_field]["$lte"] = end.isoformat()
+
+    return q
+
+
+def add_leave_overlap_date_filter(q):
+    start, end = resolve_date_range_from_request()
+
+    if start or end:
+        start_str = start.isoformat() if start else "0000-01-01"
+        end_str = end.isoformat() if end else "9999-12-31"
+
+        q["from_date"] = {"$lte": end_str}
+        q["to_date"] = {"$gte": start_str}
 
     return q
 
@@ -304,26 +429,110 @@ def build_date_query(base_query, target_date):
     return q
 
 
+def summarize_leave_requests(items):
+    summary = {
+        "total": len(items),
+        "pending": 0,
+        "approved": 0,
+        "rejected": 0,
+        "casual_leave": 0.0,
+        "earned_leave": 0.0,
+        "comp_off": 0.0,
+        "total_days": 0.0,
+    }
+
+    for item in items:
+        status = normalize_text(item.get("status")).lower()
+        leave_type = normalize_leave_type(item.get("leave_type"))
+        days = float(item.get("leave_days", 0) or 0)
+
+        if status in summary:
+            summary[status] += 1
+
+        if leave_type == "CL":
+            summary["casual_leave"] += days
+        elif leave_type == "EL":
+            summary["earned_leave"] += days
+        elif leave_type == "COMP-OFF":
+            summary["comp_off"] += days
+
+        summary["total_days"] += days
+
+    return summary
+
+
+def leave_type_options():
+    return [
+        {"value": "CL", "label": "Casual Leave"},
+        {"value": "EL", "label": "Earned Leave"},
+    ]
+
+
+def scoped_collection_query_for_summary(db, collection, base_query):
+    q = dict(base_query)
+
+    if collection in SELF_REPORT_COLLECTIONS:
+        q = apply_employee_scope(db, q, "employee_id")
+
+    if collection == "employees":
+        roles = current_roles()
+
+        if not roles.intersection(HR_ADMIN_ROLES) and "super_admin" not in roles:
+            ids = scoped_employee_ids(db)
+
+            if ids is not None:
+                object_ids = [safe_object_id(item) for item in ids]
+                object_ids = [item for item in object_ids if item]
+                q["_id"] = {"$in": object_ids}
+
+    if collection == "notifications":
+        roles = current_roles()
+
+        if not roles.intersection(HR_ADMIN_ROLES) and "super_admin" not in roles:
+            q["user_id"] = str(g.current_user["_id"])
+
+    return q
+
+
+# -----------------------------------------------------------------------------
+# Reports APIs
+# -----------------------------------------------------------------------------
+
 @reports_bp.get("/summary")
 @roles_required(*REPORT_ROLES)
 def summary():
     db = get_db()
-    q = build_report_query()
+    base_q = build_report_query()
 
-    counts = {
-        collection: collection_count(db, collection, q)
-        for collection in REPORT_COLLECTIONS
-    }
+    counts = {}
+
+    for collection in REPORT_COLLECTIONS:
+        scoped_q = scoped_collection_query_for_summary(db, collection, base_q)
+        counts[collection] = collection_count(db, collection, scoped_q)
 
     today = today_string()
 
-    attendance_today_query = build_date_query(q, today)
+    attendance_today_query = build_date_query(
+        apply_employee_scope(db, dict(base_q), "employee_id"),
+        today,
+    )
 
-    leave_pending_query = build_status_query(q, "pending")
-    mode_pending_query = build_status_query(q, "pending")
-    compoff_available_query = build_status_query(q, "available")
+    leave_pending_query = build_status_query(
+        apply_employee_scope(db, dict(base_q), "employee_id"),
+        "pending",
+    )
 
-    holiday_today_query = dict(q)
+    mode_pending_query = build_status_query(
+        apply_employee_scope(db, dict(base_q), "employee_id"),
+        "pending",
+    )
+
+    compoff_available_query = build_status_query(
+        apply_employee_scope(db, dict(base_q), "employee_id"),
+        "available",
+    )
+
+    holiday_today_query = dict(base_q)
     holiday_today_query["date"] = today
     holiday_today_query["status"] = {"$ne": "inactive"}
     holiday_today_query["is_deleted"] = {"$ne": True}
@@ -364,12 +573,12 @@ def summary():
             "leave_requests": db.leave_requests.count_documents(leave_pending_query),
             "wfh_field_requests": db.attendance_mode_requests.count_documents(mode_pending_query),
             "expenses": db.expenses.count_documents({
-                **q,
+                **apply_employee_scope(db, dict(base_q), "employee_id"),
                 "status": "pending",
                 "is_deleted": {"$ne": True},
             }),
             "tickets": db.tickets.count_documents({
-                **q,
+                **base_q,
                 "status": {"$in": ["open", "in_progress"]},
                 "is_deleted": {"$ne": True},
             }),
@@ -381,12 +590,12 @@ def summary():
         "compoff": {
             "available": db.compoff_credits.count_documents(compoff_available_query),
             "claimed": db.compoff_credits.count_documents({
-                **q,
+                **apply_employee_scope(db, dict(base_q), "employee_id"),
                 "status": "claimed",
                 "is_deleted": {"$ne": True},
             }),
             "expired": db.compoff_credits.count_documents({
-                **q,
+                **apply_employee_scope(db, dict(base_q), "employee_id"),
                 "status": "expired",
                 "is_deleted": {"$ne": True},
             }),
@@ -506,7 +715,7 @@ def leave_balances_report():
     q = apply_employee_scope(db, q, "employee_id")
     q = with_not_deleted(q)
 
-    leave_type = normalize_text(request.args.get("leave_type")).upper()
+    leave_type = normalize_leave_type(request.args.get("leave_type"))
 
     if leave_type:
         q["leave_type"] = leave_type
@@ -518,7 +727,10 @@ def leave_balances_report():
         .limit(1000)
     )
 
-    return jsonify({"items": clean_doc(items)})
+    return jsonify({
+        "leave_types": leave_type_options(),
+        "items": clean_doc(items),
+    })
 
 
 @reports_bp.get("/leave-requests")
@@ -528,11 +740,11 @@ def leave_requests_report():
 
     q = build_report_query()
     q = add_common_filters(q)
-    q = add_date_filter(q, "from_date")
+    q = add_leave_overlap_date_filter(q)
     q = apply_employee_scope(db, q, "employee_id")
     q = with_not_deleted(q)
 
-    leave_type = normalize_text(request.args.get("leave_type")).upper()
+    leave_type = normalize_leave_type(request.args.get("leave_type"))
 
     if leave_type:
         q["leave_type"] = leave_type
@@ -542,14 +754,33 @@ def leave_requests_report():
     if approval_stage:
         q["approval_stage"] = approval_stage
 
+    task_handover_to_id = normalize_text(request.args.get("task_handover_to_id"))
+    project_handover_id = normalize_text(request.args.get("project_handover_id"))
+
+    if task_handover_to_id:
+        q["task_handover_to_id"] = task_handover_to_id
+
+    if project_handover_id:
+        q["project_handover_id"] = project_handover_id
+
     items = list(
         db.leave_requests
         .find(q)
-        .sort("created_at", -1)
+        .sort([("from_date", -1), ("created_at", -1)])
         .limit(1000)
     )
 
-    return jsonify({"items": clean_doc(items)})
+    return jsonify({
+        "leave_types": leave_type_options(),
+        "summary": summarize_leave_requests(items),
+        "items": clean_doc(items),
+    })
+
+
+@reports_bp.get("/leave-records")
+@roles_required(*REPORT_ROLES)
+def leave_records_report():
+    return leave_requests_report()
 
 
 @reports_bp.get("/audit")

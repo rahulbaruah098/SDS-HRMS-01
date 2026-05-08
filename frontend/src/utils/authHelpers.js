@@ -1,4 +1,4 @@
-import { currentUser } from '../api/client';
+import { currentUser, currentEmployee } from '../api/client';
 
 export const SUPER_ADMIN_ROLES = [
   'super_admin',
@@ -19,76 +19,49 @@ export const FINANCE_ROLES = [
   'accounts_finance',
 ];
 
-export const TEAM_AUTHORITY_ROLES = [
+export const EMPLOYEE_BASE_ROLES = [
+  'employee',
+];
+
+export const EMPLOYEE_CAPABILITY_ROLES = [
   'manager',
   'ro',
   'team_leader',
   'reporting_officer',
+];
+
+export const TEAM_AUTHORITY_ROLES = [
+  ...EMPLOYEE_CAPABILITY_ROLES,
 ];
 
 export const ATTENDANCE_MANAGER_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
+  ...HR_ADMIN_ROLES,
+  ...EMPLOYEE_CAPABILITY_ROLES,
 ];
 
 export const ATTENDANCE_ALL_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
+  ...HR_ADMIN_ROLES,
+  ...EMPLOYEE_CAPABILITY_ROLES,
+  ...EMPLOYEE_BASE_ROLES,
 ];
 
 export const LEAVE_MANAGER_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
+  ...HR_ADMIN_ROLES,
+  ...EMPLOYEE_CAPABILITY_ROLES,
 ];
 
 export const LEAVE_ALL_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
+  ...HR_ADMIN_ROLES,
+  ...EMPLOYEE_CAPABILITY_ROLES,
+  ...EMPLOYEE_BASE_ROLES,
 ];
 
 export const ALL_SYSTEM_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
+  ...HR_ADMIN_ROLES,
   'finance',
   'accounts_finance',
-  'manager',
-  'ro',
-  'team_leader',
-  'reporting_officer',
-  'employee',
+  ...EMPLOYEE_CAPABILITY_ROLES,
+  ...EMPLOYEE_BASE_ROLES,
 ];
 
 export function normalizeRoles(input) {
@@ -114,9 +87,17 @@ export function normalizeRoles(input) {
   return [];
 }
 
+export function truthy(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 export function roles() {
   const user = currentUser();
   return normalizeRoles(user);
+}
+
+export function employeeProfile() {
+  return currentEmployee();
 }
 
 export function hasRole(role) {
@@ -131,6 +112,10 @@ export function hasAnyRole(allowedRoles = []) {
 export function hasAllRoles(requiredRoles = []) {
   const userRoles = roles();
   return requiredRoles.every((role) => userRoles.includes(role));
+}
+
+export function hasCapabilityRole(role) {
+  return EMPLOYEE_CAPABILITY_ROLES.includes(role) && hasRole(role);
 }
 
 export function isSuperAdmin() {
@@ -149,16 +134,34 @@ export function isFinanceUser() {
   return hasAnyRole(FINANCE_ROLES);
 }
 
+export function isEmployeeUser() {
+  return hasAnyRole([...EMPLOYEE_BASE_ROLES, ...EMPLOYEE_CAPABILITY_ROLES]);
+}
+
+export function isEmployeePortalUser() {
+  return isEmployeeUser() && !isAdminUser() && !isFinanceUser() && !isSuperAdmin();
+}
+
 export function isTeamAuthority() {
-  return hasAnyRole(TEAM_AUTHORITY_ROLES);
+  return isEmployeeUser() && hasAnyRole(TEAM_AUTHORITY_ROLES);
 }
 
 export function isTeamLeader() {
-  return hasRole('team_leader');
+  const employee = employeeProfile();
+
+  return (
+    hasRole('team_leader') ||
+    truthy(employee?.is_team_leader)
+  );
 }
 
 export function isReportingOfficer() {
-  return hasAnyRole(['reporting_officer', 'manager', 'ro']);
+  const employee = employeeProfile();
+
+  return (
+    hasAnyRole(['reporting_officer', 'manager', 'ro']) ||
+    truthy(employee?.is_reporting_officer)
+  );
 }
 
 export function canManageEmployees() {
@@ -198,13 +201,7 @@ export function canVerifyAttendance() {
 }
 
 export function canRequestAttendanceMode() {
-  return hasAnyRole([
-    'employee',
-    'team_leader',
-    'reporting_officer',
-    'manager',
-    'ro',
-  ]);
+  return isEmployeeUser();
 }
 
 export function canApproveAttendanceMode() {
@@ -228,13 +225,7 @@ export function canManageCompOff() {
 }
 
 export function canApplyLeave() {
-  return hasAnyRole([
-    'employee',
-    'team_leader',
-    'reporting_officer',
-    'manager',
-    'ro',
-  ]);
+  return isEmployeeUser();
 }
 
 export function canApproveLeave() {
@@ -249,11 +240,20 @@ export function canViewLeaveBalances() {
   return hasAnyRole(LEAVE_ALL_ROLES);
 }
 
+/*
+  Backward-compatible function name.
+  Important correction:
+  Team Leader / Reporting Officer are employee capabilities, not separate
+  dashboard identities. So an employee with team_leader/reporting_officer
+  capability should still be treated as an employee self-service dashboard user.
+*/
 export function isEmployeeOnly() {
   const userRoles = roles();
 
   return (
-    userRoles.includes('employee') &&
+    userRoles.some((role) =>
+      [...EMPLOYEE_BASE_ROLES, ...EMPLOYEE_CAPABILITY_ROLES].includes(role)
+    ) &&
     !userRoles.some((role) =>
       [
         'super_admin',
@@ -263,27 +263,45 @@ export function isEmployeeOnly() {
         'hr',
         'finance',
         'accounts_finance',
-        'manager',
-        'ro',
-        'team_leader',
-        'reporting_officer',
       ].includes(role)
     )
   );
 }
 
 export function isEmployeeSelfServiceUser() {
-  return hasAnyRole([
-    'employee',
-    'team_leader',
-    'reporting_officer',
-    'manager',
-    'ro',
-  ]);
+  return isEmployeeOnly();
+}
+
+export function employeeCapabilityLabel() {
+  const labels = [];
+
+  if (isTeamLeader()) {
+    labels.push('Team Leader');
+  }
+
+  if (isReportingOfficer()) {
+    labels.push('Reporting Officer');
+  }
+
+  return labels.length ? labels.join(' + ') : '';
 }
 
 export function roleLabel(role = '') {
-  return String(role || '')
+  const normalized = String(role || '').trim();
+
+  if (normalized === 'team_leader') {
+    return 'Team Leader Capability';
+  }
+
+  if (normalized === 'reporting_officer') {
+    return 'Reporting Officer Capability';
+  }
+
+  if (normalized === 'ro') {
+    return 'Reporting Officer Capability';
+  }
+
+  return normalized
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -295,5 +313,14 @@ export function currentRoleLabel() {
     return 'User';
   }
 
-  return userRoles.map(roleLabel).join(', ');
+  if (isSuperAdmin()) return 'Super Admin';
+  if (hasRole('admin')) return 'Admin';
+  if (hasRole('hr_admin')) return 'HR Admin';
+  if (hasRole('hr_manager')) return 'HR Manager';
+  if (hasRole('hr')) return 'HR';
+  if (hasAnyRole(['finance', 'accounts_finance'])) return 'Finance';
+
+  const capability = employeeCapabilityLabel();
+
+  return capability ? `Employee • ${capability}` : 'Employee';
 }

@@ -213,7 +213,18 @@ def normalize_roles(value):
     else:
         roles = ["employee"]
 
-    return roles or ["employee"]
+    cleaned_roles = []
+
+    for role in roles:
+        normalized = normalize_role_value(role)
+
+        if normalized in ["team_leader", "reporting_officer", "manager", "ro"]:
+            normalized = "employee"
+
+        if normalized not in cleaned_roles:
+            cleaned_roles.append(normalized)
+
+    return cleaned_roles or ["employee"]
 
 
 def normalize_state(value):
@@ -238,6 +249,8 @@ def normalize_role_value(value):
     role_key = normalize_text(value).lower()
 
     role_map = {
+        "super admin": "super_admin",
+        "super_admin": "super_admin",
         "admin": "admin",
         "hr": "hr",
         "hr admin": "hr_admin",
@@ -259,11 +272,6 @@ def normalize_role_value(value):
     return role_map.get(role_key, "employee")
 
 
-def can_be_reporting_officer(data):
-    designation = normalize_text(data.get("designation")).lower()
-    return designation in ["managing director", "manager"]
-
-
 def resolve_employee_name(db, tenant_id, emp_id):
     if not emp_id:
         return ""
@@ -283,31 +291,6 @@ def resolve_employee_name(db, tenant_id, emp_id):
     return emp.get("name", "") if emp else ""
 
 
-def resolve_reporting_officer_name(db, tenant_id, emp_id):
-    if not emp_id:
-        return ""
-
-    emp_obj_id = safe_object_id(emp_id)
-
-    if not emp_obj_id:
-        return ""
-
-    emp = db.employees.find_one({
-        "_id": emp_obj_id,
-        "tenant_id": tenant_id,
-        "status": {"$ne": "Inactive"},
-        "is_deleted": {"$ne": True},
-    })
-
-    if not emp:
-        return ""
-
-    if not can_be_reporting_officer(emp):
-        return None
-
-    return emp.get("name", "")
-
-
 def build_dynamic_employee_roles(employee_doc, current_user_roles=None):
     current_user_roles = set(current_user_roles or [])
 
@@ -321,38 +304,35 @@ def build_dynamic_employee_roles(employee_doc, current_user_roles=None):
         "accounts_finance",
     }
 
-    dynamic_roles = {
-        "employee",
+    capability_roles = {
         "manager",
         "ro",
         "team_leader",
         "reporting_officer",
     }
 
-    selected_role = normalize_role_value(employee_doc.get("role"))
-
     roles = set(current_user_roles)
 
     if not roles.intersection(protected_roles):
-        roles.difference_update(dynamic_roles)
-        roles.add(selected_role)
+        roles.difference_update(capability_roles)
+        roles.add("employee")
 
     if truthy(employee_doc.get("is_team_leader")):
         roles.add("team_leader")
     else:
-        if selected_role != "team_leader":
-            roles.discard("team_leader")
+        roles.discard("team_leader")
 
-    if truthy(employee_doc.get("is_reporting_officer")) and can_be_reporting_officer(employee_doc):
+    if truthy(employee_doc.get("is_reporting_officer")):
         roles.add("reporting_officer")
     else:
-        if selected_role != "reporting_officer":
-            roles.discard("reporting_officer")
+        roles.discard("reporting_officer")
+        roles.discard("manager")
+        roles.discard("ro")
 
     if not roles:
         roles.add("employee")
 
-    return list(roles)
+    return sorted(list(roles))
 
 
 def sync_employee_roles(db, employee_doc):
@@ -400,6 +380,7 @@ def build_employee_profile_payload(data):
     payload["state"] = normalize_state(payload.get("state") or payload.get("branch"))
     payload["status"] = payload.get("status") or "Active"
 
+    payload["role"] = "Employee"
     payload["is_team_leader"] = str(payload.get("is_team_leader", "false")).lower()
     payload["is_reporting_officer"] = str(payload.get("is_reporting_officer", "false")).lower()
 
@@ -415,6 +396,12 @@ def build_employee_profile_payload(data):
 def ensure_leave_balance_for_employee(db, tenant_id, employee, leave_type, total_days):
     leave_type = normalize_text(leave_type).upper()
     employee_id = str(employee["_id"])
+
+    label_map = {
+        "CL": "Casual Leave",
+        "EL": "Earned Leave",
+        "COMP-OFF": "Comp-Off",
+    }
 
     existing = db.leave_balances.find_one({
         "tenant_id": tenant_id,
@@ -433,6 +420,7 @@ def ensure_leave_balance_for_employee(db, tenant_id, employee, leave_type, total
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "leave_type": leave_type,
+        "leave_type_label": label_map.get(leave_type, leave_type),
         "opening_balance": float(total_days or 0),
         "credited": float(total_days or 0),
         "used": 0.0,
@@ -679,7 +667,7 @@ def create_company():
             "branch": "Assam(HO)",
             "department": "HR & Admin",
             "designation": "Manager",
-            "role": "Admin",
+            "role": "Employee",
             "shift": "General",
             "gender": "",
             "job_type": "Regular",
@@ -795,13 +783,6 @@ def create_user():
     if len(password) < 6:
         return jsonify({"message": "Password must be at least 6 characters"}), 400
 
-    employee_payload_for_role_check = build_employee_profile_payload(data)
-
-    if truthy(employee_payload_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(employee_payload_for_role_check):
-        return jsonify({
-            "message": "Only Managing Director or Manager can be Reporting Officer"
-        }), 400
-
     if db.users.find_one({"email": email}):
         return jsonify({"message": "Email already exists"}), 409
 
@@ -831,17 +812,6 @@ def create_user():
     team_leader_id = data.get("team_leader_id") or ""
     reporting_officer_id = data.get("reporting_officer_id") or ""
 
-    reporting_officer_name = resolve_reporting_officer_name(
-        db,
-        tenant_id,
-        reporting_officer_id,
-    )
-
-    if reporting_officer_id and reporting_officer_name is None:
-        return jsonify({
-            "message": "Selected Reporting Officer must be Managing Director or Manager"
-        }), 400
-
     roles = normalize_roles(data.get("roles") or ["employee"])
 
     user_res = db.users.insert_one({
@@ -866,7 +836,7 @@ def create_user():
         "team_leader_id": team_leader_id,
         "team_leader_name": resolve_employee_name(db, tenant_id, team_leader_id),
         "reporting_officer_id": reporting_officer_id,
-        "reporting_officer_name": reporting_officer_name or "",
+        "reporting_officer_name": resolve_employee_name(db, tenant_id, reporting_officer_id),
         "created_at": now(),
         "created_by": str(g.current_user["_id"]),
     })
@@ -917,21 +887,6 @@ def update_user(user_id):
 
     if not existing_user:
         return jsonify({"message": "User not found"}), 404
-
-    existing_emp_for_validation = db.employees.find_one({
-        "user_id": user_id,
-        "is_deleted": {"$ne": True},
-    }) or {}
-
-    merged_for_role_check = {
-        **existing_emp_for_validation,
-        **build_employee_profile_payload(data),
-    }
-
-    if truthy(merged_for_role_check.get("is_reporting_officer")) and not can_be_reporting_officer(merged_for_role_check):
-        return jsonify({
-            "message": "Only Managing Director or Manager can be Reporting Officer"
-        }), 400
 
     user_update = {}
 
@@ -1052,19 +1007,11 @@ def update_user(user_id):
         )
 
     if "reporting_officer_id" in emp_update:
-        reporting_officer_id = emp_update.get("reporting_officer_id") or ""
-        reporting_officer_name = resolve_reporting_officer_name(
+        emp_update["reporting_officer_name"] = resolve_employee_name(
             db,
             tenant_for_lookup,
-            reporting_officer_id,
+            emp_update.get("reporting_officer_id"),
         )
-
-        if reporting_officer_id and reporting_officer_name is None:
-            return jsonify({
-                "message": "Selected Reporting Officer must be Managing Director or Manager"
-            }), 400
-
-        emp_update["reporting_officer_name"] = reporting_officer_name or ""
 
     updated_emp = None
 

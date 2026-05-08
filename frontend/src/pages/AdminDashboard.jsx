@@ -3,6 +3,26 @@ import { api } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 
+function formatDate(value) {
+  if (!value) return '—';
+
+  try {
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return value;
+  }
+}
+
 function formatDateTime(value) {
   if (!value) return '—';
 
@@ -32,6 +52,24 @@ function modeLabel(mode) {
   return mode || 'Office';
 }
 
+function leaveTypeLabel(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+    return 'Casual Leave';
+  }
+
+  if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+    return 'Earned Leave';
+  }
+
+  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+    return 'Comp-Off';
+  }
+
+  return value || '—';
+}
+
 function statusLabel(value) {
   if (!value) return '—';
 
@@ -39,6 +77,12 @@ function statusLabel(value) {
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function boolLabel(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase())
+    ? 'Yes'
+    : 'No';
 }
 
 export default function AdminDashboard({ setPage }) {
@@ -72,6 +116,10 @@ export default function AdminDashboard({ setPage }) {
   }
 
   const stats = data?.stats || {};
+  const employeeSummary = data?.employee_summary || null;
+  const myPendingLeaves = data?.my_pending_leave_approvals || [];
+  const myPendingModeRequests = data?.my_pending_attendance_mode_requests || [];
+  const teamScopeCount = data?.team_scope_employee_ids?.length || 0;
 
   const statItems = [
     ['Total Employees', stats['Total Employees'] || 0],
@@ -93,12 +141,20 @@ export default function AdminDashboard({ setPage }) {
     ['Designations', stats.Designations || 0],
   ];
 
+  const mappedCapabilityStats = employeeSummary
+    ? [
+        ['My Mapped Employees', teamScopeCount],
+        ['My Leave Approvals', myPendingLeaves.length],
+        ['My WFH/Field Approvals', myPendingModeRequests.length],
+      ]
+    : [];
+
   const recentAttendanceRows = (data?.recent_attendance || []).map((row) => ({
     employee_name: row.employee_name || '—',
     department: row.department || '—',
     designation: row.designation || '—',
     state: row.state || '—',
-    date: row.date || '—',
+    date: formatDate(row.date),
     mode: modeLabel(row.mode),
     status: statusLabel(row.status),
     check_in: formatDateTime(row.check_in),
@@ -109,13 +165,29 @@ export default function AdminDashboard({ setPage }) {
   }));
 
   const pendingLeaveRows = (data?.pending?.leave_requests || []).map((row) => ({
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     employee_name: row.employee_name || '—',
-    leave_type: row.leave_type || '—',
-    from_date: row.from_date || '—',
-    to_date: row.to_date || '—',
+    department: row.department || '—',
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+    from_date: formatDate(row.from_date),
+    upto_date: formatDate(row.to_date || row.upto_date),
     leave_days: row.leave_days ?? '—',
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
     stage: row.approval_stage_label || statusLabel(row.approval_stage),
     reason: row.reason || '—',
+    status: statusLabel(row.status),
+  }));
+
+  const myPendingLeaveRows = myPendingLeaves.map((row) => ({
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+    employee_name: row.employee_name || '—',
+    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+    from_date: formatDate(row.from_date),
+    upto_date: formatDate(row.to_date || row.upto_date),
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
+    stage: row.approval_stage_label || statusLabel(row.approval_stage),
     status: statusLabel(row.status),
   }));
 
@@ -125,27 +197,38 @@ export default function AdminDashboard({ setPage }) {
       department: row.department || '—',
       designation: row.designation || '—',
       mode: modeLabel(row.mode),
-      date: row.date || '—',
+      date: formatDate(row.date),
       reason: row.reason || '—',
       field_location: row.field_location || '—',
       status: statusLabel(row.status),
     }),
   );
 
+  const myPendingModeRows = myPendingModeRequests.map((row) => ({
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    mode: modeLabel(row.mode),
+    date: formatDate(row.date),
+    reason: row.reason || '—',
+    field_location: row.field_location || '—',
+    status: statusLabel(row.status),
+  }));
+
   const recentCompOffRows = (data?.recent_compoffs || []).map((row) => ({
     employee_name: row.employee_name || '—',
     department: row.department || '—',
     designation: row.designation || '—',
-    earned_date: row.earned_date || '—',
-    valid_until: row.valid_until || '—',
-    claimed_date: row.claimed_date || '—',
+    earned_date: formatDate(row.earned_date),
+    valid_until: formatDate(row.valid_until),
+    claimed_date: formatDate(row.claimed_date),
     holiday: row.holiday_title || '—',
     status: statusLabel(row.status),
   }));
 
   const holidayRows = (data?.holidays_today || []).map((row) => ({
     state: row.state || '—',
-    date: row.date || '—',
+    date: formatDate(row.date),
     title: row.title || '—',
     message: row.message || '—',
     status: statusLabel(row.status),
@@ -157,6 +240,8 @@ export default function AdminDashboard({ setPage }) {
     department: row.department || '—',
     designation: row.designation || '—',
     state: row.state || row.branch || '—',
+    is_team_leader: boolLabel(row.is_team_leader),
+    is_reporting_officer: boolLabel(row.is_reporting_officer),
     team_leader: row.team_leader_name || '—',
     reporting_officer: row.reporting_officer_name || '—',
     status: row.status || row.employment_status || '—',
@@ -196,9 +281,9 @@ export default function AdminDashboard({ setPage }) {
           <h1>HRMS Control Center</h1>
 
           <p>
-            Monitor attendance, late entries, WFH/Field requests, holidays,
-            leave approvals, comp-off credits, employees, tickets and expenses
-            from one dashboard.
+            Monitor attendance, WFH/Field requests, holidays, leave approvals,
+            leave balances, employee mappings, comp-off credits, tickets,
+            expenses and reports from one dashboard.
           </p>
 
           <div className="hero-actions">
@@ -231,7 +316,7 @@ export default function AdminDashboard({ setPage }) {
               className="secondary"
               onClick={() => goTo('employees')}
             >
-              Employees
+              Employee Master
             </button>
 
             <button
@@ -268,6 +353,14 @@ export default function AdminDashboard({ setPage }) {
         ))}
       </section>
 
+      {mappedCapabilityStats.length > 0 && (
+        <section className="stats-grid">
+          {mappedCapabilityStats.map(([label, value]) => (
+            <Stat key={label} label={label} value={value} />
+          ))}
+        </section>
+      )}
+
       {holidayRows.length > 0 && (
         <section className="panel">
           <div className="toolbar">
@@ -293,14 +386,63 @@ export default function AdminDashboard({ setPage }) {
         </section>
       )}
 
+      {employeeSummary && (
+        <section className="two-col">
+          <div className="panel">
+            <div className="toolbar">
+              <div>
+                <h3>My Pending Leave Approvals</h3>
+                <p>
+                  These requests are pending at your mapped Team Leader or
+                  Reporting Officer approval stage.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => goTo('leave_requests')}
+              >
+                Open Leave Management
+              </button>
+            </div>
+
+            <Table rows={myPendingLeaveRows} maxColumns={9} />
+          </div>
+
+          <div className="panel">
+            <div className="toolbar">
+              <div>
+                <h3>My Pending WFH / Field Approvals</h3>
+                <p>
+                  These are attendance mode requests assigned to you through
+                  employee mapping.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => goTo('attendance_mode_requests')}
+              >
+                Review Requests
+              </button>
+            </div>
+
+            <Table rows={myPendingModeRows} maxColumns={8} />
+          </div>
+        </section>
+      )}
+
       <section className="two-col">
         <div className="panel">
           <div className="toolbar">
             <div>
               <h3>Pending Leave Requests</h3>
               <p>
-                Requests waiting for Team Leader, Reporting Officer or HR
-                approval.
+                HR/Admin/Super Admin can view all pending leave requests. Actual
+                approval follows Team Leader → Reporting Officer, with HR as
+                fallback when no approver mapping exists.
               </p>
             </div>
 
@@ -313,7 +455,7 @@ export default function AdminDashboard({ setPage }) {
             </button>
           </div>
 
-          <Table rows={pendingLeaveRows} maxColumns={8} />
+          <Table rows={pendingLeaveRows} maxColumns={11} />
         </div>
 
         <div className="panel">
@@ -427,7 +569,10 @@ export default function AdminDashboard({ setPage }) {
           <div className="toolbar">
             <div>
               <h3>Recent Employees</h3>
-              <p>Latest active employee records.</p>
+              <p>
+                Latest active employees with Team Leader and Reporting Officer
+                capability mapping.
+              </p>
             </div>
 
             <button
@@ -439,7 +584,7 @@ export default function AdminDashboard({ setPage }) {
             </button>
           </div>
 
-          <Table rows={recentEmployeeRows} maxColumns={8} />
+          <Table rows={recentEmployeeRows} maxColumns={10} />
         </div>
 
         <div className="panel">

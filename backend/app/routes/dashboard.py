@@ -17,6 +17,37 @@ SUPPORTED_HOLIDAY_STATES = [
 ]
 
 
+ADMIN_HR_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+}
+
+ADMIN_DASHBOARD_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+}
+
+EMPLOYEE_CAPABILITY_ROLES = {
+    "team_leader",
+    "reporting_officer",
+}
+
+PRESENT_ATTENDANCE_STATUSES = [
+    "present",
+    "late",
+    "holiday_work",
+    "early_checkout",
+]
+
+
 def normalize_roles(value):
     if not value:
         return []
@@ -94,6 +125,32 @@ def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
 
+def is_admin_hr_role_set(roles):
+    return bool(set(roles).intersection(ADMIN_HR_ROLES))
+
+
+def is_admin_dashboard_role_set(roles):
+    return bool(set(roles).intersection(ADMIN_DASHBOARD_ROLES))
+
+
+def is_team_leader_capability(employee, roles=None):
+    roles = set(roles or [])
+
+    return bool(
+        truthy(employee.get("is_team_leader"))
+        or "team_leader" in roles
+    )
+
+
+def is_reporting_officer_capability(employee, roles=None):
+    roles = set(roles or [])
+
+    return bool(
+        truthy(employee.get("is_reporting_officer"))
+        or "reporting_officer" in roles
+    )
+
+
 def current_employee(db):
     tenant_id = current_tenant_id()
 
@@ -118,6 +175,15 @@ def employee_state(employee):
         or employee.get("branch")
         or employee.get("work_state")
         or "Assam(HO)"
+    )
+
+
+def employee_code(employee):
+    return (
+        employee.get("employee_id")
+        or employee.get("emp_code")
+        or employee.get("code")
+        or ""
     )
 
 
@@ -274,30 +340,40 @@ def designation_summary(db, tenant_id):
     ]
 
 
-def employee_snapshot(employee):
+def employee_snapshot(employee, roles=None):
     if not employee:
         return None
+
+    roles = set(roles or [])
+    is_team_leader = is_team_leader_capability(employee, roles)
+    is_reporting_officer = is_reporting_officer_capability(employee, roles)
+    display_name = employee.get("name") or employee.get("employee_name") or "Employee"
 
     return {
         "_id": employee.get("_id"),
         "tenant_id": employee.get("tenant_id"),
         "user_id": employee.get("user_id"),
-        "employee_id": employee.get("employee_id", ""),
+        "employee_id": employee_code(employee),
         "emp_code": employee.get("emp_code", ""),
-        "name": employee.get("name", ""),
+        "name": display_name,
+        "display_name": display_name,
+        "dashboard_title": display_name,
+        "dashboard_subtitle": "Employee Dashboard",
+        "display_role": "Employee",
         "email": employee.get("email", ""),
         "phone": employee.get("phone", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
-        "role": employee.get("role", ""),
+        "role": "Employee",
+        "raw_role": employee.get("role", ""),
         "branch": employee.get("branch", ""),
         "state": employee_state(employee),
         "shift": employee.get("shift", ""),
         "joining_date": employee.get("joining_date") or employee.get("doj", ""),
         "employment_status": employee.get("employment_status") or employee.get("status", ""),
         "status": employee.get("status", ""),
-        "is_team_leader": employee.get("is_team_leader", "false"),
-        "is_reporting_officer": employee.get("is_reporting_officer", "false"),
+        "is_team_leader": is_team_leader,
+        "is_reporting_officer": is_reporting_officer,
         "team_leader_id": employee.get("team_leader_id", ""),
         "team_leader_name": employee.get("team_leader_name", ""),
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
@@ -305,13 +381,14 @@ def employee_snapshot(employee):
     }
 
 
-def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles):
+def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None):
     scope_or = []
+    employee = employee or {}
 
-    if "team_leader" in roles:
+    if is_team_leader_capability(employee, roles):
         scope_or.append({"team_leader_id": emp_id})
 
-    if roles.intersection({"reporting_officer", "manager", "ro"}):
+    if is_reporting_officer_capability(employee, roles):
         scope_or.append({"reporting_officer_id": emp_id})
 
     if not scope_or:
@@ -327,6 +404,58 @@ def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles):
     )
 
     return [str(row["_id"]) for row in rows]
+
+
+def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
+    stage_or = []
+
+    if is_team_leader_capability(employee, roles):
+        stage_or.append({
+            "team_leader_id": emp_id,
+            "approval_stage": "team_leader",
+        })
+
+    if is_reporting_officer_capability(employee, roles):
+        stage_or.append({
+            "reporting_officer_id": emp_id,
+            "approval_stage": "reporting_officer",
+        })
+
+    if not stage_or:
+        return None
+
+    return {
+        "tenant_id": tenant_id,
+        "status": "pending",
+        "is_deleted": {"$ne": True},
+        "$or": stage_or,
+    }
+
+
+def pending_attendance_mode_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
+    stage_or = []
+
+    if is_team_leader_capability(employee, roles):
+        stage_or.append({
+            "team_leader_id": emp_id,
+            "approval_stage": "team_leader",
+        })
+
+    if is_reporting_officer_capability(employee, roles):
+        stage_or.append({
+            "reporting_officer_id": emp_id,
+            "approval_stage": "reporting_officer",
+        })
+
+    if not stage_or:
+        return None
+
+    return {
+        "tenant_id": tenant_id,
+        "status": "pending",
+        "is_deleted": {"$ne": True},
+        "$or": stage_or,
+    }
 
 
 def base_active_query(tenant_id):
@@ -364,7 +493,7 @@ def superadmin_dashboard():
         }),
         "Present Today": db.attendance_logs.count_documents({
             "date": today,
-            "status": {"$in": ["present", "late", "holiday_work", "early_checkout"]},
+            "status": {"$in": PRESENT_ATTENDANCE_STATUSES},
             "is_deleted": {"$ne": True},
         }),
         "Late Today": db.attendance_logs.count_documents({
@@ -423,7 +552,7 @@ def superadmin_dashboard():
             "present_today": db.attendance_logs.count_documents({
                 "tenant_id": tenant_id,
                 "date": today,
-                "status": {"$in": ["present", "late", "holiday_work", "early_checkout"]},
+                "status": {"$in": PRESENT_ATTENDANCE_STATUSES},
                 "is_deleted": {"$ne": True},
             }),
             "late_today": db.attendance_logs.count_documents({
@@ -501,25 +630,13 @@ def superadmin_dashboard():
 @current_user_required
 def admin_dashboard():
     db = get_db()
+    roles = current_roles()
 
-    if not has_role(
-        "super_admin",
-        "admin",
-        "hr_admin",
-        "hr_manager",
-        "hr",
-        "finance",
-        "accounts_finance",
-        "manager",
-        "ro",
-        "team_leader",
-        "reporting_officer",
-    ):
+    if not is_admin_dashboard_role_set(roles):
         return jsonify({"message": "Forbidden"}), 403
 
     tenant_id = current_tenant_id()
     today = date.today().isoformat()
-    roles = current_roles()
 
     total_employees = count_collection(
         db,
@@ -543,7 +660,7 @@ def admin_dashboard():
             "attendance_logs",
             {
                 "date": today,
-                "status": {"$in": ["present", "late", "holiday_work", "early_checkout"]},
+                "status": {"$in": PRESENT_ATTENDANCE_STATUSES},
                 "is_deleted": {"$ne": True},
             },
         ),
@@ -777,20 +894,63 @@ def admin_dashboard():
 
     current_emp = current_employee(db)
     team_scope_ids = []
+    my_pending_leave_approvals = []
+    my_pending_attendance_mode_requests = []
 
-    if current_emp and not roles.intersection({"super_admin", "admin", "hr_admin", "hr_manager", "hr"}):
+    if current_emp:
+        current_emp_id = str(current_emp["_id"])
         team_scope_ids = scoped_employee_ids_for_manager(
             db,
             tenant_id,
-            str(current_emp["_id"]),
+            current_emp_id,
+            roles,
+            current_emp,
+        )
+
+        leave_scope = pending_leave_scope_for_employee_capability(
+            tenant_id,
+            current_emp_id,
+            current_emp,
             roles,
         )
+
+        if leave_scope:
+            my_pending_leave_approvals = list(
+                db.leave_requests
+                .find(leave_scope)
+                .sort("created_at", -1)
+                .limit(8)
+            )
+
+        mode_scope = pending_attendance_mode_scope_for_employee_capability(
+            tenant_id,
+            current_emp_id,
+            current_emp,
+            roles,
+        )
+
+        if mode_scope:
+            my_pending_attendance_mode_requests = list(
+                db.attendance_mode_requests
+                .find(mode_scope)
+                .sort("created_at", -1)
+                .limit(8)
+            )
+
+    if my_pending_leave_approvals:
+        stats["My Pending Leave Approvals"] = len(my_pending_leave_approvals)
+
+    if my_pending_attendance_mode_requests:
+        stats["My Pending WFH/Field Approvals"] = len(my_pending_attendance_mode_requests)
 
     return jsonify({
         "stats": stats,
         "today": today,
         "roles": list(roles),
+        "employee_summary": clean_doc(employee_snapshot(current_emp, roles)) if current_emp else None,
         "team_scope_employee_ids": team_scope_ids,
+        "my_pending_leave_approvals": clean_doc(my_pending_leave_approvals),
+        "my_pending_attendance_mode_requests": clean_doc(my_pending_attendance_mode_requests),
         "holidays_today": clean_doc(holidays_today),
         "departments": clean_doc(departments),
         "designations": clean_doc(designations),
@@ -815,6 +975,11 @@ def employee_dashboard():
         return jsonify({
             "employee": None,
             "employee_summary": None,
+            "dashboard_display": {
+                "title": "Employee Dashboard",
+                "subtitle": "Employee profile not found",
+                "display_role": "Employee",
+            },
             "roles": list(roles),
             "is_team_leader": False,
             "is_reporting_officer": False,
@@ -840,11 +1005,9 @@ def employee_dashboard():
     today_date = date.today()
     today = today_date.isoformat()
 
-    is_team_leader_role = "team_leader" in roles or truthy(emp.get("is_team_leader"))
-    is_reporting_officer_role = (
-        roles.intersection({"reporting_officer", "manager", "ro"})
-        or truthy(emp.get("is_reporting_officer"))
-    )
+    is_team_leader_role = is_team_leader_capability(emp, roles)
+    is_reporting_officer_role = is_reporting_officer_capability(emp, roles)
+    employee_name = emp.get("name") or emp.get("employee_name") or "Employee"
 
     team_members = []
 
@@ -978,49 +1141,62 @@ def employee_dashboard():
     team_pending_leaves = []
     team_pending_attendance_mode_requests = []
 
-    if team_scope_ids:
-        leave_scope = {
-            "tenant_id": tenant_id,
-            "employee_id": {"$in": team_scope_ids},
-            "status": "pending",
-            "is_deleted": {"$ne": True},
-        }
+    leave_approval_scope = pending_leave_scope_for_employee_capability(
+        tenant_id,
+        emp_id,
+        emp,
+        roles,
+    )
 
-        mode_scope = {
-            "tenant_id": tenant_id,
-            "employee_id": {"$in": team_scope_ids},
-            "status": "pending",
-            "is_deleted": {"$ne": True},
-        }
-
-        if is_team_leader_role and not is_reporting_officer_role:
-            leave_scope["approval_stage"] = "team_leader"
-
-        if is_reporting_officer_role and not is_team_leader_role:
-            leave_scope["approval_stage"] = "reporting_officer"
-
+    if leave_approval_scope:
         team_pending_leaves = list(
             db.leave_requests
-            .find(leave_scope)
+            .find(leave_approval_scope)
             .sort("created_at", -1)
             .limit(10)
         )
 
+    mode_approval_scope = pending_attendance_mode_scope_for_employee_capability(
+        tenant_id,
+        emp_id,
+        emp,
+        roles,
+    )
+
+    if mode_approval_scope:
         team_pending_attendance_mode_requests = list(
             db.attendance_mode_requests
-            .find(mode_scope)
+            .find(mode_approval_scope)
             .sort("created_at", -1)
             .limit(10)
         )
 
     return jsonify({
         "employee": clean_doc(emp),
-        "employee_summary": clean_doc(employee_snapshot(emp)),
+        "employee_summary": clean_doc(employee_snapshot(emp, roles)),
+        "dashboard_display": {
+            "title": employee_name,
+            "subtitle": "Employee Dashboard",
+            "display_role": "Employee",
+            "show_name_as_primary_heading": True,
+        },
         "roles": list(roles),
         "is_team_leader": bool(is_team_leader_role),
         "is_reporting_officer": bool(is_reporting_officer_role),
+        "capabilities": {
+            "is_team_leader": bool(is_team_leader_role),
+            "is_reporting_officer": bool(is_reporting_officer_role),
+            "can_approve_leave": bool(team_pending_leaves),
+            "can_approve_attendance_mode": bool(team_pending_attendance_mode_requests),
+        },
         "team_members": clean_doc(team_members),
         "reporting_members": clean_doc(reporting_members),
+        "team_member_count": len(team_members),
+        "reporting_member_count": len(reporting_members),
+        "pending_approval_counts": {
+            "leave_requests": len(team_pending_leaves),
+            "attendance_mode_requests": len(team_pending_attendance_mode_requests),
+        },
         "team_pending_leaves": clean_doc(team_pending_leaves),
         "team_pending_attendance_mode_requests": clean_doc(team_pending_attendance_mode_requests),
         "my_performance_reviews": clean_doc(my_reviews),

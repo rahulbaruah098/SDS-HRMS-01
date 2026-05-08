@@ -17,6 +17,25 @@ SUPPORTED_HOLIDAY_STATES = [
 ]
 
 
+PROTECTED_LOGIN_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+}
+
+
+EMPLOYEE_CAPABILITY_ROLES = {
+    "manager",
+    "ro",
+    "team_leader",
+    "reporting_officer",
+}
+
+
 def default_tenant_id():
     return current_app.config.get("DEFAULT_TENANT_ID", "sds")
 
@@ -31,13 +50,12 @@ def normalize_roles(value):
 
     if isinstance(value, list):
         roles = [str(role).strip() for role in value if str(role).strip()]
-        return roles or ["employee"]
-
-    if isinstance(value, str):
+    elif isinstance(value, str):
         roles = [role.strip() for role in value.split(",") if role.strip()]
-        return roles or ["employee"]
+    else:
+        roles = ["employee"]
 
-    return ["employee"]
+    return roles or ["employee"]
 
 
 def normalize_state(value):
@@ -62,6 +80,34 @@ def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
 
+def build_employee_capability_roles(user_roles, employee):
+    roles = set(normalize_roles(user_roles))
+
+    has_protected_role = bool(roles.intersection(PROTECTED_LOGIN_ROLES))
+
+    if not has_protected_role:
+        roles.difference_update(EMPLOYEE_CAPABILITY_ROLES)
+        roles.add("employee")
+
+    if employee:
+        if truthy(employee.get("is_team_leader")):
+            roles.add("team_leader")
+        else:
+            roles.discard("team_leader")
+
+        if truthy(employee.get("is_reporting_officer")):
+            roles.add("reporting_officer")
+        else:
+            roles.discard("reporting_officer")
+            roles.discard("manager")
+            roles.discard("ro")
+
+    if not roles:
+        roles.add("employee")
+
+    return sorted(list(roles))
+
+
 def sanitize_user_for_response(user):
     if not user:
         return None
@@ -81,6 +127,7 @@ def employee_snapshot(employee):
 
     return {
         **dict(employee),
+        "role": "Employee",
         "state": normalize_state(
             employee.get("state")
             or employee.get("branch")
@@ -93,6 +140,12 @@ def employee_snapshot(employee):
         "team_leader_name": employee.get("team_leader_name", ""),
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
+        "dashboard_role": "Employee",
+        "display_role": "Employee",
+        "capabilities": {
+            "is_team_leader": truthy(employee.get("is_team_leader")),
+            "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
+        },
     }
 
 
@@ -144,6 +197,23 @@ def sync_user_login_defaults(db, user):
     return user
 
 
+def sync_user_employee_capabilities(db, user, employee):
+    if not user:
+        return user
+
+    current_roles = normalize_roles(user.get("roles"))
+    next_roles = build_employee_capability_roles(current_roles, employee)
+
+    if current_roles != next_roles:
+        db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"roles": next_roles}},
+        )
+        user["roles"] = next_roles
+
+    return user
+
+
 @auth_bp.post("/login")
 def login():
     db = get_db()
@@ -168,6 +238,7 @@ def login():
 
     user = sync_user_login_defaults(db, user)
     employee = find_employee_for_user(db, user)
+    user = sync_user_employee_capabilities(db, user, employee)
 
     token = issue_token(user)
 
@@ -190,6 +261,7 @@ def me():
 
     user = sync_user_login_defaults(db, g.current_user)
     employee = find_employee_for_user(db, user)
+    user = sync_user_employee_capabilities(db, user, employee)
 
     return jsonify({
         "user": clean_doc(sanitize_user_for_response(user)),

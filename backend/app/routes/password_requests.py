@@ -18,6 +18,33 @@ def safe_object_id(value):
         return None
 
 
+def normalize_text(value):
+    return str(value or "").strip()
+
+
+def current_tenant_id():
+    return getattr(g, "tenant_id", None) or g.current_user.get("tenant_id") or "sds"
+
+
+def notify_user(db, user_id, title, body, meta=None, tenant_id=None):
+    if not user_id:
+        return
+
+    now = datetime.utcnow()
+
+    db.notifications.insert_one({
+        "tenant_id": tenant_id or current_tenant_id(),
+        "user_id": str(user_id),
+        "title": title,
+        "body": body,
+        "meta": meta or {},
+        "read": False,
+        "status": "unread",
+        "created_at": now,
+        "updated_at": now,
+    })
+
+
 @password_requests_bp.post("/password-requests")
 @current_user_required
 def request_password_change():
@@ -55,9 +82,13 @@ def request_password_change():
             "message": "New password cannot be the same as current password"
         }), 400
 
+    tenant_id = user.get("tenant_id") or current_tenant_id()
+
     existing = db.password_requests.find_one({
+        "tenant_id": tenant_id,
         "user_id": str(user["_id"]),
         "status": "pending",
+        "is_deleted": {"$ne": True},
     })
 
     if existing:
@@ -65,23 +96,32 @@ def request_password_change():
             "message": "You already have a pending password change request"
         }), 409
 
+    now = datetime.utcnow()
+
     doc = {
-        "tenant_id": user.get("tenant_id"),
+        "tenant_id": tenant_id,
         "user_id": str(user["_id"]),
-        "user_name": user.get("name"),
-        "user_email": user.get("email"),
+        "user_name": user.get("name", ""),
+        "user_email": user.get("email", ""),
         "new_password_hash": generate_password_hash(new_password),
         "status": "pending",
-        "created_at": datetime.utcnow(),
+        "is_deleted": False,
+        "created_at": now,
+        "updated_at": now,
         "created_by": str(user["_id"]),
     }
 
     res = db.password_requests.insert_one(doc)
+    doc["_id"] = res.inserted_id
 
-    audit("request_password_change", "password_requests", res.inserted_id)
+    audit("request_password_change", "password_requests", res.inserted_id, {
+        "user_id": str(user["_id"]),
+        "user_email": user.get("email", ""),
+    })
 
     return jsonify({
-        "message": "Password change request sent to Super Admin"
+        "message": "Password change request sent to Super Admin",
+        "item": clean_doc(doc),
     }), 201
 
 
@@ -89,12 +129,27 @@ def request_password_change():
 @roles_required("super_admin")
 def list_password_requests():
     db = get_db()
-    status = (request.args.get("status") or "pending").strip().lower()
 
-    q = {}
+    status = normalize_text(request.args.get("status") or "pending").lower()
+    tenant_id = normalize_text(request.args.get("tenant_id"))
+    search = normalize_text(request.args.get("q"))
 
-    if status != "all":
-      q["status"] = status
+    q = {
+        "is_deleted": {"$ne": True},
+    }
+
+    if status and status != "all":
+        q["status"] = status
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    if search:
+        q["$or"] = [
+            {"user_name": {"$regex": search, "$options": "i"}},
+            {"user_email": {"$regex": search, "$options": "i"}},
+            {"tenant_id": {"$regex": search, "$options": "i"}},
+        ]
 
     rows = list(
         db.password_requests
@@ -119,6 +174,7 @@ def approve_password_request(request_id):
     req = db.password_requests.find_one({
         "_id": request_obj_id,
         "status": "pending",
+        "is_deleted": {"$ne": True},
     })
 
     if not req:
@@ -134,12 +190,14 @@ def approve_password_request(request_id):
     if not user:
         return jsonify({"message": "User not found for this request"}), 404
 
+    now = datetime.utcnow()
+
     db.users.update_one(
         {"_id": user_obj_id},
         {
             "$set": {
                 "password_hash": req["new_password_hash"],
-                "updated_at": datetime.utcnow(),
+                "updated_at": now,
                 "updated_by": str(g.current_user["_id"]),
             }
         },
@@ -150,14 +208,30 @@ def approve_password_request(request_id):
         {
             "$set": {
                 "status": "approved",
-                "approved_at": datetime.utcnow(),
+                "approved_at": now,
                 "approved_by": str(g.current_user["_id"]),
                 "approved_by_name": g.current_user.get("name") or g.current_user.get("email"),
+                "updated_at": now,
             }
         },
     )
 
-    audit("approve_password_request", "password_requests", request_id)
+    notify_user(
+        db,
+        req.get("user_id"),
+        "Password Change Approved",
+        "Your password change request has been approved. Please login with your new password.",
+        {
+            "password_request_id": str(request_obj_id),
+            "status": "approved",
+        },
+        tenant_id=req.get("tenant_id") or user.get("tenant_id"),
+    )
+
+    audit("approve_password_request", "password_requests", request_id, {
+        "user_id": req.get("user_id"),
+        "user_email": req.get("user_email"),
+    })
 
     return jsonify({"message": "Password change approved"})
 
@@ -171,27 +245,51 @@ def reject_password_request(request_id):
         return jsonify({"message": "Invalid password request id"}), 400
 
     db = get_db()
+    data = request.get_json(silent=True) or {}
+    reason = normalize_text(data.get("reason") or data.get("note"))
 
     req = db.password_requests.find_one({
         "_id": request_obj_id,
         "status": "pending",
+        "is_deleted": {"$ne": True},
     })
 
     if not req:
         return jsonify({"message": "Pending request not found"}), 404
+
+    now = datetime.utcnow()
 
     db.password_requests.update_one(
         {"_id": request_obj_id},
         {
             "$set": {
                 "status": "rejected",
-                "rejected_at": datetime.utcnow(),
+                "rejection_reason": reason,
+                "rejected_at": now,
                 "rejected_by": str(g.current_user["_id"]),
                 "rejected_by_name": g.current_user.get("name") or g.current_user.get("email"),
+                "updated_at": now,
             }
         },
     )
 
-    audit("reject_password_request", "password_requests", request_id)
+    notify_user(
+        db,
+        req.get("user_id"),
+        "Password Change Rejected",
+        reason or "Your password change request has been rejected.",
+        {
+            "password_request_id": str(request_obj_id),
+            "status": "rejected",
+            "reason": reason,
+        },
+        tenant_id=req.get("tenant_id"),
+    )
+
+    audit("reject_password_request", "password_requests", request_id, {
+        "user_id": req.get("user_id"),
+        "user_email": req.get("user_email"),
+        "reason": reason,
+    })
 
     return jsonify({"message": "Password change request rejected"})

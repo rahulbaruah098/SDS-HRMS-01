@@ -8,6 +8,24 @@ from bson import ObjectId
 from app.extensions import get_db
 
 
+PROTECTED_LOGIN_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+}
+
+EMPLOYEE_CAPABILITY_ROLES = {
+    "manager",
+    "ro",
+    "team_leader",
+    "reporting_officer",
+}
+
+
 def safe_object_id(value):
     try:
         return ObjectId(value)
@@ -32,8 +50,88 @@ def normalize_roles(value):
     return []
 
 
+def truthy(value):
+    return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
+
+
 def default_tenant_id():
     return current_app.config.get("DEFAULT_TENANT_ID", "sds")
+
+
+def find_employee_for_user(db, user):
+    if not user:
+        return None
+
+    tenant_id = user.get("tenant_id") or default_tenant_id()
+
+    employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": str(user["_id"]),
+        "is_deleted": {"$ne": True},
+    })
+
+    if employee:
+        return employee
+
+    return db.employees.find_one({
+        "user_id": str(user["_id"]),
+        "is_deleted": {"$ne": True},
+    })
+
+
+def build_effective_roles(user, employee=None):
+    roles = set(normalize_roles(user.get("roles", [])))
+
+    if not roles:
+        roles.add("employee")
+
+    has_protected_role = bool(roles.intersection(PROTECTED_LOGIN_ROLES))
+
+    # Team Leader / Reporting Officer are employee capabilities, not separate
+    # login identities. Protected roles like admin/hr/finance are preserved.
+    if not has_protected_role:
+        roles.difference_update(EMPLOYEE_CAPABILITY_ROLES)
+        roles.add("employee")
+
+    if employee:
+        if truthy(employee.get("is_team_leader")):
+            roles.add("team_leader")
+        else:
+            roles.discard("team_leader")
+
+        if truthy(employee.get("is_reporting_officer")):
+            roles.add("reporting_officer")
+        else:
+            roles.discard("reporting_officer")
+            roles.discard("manager")
+            roles.discard("ro")
+
+    if not roles:
+        roles.add("employee")
+
+    return sorted(list(roles))
+
+
+def sync_effective_roles(db, user):
+    employee = find_employee_for_user(db, user)
+    current_roles = normalize_roles(user.get("roles", []))
+    effective_roles = build_effective_roles(user, employee)
+
+    if current_roles != effective_roles:
+        db.users.update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "roles": effective_roles,
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+        user["roles"] = effective_roles
+    else:
+        user["roles"] = current_roles
+
+    return user
 
 
 def issue_token(user):
@@ -96,11 +194,10 @@ def current_user_required(fn):
         if not user:
             return jsonify({"message": "User not found"}), 401
 
-        user_roles = normalize_roles(user.get("roles", []))
         tenant_id = user.get("tenant_id") or payload.get("tenant_id") or default_tenant_id()
 
-        user["roles"] = user_roles
         user["tenant_id"] = tenant_id
+        user = sync_effective_roles(db, user)
 
         g.current_user = user
         g.tenant_id = tenant_id
