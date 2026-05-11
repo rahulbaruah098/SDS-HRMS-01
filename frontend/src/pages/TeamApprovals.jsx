@@ -5,17 +5,23 @@ import {
   FileText,
   RefreshCcw,
   Search,
+  ShieldCheck,
   UserCheck,
   XCircle,
 } from 'lucide-react';
 import {
   approveTeamLeaveRequest,
+  currentUser,
   getInitials,
   getProfilePhotoUrl,
   getTeamApprovals,
   normalizeLeaveApprovalList,
   rejectTeamLeaveRequest,
 } from '../api/client';
+import {
+  getDisplayRole,
+  getEmployeeCapabilities,
+} from '../data/modules';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -133,10 +139,76 @@ function stageClass(row = {}) {
 
   if (status === 'approved' || stage === 'approved') return 'approved';
   if (status === 'rejected' || stage === 'rejected') return 'rejected';
+  if (stage === 'hr') return 'hr';
   if (stage === 'reporting_officer') return 'reporting';
   if (stage === 'team_leader') return 'team';
 
   return 'pending';
+}
+
+function isPending(row = {}) {
+  return ['pending', 'in_review'].includes(String(row.status || '').toLowerCase());
+}
+
+function isApprovedRecord(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  return (
+    status === 'approved' ||
+    stage === 'approved' ||
+    Boolean(row.approved_by_team_leader) ||
+    Boolean(row.approved_by_team_leader_name) ||
+    Boolean(row.team_leader_decision_by_name) ||
+    Boolean(row.approved_by_reporting_officer) ||
+    Boolean(row.approved_by_reporting_officer_name) ||
+    Boolean(row.reporting_officer_decision_by_name)
+  );
+}
+
+function isRejectedRecord(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  return (
+    status === 'rejected' ||
+    stage === 'rejected' ||
+    Boolean(row.rejected_by_name) ||
+    Boolean(row.team_leader_status === 'rejected') ||
+    Boolean(row.reporting_officer_status === 'rejected') ||
+    Boolean(row.hr_status === 'rejected')
+  );
+}
+
+function canDecideRow(row = {}, capabilities = {}) {
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
+  if (!['pending', 'in_review'].includes(status)) {
+    return false;
+  }
+
+  if (row.can_decide === true || row.current_user_can_decide === true) {
+    return true;
+  }
+
+  if (row.can_decide === false || row.current_user_can_decide === false) {
+    return false;
+  }
+
+  if (stage === 'team_leader') {
+    return Boolean(capabilities.isTeamLeader);
+  }
+
+  if (stage === 'reporting_officer') {
+    return Boolean(capabilities.isReportingOfficer);
+  }
+
+  if (stage === 'hr') {
+    return Boolean(capabilities.isHrAdmin);
+  }
+
+  return false;
 }
 
 function EmployeeAvatar({ row }) {
@@ -166,17 +238,24 @@ function Timeline({ history = [] }) {
   return (
     <div className="ta-timeline">
       {history.map((item, index) => (
-        <div className="ta-timeline-item" key={`${item.at || index}-${item.name || index}`}>
+        <div className="ta-timeline-item" key={`${item.at || item.created_at || index}-${item.name || index}`}>
           <div className="ta-timeline-dot" />
 
           <div>
             <strong>
               {statusLabel(item.action || item.status || item.decision || 'Action')}
-              {item.role ? ` by ${statusLabel(item.role)}` : ''}
+              {item.role || item.by_role || item.approver_role
+                ? ` by ${statusLabel(item.role || item.by_role || item.approver_role)}`
+                : ''}
             </strong>
 
             <span>
-              {item.name || item.approver_name || item.approved_by_name || 'Approver'}
+              {item.name ||
+                item.by_name ||
+                item.approver_name ||
+                item.approved_by_name ||
+                item.rejected_by_name ||
+                'Approver'}
             </span>
 
             <small>
@@ -192,11 +271,75 @@ function Timeline({ history = [] }) {
   );
 }
 
-function RequestCard({ row, onApprove, onReject, savingId }) {
+function ApprovalFlags({ row }) {
+  const teamLeaderDone =
+    Boolean(row.approved_by_team_leader) ||
+    Boolean(row.approved_by_team_leader_name) ||
+    Boolean(row.team_leader_decision_by_name) ||
+    String(row.team_leader_status || '').toLowerCase() === 'approved';
+
+  const reportingOfficerDone =
+    Boolean(row.approved_by_reporting_officer) ||
+    Boolean(row.approved_by_reporting_officer_name) ||
+    Boolean(row.reporting_officer_decision_by_name) ||
+    String(row.reporting_officer_status || '').toLowerCase() === 'approved';
+
+  const hrDone =
+    Boolean(row.hr_notified) ||
+    Boolean(row.hr_notified_at) ||
+    String(row.hr_notified_status || '').toLowerCase() === 'notified' ||
+    Boolean(row.hr_record_notification_sent);
+
+  return (
+    <div className="ta-approval-flags">
+      <div className={teamLeaderDone ? 'done' : ''}>
+        <CheckCircle2 size={15} />
+        <span>
+          Team Leader
+          <small>
+            {teamLeaderDone
+              ? `Approved by ${row.approved_by_team_leader_name || row.team_leader_decision_by_name || 'Team Leader'}`
+              : row.team_leader_name
+                ? `Pending / mapped to ${row.team_leader_name}`
+                : 'Not mapped / skipped'}
+          </small>
+        </span>
+      </div>
+
+      <div className={reportingOfficerDone ? 'done' : ''}>
+        <ShieldCheck size={15} />
+        <span>
+          Reporting Officer
+          <small>
+            {reportingOfficerDone
+              ? `Approved by ${row.approved_by_reporting_officer_name || row.reporting_officer_decision_by_name || 'Reporting Officer'}`
+              : row.reporting_officer_name
+                ? `Pending / mapped to ${row.reporting_officer_name}`
+                : 'Not mapped'}
+          </small>
+        </span>
+      </div>
+
+      <div className={hrDone ? 'done' : ''}>
+        <FileText size={15} />
+        <span>
+          HR Record
+          <small>
+            {hrDone
+              ? `Notified ${formatDateTime(row.hr_notified_at)}`
+              : 'Will notify HR after final approval/rejection'}
+          </small>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function RequestCard({ row, onApprove, onReject, savingId, capabilities }) {
   const requestId = getRequestId(row);
   const isSaving = savingId === requestId;
   const currentStatus = liveStatus(row);
-  const canDecide = String(row.status || '').toLowerCase() === 'pending';
+  const canDecide = canDecideRow(row, capabilities);
 
   return (
     <article className="ta-card">
@@ -256,45 +399,9 @@ function RequestCard({ row, onApprove, onReject, savingId }) {
         <p>{row.reason || 'No reason added.'}</p>
       </div>
 
-      <div className="ta-approval-flags">
-        <div className={row.approved_by_team_leader ? 'done' : ''}>
-          <CheckCircle2 size={15} />
-          <span>
-            Team Leader
-            <small>
-              {row.approved_by_team_leader
-                ? `Approved by ${row.approved_by_team_leader_name || 'Team Leader'}`
-                : 'Pending / Not required yet'}
-            </small>
-          </span>
-        </div>
+      <ApprovalFlags row={row} />
 
-        <div className={row.approved_by_reporting_officer ? 'done' : ''}>
-          <CheckCircle2 size={15} />
-          <span>
-            Reporting Officer
-            <small>
-              {row.approved_by_reporting_officer
-                ? `Approved by ${row.approved_by_reporting_officer_name || 'Reporting Officer'}`
-                : 'Pending / Not required yet'}
-            </small>
-          </span>
-        </div>
-
-        <div className={row.hr_notified ? 'done' : ''}>
-          <FileText size={15} />
-          <span>
-            HR Record
-            <small>
-              {row.hr_notified
-                ? `Notified ${formatDateTime(row.hr_notified_at)}`
-                : 'Will notify HR after final approval'}
-            </small>
-          </span>
-        </div>
-      </div>
-
-      <Timeline history={row.approval_history || []} />
+      <Timeline history={row.approval_history || row.approval_timeline || []} />
 
       <div className="ta-actions">
         {canDecide ? (
@@ -321,7 +428,9 @@ function RequestCard({ row, onApprove, onReject, savingId }) {
           </>
         ) : (
           <span className="ta-closed-note">
-            This request is already {statusLabel(row.status)}.
+            {isPending(row)
+              ? `This request is pending at ${statusLabel(row.approval_stage)} stage.`
+              : `This request is already ${statusLabel(row.status)}.`}
           </span>
         )}
       </div>
@@ -330,6 +439,11 @@ function RequestCard({ row, onApprove, onReject, savingId }) {
 }
 
 export default function TeamApprovals({ setPage }) {
+  const user = currentUser();
+  const capabilities = getEmployeeCapabilities(user || {});
+  const displayRole = getDisplayRole(user || {});
+  const isHrPanel = Boolean(capabilities.isHrAdmin);
+
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [q, setQ] = useState('');
@@ -342,12 +456,6 @@ export default function TeamApprovals({ setPage }) {
     const search = q.trim().toLowerCase();
 
     return rows.filter((row) => {
-      const status = String(row.status || '').toLowerCase();
-
-      if (filter !== 'all' && status !== filter) {
-        return false;
-      }
-
       if (!search) {
         return true;
       }
@@ -364,6 +472,12 @@ export default function TeamApprovals({ setPage }) {
         row.reason,
         row.task_handover_to_name,
         row.project_handover_name,
+        row.team_leader_name,
+        row.reporting_officer_name,
+        row.approved_by_team_leader_name,
+        row.approved_by_reporting_officer_name,
+        row.team_leader_decision_by_name,
+        row.reporting_officer_decision_by_name,
         liveStatus(row),
       ]
         .filter(Boolean)
@@ -371,19 +485,11 @@ export default function TeamApprovals({ setPage }) {
         .toLowerCase()
         .includes(search);
     });
-  }, [filter, q, rows]);
+  }, [q, rows]);
 
-  const pendingCount = rows.filter(
-    (row) => String(row.status || '').toLowerCase() === 'pending',
-  ).length;
-
-  const approvedCount = rows.filter(
-    (row) => String(row.status || '').toLowerCase() === 'approved',
-  ).length;
-
-  const rejectedCount = rows.filter(
-    (row) => String(row.status || '').toLowerCase() === 'rejected',
-  ).length;
+  const pendingCount = rows.filter(isPending).length;
+  const approvedCount = rows.filter(isApprovedRecord).length;
+  const rejectedCount = rows.filter(isRejectedRecord).length;
 
   async function loadData() {
     try {
@@ -513,7 +619,7 @@ export default function TeamApprovals({ setPage }) {
           margin: 10px 0 0;
           color: var(--ta-muted);
           line-height: 1.65;
-          max-width: 820px;
+          max-width: 880px;
         }
 
         .ta-hero-icon {
@@ -525,6 +631,17 @@ export default function TeamApprovals({ setPage }) {
           background: linear-gradient(135deg, var(--ta-primary), var(--ta-info));
           color: #ffffff;
           box-shadow: 0 18px 42px rgba(79, 70, 229, .24);
+        }
+
+        .ta-role-pill {
+          display: inline-flex;
+          margin: 12px 0 0;
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: #eef2ff;
+          color: #4338ca;
+          font-size: 12px;
+          font-weight: 900;
         }
 
         .ta-kpis {
@@ -710,6 +827,12 @@ export default function TeamApprovals({ setPage }) {
           border-color: rgba(2, 132, 199, .24);
           background: #e0f2fe;
           color: var(--ta-info);
+        }
+
+        .ta-stage-pill.hr {
+          border-color: rgba(217, 119, 6, .24);
+          background: #fffbeb;
+          color: var(--ta-warning);
         }
 
         .ta-stage-pill.approved {
@@ -952,14 +1075,26 @@ export default function TeamApprovals({ setPage }) {
 
       <section className="ta-hero">
         <div>
-          <span className="kicker">Team Approvals</span>
-          <h1>Leave Approval Inbox</h1>
+          <span className="kicker">
+            {isHrPanel ? 'HR Leave Records' : 'Team Approvals'}
+          </span>
+
+          <h1>
+            {isHrPanel ? 'Leave Record & Approval Panel' : 'Leave Approval Inbox'}
+          </h1>
+
           <p>
-            Review leave requests assigned to you as Team Leader or Reporting Officer.
-            Requests first move to Team Leader, then Reporting Officer. If no Team
-            Leader is mapped, the request directly comes to Reporting Officer.
-            After final approval, HR is notified for record keeping.
+            {isHrPanel
+              ? 'Review final leave records, HR notifications, approval history, and pending HR-stage leave requests. HR/Admin can use this page as the record panel when notifications are received.'
+              : 'Review leave requests assigned to you as Team Leader or Reporting Officer. Requests first move to Team Leader, then Reporting Officer. If no Team Leader is mapped, the request directly comes to Reporting Officer.'}
           </p>
+
+          <div className="ta-role-pill">
+            Current access: {displayRole}
+            {capabilities.isTeamLeader ? ' • Team Leader' : ''}
+            {capabilities.isReportingOfficer ? ' • Reporting Officer' : ''}
+            {capabilities.isHrAdmin ? ' • HR/Admin Records' : ''}
+          </div>
 
           <div className="hero-actions">
             <button
@@ -1000,25 +1135,25 @@ export default function TeamApprovals({ setPage }) {
       <section className="ta-kpis">
         <div className="ta-kpi">
           <span>Pending</span>
-          <strong>{summary.pending ?? pendingCount}</strong>
-          <small>Waiting for your decision</small>
+          <strong>{summary.pending ?? summary.pending_leave_requests ?? pendingCount}</strong>
+          <small>Waiting for decision</small>
         </div>
 
         <div className="ta-kpi">
-          <span>Approved</span>
+          <span>Approved / Stage Approved</span>
           <strong>{summary.approved ?? approvedCount}</strong>
-          <small>Approved requests loaded here</small>
+          <small>Includes Team Leader approved pending RO</small>
         </div>
 
         <div className="ta-kpi">
           <span>Rejected</span>
           <strong>{summary.rejected ?? rejectedCount}</strong>
-          <small>Rejected requests loaded here</small>
+          <small>Rejected/cancelled records</small>
         </div>
 
         <div className="ta-kpi">
           <span>Total Loaded</span>
-          <strong>{rows.length}</strong>
+          <strong>{summary.total ?? rows.length}</strong>
           <small>Based on selected filter</small>
         </div>
       </section>
@@ -1029,7 +1164,7 @@ export default function TeamApprovals({ setPage }) {
           <input
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="Search employee, leave type, department, reason..."
+            placeholder="Search employee, leave type, approver, department, reason..."
           />
         </div>
 
@@ -1068,6 +1203,7 @@ export default function TeamApprovals({ setPage }) {
               onApprove={approveRequest}
               onReject={rejectRequest}
               savingId={savingId}
+              capabilities={capabilities}
             />
           ))}
 

@@ -508,12 +508,60 @@ def enrich_leave_request_doc(item):
     item["approval_stage_label"] = item.get("approval_stage_label") or leave_stage_label(item.get("approval_stage"))
     item["leave_type_label"] = item.get("leave_type_label") or leave_type_label(item.get("leave_type"))
     item["approval_timeline"] = item.get("approval_history") or []
-    item["approved_by_team_leader"] = item.get("team_leader_decision_by_name", "")
-    item["approved_by_reporting_officer"] = item.get("reporting_officer_decision_by_name", "")
-    item["approved_by_hr"] = item.get("hr_decision_by_name", "")
-    item["hr_notified_status"] = item.get("hr_notified_status", "")
-    return item
 
+    team_leader_approved = (
+        normalize_status(item.get("team_leader_status")) == "approved"
+        or bool(item.get("approved_by_team_leader"))
+        or bool(item.get("approved_by_team_leader_name"))
+        or bool(item.get("team_leader_decision_by_name"))
+    )
+    reporting_officer_approved = (
+        normalize_status(item.get("reporting_officer_status")) == "approved"
+        or bool(item.get("approved_by_reporting_officer"))
+        or bool(item.get("approved_by_reporting_officer_name"))
+        or bool(item.get("reporting_officer_decision_by_name"))
+    )
+    hr_approved = (
+        normalize_status(item.get("hr_status")) == "approved"
+        or bool(item.get("approved_by_hr"))
+        or bool(item.get("approved_by_hr_name"))
+        or bool(item.get("hr_decision_by_name"))
+    )
+
+    item["approved_by_team_leader"] = team_leader_approved
+    item["approved_by_team_leader_id"] = item.get("approved_by_team_leader") if isinstance(item.get("approved_by_team_leader"), str) else item.get("team_leader_decision_by", "")
+    item["approved_by_team_leader_name"] = item.get("approved_by_team_leader_name") or item.get("team_leader_decision_by_name", "")
+    item["approved_by_team_leader_at"] = item.get("approved_by_team_leader_at") or item.get("team_leader_decision_at", "")
+
+    item["approved_by_reporting_officer"] = reporting_officer_approved
+    item["approved_by_reporting_officer_id"] = item.get("approved_by_reporting_officer") if isinstance(item.get("approved_by_reporting_officer"), str) else item.get("reporting_officer_decision_by", "")
+    item["approved_by_reporting_officer_name"] = item.get("approved_by_reporting_officer_name") or item.get("reporting_officer_decision_by_name", "")
+    item["approved_by_reporting_officer_at"] = item.get("approved_by_reporting_officer_at") or item.get("reporting_officer_decision_at", "")
+
+    item["approved_by_hr"] = hr_approved
+    item["approved_by_hr_id"] = item.get("approved_by_hr") if isinstance(item.get("approved_by_hr"), str) else item.get("hr_decision_by", "")
+    item["approved_by_hr_name"] = item.get("approved_by_hr_name") or item.get("hr_decision_by_name", "")
+    item["approved_by_hr_at"] = item.get("approved_by_hr_at") or item.get("hr_decision_at", "")
+
+    item["hr_notified"] = bool(item.get("hr_notified") or item.get("hr_record_notification_sent") or item.get("hr_notified_at"))
+    item["hr_notified_status"] = item.get("hr_notified_status", "")
+
+    if normalize_status(item.get("status")) == "rejected":
+        item["rejected_by_role"] = item.get("rejected_by_role") or item.get("approval_stage") or ""
+        if item.get("team_leader_decision_by_name") and normalize_status(item.get("team_leader_status")) == "rejected":
+            item["rejected_by_role"] = "team_leader"
+            item["rejected_by_name"] = item.get("team_leader_decision_by_name")
+            item["rejected_at"] = item.get("team_leader_decision_at")
+        elif item.get("reporting_officer_decision_by_name") and normalize_status(item.get("reporting_officer_status")) == "rejected":
+            item["rejected_by_role"] = "reporting_officer"
+            item["rejected_by_name"] = item.get("reporting_officer_decision_by_name")
+            item["rejected_at"] = item.get("reporting_officer_decision_at")
+        elif item.get("hr_decision_by_name") and normalize_status(item.get("hr_status")) == "rejected":
+            item["rejected_by_role"] = "hr"
+            item["rejected_by_name"] = item.get("hr_decision_by_name")
+            item["rejected_at"] = item.get("hr_decision_at")
+
+    return item
 
 def enrich_leave_request_docs(items):
     return [enrich_leave_request_doc(item) for item in items]
@@ -938,19 +986,40 @@ def rollback_compoff_claim_if_needed(db, leave_doc):
 
 def create_leave_history_entry(status, stage, note):
     roles = sorted(list(current_user_roles()))
+    actor_id = str(g.current_user["_id"])
+    actor_name = g.current_user.get("name") or g.current_user.get("email")
+    created_at = datetime.utcnow()
+    role_label = leave_stage_label(stage)
 
     return {
         "stage": stage,
-        "stage_label": leave_stage_label(stage),
+        "stage_label": role_label,
         "status": status,
+        "action": status,
+        "decision": status,
         "note": note,
-        "by": str(g.current_user["_id"]),
-        "by_name": g.current_user.get("name") or g.current_user.get("email"),
-        "by_role": leave_stage_label(stage),
+        "reason": note,
+        "user_id": actor_id,
+        "approver_id": actor_id,
+        "approved_by_id": actor_id if status == "approved" else "",
+        "rejected_by_id": actor_id if status == "rejected" else "",
+        "by": actor_id,
+        "by_name": actor_name,
+        "name": actor_name,
+        "approver_name": actor_name,
+        "approved_by_name": actor_name if status == "approved" else "",
+        "rejected_by_name": actor_name if status == "rejected" else "",
+        "by_role": role_label,
+        "role": stage,
+        "approver_role": stage,
+        "approved_by_role": stage if status == "approved" else "",
+        "rejected_by_role": stage if status == "rejected" else "",
         "actor_roles": roles,
-        "created_at": datetime.utcnow(),
+        "created_at": created_at,
+        "at": created_at,
+        "approved_at": created_at if status == "approved" else "",
+        "rejected_at": created_at if status == "rejected" else "",
     }
-
 
 def notify_next_leave_approvers(db, employee, leave_doc, stage):
     tenant_id = employee.get("tenant_id") or current_tenant_id()
@@ -973,14 +1042,16 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         f"{employee_display_name(employee)} has a leave request pending at {leave_stage_label(stage)} stage.",
         {
             "target": "team_approvals",
+            "page": "team_approvals",
             "leave_request_id": str(leave_doc.get("_id")),
             "employee_id": str(employee.get("_id")),
             "stage": stage,
+            "approval_stage": stage,
+            "pending_approver_role": stage,
             "status": "pending",
         },
         tenant_id=tenant_id,
     )
-
 
 def notify_employee_leave_decision(db, employee, leave_doc, status):
     status_text = "approved" if status == "approved" else "rejected/cancelled"
@@ -1009,8 +1080,8 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
     status_text = "approved" if status == "approved" else "rejected/cancelled"
     from_date = leave_doc.get("from_date") or ""
     to_date = leave_doc.get("to_date") or leave_doc.get("upto_date") or ""
-    team_leader_name = leave_doc.get("team_leader_decision_by_name") or leave_doc.get("team_leader_name") or "Not applicable"
-    reporting_officer_name = leave_doc.get("reporting_officer_decision_by_name") or leave_doc.get("reporting_officer_name") or "Not applicable"
+    team_leader_name = leave_doc.get("team_leader_decision_by_name") or leave_doc.get("approved_by_team_leader_name") or leave_doc.get("team_leader_name") or "Not applicable"
+    reporting_officer_name = leave_doc.get("reporting_officer_decision_by_name") or leave_doc.get("approved_by_reporting_officer_name") or leave_doc.get("reporting_officer_name") or "Not applicable"
 
     notify_users(
         db,
@@ -1021,7 +1092,8 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
             f"Team Leader: {team_leader_name}. Reporting Officer: {reporting_officer_name}."
         ),
         {
-            "target": "application_status",
+            "target": "team_approvals",
+            "page": "team_approvals",
             "leave_request_id": str(leave_doc.get("_id")),
             "employee_id": str(employee.get("_id")),
             "from_date": from_date,
@@ -1029,6 +1101,8 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
             "team_leader_name": team_leader_name,
             "reporting_officer_name": reporting_officer_name,
             "status": status,
+            "hr_record": True,
+            "record_only": True,
         },
         tenant_id=tenant_id,
     )
@@ -1037,13 +1111,13 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
         {"_id": leave_doc.get("_id")},
         {
             "$set": {
+                "hr_notified": True,
                 "hr_notified_status": "notified",
                 "hr_notified_at": datetime.utcnow(),
                 "hr_record_notification_sent": True,
             }
         },
     )
-
 
 def resolve_handover_employee(db, tenant_id, employee, raw_employee_id):
     handover_id = normalize_text(raw_employee_id)
@@ -1348,51 +1422,105 @@ def team_approvals():
     db = get_db()
     roles = current_user_roles()
     employee = current_employee(db)
+    is_admin_hr = bool(roles.intersection(ADMIN_HR_ROLES))
+    is_team_leader = bool(employee and ("team_leader" in roles or employee_is_team_leader(employee)))
+    is_reporting_officer = bool(employee and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee)))
 
-    if not employee:
-        return jsonify({
-            "employee": None,
-            "summary": {"total": 0, "pending_leave_requests": 0},
-            "leave_requests": [],
-            "items": [],
-        })
+    if not (is_admin_hr or is_team_leader or is_reporting_officer):
+        return jsonify({"message": "Only Team Leaders, Reporting Officers and HR/Admin can access approvals"}), 403
 
-    if not (
-        "team_leader" in roles
-        or "reporting_officer" in roles
-        or "ro" in roles
-        or employee_is_team_leader(employee)
-        or employee_is_reporting_officer(employee)
-    ):
-        return jsonify({"message": "Only Team Leaders and Reporting Officers can access approvals"}), 403
+    status_filter = normalize_status(request.args.get("status") or "pending")
+    if status_filter not in ["pending", "approved", "rejected", "all", ""]:
+        status_filter = "pending"
 
-    emp_id = str(employee["_id"])
+    tenant_id = current_tenant_id()
+    emp_id = str(employee["_id"]) if employee else ""
     approval_or = []
 
-    if "team_leader" in roles or employee_is_team_leader(employee):
-        approval_or.append({
-            "team_leader_id": emp_id,
-            "approval_stage": "team_leader",
-            "status": {"$in": ["pending", "in_review"]},
-        })
+    def add_team_leader_scope():
+        if not emp_id:
+            return
+        if status_filter in ["", "pending"]:
+            approval_or.append({
+                "team_leader_id": emp_id,
+                "approval_stage": "team_leader",
+                "status": {"$in": ["pending", "in_review"]},
+            })
+        elif status_filter == "approved":
+            approval_or.append({
+                "team_leader_id": emp_id,
+                "team_leader_status": "approved",
+            })
+        elif status_filter == "rejected":
+            approval_or.append({
+                "team_leader_id": emp_id,
+                "team_leader_status": "rejected",
+            })
+        elif status_filter == "all":
+            approval_or.append({"team_leader_id": emp_id})
 
-    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
-        approval_or.append({
-            "reporting_officer_id": emp_id,
-            "approval_stage": "reporting_officer",
-            "status": {"$in": ["pending", "in_review"]},
-        })
+    def add_reporting_officer_scope():
+        if not emp_id:
+            return
+        if status_filter in ["", "pending"]:
+            approval_or.append({
+                "reporting_officer_id": emp_id,
+                "approval_stage": "reporting_officer",
+                "status": {"$in": ["pending", "in_review"]},
+            })
+        elif status_filter == "approved":
+            approval_or.append({
+                "reporting_officer_id": emp_id,
+                "reporting_officer_status": "approved",
+            })
+        elif status_filter == "rejected":
+            approval_or.append({
+                "reporting_officer_id": emp_id,
+                "reporting_officer_status": "rejected",
+            })
+        elif status_filter == "all":
+            approval_or.append({"reporting_officer_id": emp_id})
+
+    def add_hr_scope():
+        if status_filter in ["", "pending"]:
+            approval_or.append({
+                "approval_stage": "hr",
+                "status": {"$in": ["pending", "in_review"]},
+            })
+        elif status_filter == "approved":
+            approval_or.append({"status": "approved"})
+        elif status_filter == "rejected":
+            approval_or.append({"status": "rejected"})
+        elif status_filter == "all":
+            approval_or.append({
+                "status": {"$in": ["pending", "in_review", "approved", "rejected"]},
+            })
+
+    if is_team_leader:
+        add_team_leader_scope()
+
+    if is_reporting_officer:
+        add_reporting_officer_scope()
+
+    if is_admin_hr:
+        add_hr_scope()
 
     if not approval_or:
         return jsonify({
-            "employee": clean_doc(employee),
-            "summary": {"total": 0, "pending_leave_requests": 0},
+            "employee": clean_doc(employee) if employee else None,
+            "summary": {
+                "total": 0,
+                "pending": 0,
+                "approved": 0,
+                "rejected": 0,
+                "pending_leave_requests": 0,
+            },
             "leave_requests": [],
             "items": [],
         })
 
     q = {
-        "tenant_id": current_tenant_id(),
+        "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "$or": approval_or,
     }
@@ -1400,20 +1528,26 @@ def team_approvals():
     items = list(
         db.leave_requests
         .find(q)
-        .sort([("from_date", 1), ("created_at", -1)])
+        .sort([("updated_at", -1), ("from_date", -1), ("created_at", -1)])
         .limit(500)
     )
 
     enriched_items = enrich_leave_request_docs(items)
 
+    summary = {
+        "total": len(enriched_items),
+        "pending": len([item for item in enriched_items if normalize_status(item.get("status")) in ["pending", "in_review"]]),
+        "approved": len([item for item in enriched_items if normalize_status(item.get("status")) == "approved"]),
+        "rejected": len([item for item in enriched_items if normalize_status(item.get("status")) == "rejected"]),
+        "pending_leave_requests": len([item for item in enriched_items if normalize_status(item.get("status")) in ["pending", "in_review"]]),
+        "team_leader_stage": len([item for item in enriched_items if item.get("approval_stage") == "team_leader"]),
+        "reporting_officer_stage": len([item for item in enriched_items if item.get("approval_stage") == "reporting_officer"]),
+        "hr_stage": len([item for item in enriched_items if item.get("approval_stage") == "hr"]),
+    }
+
     return jsonify({
-        "employee": clean_doc(employee),
-        "summary": {
-            "total": len(enriched_items),
-            "pending_leave_requests": len(enriched_items),
-            "team_leader_stage": len([item for item in enriched_items if item.get("approval_stage") == "team_leader"]),
-            "reporting_officer_stage": len([item for item in enriched_items if item.get("approval_stage") == "reporting_officer"]),
-        },
+        "employee": clean_doc(employee) if employee else None,
+        "summary": summary,
         "leave_requests": clean_doc(enriched_items),
         "items": clean_doc(enriched_items),
     })

@@ -208,6 +208,7 @@ function moduleGroup(key) {
       'attendance_mode_requests',
       'holiday_calendar',
       'compoff_credits',
+      'team_approvals',
       'leave_requests',
       'leave_balances',
       'leave_types',
@@ -284,6 +285,10 @@ function buildCapabilityText(user) {
     items.push('Reporting Officer');
   }
 
+  if (capabilities.isHrAdmin) {
+    items.push('HR Records');
+  }
+
   return items.length ? items.join(' + ') : '';
 }
 
@@ -302,6 +307,72 @@ function formatNotificationTime(value) {
 
 function notificationTarget(meta = {}) {
   const target = String(meta.target || meta.page || '').trim();
+
+  if (
+    [
+      'team_approvals',
+      'team-approvals',
+      'team_approval',
+      'team-approval',
+      'leave_approval',
+      'leave-approval',
+      'leave_approvals',
+      'leave-approvals',
+      'leave_approval_inbox',
+      'approval_inbox',
+      'approval-inbox',
+      'pending_approvals',
+      'pending-approvals',
+      'pending_leave_approvals',
+      'pending-leave-approvals',
+      'tl_approvals',
+      'team_leader_approvals',
+      'ro_approvals',
+      'reporting_officer_approvals',
+      'hr_leave_records',
+      'hr-leave-records',
+      'leave_records_panel',
+      'leave-records-panel',
+      'hr_record_panel',
+      'hr-record-panel',
+    ].includes(target)
+  ) {
+    return 'team_approvals';
+  }
+
+  if (
+    meta.leave_request_id ||
+    meta.team_approval_id ||
+    meta.team_approval_request_id ||
+    meta.approval_stage ||
+    meta.pending_approver_role ||
+    meta.approved_by_team_leader ||
+    meta.approved_by_reporting_officer ||
+    meta.hr_notified ||
+    meta.hr_notified_at ||
+    meta.hr_record_notification_sent ||
+    meta.hr_record_status
+  ) {
+    const stage = String(meta.approval_stage || '').toLowerCase();
+    const approverRole = String(meta.pending_approver_role || '').toLowerCase();
+    const notificationType = String(meta.notification_type || meta.type || '').toLowerCase();
+
+    if (
+      stage === 'team_leader' ||
+      stage === 'reporting_officer' ||
+      stage === 'hr' ||
+      approverRole === 'team_leader' ||
+      approverRole === 'reporting_officer' ||
+      approverRole === 'hr' ||
+      notificationType.includes('approval') ||
+      notificationType.includes('leave_record') ||
+      notificationType.includes('hr_record')
+    ) {
+      return 'team_approvals';
+    }
+
+    return 'application_status';
+  }
 
   if (
     [
@@ -348,10 +419,6 @@ function notificationTarget(meta = {}) {
 
   if (meta.performance_review_id || meta.review_target_type) {
     return 'performance_reviews';
-  }
-
-  if (meta.leave_request_id) {
-    return 'application_status';
   }
 
   if (meta.attendance_mode_request_id) {
@@ -440,6 +507,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
   const leaveCount = modules.filter(([key]) =>
     [
+      'team_approvals',
       'leave_requests',
       'leave_balances',
       'leave_types',
@@ -604,7 +672,12 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         method: 'PATCH',
       });
 
-      const target = notificationTarget(notification.meta || {});
+      const target = notificationTarget({
+        ...(notification.meta || {}),
+        target: notification.target || notification.meta?.target,
+        page: notification.page || notification.meta?.page,
+        type: notification.type || notification.meta?.type,
+      });
 
       if (target) {
         goTo(target);

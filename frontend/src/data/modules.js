@@ -52,8 +52,10 @@ import {
   - If employee has no Team Leader, leave directly goes to Reporting Officer.
   - After Team Leader approval, leave moves to Reporting Officer.
   - After Reporting Officer approval, leave is finally approved.
-  - HR/Admin receives notification after final approval for record keeping.
-  - Team Leader and Reporting Officer approve from Team Approvals page.
+  - HR/Admin receives notification after final approval/rejection for record keeping.
+  - Team Leader, Reporting Officer, HR/Admin and Super Admin can open Team Approvals.
+  - Team Leader and Reporting Officer use Team Approvals for approval decisions.
+  - HR/Admin use Team Approvals as the HR leave record/approval panel.
   - Application Status shows live stage, approval history and final approval status.
 
   Project workflow:
@@ -99,7 +101,16 @@ export const CAPABILITY_ROLES = [
   'reporting_officer',
 ];
 
+export const HR_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+];
+
 export const TEAM_APPROVAL_ROLES = [
+  ...HR_ROLES,
   'team_leader',
   'reporting_officer',
   'ro',
@@ -122,14 +133,6 @@ export const ALL_COMMON_ROLES = [
   'accounts_finance',
   ...CAPABILITY_ROLES,
   BASE_EMPLOYEE_ROLE,
-];
-
-export const HR_ROLES = [
-  'super_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
-  'hr',
 ];
 
 export const ADMIN_HR_FINANCE_ROLES = [
@@ -277,7 +280,7 @@ export const coreModules = [
     'team_approvals',
     'Team Approvals',
     ClipboardList,
-    'Team Leader and Reporting Officer leave approval inbox with live approval stage and approval history.',
+    'Team Leader and Reporting Officer approval inbox plus HR/Admin leave record panel with live approval stage and history.',
     TEAM_APPROVAL_ROLES,
   ],
   [
@@ -620,6 +623,7 @@ export function canApproveTeamRequests(user) {
   const employee = getEmployeeProfile(user);
 
   return (
+    hasAnyRole(roles, HR_ROLES) ||
     truthyValue(employee?.is_team_leader) ||
     truthyValue(employee?.is_reporting_officer) ||
     roles.some(isTeamApprovalRole)
@@ -653,11 +657,14 @@ export function getEmployeeCapabilities(user) {
     roles.includes('reporting_officer') ||
     roles.includes('ro');
 
+  const isHrAdmin = hasAnyRole(roles, HR_ROLES);
+
   return {
     isEmployee: isEmployeePortalUser(user),
     isTeamLeader,
     isReportingOfficer,
-    canApproveTeamRequests: isTeamLeader || isReportingOfficer,
+    isHrAdmin,
+    canApproveTeamRequests: isHrAdmin || isTeamLeader || isReportingOfficer,
     canManageProjects: isTeamLeader || isReportingOfficer,
     canAssignProjectMembers: isTeamLeader || isReportingOfficer,
     canAddProjectCollaborators: isTeamLeader || isReportingOfficer,
@@ -692,6 +699,10 @@ export function getCapabilityDisplayText(user) {
 
   if (capabilities.isReportingOfficer) {
     labels.push('Reporting Officer');
+  }
+
+  if (capabilities.isHrAdmin) {
+    labels.push('HR Approval Records');
   }
 
   return labels.join(' + ');
@@ -902,6 +913,8 @@ export const templates = {
     decision_note: '',
     hr_notified: false,
     hr_notified_at: '',
+    hr_notified_status: '',
+    hr_record_notification_sent: false,
   },
 
   states: {
@@ -976,6 +989,8 @@ export const templates = {
     approved_by_reporting_officer_at: '',
     hr_notified: false,
     hr_notified_at: '',
+    hr_notified_status: '',
+    hr_record_notification_sent: false,
     balance_deducted: false,
   },
 

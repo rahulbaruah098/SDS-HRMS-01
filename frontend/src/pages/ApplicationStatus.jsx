@@ -93,6 +93,35 @@ function modeLabel(value) {
   return statusLabel(value);
 }
 
+function isTeamLeaderApproved(row = {}) {
+  return (
+    Boolean(row.approved_by_team_leader) ||
+    Boolean(row.approved_by_team_leader_name) ||
+    Boolean(row.approved_by_team_leader_at) ||
+    Boolean(row.team_leader_decision_by_name) ||
+    String(row.team_leader_status || '').toLowerCase() === 'approved'
+  );
+}
+
+function isReportingOfficerApproved(row = {}) {
+  return (
+    Boolean(row.approved_by_reporting_officer) ||
+    Boolean(row.approved_by_reporting_officer_name) ||
+    Boolean(row.approved_by_reporting_officer_at) ||
+    Boolean(row.reporting_officer_decision_by_name) ||
+    String(row.reporting_officer_status || '').toLowerCase() === 'approved'
+  );
+}
+
+function isHrNotified(row = {}) {
+  return (
+    Boolean(row.hr_notified) ||
+    Boolean(row.hr_notified_at) ||
+    Boolean(row.hr_record_notification_sent) ||
+    String(row.hr_notified_status || '').toLowerCase() === 'notified'
+  );
+}
+
 function liveStatus(row = {}) {
   if (row.live_status || row.status_text || row.status_display) {
     return row.live_status || row.status_text || row.status_display;
@@ -102,11 +131,15 @@ function liveStatus(row = {}) {
   const stage = String(row.approval_stage || '').toLowerCase();
 
   if (status === 'approved' || stage === 'approved') {
-    if (row.approved_by_reporting_officer_name) {
-      return `Approved by Reporting Officer ${row.approved_by_reporting_officer_name}`;
+    if (row.approved_by_reporting_officer_name || row.reporting_officer_decision_by_name) {
+      return `Approved by Reporting Officer ${row.approved_by_reporting_officer_name || row.reporting_officer_decision_by_name}`;
     }
 
-    return 'Approved by Reporting Officer';
+    if (row.approved_by_team_leader_name || row.team_leader_decision_by_name) {
+      return `Approved by Team Leader ${row.approved_by_team_leader_name || row.team_leader_decision_by_name}`;
+    }
+
+    return 'Approved';
   }
 
   if (status === 'rejected' || stage === 'rejected') {
@@ -117,17 +150,21 @@ function liveStatus(row = {}) {
     return 'Rejected / Cancelled';
   }
 
-  if (stage === 'team_leader') return 'Pending with Team Leader';
+  if (stage === 'team_leader') {
+    return 'Pending with Team Leader';
+  }
 
   if (stage === 'reporting_officer') {
-    if (row.approved_by_team_leader) {
+    if (isTeamLeaderApproved(row)) {
       return 'Approved by Team Leader, Pending with Reporting Officer';
     }
 
     return 'Pending with Reporting Officer';
   }
 
-  if (stage === 'hr') return 'Pending with HR';
+  if (stage === 'hr') {
+    return 'Pending with HR/Admin';
+  }
 
   return row.approval_stage_label || statusLabel(row.status);
 }
@@ -138,6 +175,7 @@ function stageClass(row = {}) {
 
   if (status === 'approved' || stage === 'approved') return 'approved';
   if (status === 'rejected' || stage === 'rejected') return 'rejected';
+  if (stage === 'hr') return 'hr';
   if (stage === 'reporting_officer') return 'reporting';
   if (stage === 'team_leader') return 'team';
 
@@ -149,7 +187,7 @@ function normalizeMainRows(rows = []) {
     type: row.type || '—',
     title: row.title || '—',
     date: formatDate(row.date),
-    live_status: row.live_status || '—',
+    live_status: row.live_status || row.status_text || row.status_display || '—',
     status: statusLabel(row.status),
   }));
 }
@@ -164,10 +202,22 @@ function normalizeLeaveRows(rows = []) {
     task_handover_to: row.task_handover_to_name || '—',
     project_handover: row.project_handover_name || '—',
     current_stage: liveStatus(row),
-    approved_by_team_leader: row.approved_by_team_leader_name || '—',
-    approved_by_reporting_officer: row.approved_by_reporting_officer_name || '—',
-    hr_record_notified: row.hr_notified ? 'Yes' : 'No',
+    team_leader: row.team_leader_name || '—',
+    approved_by_team_leader:
+      row.approved_by_team_leader_name ||
+      row.team_leader_decision_by_name ||
+      (isTeamLeaderApproved(row) ? 'Approved' : '—'),
+    reporting_officer: row.reporting_officer_name || '—',
+    approved_by_reporting_officer:
+      row.approved_by_reporting_officer_name ||
+      row.reporting_officer_decision_by_name ||
+      (isReportingOfficerApproved(row) ? 'Approved' : '—'),
+    hr_record_notified: isHrNotified(row) ? 'Yes' : 'No',
     final_status: statusLabel(row.status),
+    rejected_by:
+      row.rejected_by_name
+        ? `${statusLabel(row.rejected_by_role || '')} ${row.rejected_by_name}`.trim()
+        : '—',
     created_at: formatDateTime(row.created_at),
   }));
 }
@@ -279,17 +329,24 @@ function Timeline({ history = [] }) {
   return (
     <div className="as-timeline">
       {history.map((item, index) => (
-        <div className="as-timeline-item" key={`${item.at || index}-${item.name || index}`}>
+        <div className="as-timeline-item" key={`${item.at || item.created_at || index}-${item.name || index}`}>
           <div className="as-timeline-dot" />
 
           <div>
             <strong>
               {statusLabel(item.action || item.status || item.decision || 'Action')}
-              {item.role ? ` by ${statusLabel(item.role)}` : ''}
+              {item.role || item.by_role || item.approver_role
+                ? ` by ${statusLabel(item.role || item.by_role || item.approver_role)}`
+                : ''}
             </strong>
 
             <span>
-              {item.name || item.approver_name || item.approved_by_name || 'Approver'}
+              {item.name ||
+                item.by_name ||
+                item.approver_name ||
+                item.approved_by_name ||
+                item.rejected_by_name ||
+                'Approver'}
             </span>
 
             <small>
@@ -306,6 +363,12 @@ function Timeline({ history = [] }) {
 }
 
 function LeaveStatusCard({ row }) {
+  const teamLeaderApproved = isTeamLeaderApproved(row);
+  const reportingOfficerApproved = isReportingOfficerApproved(row);
+  const hrNotified = isHrNotified(row);
+  const status = String(row.status || '').toLowerCase();
+  const stage = String(row.approval_stage || '').toLowerCase();
+
   return (
     <article className="as-leave-card">
       <div className="as-leave-card-head">
@@ -365,48 +428,54 @@ function LeaveStatusCard({ row }) {
       </div>
 
       <div className="as-stage-grid">
-        <div className={row.approved_by_team_leader ? 'done' : ''}>
+        <div className={teamLeaderApproved ? 'done' : ''}>
           <CheckCircle2 size={16} />
           <span>
             Team Leader Approval
             <small>
-              {row.approved_by_team_leader
-                ? `${row.approved_by_team_leader_name || 'Approved'} • ${formatDateTime(row.approved_by_team_leader_at)}`
-                : String(row.approval_stage || '').toLowerCase() === 'team_leader'
-                  ? 'Pending with Team Leader'
-                  : 'Not completed / skipped'}
+              {teamLeaderApproved
+                ? `${row.approved_by_team_leader_name || row.team_leader_decision_by_name || 'Approved'} • ${formatDateTime(row.approved_by_team_leader_at || row.team_leader_decision_at)}`
+                : stage === 'team_leader'
+                  ? `Pending with ${row.team_leader_name || 'Team Leader'}`
+                  : row.team_leader_name
+                    ? `Mapped to ${row.team_leader_name}`
+                    : 'Not mapped / skipped'}
             </small>
           </span>
         </div>
 
-        <div className={row.approved_by_reporting_officer ? 'done' : ''}>
+        <div className={reportingOfficerApproved ? 'done' : ''}>
           <ShieldCheck size={16} />
           <span>
             Reporting Officer Approval
             <small>
-              {row.approved_by_reporting_officer
-                ? `${row.approved_by_reporting_officer_name || 'Approved'} • ${formatDateTime(row.approved_by_reporting_officer_at)}`
-                : String(row.approval_stage || '').toLowerCase() === 'reporting_officer'
-                  ? 'Pending with Reporting Officer'
-                  : 'Not completed yet'}
+              {reportingOfficerApproved
+                ? `${row.approved_by_reporting_officer_name || row.reporting_officer_decision_by_name || 'Approved'} • ${formatDateTime(row.approved_by_reporting_officer_at || row.reporting_officer_decision_at)}`
+                : stage === 'reporting_officer'
+                  ? `Pending with ${row.reporting_officer_name || 'Reporting Officer'}`
+                  : row.reporting_officer_name
+                    ? `Mapped to ${row.reporting_officer_name}`
+                    : 'Not mapped'}
             </small>
           </span>
         </div>
 
-        <div className={row.hr_notified ? 'done' : ''}>
+        <div className={hrNotified ? 'done' : ''}>
           <FileText size={16} />
           <span>
             HR Record Notification
             <small>
-              {row.hr_notified
+              {hrNotified
                 ? `HR notified ${formatDateTime(row.hr_notified_at)}`
-                : 'HR will be notified after final approval'}
+                : status === 'approved' || status === 'rejected'
+                  ? 'Waiting for HR notification sync'
+                  : 'HR will be notified after final approval/rejection'}
             </small>
           </span>
         </div>
       </div>
 
-      {String(row.status || '').toLowerCase() === 'rejected' && (
+      {status === 'rejected' && (
         <div className="as-rejected-note">
           <XCircle size={16} />
           <span>
@@ -416,7 +485,7 @@ function LeaveStatusCard({ row }) {
         </div>
       )}
 
-      <Timeline history={row.approval_history || []} />
+      <Timeline history={row.approval_history || row.approval_timeline || []} />
     </article>
   );
 }
@@ -487,16 +556,21 @@ export default function ApplicationStatus() {
   );
 
   const pendingLeaves = rawLeaveRows.filter(
-    (row) => String(row.status || '').toLowerCase() === 'pending',
+    (row) => ['pending', 'in_review'].includes(String(row.status || '').toLowerCase()),
   ).length;
 
   const approvedLeaves = rawLeaveRows.filter(
-    (row) => String(row.status || '').toLowerCase() === 'approved',
+    (row) =>
+      String(row.status || '').toLowerCase() === 'approved' ||
+      isTeamLeaderApproved(row) ||
+      isReportingOfficerApproved(row),
   ).length;
 
   const rejectedLeaves = rawLeaveRows.filter(
     (row) => String(row.status || '').toLowerCase() === 'rejected',
   ).length;
+
+  const hrNotifiedLeaves = rawLeaveRows.filter(isHrNotified).length;
 
   return (
     <div className="page-grid application-status-page">
@@ -600,6 +674,12 @@ export default function ApplicationStatus() {
           border-color: rgba(2, 132, 199, .24);
           background: #e0f2fe;
           color: var(--as-info);
+        }
+
+        .as-stage-pill.hr {
+          border-color: rgba(217, 119, 6, .24);
+          background: #fffbeb;
+          color: var(--as-warning);
         }
 
         .as-stage-pill.approved {
@@ -830,9 +910,9 @@ export default function ApplicationStatus() {
 
       <section className="stats-grid">
         <Stat label="Pending Leaves" value={pendingLeaves} />
-        <Stat label="Approved Leaves" value={approvedLeaves} />
+        <Stat label="Approved / Stage Approved Leaves" value={approvedLeaves} />
         <Stat label="Rejected Leaves" value={rejectedLeaves} />
-        <Stat label="Leave Records" value={rawLeaveRows.length} />
+        <Stat label="HR Notified Leave Records" value={hrNotifiedLeaves} />
       </section>
 
       <section className="panel">
@@ -878,14 +958,14 @@ export default function ApplicationStatus() {
           <div>
             <h3>Leave Requests Table</h3>
             <p>
-              Shows whether your leave is pending with Team Leader, approved by
-              Team Leader and pending with Reporting Officer, approved by Reporting
+              Shows whether leave is pending with Team Leader, approved by Team
+              Leader and pending with Reporting Officer, approved by Reporting
               Officer, rejected, or notified to HR.
             </p>
           </div>
         </div>
 
-        <Table rows={leaveRows} maxColumns={12} />
+        <Table rows={leaveRows} maxColumns={14} />
       </section>
 
       <section className="panel">
