@@ -29,6 +29,15 @@ PROJECT_WRITE_STATUSES = {
     "completed",
 }
 
+SELF_ASSIGN_ALIASES = {
+    "self",
+    "me",
+    "myself",
+    "current",
+    "current_user",
+    "current_employee",
+}
+
 
 # -----------------------------------------------------------------------------
 # Common helpers
@@ -140,6 +149,11 @@ def get_current_employee(db):
         "user_id": user_id,
         "is_deleted": {"$ne": True},
     })
+
+
+def current_employee_id(db):
+    employee = get_current_employee(db)
+    return str(employee["_id"]) if employee else ""
 
 
 def employee_display_name(employee):
@@ -432,7 +446,7 @@ def employee_member_payload(employee, relation="member"):
     }
 
 
-def normalize_employee_id_list(value):
+def normalize_employee_id_list(value, self_employee_id=""):
     if value is None:
         return []
 
@@ -454,6 +468,9 @@ def normalize_employee_id_list(value):
 
         employee_id = normalize_text(raw)
 
+        if normalize_role(employee_id) in SELF_ASSIGN_ALIASES:
+            employee_id = normalize_text(self_employee_id)
+
         if employee_id and employee_id not in seen:
             seen.add(employee_id)
             cleaned.append(employee_id)
@@ -461,11 +478,11 @@ def normalize_employee_id_list(value):
     return cleaned
 
 
-def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member"):
+def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member", self_employee_id=""):
     resolved_ids = []
     members = []
 
-    for employee_id in normalize_employee_id_list(employee_ids):
+    for employee_id in normalize_employee_id_list(employee_ids, self_employee_id):
         employee = resolve_employee(db, employee_id, tenant_id)
 
         if not employee:
@@ -1103,8 +1120,221 @@ def project_wise_performance(db, tenant_id, projects):
 
 
 # -----------------------------------------------------------------------------
+# Project option helpers
+# -----------------------------------------------------------------------------
+
+def employee_option_payload(employee, relation="member"):
+    payload = employee_member_payload(employee, relation)
+
+    payload["_id"] = payload.get("employee_id", "")
+    payload["id"] = payload.get("employee_id", "")
+    payload["label"] = (
+        f"{payload.get('employee_name', 'Employee')}"
+        f" — {payload.get('employee_code') or payload.get('designation') or payload.get('department') or payload.get('email') or 'Member'}"
+    )
+
+    return payload
+
+
+def project_assignable_employee_query(current_emp):
+    tenant_id = current_tenant_id()
+    base = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+
+    if is_admin_view_user():
+        return base
+
+    if not current_emp:
+        return {**base, "_id": {"$exists": False}}
+
+    current_emp_id = str(current_emp["_id"])
+    scope = [{"_id": current_emp["_id"]}]
+
+    if employee_is_team_leader(current_emp):
+        scope.append({"team_leader_id": current_emp_id})
+
+    if employee_is_reporting_officer(current_emp):
+        scope.extend([
+            {"reporting_officer_id": current_emp_id},
+            {"_id": current_emp["_id"]},
+        ])
+
+    return {
+        **base,
+        "$or": scope,
+    }
+
+
+def capability_query_or(capability):
+    if capability == "team_leader":
+        return [
+            {"is_team_leader": True},
+            {"is_team_leader": "true"},
+            {"roles": "team_leader"},
+            {"roles": {"$in": ["team_leader"]}},
+        ]
+
+    return [
+        {"is_reporting_officer": True},
+        {"is_reporting_officer": "true"},
+        {"roles": "reporting_officer"},
+        {"roles": {"$in": ["reporting_officer", "ro"]}},
+    ]
+
+
+def project_team_leader_query(current_emp):
+    tenant_id = current_tenant_id()
+    base = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+    capability_or = capability_query_or("team_leader")
+
+    if is_admin_view_user():
+        return {**base, "$or": capability_or}
+
+    if not current_emp:
+        return {**base, "_id": {"$exists": False}}
+
+    current_emp_id = str(current_emp["_id"])
+
+    if employee_is_reporting_officer(current_emp):
+        return {
+            **base,
+            "$and": [
+                {"$or": capability_or},
+                {"$or": [
+                    {"reporting_officer_id": current_emp_id},
+                    {"_id": current_emp["_id"]},
+                ]},
+            ],
+        }
+
+    if employee_is_team_leader(current_emp):
+        return {
+            **base,
+            "$and": [
+                {"$or": capability_or},
+                {"_id": current_emp["_id"]},
+            ],
+        }
+
+    return {**base, "_id": {"$exists": False}}
+
+
+def project_reporting_officer_query(current_emp):
+    tenant_id = current_tenant_id()
+    base = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+    capability_or = capability_query_or("reporting_officer")
+
+    if is_admin_view_user():
+        return {**base, "$or": capability_or}
+
+    if not current_emp:
+        return {**base, "_id": {"$exists": False}}
+
+    if employee_is_reporting_officer(current_emp):
+        return {
+            **base,
+            "$and": [
+                {"$or": capability_or},
+                {"_id": current_emp["_id"]},
+            ],
+        }
+
+    mapped_ro_id = normalize_text(current_emp.get("reporting_officer_id"))
+    mapped_ro_obj_id = safe_object_id(mapped_ro_id)
+
+    if mapped_ro_obj_id:
+        return {
+            **base,
+            "$and": [
+                {"$or": capability_or},
+                {"_id": mapped_ro_obj_id},
+            ],
+        }
+
+    return {**base, "_id": {"$exists": False}}
+
+def fetch_project_options(db):
+    current_emp = get_current_employee(db)
+
+    assignable = list(
+        db.employees
+        .find(project_assignable_employee_query(current_emp))
+        .sort([("name", 1), ("employee_name", 1)])
+        .limit(1000)
+    )
+
+    team_leaders = list(
+        db.employees
+        .find(project_team_leader_query(current_emp))
+        .sort([("name", 1), ("employee_name", 1)])
+        .limit(500)
+    )
+
+    reporting_officers = list(
+        db.employees
+        .find(project_reporting_officer_query(current_emp))
+        .sort([("name", 1), ("employee_name", 1)])
+        .limit(500)
+    )
+
+    current_emp_payload = employee_option_payload(current_emp, "self") if current_emp else {}
+
+    return {
+        "current_employee": clean_doc(current_emp_payload),
+        "assignable_employees": clean_doc([employee_option_payload(row, "assignable") for row in assignable]),
+        "assigned_member_options": clean_doc([employee_option_payload(row, "assignable") for row in assignable]),
+        "collaborator_options": clean_doc([employee_option_payload(row, "collaborator") for row in assignable]),
+        "team_leader_options": clean_doc([employee_option_payload(row, "team_leader") for row in team_leaders]),
+        "reporting_officer_options": clean_doc([employee_option_payload(row, "reporting_officer") for row in reporting_officers]),
+        "can_assign_self": bool(current_emp and can_create_assign_or_collaborate_projects(db)),
+    }
+
+
+# -----------------------------------------------------------------------------
 # Project CRUD APIs
 # -----------------------------------------------------------------------------
+
+@projects_bp.get("/options")
+@current_user_required
+def project_options():
+    db = get_db()
+
+    if not can_create_assign_or_collaborate_projects(db):
+        return jsonify({
+            "current_employee": clean_doc(employee_option_payload(get_current_employee(db), "self") if get_current_employee(db) else {}),
+            "assignable_employees": [],
+            "assigned_member_options": [],
+            "collaborator_options": [],
+            "team_leader_options": [],
+            "reporting_officer_options": [],
+            "can_assign_self": False,
+            "can_create_assign_collaborate": False,
+            "can_create_projects": False,
+            "can_assign_projects": False,
+            "can_add_collaborators": False,
+        })
+
+    options = fetch_project_options(db)
+    options.update({
+        "can_create_assign_collaborate": True,
+        "can_create_projects": True,
+        "can_assign_projects": True,
+        "can_add_collaborators": True,
+    })
+
+    return jsonify(options)
+
 
 @projects_bp.get("")
 @current_user_required
@@ -1203,17 +1433,24 @@ def create_project():
         team_leader = resolve_team_leader_for_project(db, tenant_id, data, creator_employee)
         reporting_officer = resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader)
 
+        assigned_source = data.get("assigned_employee_ids") or data.get("assigned_members") or []
+
+        if truthy(data.get("assign_to_self")) or truthy(data.get("self_assign")):
+            assigned_source = [*normalize_employee_id_list(assigned_source), str(creator_employee["_id"])]
+
         assigned_employee_ids, assigned_members = resolve_member_list(
             db,
             tenant_id,
-            data.get("assigned_employee_ids") or data.get("assigned_members") or [],
+            assigned_source,
             "assigned_member",
+            str(creator_employee["_id"]),
         )
         collaborator_ids, collaborators = resolve_member_list(
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
             "collaborator",
+            str(creator_employee["_id"]),
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -1395,11 +1632,18 @@ def assign_project(project_id):
     tenant_id = project.get("tenant_id") or current_tenant_id()
 
     try:
+        current_emp = get_current_employee(db)
+        assigned_source = data.get("assigned_employee_ids") or data.get("assigned_members") or []
+
+        if current_emp and (truthy(data.get("assign_to_self")) or truthy(data.get("self_assign"))):
+            assigned_source = [*normalize_employee_id_list(assigned_source), str(current_emp["_id"])]
+
         assigned_employee_ids, assigned_members = resolve_member_list(
             db,
             tenant_id,
-            data.get("assigned_employee_ids") or data.get("assigned_members") or [],
+            assigned_source,
             "assigned_member",
+            str(current_emp["_id"]) if current_emp else "",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -1454,11 +1698,13 @@ def update_project_collaborators(project_id):
     tenant_id = project.get("tenant_id") or current_tenant_id()
 
     try:
+        current_emp = get_current_employee(db)
         collaborator_ids, collaborators = resolve_member_list(
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
             "collaborator",
+            str(current_emp["_id"]) if current_emp else "",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400

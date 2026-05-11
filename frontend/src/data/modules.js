@@ -46,12 +46,23 @@ import {
   - Frontend pages should read any available alias and keep all aliases synced
     when creating/updating users or employees.
 
+  Leave approval workflow:
+  - Employees apply leave from Leave Management.
+  - Leave first goes to mapped Team Leader.
+  - If employee has no Team Leader, leave directly goes to Reporting Officer.
+  - After Team Leader approval, leave moves to Reporting Officer.
+  - After Reporting Officer approval, leave is finally approved.
+  - HR/Admin receives notification after final approval for record keeping.
+  - Team Leader and Reporting Officer approve from Team Approvals page.
+  - Application Status shows live stage, approval history and final approval status.
+
   Project workflow:
   - Projects module remains visible to employees so assigned/collaborator staff
     can view projects and update status/progress.
   - Only Team Leader and Reporting Officer capability users can create projects.
   - Only Team Leader and Reporting Officer capability users can assign team members.
   - Only Team Leader and Reporting Officer capability users can add collaborators.
+  - Team Leader / Reporting Officer can assign a project to himself/herself.
   - Normal employees/team members cannot create projects, assign members, or add collaborators.
   - Normal employees/team members can view scoped projects and update status/progress only.
   - Active projects appear in handover dropdowns.
@@ -86,6 +97,13 @@ export const CAPABILITY_ROLES = [
   'ro',
   'team_leader',
   'reporting_officer',
+];
+
+export const TEAM_APPROVAL_ROLES = [
+  'team_leader',
+  'reporting_officer',
+  'ro',
+  'manager',
 ];
 
 export const PROJECT_MANAGER_ROLES = [
@@ -254,6 +272,13 @@ export const coreModules = [
     Briefcase,
     'Team Leaders and Reporting Officers create/assign projects; employees view scoped projects and update progress/status.',
     PROJECT_ROLES,
+  ],
+  [
+    'team_approvals',
+    'Team Approvals',
+    ClipboardList,
+    'Team Leader and Reporting Officer leave approval inbox with live approval stage and approval history.',
+    TEAM_APPROVAL_ROLES,
   ],
   [
     'leave_requests',
@@ -514,6 +539,10 @@ export function isCapabilityRole(role) {
   return CAPABILITY_ROLES.includes(normalizeRoleValue(role));
 }
 
+export function isTeamApprovalRole(role) {
+  return TEAM_APPROVAL_ROLES.includes(normalizeRoleValue(role));
+}
+
 export function isProjectManagerRole(role) {
   return PROJECT_MANAGER_ROLES.includes(normalizeRoleValue(role));
 }
@@ -586,6 +615,17 @@ export function canManageLeaveBalances(user) {
   return hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES);
 }
 
+export function canApproveTeamRequests(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  const employee = getEmployeeProfile(user);
+
+  return (
+    truthyValue(employee?.is_team_leader) ||
+    truthyValue(employee?.is_reporting_officer) ||
+    roles.some(isTeamApprovalRole)
+  );
+}
+
 export function canSubmitPerformanceReview(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = getEmployeeProfile(user);
@@ -617,6 +657,7 @@ export function getEmployeeCapabilities(user) {
     isEmployee: isEmployeePortalUser(user),
     isTeamLeader,
     isReportingOfficer,
+    canApproveTeamRequests: isTeamLeader || isReportingOfficer,
     canManageProjects: isTeamLeader || isReportingOfficer,
     canAssignProjectMembers: isTeamLeader || isReportingOfficer,
     canAddProjectCollaborators: isTeamLeader || isReportingOfficer,
@@ -821,6 +862,48 @@ export const templates = {
     completed_at: '',
   },
 
+  team_approvals: {
+    request_type: 'leave_request',
+    employee_id: '',
+    employee_name: '',
+    employee_code: '',
+    department: '',
+    designation: '',
+    leave_type: 'CL',
+    leave_type_label: 'Casual Leave',
+    from_date: '',
+    to_date: '',
+    upto_date: '',
+    leave_days: 1,
+    reason: '',
+    task_handover_to_id: '',
+    task_handover_to_name: '',
+    project_handover_id: '',
+    project_handover_name: '',
+    status: 'pending',
+    approval_stage: '',
+    approval_stage_label: '',
+    live_status: '',
+    status_text: '',
+    status_display: '',
+    approval_history: [],
+    approved_by_team_leader: false,
+    approved_by_team_leader_id: '',
+    approved_by_team_leader_name: '',
+    approved_by_team_leader_at: '',
+    approved_by_reporting_officer: false,
+    approved_by_reporting_officer_id: '',
+    approved_by_reporting_officer_name: '',
+    approved_by_reporting_officer_at: '',
+    rejected_by_id: '',
+    rejected_by_name: '',
+    rejected_by_role: '',
+    rejected_at: '',
+    decision_note: '',
+    hr_notified: false,
+    hr_notified_at: '',
+  },
+
   states: {
     tenant_id: 'sds',
     name: '',
@@ -883,6 +966,16 @@ export const templates = {
     approval_stage: '',
     approval_stage_label: '',
     approval_history: [],
+    approved_by_team_leader: false,
+    approved_by_team_leader_id: '',
+    approved_by_team_leader_name: '',
+    approved_by_team_leader_at: '',
+    approved_by_reporting_officer: false,
+    approved_by_reporting_officer_id: '',
+    approved_by_reporting_officer_name: '',
+    approved_by_reporting_officer_at: '',
+    hr_notified: false,
+    hr_notified_at: '',
     balance_deducted: false,
   },
 

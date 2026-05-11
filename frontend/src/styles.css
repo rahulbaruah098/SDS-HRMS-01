@@ -3829,3 +3829,382 @@ tr:hover td {
     white-space: normal;
   }
 }
+
+/* ===========================================================================
+   Team Approvals + Application Status Final Global Layer
+   Applies to:
+   - frontend/src/pages/TeamApprovals.jsx
+   - frontend/src/pages/ApplicationStatus.jsx
+   - frontend/src/pages/EmployeeDashboard.jsx
+   =========================================================================== */
+
+.team-approvals-page,
+.application-status-page {
+  animation: softFadeUp .28s ease both;
+}
+
+.team-approvals-page .ta-hero,
+.application-status-page .hero,
+.as-leave-card,
+.ta-card {
+  isolation: isolate;
+}
+
+.team-approvals-page .ta-hero::after,
+.as-leave-card::after,
+.ta-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .72), transparent 58%);
+  z-index: 0;
+}
+
+.team-approvals-page .ta-hero > *,
+.as-leave-card > *,
+.ta-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ta-card,
+.as-leave-card,
+.ta-kpi,
+.ta-toolbar,
+.as-stage-grid > div,
+.ta-approval-flags > div,
+.ta-details-grid > div,
+.as-leave-meta-grid > div {
+  transition:
+    transform .22s ease,
+    box-shadow .22s ease,
+    border-color .22s ease,
+    background .22s ease;
+}
+
+.ta-card:hover,
+.as-leave-card:hover,
+.ta-kpi:hover,
+.as-stage-grid > div:hover,
+.ta-approval-flags > div:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+.ta-hero-icon,
+.as-avatar,
+.ta-avatar,
+.employee-profile-avatar,
+.emp-avatar,
+.layout-avatar {
+  position: relative;
+}
+
+.ta-avatar,
+.as-avatar {
+  overflow: hidden;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255,255,255,.85), transparent 35%),
+    linear-gradient(135deg, var(--primarySoft), var(--successSoft));
+  color: var(--primary);
+  border: 3px solid #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, .13);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ta-avatar img,
+.as-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ta-stage-pill,
+.as-stage-pill {
+  text-transform: none;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .05);
+}
+
+.ta-stage-pill.pending,
+.as-stage-pill.pending {
+  background: var(--warningSoft);
+  color: var(--warning);
+  border-color: #FED7AA;
+}
+
+.ta-stage-pill.team,
+.as-stage-pill.team {
+  background: var(--primarySoft);
+  color: var(--primary);
+  border-color: var(--primaryRing);
+}
+
+.ta-stage-pill.reporting,
+.as-stage-pill.reporting {
+  background: var(--infoSoft);
+  color: var(--info);
+  border-color: #BAE6FD;
+}
+
+.ta-stage-pill.approved,
+.as-stage-pill.approved,
+.ta-approval-flags > div.done,
+.as-stage-grid > div.done {
+  background: var(--successSoft);
+  color: var(--success);
+  border-color: #BBF7D0;
+}
+
+.ta-stage-pill.rejected,
+.as-stage-pill.rejected,
+.as-rejected-note {
+  background: var(--dangerSoft);
+  color: var(--danger);
+  border-color: #FECACA;
+}
+
+.ta-timeline,
+.as-timeline {
+  position: relative;
+  overflow: hidden;
+}
+
+.ta-timeline::before,
+.as-timeline::before {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 20px;
+  bottom: 20px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--primary), var(--info), var(--success));
+  opacity: .22;
+}
+
+.ta-timeline-item,
+.as-timeline-item {
+  position: relative;
+  z-index: 1;
+}
+
+.ta-timeline-dot,
+.as-timeline-dot {
+  box-shadow: 0 0 0 5px rgba(79, 70, 229, .10);
+}
+
+.ta-actions .primary,
+.ta-actions .danger,
+.application-status-page .secondary,
+.team-approvals-page .secondary,
+.team-approvals-page .primary {
+  min-height: 42px;
+}
+
+.ta-filter button,
+.team-approvals-page .secondary,
+.application-status-page .secondary {
+  transition:
+    transform .2s ease,
+    box-shadow .2s ease,
+    border-color .2s ease,
+    background .2s ease;
+}
+
+.ta-filter button:hover,
+.team-approvals-page .secondary:hover,
+.application-status-page .secondary:hover {
+  transform: translateY(-1px);
+  border-color: var(--primaryRing);
+  box-shadow: 0 10px 24px rgba(79, 70, 229, .10);
+}
+
+.ta-search:focus-within {
+  border-color: var(--primaryRing);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, .10);
+}
+
+.ta-search input::placeholder {
+  color: #94A3B8;
+}
+
+.ta-list,
+.as-live-grid {
+  min-width: 0;
+}
+
+.ta-details-grid strong,
+.as-leave-meta-grid strong,
+.ta-person strong,
+.as-person strong,
+.ta-approval-flags span,
+.as-stage-grid span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ta-reason p,
+.as-reason p {
+  overflow-wrap: anywhere;
+}
+
+.ta-empty,
+.as-empty,
+.ta-empty-line,
+.as-empty-line {
+  border-style: dashed;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .04);
+}
+
+/* Employee dashboard approval shortcut styling */
+.emp-team-approval-shortcut,
+.emp-approval-live-card {
+  border: 1px solid var(--primaryRing);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79,70,229,.08), transparent 36%),
+    #FFFFFF;
+  border-radius: 22px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.emp-team-approval-shortcut strong,
+.emp-approval-live-card strong {
+  color: var(--ink);
+}
+
+.emp-team-approval-shortcut p,
+.emp-approval-live-card p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* Keep tables readable after adding long live leave statuses */
+.application-status-page .table-wrap table,
+.employee-dashboard-page .table-wrap table,
+.team-approvals-page .table-wrap table {
+  min-width: 980px;
+}
+
+.application-status-page td,
+.employee-dashboard-page td,
+.team-approvals-page td {
+  line-height: 1.45;
+}
+
+.application-status-page td:nth-child(7),
+.application-status-page td:nth-child(8),
+.employee-dashboard-page td:nth-child(8),
+.team-approvals-page td:nth-child(8) {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+}
+
+/* Responsive final fixes for new Team Approval screens */
+@media (max-width: 1180px) {
+  .ta-kpis,
+  .emp-leave-status-grid,
+  .emp-performance-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .ta-details-grid,
+  .as-leave-meta-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .ta-approval-flags,
+  .as-stage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .team-approvals-page .ta-hero,
+  .as-leave-card,
+  .ta-card {
+    border-radius: 22px !important;
+    padding: 16px !important;
+  }
+
+  .ta-kpis,
+  .ta-details-grid,
+  .ta-approval-flags,
+  .as-leave-meta-grid,
+  .as-stage-grid,
+  .emp-leave-status-grid,
+  .emp-performance-stat-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .ta-card-top,
+  .as-leave-card-head,
+  .ta-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ta-stage-pill,
+  .as-stage-pill {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .ta-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .ta-actions button,
+  .ta-filter button,
+  .team-approvals-page .hero-actions button,
+  .application-status-page .hero-actions button {
+    width: 100%;
+  }
+
+  .ta-person,
+  .as-person {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ta-person strong,
+  .as-person strong {
+    white-space: normal;
+  }
+
+  .ta-timeline::before,
+  .as-timeline::before {
+    left: 17px;
+  }
+}
+
+@media (max-width: 520px) {
+  .ta-avatar,
+  .as-avatar {
+    width: 50px !important;
+    height: 50px !important;
+    border-radius: 18px !important;
+  }
+
+  .ta-hero-icon {
+    width: 58px !important;
+    height: 58px !important;
+    border-radius: 18px !important;
+  }
+
+  .ta-kpi strong,
+  .emp-leave-status-card strong,
+  .emp-performance-stat-card strong {
+    font-size: 24px;
+  }
+}

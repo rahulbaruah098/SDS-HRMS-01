@@ -436,20 +436,41 @@ def leave_stage_label(stage):
 def leave_request_live_status(leave_doc):
     status = normalize_status(leave_doc.get("status"))
     stage = normalize_text(leave_doc.get("approval_stage"))
+    team_leader_status = normalize_status(leave_doc.get("team_leader_status"))
+    reporting_officer_status = normalize_status(leave_doc.get("reporting_officer_status"))
+    hr_status = normalize_status(leave_doc.get("hr_status"))
 
     if status == "approved" or stage == "approved":
+        if reporting_officer_status == "approved":
+            return "Approved by Reporting Officer"
+        if team_leader_status == "approved" and hr_status == "approved":
+            return "Approved by Team Leader and HR"
+        if hr_status == "approved":
+            return "Approved by HR"
         return "Approved"
 
     if status == "rejected" or stage == "rejected":
+        if team_leader_status == "rejected":
+            return "Rejected by Team Leader"
+        if reporting_officer_status == "rejected":
+            return "Rejected by Reporting Officer"
+        if hr_status == "rejected":
+            return "Rejected by HR"
         return "Rejected / Cancelled"
 
     if stage == "team_leader":
         return "Pending with Team Leader"
 
     if stage == "reporting_officer":
+        if team_leader_status == "approved":
+            return "Approved by Team Leader, Pending with Reporting Officer"
         return "Pending with Reporting Officer"
 
     if stage == "hr":
+        if reporting_officer_status == "approved":
+            return "Approved by Reporting Officer, Pending HR Record"
+        if team_leader_status == "approved":
+            return "Approved by Team Leader, Pending HR Record"
         return "Pending with HR"
 
     return leave_stage_label(stage) if stage else "Pending"
@@ -486,6 +507,11 @@ def enrich_leave_request_doc(item):
     item["current_approval_stage"] = live_status
     item["approval_stage_label"] = item.get("approval_stage_label") or leave_stage_label(item.get("approval_stage"))
     item["leave_type_label"] = item.get("leave_type_label") or leave_type_label(item.get("leave_type"))
+    item["approval_timeline"] = item.get("approval_history") or []
+    item["approved_by_team_leader"] = item.get("team_leader_decision_by_name", "")
+    item["approved_by_reporting_officer"] = item.get("reporting_officer_decision_by_name", "")
+    item["approved_by_hr"] = item.get("hr_decision_by_name", "")
+    item["hr_notified_status"] = item.get("hr_notified_status", "")
     return item
 
 
@@ -911,6 +937,8 @@ def rollback_compoff_claim_if_needed(db, leave_doc):
 
 
 def create_leave_history_entry(status, stage, note):
+    roles = sorted(list(current_user_roles()))
+
     return {
         "stage": stage,
         "stage_label": leave_stage_label(stage),
@@ -918,6 +946,8 @@ def create_leave_history_entry(status, stage, note):
         "note": note,
         "by": str(g.current_user["_id"]),
         "by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "by_role": leave_stage_label(stage),
+        "actor_roles": roles,
         "created_at": datetime.utcnow(),
     }
 
@@ -942,7 +972,7 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         "Leave Approval Pending",
         f"{employee_display_name(employee)} has a leave request pending at {leave_stage_label(stage)} stage.",
         {
-            "target": "application_status",
+            "target": "team_approvals",
             "leave_request_id": str(leave_doc.get("_id")),
             "employee_id": str(employee.get("_id")),
             "stage": stage,
@@ -977,19 +1007,41 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
         return
 
     status_text = "approved" if status == "approved" else "rejected/cancelled"
+    from_date = leave_doc.get("from_date") or ""
+    to_date = leave_doc.get("to_date") or leave_doc.get("upto_date") or ""
+    team_leader_name = leave_doc.get("team_leader_decision_by_name") or leave_doc.get("team_leader_name") or "Not applicable"
+    reporting_officer_name = leave_doc.get("reporting_officer_decision_by_name") or leave_doc.get("reporting_officer_name") or "Not applicable"
 
     notify_users(
         db,
         user_ids,
-        "Leave Workflow Updated",
-        f"{employee_display_name(employee)}'s leave request has been {status_text}.",
+        "Leave Record Update",
+        (
+            f"{employee_display_name(employee)}'s leave from {from_date} to {to_date} has been {status_text}. "
+            f"Team Leader: {team_leader_name}. Reporting Officer: {reporting_officer_name}."
+        ),
         {
             "target": "application_status",
             "leave_request_id": str(leave_doc.get("_id")),
             "employee_id": str(employee.get("_id")),
+            "from_date": from_date,
+            "to_date": to_date,
+            "team_leader_name": team_leader_name,
+            "reporting_officer_name": reporting_officer_name,
             "status": status,
         },
         tenant_id=tenant_id,
+    )
+
+    db.leave_requests.update_one(
+        {"_id": leave_doc.get("_id")},
+        {
+            "$set": {
+                "hr_notified_status": "notified",
+                "hr_notified_at": datetime.utcnow(),
+                "hr_record_notification_sent": True,
+            }
+        },
     )
 
 
@@ -1079,6 +1131,8 @@ def leave_stage_status_fields(initial_stage):
         "team_leader_status": "pending" if initial_stage == "team_leader" else "not_applicable",
         "reporting_officer_status": "pending" if initial_stage == "reporting_officer" else "not_applicable",
         "hr_status": "pending" if initial_stage == "hr" else "view_only",
+        "hr_notified_status": "not_notified",
+        "hr_notified_at": "",
     }
 
 
@@ -1098,13 +1152,24 @@ def approval_stage_update_fields(stage, status, note):
     if not prefix:
         return {}
 
-    return {
+    fields = {
         f"{prefix}_status": status,
         f"{prefix}_decision_note": note,
         f"{prefix}_decision_by": actor_id,
         f"{prefix}_decision_by_name": actor_name,
         f"{prefix}_decision_at": now,
     }
+
+    if status == "approved":
+        fields[f"approved_by_{prefix}"] = actor_id
+        fields[f"approved_by_{prefix}_name"] = actor_name
+        fields[f"approved_by_{prefix}_at"] = now
+    elif status == "rejected":
+        fields[f"rejected_by_{prefix}"] = actor_id
+        fields[f"rejected_by_{prefix}_name"] = actor_name
+        fields[f"rejected_by_{prefix}_at"] = now
+
+    return fields
 
 
 def date_range_for_period(period, base_value=None):
@@ -1274,6 +1339,93 @@ def mark_all_notifications_read():
 
 
 # -----------------------------------------------------------------------------
+# Team Leader / Reporting Officer approval inbox
+# -----------------------------------------------------------------------------
+
+@workflow_bp.get("/team_approvals")
+@current_user_required
+def team_approvals():
+    db = get_db()
+    roles = current_user_roles()
+    employee = current_employee(db)
+
+    if not employee:
+        return jsonify({
+            "employee": None,
+            "summary": {"total": 0, "pending_leave_requests": 0},
+            "leave_requests": [],
+            "items": [],
+        })
+
+    if not (
+        "team_leader" in roles
+        or "reporting_officer" in roles
+        or "ro" in roles
+        or employee_is_team_leader(employee)
+        or employee_is_reporting_officer(employee)
+    ):
+        return jsonify({"message": "Only Team Leaders and Reporting Officers can access approvals"}), 403
+
+    emp_id = str(employee["_id"])
+    approval_or = []
+
+    if "team_leader" in roles or employee_is_team_leader(employee):
+        approval_or.append({
+            "team_leader_id": emp_id,
+            "approval_stage": "team_leader",
+            "status": {"$in": ["pending", "in_review"]},
+        })
+
+    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
+        approval_or.append({
+            "reporting_officer_id": emp_id,
+            "approval_stage": "reporting_officer",
+            "status": {"$in": ["pending", "in_review"]},
+        })
+
+    if not approval_or:
+        return jsonify({
+            "employee": clean_doc(employee),
+            "summary": {"total": 0, "pending_leave_requests": 0},
+            "leave_requests": [],
+            "items": [],
+        })
+
+    q = {
+        "tenant_id": current_tenant_id(),
+        "is_deleted": {"$ne": True},
+        "$or": approval_or,
+    }
+
+    items = list(
+        db.leave_requests
+        .find(q)
+        .sort([("from_date", 1), ("created_at", -1)])
+        .limit(500)
+    )
+
+    enriched_items = enrich_leave_request_docs(items)
+
+    return jsonify({
+        "employee": clean_doc(employee),
+        "summary": {
+            "total": len(enriched_items),
+            "pending_leave_requests": len(enriched_items),
+            "team_leader_stage": len([item for item in enriched_items if item.get("approval_stage") == "team_leader"]),
+            "reporting_officer_stage": len([item for item in enriched_items if item.get("approval_stage") == "reporting_officer"]),
+        },
+        "leave_requests": clean_doc(enriched_items),
+        "items": clean_doc(enriched_items),
+    })
+
+
+@workflow_bp.patch("/team_approvals/leave_requests/<req_id>/decision")
+@current_user_required
+def team_leave_decision(req_id):
+    return leave_decision(req_id)
+
+
+# -----------------------------------------------------------------------------
 # Application status API
 # -----------------------------------------------------------------------------
 
@@ -1388,8 +1540,18 @@ def application_status():
             "type": "Leave Request",
             "title": row.get("leave_type_label") or leave_type_label(row.get("leave_type")),
             "date": row.get("from_date"),
+            "from_date": row.get("from_date"),
+            "to_date": row.get("to_date") or row.get("upto_date"),
             "status": row.get("status"),
             "live_status": row.get("live_status"),
+            "approval_stage": row.get("approval_stage"),
+            "approval_stage_label": row.get("approval_stage_label"),
+            "approval_history": row.get("approval_history", []),
+            "team_leader_name": row.get("team_leader_name", ""),
+            "reporting_officer_name": row.get("reporting_officer_name", ""),
+            "approved_by_team_leader": row.get("team_leader_decision_by_name", ""),
+            "approved_by_reporting_officer": row.get("reporting_officer_decision_by_name", ""),
+            "hr_notified_status": row.get("hr_notified_status", ""),
         })
 
     for row in enriched_modes:
@@ -1930,6 +2092,7 @@ def leave_decision(req_id):
 
         notify_employee_leave_decision(db, employee, updated, "rejected")
         notify_hr_leave_result(db, employee, updated, "rejected")
+        updated = db.leave_requests.find_one({"_id": leave_obj_id})
         audit("reject_leave_cancelled", "leave_requests", req_id, data)
 
         return jsonify({
@@ -2019,6 +2182,7 @@ def leave_decision(req_id):
 
     notify_employee_leave_decision(db, employee, updated, "approved")
     notify_hr_leave_result(db, employee, updated, "approved")
+    updated = db.leave_requests.find_one({"_id": leave_obj_id})
     audit("approve_leave_final", "leave_requests", req_id, data)
 
     return jsonify({

@@ -162,6 +162,122 @@ export function normalizePeopleList(people = []) {
   return people.map((person) => normalizePerson(person)).filter(Boolean);
 }
 
+export function normalizeApprovalHistory(history = []) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return history.map((item = {}) => ({
+    ...item,
+    action: item.action || item.status || item.decision || '',
+    role: item.role || item.approver_role || item.approved_by_role || '',
+    name:
+      item.name ||
+      item.approver_name ||
+      item.approved_by_name ||
+      item.rejected_by_name ||
+      '',
+    user_id:
+      item.user_id ||
+      item.approver_id ||
+      item.approved_by_id ||
+      item.rejected_by_id ||
+      '',
+    at:
+      item.at ||
+      item.approved_at ||
+      item.rejected_at ||
+      item.created_at ||
+      item.updated_at ||
+      '',
+    note: item.note || item.reason || item.decision_note || '',
+  }));
+}
+
+export function normalizeLeaveApprovalRecord(record = {}) {
+  if (!record || typeof record !== 'object') {
+    return record;
+  }
+
+  const normalized = withProfilePhotoAliases({ ...record });
+
+  const status = String(normalized.status || '').toLowerCase();
+  const stage = String(normalized.approval_stage || '').toLowerCase();
+
+  let liveStatus =
+    normalized.live_status ||
+    normalized.status_text ||
+    normalized.status_display ||
+    normalized.approval_stage_label ||
+    '';
+
+  if (!liveStatus) {
+    if (status === 'approved' || stage === 'approved') {
+      liveStatus = 'Approved';
+    } else if (status === 'rejected' || stage === 'rejected') {
+      liveStatus = 'Rejected';
+    } else if (stage === 'team_leader') {
+      liveStatus = 'Pending with Team Leader';
+    } else if (stage === 'reporting_officer') {
+      liveStatus = normalized.approved_by_team_leader
+        ? 'Approved by Team Leader, Pending with Reporting Officer'
+        : 'Pending with Reporting Officer';
+    } else if (stage === 'hr') {
+      liveStatus = 'Pending with HR';
+    } else {
+      liveStatus = normalized.status || 'Pending';
+    }
+  }
+
+  normalized.live_status = liveStatus;
+  normalized.status_text = normalized.status_text || liveStatus;
+  normalized.status_display = normalized.status_display || liveStatus;
+  normalized.approval_stage_label = normalized.approval_stage_label || liveStatus;
+
+  normalized.approval_history = normalizeApprovalHistory(normalized.approval_history || []);
+
+  normalized.employee_name =
+    normalized.employee_name ||
+    normalized.name ||
+    normalized.employee?.name ||
+    normalized.employee?.employee_name ||
+    'Employee';
+
+  normalized.leave_type_label =
+    normalized.leave_type_label ||
+    (String(normalized.leave_type || '').toUpperCase() === 'CL'
+      ? 'Casual Leave'
+      : String(normalized.leave_type || '').toUpperCase() === 'EL'
+        ? 'Earned Leave'
+        : normalized.leave_type || 'Leave');
+
+  normalized.upto_date = normalized.upto_date || normalized.to_date || '';
+  normalized.to_date = normalized.to_date || normalized.upto_date || '';
+
+  normalized.approved_by_team_leader =
+    normalized.approved_by_team_leader ||
+    Boolean(normalized.approved_by_team_leader_id || normalized.team_leader_approved_at);
+
+  normalized.approved_by_reporting_officer =
+    normalized.approved_by_reporting_officer ||
+    Boolean(
+      normalized.approved_by_reporting_officer_id ||
+      normalized.reporting_officer_approved_at,
+    );
+
+  normalized.hr_notified = Boolean(normalized.hr_notified || normalized.hr_notified_at);
+
+  return normalized;
+}
+
+export function normalizeLeaveApprovalList(records = []) {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+
+  return records.map((record) => normalizeLeaveApprovalRecord(record));
+}
+
 export function normalizeProjectTeamTree(tree = {}) {
   if (!tree || typeof tree !== 'object') {
     return {
@@ -334,6 +450,29 @@ export function normalizeDashboardPayload(data = {}) {
   normalized.team_leader_projects = normalizeProjectList(normalized.team_leader_projects || []);
   normalized.reporting_projects = normalizeProjectList(normalized.reporting_projects || []);
 
+  normalized.my_pending_leave_approvals = normalizeLeaveApprovalList(
+    normalized.my_pending_leave_approvals || [],
+  );
+  normalized.pending_leave_approvals = normalizeLeaveApprovalList(
+    normalized.pending_leave_approvals || [],
+  );
+
+  if (normalized.pending && typeof normalized.pending === 'object') {
+    normalized.pending = {
+      ...normalized.pending,
+      leave_requests: normalizeLeaveApprovalList(normalized.pending.leave_requests || []),
+    };
+  }
+
+  if (normalized.application_status && typeof normalized.application_status === 'object') {
+    normalized.application_status = {
+      ...normalized.application_status,
+      leave_requests: normalizeLeaveApprovalList(
+        normalized.application_status.leave_requests || [],
+      ),
+    };
+  }
+
   if (normalized.project_dashboard && typeof normalized.project_dashboard === 'object') {
     normalized.project_dashboard = {
       ...normalized.project_dashboard,
@@ -394,7 +533,9 @@ export function normalizeApiPayload(data = {}) {
   }
 
   if (normalized.item) {
-    normalized.item = normalizeProject(withProfilePhotoAliases(normalized.item));
+    normalized.item = normalizeLeaveApprovalRecord(
+      normalizeProject(withProfilePhotoAliases(normalized.item)),
+    );
   }
 
   if (normalized.project) {
@@ -402,7 +543,25 @@ export function normalizeApiPayload(data = {}) {
   }
 
   if (Array.isArray(normalized.items)) {
-    normalized.items = normalized.items.map((item) => normalizeProject(withProfilePhotoAliases(item)));
+    normalized.items = normalized.items.map((item) =>
+      normalizeLeaveApprovalRecord(normalizeProject(withProfilePhotoAliases(item))),
+    );
+  }
+
+  if (Array.isArray(normalized.leave_requests)) {
+    normalized.leave_requests = normalizeLeaveApprovalList(normalized.leave_requests);
+  }
+
+  if (Array.isArray(normalized.pending_leave_approvals)) {
+    normalized.pending_leave_approvals = normalizeLeaveApprovalList(
+      normalized.pending_leave_approvals,
+    );
+  }
+
+  if (Array.isArray(normalized.my_pending_leave_approvals)) {
+    normalized.my_pending_leave_approvals = normalizeLeaveApprovalList(
+      normalized.my_pending_leave_approvals,
+    );
   }
 
   if (
@@ -410,7 +569,9 @@ export function normalizeApiPayload(data = {}) {
     normalized.project_analytics ||
     normalized.team_hierarchy_tree ||
     normalized.employee_summary ||
-    normalized.dashboard_display
+    normalized.dashboard_display ||
+    normalized.pending ||
+    normalized.application_status
   ) {
     return normalizeDashboardPayload(normalized);
   }
@@ -682,11 +843,44 @@ export function getApplicationStatus() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Team Approval APIs                                                         */
+/* -------------------------------------------------------------------------- */
+
+export function getTeamApprovals(params = {}) {
+  return api(`/team_approvals${buildQuery(params)}`);
+}
+
+export function decideTeamLeaveApproval(requestId, payload = {}) {
+  return api(`/team_approvals/leave_requests/${requestId}/decision`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveTeamLeaveRequest(requestId, reason = '') {
+  return decideTeamLeaveApproval(requestId, {
+    status: 'approved',
+    reason,
+  });
+}
+
+export function rejectTeamLeaveRequest(requestId, reason = '') {
+  return decideTeamLeaveApproval(requestId, {
+    status: 'rejected',
+    reason,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* Project APIs                                                               */
 /* -------------------------------------------------------------------------- */
 
 export function getProjects(params = {}) {
   return api(`/projects${buildQuery(params)}`);
+}
+
+export function getProjectOptions(params = {}) {
+  return api(`/projects/options${buildQuery(params)}`);
 }
 
 export function getActiveProjects(params = {}) {
@@ -730,6 +924,13 @@ export function assignProject(projectId, payload = {}) {
   return api(`/projects/${projectId}/assign`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  });
+}
+
+export function assignProjectToSelf(projectId, extraPayload = {}) {
+  return assignProject(projectId, {
+    ...extraPayload,
+    assign_to_self: true,
   });
 }
 

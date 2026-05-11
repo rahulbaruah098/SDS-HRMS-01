@@ -16,6 +16,7 @@ import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 import Projects from './pages/Projects';
 import ApplicationStatus from './pages/ApplicationStatus';
+import TeamApprovals from './pages/TeamApprovals';
 
 import './styles.css';
 
@@ -58,9 +59,32 @@ const PAGE_ALIASES = {
   leave_request: 'leave_requests',
   leave_requests: 'leave_requests',
   leave_management: 'leave_requests',
-  leave_approvals: 'leave_requests',
   leave_deductions: 'reports',
   leave_records: 'reports',
+
+  leave_approval: 'team_approvals',
+  leave_approvals: 'team_approvals',
+  team_approval: 'team_approvals',
+  team_approvals: 'team_approvals',
+  team_leave_approval: 'team_approvals',
+  team_leave_approvals: 'team_approvals',
+  leave_approval_inbox: 'team_approvals',
+  approval_inbox: 'team_approvals',
+  pending_approvals: 'team_approvals',
+  pending_leave_approvals: 'team_approvals',
+  tl_approvals: 'team_approvals',
+  team_leader_approvals: 'team_approvals',
+  ro_approvals: 'team_approvals',
+  reporting_officer_approvals: 'team_approvals',
+  manager_approvals: 'team_approvals',
+
+  'team-approvals': 'team_approvals',
+  'team-approval': 'team_approvals',
+  'leave-approval': 'team_approvals',
+  'leave-approvals': 'team_approvals',
+  'approval-inbox': 'team_approvals',
+  'pending-approvals': 'team_approvals',
+  'pending-leave-approvals': 'team_approvals',
 
   leave_balance: 'leave_balances',
   leave_balances: 'leave_balances',
@@ -337,6 +361,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'projects') {
     return <Projects setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'team_approvals') {
+    return <TeamApprovals setPage={setPage} />;
   }
 
   if (normalizedPage === 'profile') {

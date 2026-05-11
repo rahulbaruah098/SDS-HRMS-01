@@ -5,11 +5,14 @@ import {
   getMyAttendanceModeRequests,
   getMyCompOffs,
   claimCompOff,
+  decideTeamLeaveApproval,
+  getTeamApprovals,
   getInitials,
   getProfilePhotoUrl,
   normalizePeopleList,
   normalizeTeamHierarchyTree,
   normalizeProjectTeamTree,
+  normalizeLeaveApprovalList,
 } from '../api/client';
 import AttendanceWidget from '../components/AttendanceWidget';
 import Stat from '../components/Stat';
@@ -500,6 +503,10 @@ function leaveLiveStatus(row = {}) {
   }
 
   if (stage === 'reporting_officer') {
+    if (row.approved_by_team_leader || row.approved_by_team_leader_name) {
+      return 'Approved by Team Leader, Pending with Reporting Officer';
+    }
+
     return 'Pending with Reporting Officer';
   }
 
@@ -566,12 +573,12 @@ function ProjectAccessCard({ isTeamLeader, isReportingOfficer }) {
         <strong>{canCreate ? 'Creator / Manager Access' : 'View + Progress Access'}</strong>
         <p>
           {canCreate
-            ? 'You can create projects, assign team members, add collaborators, and update project progress.'
+            ? 'You can create projects, assign team members, assign projects to yourself, add collaborators, and update project progress.'
             : 'You can view scoped projects and update status/progress only when you are assigned or added as a collaborator.'}
         </p>
       </div>
 
-      <em>{canCreate ? 'TL / RO' : 'Employee'}</em>
+      <em>{canCreate ? 'TL / RO + Self Assign' : 'Employee'}</em>
     </div>
   );
 }
@@ -873,6 +880,7 @@ export default function EmployeeDashboard({ setPage }) {
   const [compOffs, setCompOffs] = useState([]);
   const [leaveBalances, setLeaveBalances] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
+  const [teamApprovalRequests, setTeamApprovalRequests] = useState([]);
 
   const [claimForm, setClaimForm] = useState({
     compoff_id: '',
@@ -905,6 +913,7 @@ export default function EmployeeDashboard({ setPage }) {
         compOffData,
         leaveBalanceData,
         leaveRequestData,
+        teamApprovalData,
       ] = await Promise.all([
         api('/dashboard/employee'),
         getAttendanceStatus().catch(() => null),
@@ -912,6 +921,7 @@ export default function EmployeeDashboard({ setPage }) {
         getMyCompOffs().catch(() => ({ items: [] })),
         api('/leave_balances').catch(() => ({ items: [] })),
         api('/leave_requests').catch(() => ({ items: [] })),
+        getTeamApprovals({ status: 'pending' }).catch(() => ({ items: [] })),
       ]);
 
       setData(dashboardData);
@@ -920,6 +930,15 @@ export default function EmployeeDashboard({ setPage }) {
       setCompOffs(compOffData?.items || []);
       setLeaveBalances(leaveBalanceData?.items || []);
       setLeaveRequests(leaveRequestData?.items || []);
+      setTeamApprovalRequests(
+        normalizeLeaveApprovalList(
+          teamApprovalData?.items ||
+            teamApprovalData?.leave_requests ||
+            teamApprovalData?.pending_leave_approvals ||
+            teamApprovalData?.my_pending_leave_approvals ||
+            [],
+        ),
+      );
     } catch (error) {
       console.error(error);
       setMessage(error.message || 'Unable to load employee dashboard');
@@ -1031,9 +1050,8 @@ export default function EmployeeDashboard({ setPage }) {
       setMessage('');
       setLeaveDecisionSaving(true);
 
-      const res = await api(`/leave_requests/${row._id}/decision`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
+      const res = await decideTeamLeaveApproval(row._id, {
+        status,
       });
 
       setMessage(res.message || `Leave ${status}`);
@@ -1241,9 +1259,11 @@ export default function EmployeeDashboard({ setPage }) {
   });
 
   const pendingApprovalLeaves =
-    pendingApprovalLeavesFromApi.length > 0
-      ? pendingApprovalLeavesFromApi
-      : data?.team_pending_leaves || [];
+    teamApprovalRequests.length > 0
+      ? teamApprovalRequests
+      : pendingApprovalLeavesFromApi.length > 0
+        ? normalizeLeaveApprovalList(pendingApprovalLeavesFromApi)
+        : normalizeLeaveApprovalList(data?.team_pending_leaves || []);
 
   const approvalCounts = data?.pending_approval_counts || {
     leave_requests: pendingApprovalLeaves.length,
@@ -2770,6 +2790,12 @@ export default function EmployeeDashboard({ setPage }) {
             <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Open Leave Management
             </button>
+
+            {isMappedApprover && (
+              <button type="button" className="secondary" onClick={() => goTo('team_approvals')}>
+                Team Approvals
+              </button>
+            )}
           </div>
 
           <Table rows={leaveRows} maxColumns={8} />
@@ -2789,8 +2815,8 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
-              Open Leave Management
+            <button type="button" className="secondary" onClick={() => goTo('team_approvals')}>
+              Open Team Approvals
             </button>
           </div>
 
@@ -2810,7 +2836,7 @@ export default function EmployeeDashboard({ setPage }) {
               <h3>My Projects & Daily Progress</h3>
               <p>
                 Team Leaders and Reporting Officers can create projects, assign team members,
-                and add collaborators. Employees can view scoped projects and update status/progress
+                assign projects to themselves, and add collaborators. Employees can view scoped projects and update status/progress
                 only when assigned or added as collaborators.
               </p>
             </div>

@@ -3,10 +3,12 @@ import {
   addProjectProgress,
   assignProject,
   createProject,
+  currentEmployee,
   currentUser,
   getEmployeeDashboard,
   getInitials,
   getProfilePhotoUrl,
+  getProjectOptions,
   getProjects,
   listCollection,
   normalizePeopleList,
@@ -17,11 +19,20 @@ import {
 function toArray(value) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.employees)) return value.employees;
+  if (Array.isArray(value?.assignable_employees)) return value.assignable_employees;
   return [];
 }
 
 function getId(item = {}) {
-  return item._id || item.id || item.employee_id || '';
+  return (
+    item._id ||
+    item.id ||
+    item.employee_id ||
+    item.employee_ref_id ||
+    item.user_id ||
+    ''
+  );
 }
 
 function getName(item = {}) {
@@ -67,10 +78,10 @@ function isTruthy(value) {
 
 function isTeamLeaderOrReportingOfficer(user = {}, dashboardData = null) {
   const roles = normalizeRoles(user);
-  const employee = dashboardData?.employee || dashboardData?.employee_summary || {};
+  const employee = dashboardData?.employee || dashboardData?.employee_summary || currentEmployee() || {};
 
   const hasRoleCapability = roles.some((role) =>
-    ['team_leader', 'reporting_officer', 'ro'].includes(role),
+    ['team_leader', 'reporting_officer', 'ro', 'manager'].includes(role),
   );
 
   const hasEmployeeCapability =
@@ -101,27 +112,113 @@ function uniqueEmployees(items = []) {
   return Array.from(map.values());
 }
 
-function buildScopedProjectEmployees(allEmployees = [], dashboardData = null) {
-  const employee = dashboardData?.employee || dashboardData?.employee_summary || {};
+function normalizeEmployeeOption(item = {}) {
+  const id = String(getId(item));
+
+  if (!id) return null;
+
+  return {
+    ...item,
+    _id: item._id || id,
+    id,
+    employee_id: item.employee_id || item.emp_code || item.employee_code || '',
+    employee_ref_id: item.employee_ref_id || id,
+    name: getName(item),
+    employee_name: item.employee_name || getName(item),
+    department: item.department || '',
+    designation: item.designation || '',
+  };
+}
+
+function getCurrentEmployeeOption(user = {}, dashboardData = null, optionsData = null) {
+  const storedEmployee = currentEmployee() || {};
+  const employee =
+    optionsData?.current_employee ||
+    dashboardData?.employee ||
+    dashboardData?.employee_summary ||
+    user.employee ||
+    user.employee_summary ||
+    user.employee_profile ||
+    storedEmployee ||
+    {};
+
+  const id = String(
+    employee._id ||
+      employee.employee_ref_id ||
+      employee.employee_id_for_edit ||
+      user.employee_ref_id ||
+      user.employee_id ||
+      '',
+  );
+
+  if (!id && !employee.name && !user.name) {
+    return null;
+  }
+
+  return normalizeEmployeeOption({
+    ...employee,
+    _id: id || employee._id,
+    id: id || employee.id,
+    name: employee.name || employee.employee_name || user.name || user.email || 'Current Employee',
+    employee_name: employee.employee_name || employee.name || user.name || user.email || 'Current Employee',
+    email: employee.email || user.email || '',
+    department: employee.department || user.department || '',
+    designation: employee.designation || user.designation || '',
+    avatar: employee.avatar || user.avatar || '',
+    profile_photo: employee.profile_photo || user.profile_photo || '',
+    profile_picture: employee.profile_picture || user.profile_picture || '',
+    photo: employee.photo || user.photo || '',
+    is_current_user: true,
+  });
+}
+
+function buildScopedProjectEmployees(allEmployees = [], dashboardData = null, user = {}, optionsData = null) {
+  const employee = dashboardData?.employee || dashboardData?.employee_summary || currentEmployee() || {};
   const employeeDepartment = employee.department || '';
+
+  const optionEmployees = uniqueEmployees([
+    ...(optionsData?.assignable_employees || []),
+    ...(optionsData?.assigned_member_options || []),
+    ...(optionsData?.collaborator_options || []),
+  ])
+    .map(normalizeEmployeeOption)
+    .filter(Boolean);
+
+  const currentEmployeeOption = getCurrentEmployeeOption(user, dashboardData, optionsData);
+
+  if (optionEmployees.length) {
+    return uniqueEmployees([
+      currentEmployeeOption,
+      ...optionEmployees,
+    ].filter(Boolean));
+  }
 
   const teamMembers = dashboardData?.team_members || [];
   const reportingMembers = dashboardData?.reporting_members || [];
 
   const scopedMembers = uniqueEmployees([
+    currentEmployeeOption,
     ...teamMembers,
     ...reportingMembers,
-  ]);
+  ].filter(Boolean));
 
   if (scopedMembers.length) {
-    return scopedMembers.filter((member) =>
-      !employeeDepartment || sameDepartment(member, employeeDepartment),
-    );
+    return scopedMembers
+      .map(normalizeEmployeeOption)
+      .filter(Boolean)
+      .filter((member) =>
+        member.is_current_user ||
+        !employeeDepartment ||
+        sameDepartment(member, employeeDepartment),
+      );
   }
 
-  return allEmployees.filter((member) =>
-    sameDepartment(member, employeeDepartment),
-  );
+  return uniqueEmployees([
+    currentEmployeeOption,
+    ...allEmployees.filter((member) => sameDepartment(member, employeeDepartment)),
+  ].filter(Boolean))
+    .map(normalizeEmployeeOption)
+    .filter(Boolean);
 }
 
 function normalizeStatus(status) {
@@ -290,8 +387,9 @@ function PersonMiniCard({ person = {}, relation, compact = false }) {
 }
 
 function PeopleStack({ people = [], limit = 5 }) {
-  const list = normalizePeople(people).slice(0, limit);
-  const remaining = Math.max(0, people.length - limit);
+  const normalizedPeople = normalizePeople(people);
+  const list = normalizedPeople.slice(0, limit);
+  const remaining = Math.max(0, normalizedPeople.length - limit);
 
   if (!list.length) {
     return <span className="project-team-empty-text">No people mapped</span>;
@@ -319,7 +417,6 @@ function PeopleStack({ people = [], limit = 5 }) {
 function ProjectTeamSummary({ project }) {
   const reportingOfficer = getProjectReportingOfficer(project);
   const teamLeader = getProjectTeamLeader(project);
-  const assignedMembers = getProjectAssignedMembers(project);
   const collaborators = getProjectCollaborators(project);
   const doingPeople = getProjectDoingPeople(project);
 
@@ -458,17 +555,19 @@ function ProjectSpiderTree({ project }) {
 }
 
 function MultiSelect({ label, value = [], options = [], onChange, helper, disabled = false }) {
-  const selected = Array.isArray(value) ? value : [];
+  const selected = Array.isArray(value) ? value.map(String) : [];
 
   function toggle(id) {
-    if (!id || disabled) return;
+    const normalizedId = String(id || '');
 
-    if (selected.includes(id)) {
-      onChange(selected.filter((item) => item !== id));
+    if (!normalizedId || disabled) return;
+
+    if (selected.includes(normalizedId)) {
+      onChange(selected.filter((item) => item !== normalizedId));
       return;
     }
 
-    onChange([...selected, id]);
+    onChange([...selected, normalizedId]);
   }
 
   return (
@@ -484,14 +583,17 @@ function MultiSelect({ label, value = [], options = [], onChange, helper, disabl
             <button
               type="button"
               key={id}
-              className={`project-check ${checked ? 'is-active' : ''}`}
+              className={`project-check ${checked ? 'is-active' : ''} ${employee.is_current_user ? 'is-self' : ''}`}
               onClick={() => toggle(id)}
               disabled={disabled}
             >
               <PersonAvatar person={employee} size="sm" />
 
               <span className="project-check-main">
-                <strong>{getName(employee)}</strong>
+                <strong>
+                  {getName(employee)}
+                  {employee.is_current_user ? ' (You)' : ''}
+                </strong>
                 <small>
                   {employee.department || 'No department'}
                   {employee.designation ? ` • ${employee.designation}` : ''}
@@ -678,6 +780,7 @@ function ProjectAnalyticsGraph({ projects = [] }) {
 function ProjectCard({
   project,
   employees,
+  currentEmployeeOption,
   canManageProjectSetup,
   onStatusChange,
   onAssign,
@@ -687,9 +790,10 @@ function ProjectCard({
   const status = normalizeStatus(project.status);
   const canAssignThisProject = Boolean(canManageProjectSetup && project.can_create_assign_collaborate !== false);
   const canUpdateStatusProgress = Boolean(project.can_update_status_progress !== false);
+  const selfId = currentEmployeeOption ? String(getId(currentEmployeeOption)) : '';
 
-  const [assignedIds, setAssignedIds] = useState(project.assigned_employee_ids || []);
-  const [collaboratorIds, setCollaboratorIds] = useState(project.collaborator_ids || []);
+  const [assignedIds, setAssignedIds] = useState((project.assigned_employee_ids || []).map(String));
+  const [collaboratorIds, setCollaboratorIds] = useState((project.collaborator_ids || []).map(String));
   const [progressPercent, setProgressPercent] = useState(
     project.latest_progress || project.progress_percent || '',
   );
@@ -702,18 +806,45 @@ function ProjectCard({
   const teamLeader = getProjectTeamLeader(project);
   const reportingOfficer = getProjectReportingOfficer(project);
 
+  const selfAssigned = Boolean(selfId && assignedIds.includes(selfId));
+  const selfCollaborator = Boolean(selfId && collaboratorIds.includes(selfId));
+
   useEffect(() => {
-    setAssignedIds(project.assigned_employee_ids || []);
-    setCollaboratorIds(project.collaborator_ids || []);
+    setAssignedIds((project.assigned_employee_ids || []).map(String));
+    setCollaboratorIds((project.collaborator_ids || []).map(String));
     setProgressPercent(project.latest_progress || project.progress_percent || '');
     setProgressNote('');
   }, [project]);
 
-  async function saveAssignment() {
+  async function saveAssignment(nextAssignedIds = assignedIds, nextCollaboratorIds = collaboratorIds) {
     await onAssign(projectId, {
-      assigned_employee_ids: assignedIds,
-      collaborator_ids: collaboratorIds,
+      assigned_employee_ids: nextAssignedIds,
+      collaborator_ids: nextCollaboratorIds,
     });
+  }
+
+  async function assignSelfAsMember() {
+    if (!selfId) return;
+
+    const nextAssignedIds = selfAssigned
+      ? assignedIds
+      : [...assignedIds, selfId];
+
+    setAssignedIds(nextAssignedIds);
+
+    await saveAssignment(nextAssignedIds, collaboratorIds);
+  }
+
+  async function addSelfAsCollaborator() {
+    if (!selfId) return;
+
+    const nextCollaboratorIds = selfCollaborator
+      ? collaboratorIds
+      : [...collaboratorIds, selfId];
+
+    setCollaboratorIds(nextCollaboratorIds);
+
+    await saveAssignment(assignedIds, nextCollaboratorIds);
   }
 
   async function saveProgress() {
@@ -793,13 +924,42 @@ function ProjectCard({
 
       {canAssignThisProject ? (
         <>
+          <div className="project-self-actions">
+            <div>
+              <strong>Quick self assignment</strong>
+              <small>
+                Team Leaders and Reporting Officers can assign the project to themselves.
+              </small>
+            </div>
+
+            <div>
+              <button
+                type="button"
+                className="project-btn project-btn-soft"
+                onClick={assignSelfAsMember}
+                disabled={!selfId || selfAssigned}
+              >
+                {selfAssigned ? 'You are Assigned' : 'Assign to Myself'}
+              </button>
+
+              <button
+                type="button"
+                className="project-btn project-btn-soft"
+                onClick={addSelfAsCollaborator}
+                disabled={!selfId || selfCollaborator}
+              >
+                {selfCollaborator ? 'You are Collaborator' : 'Add Me as Collaborator'}
+              </button>
+            </div>
+          </div>
+
           <div className="project-grid-two">
             <MultiSelect
               label="Assigned Team Members"
               value={assignedIds}
               options={employees}
               onChange={setAssignedIds}
-              helper="Only Team Leaders and Reporting Officers can assign employees."
+              helper="Only Team Leaders and Reporting Officers can assign employees. Your own name is also available here."
             />
 
             <MultiSelect
@@ -807,12 +967,12 @@ function ProjectCard({
               value={collaboratorIds}
               options={employees}
               onChange={setCollaboratorIds}
-              helper="Only Team Leaders and Reporting Officers can add collaborators."
+              helper="Only Team Leaders and Reporting Officers can add collaborators. You can add yourself too."
             />
           </div>
 
           <div className="project-actions">
-            <button type="button" className="project-btn project-btn-soft" onClick={saveAssignment}>
+            <button type="button" className="project-btn project-btn-soft" onClick={() => saveAssignment()}>
               Save Assignment / Collaborators
             </button>
 
@@ -855,25 +1015,27 @@ function ProjectCard({
 
       {canUpdateStatusProgress && (
         <>
-          <div className="project-actions">
-            {status !== 'completed' ? (
-              <button
-                type="button"
-                className="project-btn project-btn-danger-soft"
-                onClick={() => onStatusChange(projectId, 'completed')}
-              >
-                Mark Completed
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="project-btn project-btn-soft"
-                onClick={() => onStatusChange(projectId, 'active')}
-              >
-                Reopen Active
-              </button>
-            )}
-          </div>
+          {!canAssignThisProject && (
+            <div className="project-actions">
+              {status !== 'completed' ? (
+                <button
+                  type="button"
+                  className="project-btn project-btn-danger-soft"
+                  onClick={() => onStatusChange(projectId, 'completed')}
+                >
+                  Mark Completed
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="project-btn project-btn-soft"
+                  onClick={() => onStatusChange(projectId, 'active')}
+                >
+                  Reopen Active
+                </button>
+              )}
+            </div>
+          )}
 
           {status !== 'completed' && (
             <div className="project-progress-form">
@@ -935,6 +1097,8 @@ export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [projectOptions, setProjectOptions] = useState(null);
+  const [currentEmployeeOption, setCurrentEmployeeOption] = useState(null);
   const [permissionState, setPermissionState] = useState({
     can_create_projects: false,
     can_assign_projects: false,
@@ -1000,23 +1164,50 @@ export default function Projects() {
     setMessage('');
 
     try {
-      const [projectResponse, employeeResponse, dashboardResponse] = await Promise.all([
+      const [
+        projectResponse,
+        projectOptionsResponse,
+        employeeResponse,
+        dashboardResponse,
+      ] = await Promise.all([
         getProjects({ limit: 300, sort_by: 'created_at', sort_dir: 'desc' }),
-        listCollection('employees', { limit: 500, sort_by: 'name', sort_dir: 'asc' }),
+        getProjectOptions().catch(() => null),
+        listCollection('employees', { limit: 500, sort_by: 'name', sort_dir: 'asc' }).catch(() => ({ items: [] })),
         getEmployeeDashboard().catch(() => null),
       ]);
 
       const allEmployees = toArray(employeeResponse);
-      const scopedEmployees = buildScopedProjectEmployees(allEmployees, dashboardResponse);
+      const scopedEmployees = buildScopedProjectEmployees(
+        allEmployees,
+        dashboardResponse,
+        user,
+        projectOptionsResponse,
+      );
+
+      const selfOption = getCurrentEmployeeOption(user, dashboardResponse, projectOptionsResponse);
 
       setProjects(toArray(projectResponse));
       setEmployees(scopedEmployees);
       setDashboard(dashboardResponse || null);
+      setProjectOptions(projectOptionsResponse || null);
+      setCurrentEmployeeOption(selfOption);
       setPermissionState({
-        can_create_projects: Boolean(projectResponse?.can_create_projects),
-        can_assign_projects: Boolean(projectResponse?.can_assign_projects),
-        can_add_collaborators: Boolean(projectResponse?.can_add_collaborators),
-        can_create_assign_collaborate: Boolean(projectResponse?.can_create_assign_collaborate),
+        can_create_projects: Boolean(
+          projectResponse?.can_create_projects ||
+          projectOptionsResponse?.can_create_projects,
+        ),
+        can_assign_projects: Boolean(
+          projectResponse?.can_assign_projects ||
+          projectOptionsResponse?.can_assign_projects,
+        ),
+        can_add_collaborators: Boolean(
+          projectResponse?.can_add_collaborators ||
+          projectOptionsResponse?.can_add_collaborators,
+        ),
+        can_create_assign_collaborate: Boolean(
+          projectResponse?.can_create_assign_collaborate ||
+          projectOptionsResponse?.can_create_assign_collaborate,
+        ),
       });
     } catch (err) {
       setError(err.message || 'Unable to load project data.');
@@ -1027,6 +1218,7 @@ export default function Projects() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function updateForm(key, value) {
@@ -1034,6 +1226,28 @@ export default function Projects() {
       ...previous,
       [key]: value,
     }));
+  }
+
+  function assignSelfInCreateForm() {
+    const selfId = currentEmployeeOption ? String(getId(currentEmployeeOption)) : '';
+
+    if (!selfId) {
+      setError('Current employee profile was not found. Please refresh or login again.');
+      return;
+    }
+
+    setForm((previous) => {
+      const assigned = (previous.assigned_employee_ids || []).map(String);
+
+      return {
+        ...previous,
+        assigned_employee_ids: assigned.includes(selfId)
+          ? assigned
+          : [...assigned, selfId],
+      };
+    });
+
+    setMessage('Your name has been added to the assigned team members list.');
   }
 
   async function handleCreateProject(event) {
@@ -1737,6 +1951,16 @@ export default function Projects() {
           background: #eef2ff;
         }
 
+        .project-check.is-self {
+          border-color: #bbf7d0;
+          background: #f0fdf4;
+        }
+
+        .project-check.is-self.is-active {
+          border-color: #059669;
+          background: #ecfdf5;
+        }
+
         .project-check-box {
           width: 22px;
           height: 22px;
@@ -1771,6 +1995,38 @@ export default function Projects() {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .project-self-actions {
+          border: 1px solid #bbf7d0;
+          background: #f0fdf4;
+          color: #065f46;
+          border-radius: 18px;
+          padding: 13px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .project-self-actions strong {
+          display: block;
+          color: #064e3b;
+          font-size: 14px;
+        }
+
+        .project-self-actions small {
+          display: block;
+          margin-top: 3px;
+          color: #047857;
+          font-weight: 750;
+        }
+
+        .project-self-actions > div:last-child {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
         }
 
         .project-actions {
@@ -2312,6 +2568,10 @@ export default function Projects() {
             grid-template-columns: 1fr;
             justify-items: start;
           }
+
+          .project-self-actions > div:last-child {
+            width: 100%;
+          }
         }
       `}</style>
 
@@ -2320,14 +2580,14 @@ export default function Projects() {
         <h1>Team Projects, Collaborators & Daily Progress</h1>
         <p>
           Team Leaders and Reporting Officers can create projects, assign team members,
-          and add collaborators. Employees and team members can view scoped projects
-          and update only project status/progress.
+          assign projects to themselves, and add collaborators. Employees and team
+          members can view scoped projects and update only project status/progress.
         </p>
 
         <div className="project-permission-note">
           Current access:{' '}
           {canManageProjectSetup
-            ? 'You can create projects, assign team members, add collaborators, and update progress.'
+            ? 'You can create projects, assign team members, assign yourself, add collaborators, and update progress.'
             : 'You can view scoped projects and update progress/status only when you are assigned or added as collaborator.'}
         </div>
 
@@ -2398,12 +2658,32 @@ export default function Projects() {
               />
             </div>
 
+            <div className="project-self-actions project-field-full">
+              <div>
+                <strong>Assign this new project to yourself</strong>
+                <small>
+                  Use this when you are also doing or leading the project directly.
+                </small>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  className="project-btn project-btn-soft"
+                  onClick={assignSelfInCreateForm}
+                  disabled={!currentEmployeeOption}
+                >
+                  Add Myself
+                </button>
+              </div>
+            </div>
+
             <MultiSelect
               label="Assign Team Members"
               value={form.assigned_employee_ids}
               options={employees}
               onChange={(value) => updateForm('assigned_employee_ids', value)}
-              helper="Only mapped team/reporting members are shown here."
+              helper="Mapped team/reporting members are shown here. Your own name is also available."
             />
 
             <MultiSelect
@@ -2411,7 +2691,7 @@ export default function Projects() {
               value={form.collaborator_ids}
               options={employees}
               onChange={(value) => updateForm('collaborator_ids', value)}
-              helper="Collaborators can support and update project progress."
+              helper="Collaborators can support and update project progress. You can add yourself too."
             />
           </div>
 
@@ -2485,6 +2765,7 @@ export default function Projects() {
               key={String(getId(project))}
               project={project}
               employees={employees}
+              currentEmployeeOption={currentEmployeeOption}
               canManageProjectSetup={canManageProjectSetup}
               onStatusChange={handleStatusChange}
               onAssign={handleAssign}

@@ -87,9 +87,34 @@ function getStoredEmployee() {
   }
 }
 
+function getStoredUser() {
+  try {
+    return JSON.parse(localStorage.getItem('sds_hrms_user') || '{}');
+  } catch {
+    return {};
+  }
+}
+
 function getUserPhoto(user = {}) {
-  const employee = user.employee || user.employee_profile || getStoredEmployee();
-  return profilePhotoValue(employee) || profilePhotoValue(user);
+  const storedUser = getStoredUser();
+  const storedEmployee = getStoredEmployee();
+
+  const employee =
+    user.employee ||
+    user.employee_summary ||
+    user.employee_profile ||
+    storedUser.employee ||
+    storedUser.employee_summary ||
+    storedUser.employee_profile ||
+    storedEmployee ||
+    {};
+
+  return (
+    profilePhotoValue(employee) ||
+    profilePhotoValue(user) ||
+    profilePhotoValue(storedEmployee) ||
+    profilePhotoValue(storedUser)
+  );
 }
 
 function userDisplayName(user = {}) {
@@ -103,14 +128,24 @@ function userDisplayName(user = {}) {
 }
 
 function UserAvatar({ user = {}, size = 'sm' }) {
+  const [imageFailed, setImageFailed] = useState(false);
+
   const photo = getUserPhoto(user);
-  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const photoUrl = photo && !imageFailed ? getProfilePhotoUrl({ avatar: photo }) : '';
   const name = userDisplayName(user);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photo]);
 
   return (
     <span className={`layout-avatar layout-avatar-${size}`}>
       {photoUrl ? (
-        <img src={photoUrl} alt={name} />
+        <img
+          src={photoUrl}
+          alt={name}
+          onError={() => setImageFailed(true)}
+        />
       ) : (
         <b>{getInitials(name)}</b>
       )}
@@ -454,12 +489,38 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           const syncedUser = {
             ...data.user,
             employee: data.employee || {},
+            employee_summary: data.employee || {},
+            employee_profile: data.employee || {},
           };
 
           applyProfilePhotoAliases(
             syncedUser,
             profilePhotoValue(data.employee) || profilePhotoValue(data.user),
           );
+
+          if (syncedUser.employee && typeof syncedUser.employee === 'object') {
+            applyProfilePhotoAliases(
+              syncedUser.employee,
+              profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+            );
+          }
+
+          if (syncedUser.employee_summary && typeof syncedUser.employee_summary === 'object') {
+            applyProfilePhotoAliases(
+              syncedUser.employee_summary,
+              profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+            );
+          }
+
+          if (syncedUser.employee_profile && typeof syncedUser.employee_profile === 'object') {
+            applyProfilePhotoAliases(
+              syncedUser.employee_profile,
+              profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+            );
+          }
+
+          localStorage.setItem('sds_hrms_user', JSON.stringify(syncedUser));
+          localStorage.setItem('sds_hrms_employee', JSON.stringify(data.employee || {}));
 
           setUser(syncedUser);
         }
