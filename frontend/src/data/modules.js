@@ -36,23 +36,15 @@ import {
     users/tokens and for approval-scoped pages, but the dashboard should display
     the person as Employee unless they are an admin/HR/finance user.
 
-  Attendance + Leave rules:
-  - Attendance main page handles Office/WFH/Field check-in, holiday calendar,
-    WFH/Field approval requests and comp-off tracking.
-  - Leave Management uses a simple employee form:
-      Leave Type, Reason, From Date, Upto Date, Task Handover To, Project Handover.
-  - Leave project handover dropdown shows only active projects.
-  - Leave types shown to employees should be Casual Leave and Earned Leave.
-  - Leave balances are managed only by HR/Admin/Super Admin.
-  - Team Leader/Reporting Officer approval is based on employee mapping.
-  - Reports page shows attendance, holiday, comp-off, leave and audit reports.
-  - Application Status page shows live request status for employees.
-  - Leave request status should show live stage:
-      Pending with Team Leader
-      Pending with Reporting Officer
-      Pending with HR
-      Approved
-      Rejected / Cancelled
+  Profile photo workflow:
+  - Employee Master, User Control, login user, dashboards and projects all use
+    the same avatar/photo aliases:
+      avatar
+      profile_photo
+      profile_picture
+      photo
+  - Frontend pages should read any available alias and keep all aliases synced
+    when creating/updating users or employees.
 
   Project workflow:
   - Projects module remains visible to employees so assigned/collaborator staff
@@ -67,6 +59,14 @@ import {
   - Reporting Officer can see mapped Team Leader project progress.
   - Super Admin / Managing Director can see department-wise and top-performing department analytics.
   - SDS Admin dashboard can see department-wise and project-wise project graphs.
+  - Project cards/dashboards can show:
+      Reporting Officer
+      Team Leader
+      assigned_members
+      collaborators
+      doing_people
+      project_team_tree
+      team_hierarchy_tree
 
   Performance workflow:
   - Team Leader can give performance rating only to mapped team members.
@@ -128,11 +128,6 @@ export const EMPLOYEE_PORTAL_ROLES = [
 
 export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
-/*
-  PROJECT_ROLES controls who can open the Projects module.
-  Creation/assignment/collaborator permission is handled separately by
-  PROJECT_MANAGER_ROLES and canManageProjects().
-*/
 export const PROJECT_ROLES = [
   ...HR_ROLES,
   ...CAPABILITY_ROLES,
@@ -180,6 +175,20 @@ export const PROJECT_STATUS_OPTIONS = [
   { value: 'completed', label: 'Completed' },
 ];
 
+export const PROJECT_PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'critical', label: 'Critical' },
+];
+
+export const PROJECT_TEAM_TREE_LEVELS = [
+  { value: 'reporting_officer', label: 'Reporting Officer' },
+  { value: 'team_leader', label: 'Team Leader' },
+  { value: 'assigned_member', label: 'Team Member Doing Project' },
+  { value: 'collaborator', label: 'Collaborator' },
+];
+
 export const PERFORMANCE_REVIEW_TARGET_TYPES = [
   { value: 'team_member', label: 'Team Member' },
   { value: 'team_leader', label: 'Team Leader' },
@@ -191,6 +200,13 @@ export const PERFORMANCE_REVIEWER_ROLES = [
   { value: 'team_leader', label: 'Team Leader' },
   { value: 'reporting_officer', label: 'Reporting Officer' },
   { value: 'admin_hr', label: 'Admin / HR' },
+];
+
+export const PROFILE_PHOTO_FIELDS = [
+  'avatar',
+  'profile_photo',
+  'profile_picture',
+  'photo',
 ];
 
 export const superModules = [
@@ -205,7 +221,7 @@ export const superModules = [
     'users',
     'User Control',
     KeyRound,
-    'Create users, reset passwords, update roles and full employee profiles.',
+    'Create users, reset passwords, update roles, profile photos and full employee profiles.',
     ['super_admin'],
   ],
   [
@@ -222,7 +238,7 @@ export const coreModules = [
     'employees',
     'Employee Master',
     Users,
-    'Employee database with Team Leader and Reporting Officer capability mapping.',
+    'Employee database with profile photo, Team Leader and Reporting Officer capability mapping.',
     HR_ROLES,
   ],
   [
@@ -418,7 +434,7 @@ export const coreModules = [
     'profile',
     'My Profile',
     UserCircle,
-    'View profile and request password change.',
+    'View profile, profile photo and request password change.',
     ALL_COMMON_ROLES,
   ],
 ];
@@ -463,6 +479,37 @@ export function truthyValue(value) {
   );
 }
 
+export function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
+  );
+}
+
+export function applyProfilePhotoAliases(payload = {}, photoValue = '') {
+  const photo = String(photoValue || profilePhotoValue(payload) || '').trim();
+
+  if (photo) {
+    payload.avatar = photo;
+    payload.profile_photo = photo;
+    payload.profile_picture = photo;
+    payload.photo = photo;
+  }
+
+  return payload;
+}
+
+export function buildProfilePhotoPayload(photoValue = '', extra = {}) {
+  const payload = { ...extra };
+  applyProfilePhotoAliases(payload, photoValue);
+  return payload;
+}
+
 export function isCapabilityRole(role) {
   return CAPABILITY_ROLES.includes(normalizeRoleValue(role));
 }
@@ -491,18 +538,46 @@ export function isFinanceUser(user) {
   return hasAnyRole(roles, FINANCE_ROLES);
 }
 
-/*
-  This controls project creation/assignment/collaborator UI capability.
-  It does not control basic Projects module access.
-*/
+export function getEmployeeProfile(user = {}) {
+  return user.employee_summary || user.employee || user.employee_profile || user.profile || {};
+}
+
 export function canManageProjects(user) {
   const roles = normalizeRoleList(user?.roles || []);
-  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+  const employee = getEmployeeProfile(user);
 
   return (
     truthyValue(employee?.is_team_leader) ||
     truthyValue(employee?.is_reporting_officer) ||
     roles.some(isProjectManagerRole)
+  );
+}
+
+export function canAssignProjectMembers(user) {
+  return canManageProjects(user);
+}
+
+export function canAddProjectCollaborators(user) {
+  return canManageProjects(user);
+}
+
+export function canUpdateProjectProgress(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+
+  return (
+    roles.includes(BASE_EMPLOYEE_ROLE) ||
+    roles.some(isCapabilityRole) ||
+    hasAnyRole(roles, HR_ROLES)
+  );
+}
+
+export function canViewProjectTeamTree(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+
+  return (
+    roles.includes(BASE_EMPLOYEE_ROLE) ||
+    roles.some(isCapabilityRole) ||
+    hasAnyRole(roles, ADMIN_HR_FINANCE_ROLES)
   );
 }
 
@@ -513,7 +588,7 @@ export function canManageLeaveBalances(user) {
 
 export function canSubmitPerformanceReview(user) {
   const roles = normalizeRoleList(user?.roles || []);
-  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+  const employee = getEmployeeProfile(user);
 
   return (
     truthyValue(employee?.is_team_leader) ||
@@ -527,7 +602,7 @@ export function canSubmitPerformanceReview(user) {
 
 export function getEmployeeCapabilities(user) {
   const roles = normalizeRoleList(user?.roles || []);
-  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+  const employee = getEmployeeProfile(user);
 
   const isTeamLeader =
     truthyValue(employee?.is_team_leader) ||
@@ -543,6 +618,10 @@ export function getEmployeeCapabilities(user) {
     isTeamLeader,
     isReportingOfficer,
     canManageProjects: isTeamLeader || isReportingOfficer,
+    canAssignProjectMembers: isTeamLeader || isReportingOfficer,
+    canAddProjectCollaborators: isTeamLeader || isReportingOfficer,
+    canUpdateProjectProgress: true,
+    canViewProjectTeamTree: true,
     canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
     canSubmitPerformanceReview: canSubmitPerformanceReview(user),
     displayRole: 'Employee',
@@ -560,6 +639,21 @@ export function getDisplayRole(user) {
   if (roles.includes('finance') || roles.includes('accounts_finance')) return 'Finance';
 
   return 'Employee';
+}
+
+export function getCapabilityDisplayText(user) {
+  const capabilities = getEmployeeCapabilities(user);
+  const labels = [];
+
+  if (capabilities.isTeamLeader) {
+    labels.push('Team Leader');
+  }
+
+  if (capabilities.isReportingOfficer) {
+    labels.push('Reporting Officer');
+  }
+
+  return labels.join(' + ');
 }
 
 export function moduleList(user) {
@@ -596,7 +690,12 @@ export const templates = {
   employees: {
     name: '',
     email: '',
+
     avatar: '',
+    profile_photo: '',
+    profile_picture: '',
+    photo: '',
+
     phone: '',
     country: 'India',
     joining_date: '',
@@ -617,8 +716,6 @@ export const templates = {
     password: '12345678',
     password_mode: 'default',
 
-    // Always keep the account as an employee. Team Leader / Reporting Officer
-    // are controlled using the capability fields below.
     role: 'Employee',
 
     designation: 'Employee',
@@ -671,9 +768,15 @@ export const templates = {
     description: '',
     department: '',
     status: 'active',
+    priority: 'medium',
+
+    reporting_officer_id: '',
+    reporting_officer_name: '',
+    reporting_officer: {},
 
     team_leader_id: '',
     team_leader_name: '',
+    team_leader: {},
 
     assigned_to_id: '',
     assigned_to_name: '',
@@ -683,21 +786,39 @@ export const templates = {
     collaborator_ids: [],
     collaborators: [],
 
+    doing_people: [],
+    doing_people_names: [],
+    doing_person_name: '',
+
+    project_team_tree: {
+      reporting_officer: {},
+      team_leader: {},
+      assigned_members: [],
+      collaborators: [],
+      doing_people: [],
+      latest_progress_person: {},
+      all_people: [],
+      tree_levels: [],
+      connection_label: 'Reporting Officer → Team Leader → Team Members → Collaborators',
+    },
+
     latest_progress: 0,
     latest_progress_note: '',
     latest_progress_date: '',
     latest_progress_by: '',
     latest_progress_by_name: '',
+    latest_progress_person: {},
 
     can_create_projects: false,
     can_assign_projects: false,
     can_add_collaborators: false,
+    can_create_assign_collaborate: false,
     can_update_status_progress: false,
+    can_view_project_team_tree: true,
 
     start_date: '',
     due_date: '',
     completed_at: '',
-    priority: 'medium',
   },
 
   states: {
@@ -933,6 +1054,8 @@ export const templates = {
     body: '',
     read: false,
     status: 'unread',
+    target: '',
+    meta: {},
   },
 
   policies: {
@@ -978,6 +1101,11 @@ export const emptyUser = {
   email: '',
   password: 'User@123',
 
+  avatar: '',
+  profile_photo: '',
+  profile_picture: '',
+  photo: '',
+
   // Keep created staff as employee. Do not create a separate Team Leader login.
   roles: BASE_EMPLOYEE_ROLE,
 
@@ -996,5 +1124,7 @@ export const emptyUser = {
   is_reporting_officer: 'false',
 
   team_leader_id: '',
+  team_leader_name: '',
   reporting_officer_id: '',
+  reporting_officer_name: '',
 };

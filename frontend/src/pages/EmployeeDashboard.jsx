@@ -5,6 +5,11 @@ import {
   getMyAttendanceModeRequests,
   getMyCompOffs,
   claimCompOff,
+  getInitials,
+  getProfilePhotoUrl,
+  normalizePeopleList,
+  normalizeTeamHierarchyTree,
+  normalizeProjectTeamTree,
 } from '../api/client';
 import AttendanceWidget from '../components/AttendanceWidget';
 import Stat from '../components/Stat';
@@ -241,6 +246,239 @@ function employeeOptionLabel(row = {}) {
   }`;
 }
 
+function personName(person = {}) {
+  return (
+    person.name ||
+    person.employee_name ||
+    person.display_name ||
+    person.full_name ||
+    person.email ||
+    'Employee'
+  );
+}
+
+function personRole(person = {}) {
+  return (
+    person.relation_label ||
+    person.review_group_label ||
+    person.designation ||
+    person.relation ||
+    'Team Member'
+  );
+}
+
+function safePeople(value = []) {
+  return normalizePeopleList(Array.isArray(value) ? value : []);
+}
+
+function projectTeamTree(project = {}) {
+  return normalizeProjectTeamTree(project.project_team_tree || {});
+}
+
+function projectDoingPeople(project = {}) {
+  const tree = projectTeamTree(project);
+  const direct = safePeople(project.doing_people || []);
+
+  if (direct.length) return direct;
+  if (tree.doing_people?.length) return tree.doing_people;
+
+  return safePeople(project.assigned_members || []);
+}
+
+function projectAssignedPeople(project = {}) {
+  const tree = projectTeamTree(project);
+  const direct = safePeople(project.assigned_members || []);
+  return direct.length ? direct : tree.assigned_members || [];
+}
+
+function projectCollaboratorPeople(project = {}) {
+  const tree = projectTeamTree(project);
+  const direct = safePeople(project.collaborators || []);
+  return direct.length ? direct : tree.collaborators || [];
+}
+
+function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
+  );
+}
+
+function Avatar({ person = {}, size = 'md' }) {
+  const name = personName(person);
+  const photoUrl = getProfilePhotoUrl(person);
+
+  return (
+    <div className={`emp-avatar emp-avatar-${size}`} title={name}>
+      {photoUrl ? <img src={photoUrl} alt={name} /> : <span>{getInitials(name)}</span>}
+    </div>
+  );
+}
+
+function PersonChip({ person = {}, label = '', compact = false }) {
+  return (
+    <div className={`emp-person-chip ${compact ? 'compact' : ''}`}>
+      <Avatar person={person} size={compact ? 'sm' : 'md'} />
+      <div>
+        <strong>{personName(person)}</strong>
+        <span>{label || personRole(person)}</span>
+        {!compact && (
+          <small>
+            {person.department || 'No department'}
+            {person.designation ? ` • ${person.designation}` : ''}
+          </small>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AvatarStack({ people = [], limit = 5 }) {
+  const list = safePeople(people).slice(0, limit);
+  const remaining = Math.max(0, safePeople(people).length - limit);
+
+  if (!list.length) {
+    return <span className="emp-avatar-empty">No members</span>;
+  }
+
+  return (
+    <div className="emp-avatar-stack">
+      {list.map((person, index) => (
+        <div className="emp-avatar-stack-item" key={`${person.employee_id || person._id || person.email || index}-${index}`}>
+          <Avatar person={person} size="xs" />
+        </div>
+      ))}
+      {remaining > 0 && <span className="emp-avatar-more">+{remaining}</span>}
+    </div>
+  );
+}
+
+function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
+  const normalized = normalizeTeamHierarchyTree(tree || {});
+  const reportingOfficer = normalized.reporting_officer || {};
+  const teamLeader = normalized.team_leader || {};
+  const self = normalized.self || {};
+  const teamMembers = normalized.team_members || [];
+  const reportingMembers = normalized.reporting_members || [];
+  const teamLeadersUnderReporting = normalized.team_leaders_under_reporting || [];
+
+  return (
+    <section className="emp-root-map-panel">
+      <div className="emp-root-map-bg" />
+      <div className="emp-root-map-head">
+        <span>Hierarchy View</span>
+        <h3>{title}</h3>
+        <p>{normalized.connection_label || 'Reporting Officer → Team Leader → Team Members'}</p>
+      </div>
+
+      <div className="emp-root-map-stage">
+        <div className="emp-root-node ro-node">
+          {reportingOfficer?.employee_name || reportingOfficer?.name ? (
+            <PersonChip person={reportingOfficer} label="Reporting Officer" />
+          ) : (
+            <div className="emp-root-empty">No Reporting Officer mapped</div>
+          )}
+        </div>
+
+        <div className="emp-root-line" />
+
+        <div className="emp-root-node tl-node">
+          {teamLeader?.employee_name || teamLeader?.name ? (
+            <PersonChip person={teamLeader} label="Team Leader" />
+          ) : (
+            <PersonChip person={self} label="Current Employee" />
+          )}
+        </div>
+
+        <div className="emp-root-branches">
+          <div className="emp-root-branch">
+            <div className="emp-root-branch-title">
+              <span>Team Members</span>
+              <strong>{teamMembers.length}</strong>
+            </div>
+
+            <div className="emp-root-people-list">
+              {teamMembers.map((person, index) => (
+                <PersonChip
+                  compact
+                  key={`${person.employee_id || person._id || index}-team`}
+                  person={person}
+                  label="Team Member"
+                />
+              ))}
+
+              {!teamMembers.length && <div className="emp-root-empty">No team members mapped</div>}
+            </div>
+          </div>
+
+          <div className="emp-root-branch reporting">
+            <div className="emp-root-branch-title">
+              <span>Reporting Scope</span>
+              <strong>{reportingMembers.length}</strong>
+            </div>
+
+            <div className="emp-root-people-list">
+              {(teamLeadersUnderReporting.length ? teamLeadersUnderReporting : reportingMembers).map((person, index) => (
+                <PersonChip
+                  compact
+                  key={`${person.employee_id || person._id || index}-reporting`}
+                  person={person}
+                  label={isTruthy(person.is_team_leader) ? 'Team Leader' : 'Reporting Member'}
+                />
+              ))}
+
+              {!reportingMembers.length && <div className="emp-root-empty">No reporting members mapped</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="emp-root-map-foot">
+        <span>Connected People</span>
+        <strong>{normalized.all_people?.length || 0}</strong>
+        <AvatarStack people={normalized.all_people || []} limit={8} />
+      </div>
+    </section>
+  );
+}
+
+function ProjectPeopleLine({ project = {} }) {
+  const doingPeople = projectDoingPeople(project);
+  const assignedPeople = projectAssignedPeople(project);
+  const collaborators = projectCollaboratorPeople(project);
+  const tree = projectTeamTree(project);
+
+  return (
+    <div className="emp-project-people-line">
+      <div>
+        <span>Doing</span>
+        <AvatarStack people={doingPeople} />
+      </div>
+      <div>
+        <span>Assigned</span>
+        <AvatarStack people={assignedPeople} />
+      </div>
+      <div>
+        <span>Collaborators</span>
+        <AvatarStack people={collaborators} />
+      </div>
+      <div>
+        <span>Team Lead</span>
+        {tree.team_leader?.employee_name || tree.team_leader?.name ? (
+          <PersonChip person={tree.team_leader} label="TL" compact />
+        ) : (
+          <small>Not mapped</small>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function leaveLiveStatus(row = {}) {
   if (row.live_status || row.status_text || row.status_display) {
     return row.live_status || row.status_text || row.status_display;
@@ -449,20 +687,40 @@ function ProjectMiniBoard({
     <div className="emp-project-card-grid">
       {projects.slice(0, 6).map((project) => {
         const status = normalizeProjectStatus(project.status);
+        const doingPeople = projectDoingPeople(project);
+        const collaborators = projectCollaboratorPeople(project);
+        const tree = projectTeamTree(project);
 
         return (
           <div className="emp-project-card" key={project._id || projectName(project)}>
-            <h4>{projectName(project)}</h4>
-            <p>
-              {project.department || 'No department'}
-              {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
-            </p>
+            <div className="emp-project-card-top">
+              <div>
+                <h4>{projectName(project)}</h4>
+                <p>
+                  {project.department || 'No department'}
+                  {tree.team_leader?.employee_name || project.team_leader_name
+                    ? ` • TL: ${tree.team_leader?.employee_name || project.team_leader_name}`
+                    : ''}
+                </p>
+              </div>
+              <AvatarStack people={doingPeople} limit={3} />
+            </div>
 
             <span className={`emp-project-status ${status}`}>
               {statusLabel(status)}
             </span>
 
             <MiniProgressBar value={project.latest_progress} />
+
+            <ProjectPeopleLine project={project} />
+
+            <p>
+              Doing: {doingPeople.map((person) => personName(person)).filter(Boolean).join(', ') || 'No assigned member'}
+            </p>
+
+            <p>
+              Collaborators: {collaborators.map((person) => personName(person)).filter(Boolean).join(', ') || 'No collaborators'}
+            </p>
 
             <p>
               Last update: {project.latest_progress_date || 'No update yet'}
@@ -1198,7 +1456,10 @@ export default function EmployeeDashboard({ setPage }) {
     project_name: projectName(project),
     status: statusLabel(project.status),
     department: project.department || '—',
-    team_leader: project.team_leader_name || '—',
+    reporting_officer: project.reporting_officer_name || projectTeamTree(project).reporting_officer?.employee_name || '—',
+    team_leader: project.team_leader_name || projectTeamTree(project).team_leader?.employee_name || '—',
+    doing_person: projectDoingPeople(project).map((person) => personName(person)).filter(Boolean).join(', ') || '—',
+    collaborators: projectCollaboratorPeople(project).map((person) => personName(person)).filter(Boolean).join(', ') || '—',
     progress: `${percentValue(project.latest_progress)}%`,
     last_update: project.latest_progress_date || '—',
     updated_by: project.latest_progress_by_name || '—',
@@ -1208,12 +1469,9 @@ export default function EmployeeDashboard({ setPage }) {
     project_name: projectName(project),
     status: statusLabel(project.status),
     department: project.department || '—',
-    assigned_members: Array.isArray(project.assigned_members)
-      ? project.assigned_members.map((member) => member.employee_name).filter(Boolean).join(', ') || '—'
-      : '—',
-    collaborators: Array.isArray(project.collaborators)
-      ? project.collaborators.map((member) => member.employee_name).filter(Boolean).join(', ') || '—'
-      : '—',
+    reporting_officer: project.reporting_officer_name || projectTeamTree(project).reporting_officer?.employee_name || '—',
+    assigned_members: projectAssignedPeople(project).map((member) => personName(member)).filter(Boolean).join(', ') || '—',
+    collaborators: projectCollaboratorPeople(project).map((member) => personName(member)).filter(Boolean).join(', ') || '—',
     progress: `${percentValue(project.latest_progress)}%`,
     last_update: project.latest_progress_date || '—',
   }));
@@ -1222,7 +1480,9 @@ export default function EmployeeDashboard({ setPage }) {
     project_name: projectName(project),
     status: statusLabel(project.status),
     department: project.department || '—',
-    team_leader: project.team_leader_name || '—',
+    team_leader: project.team_leader_name || projectTeamTree(project).team_leader?.employee_name || '—',
+    doing_person: projectDoingPeople(project).map((person) => personName(person)).filter(Boolean).join(', ') || '—',
+    collaborators: projectCollaboratorPeople(project).map((person) => personName(person)).filter(Boolean).join(', ') || '—',
     progress: `${percentValue(project.latest_progress)}%`,
     last_update: project.latest_progress_date || '—',
   }));
@@ -1247,6 +1507,15 @@ export default function EmployeeDashboard({ setPage }) {
     note: row.note || row.description || '—',
     date: row.date || '—',
   }));
+
+  const teamHierarchyTree = data?.team_hierarchy_tree || {};
+  const profilePhotoPerson = {
+    ...employeeSummary,
+    ...employee,
+    name: displayName,
+    employee_name: displayName,
+  };
+  const profilePhotoUrl = getProfilePhotoUrl(profilePhotoPerson);
 
   const todayStatus = statusLabel(todayAttendance?.status || 'Not checked-in');
 
@@ -1814,6 +2083,356 @@ export default function EmployeeDashboard({ setPage }) {
           margin-top: -4px;
         }
 
+        .employee-hero {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+          gap: 22px;
+          align-items: stretch;
+        }
+
+        .employee-identity-head {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 16px;
+          align-items: center;
+        }
+
+        .employee-profile-avatar {
+          width: 92px;
+          height: 92px;
+          border-radius: 28px;
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          color: #4338ca;
+          font-size: 28px;
+          font-weight: 900;
+          border: 4px solid #fff;
+          box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
+        }
+
+        .employee-profile-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .emp-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          border: 2px solid #ffffff;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, .10);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #4338ca;
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .emp-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .emp-avatar-xs { width: 30px; height: 30px; font-size: 10px; }
+        .emp-avatar-sm { width: 38px; height: 38px; font-size: 12px; }
+        .emp-avatar-md { width: 48px; height: 48px; font-size: 14px; }
+
+        .emp-person-chip {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: center;
+        }
+
+        .emp-person-chip strong {
+          display: block;
+          color: #0f172a;
+          font-size: 13px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .emp-person-chip span {
+          display: block;
+          color: #4338ca;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+
+        .emp-person-chip small {
+          display: block;
+          margin-top: 2px;
+          color: #64748b;
+          font-size: 11px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .emp-avatar-stack {
+          display: flex;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .emp-avatar-stack-item { margin-left: -8px; }
+        .emp-avatar-stack-item:first-child { margin-left: 0; }
+
+        .emp-avatar-more {
+          min-width: 30px;
+          height: 30px;
+          margin-left: -8px;
+          border-radius: 999px;
+          background: #0f172a;
+          color: #fff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 2px solid #fff;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .emp-avatar-empty {
+          color: #94a3b8;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .emp-project-card-top {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 12px;
+          align-items: flex-start;
+        }
+
+        .emp-project-people-line {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin-top: 12px;
+          border: 1px solid #e2e8f0;
+          background: #f8fafc;
+          border-radius: 16px;
+          padding: 10px;
+        }
+
+        .emp-project-people-line > div {
+          min-width: 0;
+        }
+
+        .emp-project-people-line span {
+          display: block;
+          margin-bottom: 7px;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .emp-project-people-line small {
+          color: #94a3b8;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .emp-root-map-panel {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid #dbe4ff;
+          border-radius: 30px;
+          background:
+            radial-gradient(circle at 50% 0%, rgba(79,70,229,.13), transparent 34%),
+            radial-gradient(circle at 0% 100%, rgba(5,150,105,.10), transparent 30%),
+            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+          padding: 22px;
+          display: grid;
+          gap: 18px;
+          box-shadow: 0 18px 50px rgba(15,23,42,.08);
+        }
+
+        .emp-root-map-bg {
+          position: absolute;
+          inset: 0;
+          background-image:
+            linear-gradient(rgba(79,70,229,.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(79,70,229,.06) 1px, transparent 1px);
+          background-size: 24px 24px;
+          mask-image: radial-gradient(circle at 50% 38%, black, transparent 76%);
+          pointer-events: none;
+        }
+
+        .emp-root-map-panel > *:not(.emp-root-map-bg) {
+          position: relative;
+          z-index: 1;
+        }
+
+        .emp-root-map-head {
+          text-align: center;
+        }
+
+        .emp-root-map-head span {
+          display: inline-flex;
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: #eef2ff;
+          color: #4338ca;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .07em;
+        }
+
+        .emp-root-map-head h3 {
+          margin: 8px 0 0;
+          color: #0f172a;
+          font-size: clamp(22px, 3vw, 30px);
+          letter-spacing: -.04em;
+        }
+
+        .emp-root-map-head p {
+          margin: 6px 0 0;
+          color: #64748b;
+          font-weight: 700;
+        }
+
+        .emp-root-map-stage {
+          display: grid;
+          gap: 14px;
+        }
+
+        .emp-root-node {
+          max-width: 380px;
+          margin: 0 auto;
+          border: 1px solid #e2e8f0;
+          border-radius: 22px;
+          background: rgba(255,255,255,.94);
+          padding: 13px;
+          box-shadow: 0 14px 34px rgba(15,23,42,.08);
+        }
+
+        .ro-node { border-color: #c7d2fe; }
+        .tl-node { border-color: #bbf7d0; }
+
+        .emp-root-line {
+          width: 2px;
+          height: 30px;
+          margin: -4px auto;
+          background: linear-gradient(#4f46e5, #059669);
+          border-radius: 999px;
+        }
+
+        .emp-root-branches {
+          position: relative;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .emp-root-branches::before {
+          content: "";
+          position: absolute;
+          top: -12px;
+          left: 25%;
+          right: 25%;
+          height: 2px;
+          background: linear-gradient(90deg, #4f46e5, #059669);
+          border-radius: 999px;
+        }
+
+        .emp-root-branch {
+          border: 1px solid #e2e8f0;
+          border-radius: 22px;
+          background: rgba(255,255,255,.92);
+          padding: 14px;
+          display: grid;
+          gap: 12px;
+        }
+
+        .emp-root-branch-title {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-radius: 16px;
+          background: #ecfdf5;
+          color: #047857;
+          padding: 10px 12px;
+        }
+
+        .emp-root-branch.reporting .emp-root-branch-title {
+          background: #eef2ff;
+          color: #4338ca;
+        }
+
+        .emp-root-branch-title span {
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+        }
+
+        .emp-root-branch-title strong {
+          width: 28px;
+          height: 28px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          background: #fff;
+          color: inherit;
+        }
+
+        .emp-root-people-list {
+          display: grid;
+          gap: 10px;
+        }
+
+        .emp-root-empty {
+          border: 1px dashed #cbd5e1;
+          border-radius: 16px;
+          color: #64748b;
+          background: #f8fafc;
+          padding: 12px;
+          text-align: center;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .emp-root-map-foot {
+          display: grid;
+          grid-template-columns: auto auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: center;
+          justify-content: center;
+          border-top: 1px solid #e2e8f0;
+          padding-top: 14px;
+        }
+
+        .emp-root-map-foot span {
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .emp-root-map-foot strong {
+          color: #0f172a;
+          font-size: 18px;
+        }
+
         @media (max-width: 1024px) {
           .emp-project-head-grid {
             grid-template-columns: 1fr;
@@ -1823,11 +2442,16 @@ export default function EmployeeDashboard({ setPage }) {
             justify-self: start;
           }
 
+          .employee-hero {
+            grid-template-columns: 1fr;
+          }
+
           .emp-project-stats,
           .emp-project-modern-stat-grid,
           .emp-project-card-grid,
           .emp-leave-status-grid,
-          .emp-performance-stat-grid {
+          .emp-performance-stat-grid,
+          .emp-project-people-line {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
@@ -1837,8 +2461,29 @@ export default function EmployeeDashboard({ setPage }) {
           .emp-project-modern-stat-grid,
           .emp-project-card-grid,
           .emp-leave-status-grid,
-          .emp-performance-stat-grid {
+          .emp-performance-stat-grid,
+          .emp-project-people-line,
+          .emp-root-branches {
             grid-template-columns: 1fr;
+          }
+
+          .employee-identity-head {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-profile-avatar {
+            width: 78px;
+            height: 78px;
+            border-radius: 22px;
+          }
+
+          .emp-root-branches::before {
+            display: none;
+          }
+
+          .emp-root-map-foot {
+            grid-template-columns: 1fr;
+            justify-items: start;
           }
 
           .emp-project-hero,
@@ -1868,17 +2513,29 @@ export default function EmployeeDashboard({ setPage }) {
 
       <section className="hero employee-hero">
         <div className="employee-identity">
-          <span className="kicker">Employee Self Service</span>
+          <div className="employee-identity-head">
+            <div className="employee-profile-avatar">
+              {profilePhotoUrl ? (
+                <img src={profilePhotoUrl} alt={displayName} />
+              ) : (
+                <span>{getInitials(displayName)}</span>
+              )}
+            </div>
 
-          <h1 className="employee-name-heading dashboard-display-name">
-            {displayName}
-          </h1>
+            <div>
+              <span className="kicker">Employee Self Service</span>
 
-          <p className="employee-dashboard-subtitle">
-            Employee dashboard for attendance, leave, profile, tickets,
-            notifications, assigned approval responsibilities, performance, and
-            project progress.
-          </p>
+              <h1 className="employee-name-heading dashboard-display-name">
+                {displayName}
+              </h1>
+
+              <p className="employee-dashboard-subtitle">
+                Employee dashboard for attendance, leave, profile, tickets,
+                notifications, assigned approval responsibilities, performance, and
+                project progress.
+              </p>
+            </div>
+          </div>
 
           <div className="employee-badges">
             <span className="employee-badge primary-cap">
@@ -2201,6 +2858,11 @@ export default function EmployeeDashboard({ setPage }) {
             </button>
           </div>
         </div>
+
+        <TeamHierarchyMap
+          tree={teamHierarchyTree}
+          title={isReportingOfficer ? 'Reporting Officer Team Root Map' : isTeamLeader ? 'Team Leader Root Map' : 'My Team Root Map'}
+        />
 
         <ProjectMiniBoard
           title="Active Projects"

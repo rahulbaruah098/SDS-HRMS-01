@@ -12,7 +12,13 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, clearSession } from '../api/client';
+import {
+  api,
+  clearSession,
+  getInitials,
+  getProfilePhotoUrl,
+  refreshCurrentSession,
+} from '../api/client';
 import {
   moduleList,
   getDisplayRole,
@@ -46,6 +52,70 @@ function normalizeRoles(user) {
   const singleRole = normalizeRoleValue(user?.role);
 
   return singleRole ? [singleRole] : [];
+}
+
+function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
+  );
+}
+
+function applyProfilePhotoAliases(record = {}, photoValue = '') {
+  const photo = String(photoValue || profilePhotoValue(record) || '').trim();
+
+  if (photo) {
+    record.avatar = photo;
+    record.profile_photo = photo;
+    record.profile_picture = photo;
+    record.photo = photo;
+  }
+
+  return record;
+}
+
+function getStoredEmployee() {
+  try {
+    return JSON.parse(localStorage.getItem('sds_hrms_employee') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function getUserPhoto(user = {}) {
+  const employee = user.employee || user.employee_profile || getStoredEmployee();
+  return profilePhotoValue(employee) || profilePhotoValue(user);
+}
+
+function userDisplayName(user = {}) {
+  return (
+    user.name ||
+    user.full_name ||
+    user.display_name ||
+    user.email ||
+    'User'
+  );
+}
+
+function UserAvatar({ user = {}, size = 'sm' }) {
+  const photo = getUserPhoto(user);
+  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const name = userDisplayName(user);
+
+  return (
+    <span className={`layout-avatar layout-avatar-${size}`}>
+      {photoUrl ? (
+        <img src={photoUrl} alt={name} />
+      ) : (
+        <b>{getInitials(name)}</b>
+      )}
+    </span>
+  );
 }
 
 function roleLabel(role = '') {
@@ -232,12 +302,16 @@ function notificationTarget(meta = {}) {
       'project_analytics',
       'department_project_graph',
       'project_wise_graph',
+      'team_project_graph',
+      'project_team_tree',
+      'team_hierarchy',
+      'team_root_map',
     ].includes(target)
   ) {
     return 'projects';
   }
 
-  if (meta.performance_review_id) {
+  if (meta.performance_review_id || meta.review_target_type) {
     return 'performance_reviews';
   }
 
@@ -261,7 +335,12 @@ function notificationTarget(meta = {}) {
     return 'application_status';
   }
 
-  if (meta.project_id) {
+  if (
+    meta.project_id ||
+    meta.project_progress_id ||
+    meta.assigned_employee_ids ||
+    meta.collaborator_ids
+  ) {
     return 'projects';
   }
 
@@ -281,6 +360,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     ...(user || {}),
     roles: normalizeRoles(user),
   };
+
+  applyProfilePhotoAliases(safeUser, getUserPhoto(safeUser));
 
   const modules = moduleList(safeUser).filter(
     (module) => module[0] !== 'dashboard',
@@ -363,6 +444,33 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       setNotificationLoading(false);
     }
   }
+
+  useEffect(() => {
+    async function syncProfileSession() {
+      try {
+        const data = await refreshCurrentSession();
+
+        if (data?.user && typeof setUser === 'function') {
+          const syncedUser = {
+            ...data.user,
+            employee: data.employee || {},
+          };
+
+          applyProfilePhotoAliases(
+            syncedUser,
+            profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+          );
+
+          setUser(syncedUser);
+        }
+      } catch {
+        // Ignore session refresh failure here; api() handles expired sessions globally.
+      }
+    }
+
+    syncProfileSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     loadNotifications({ silent: true });
@@ -460,7 +568,104 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell layout-photo-aware">
+      <style>{`
+        .layout-photo-aware .side-brand {
+          align-items: center;
+        }
+
+        .layout-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          color: #4338ca;
+          border: 2px solid #ffffff;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, .12);
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .layout-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .layout-avatar b {
+          font-size: inherit;
+          line-height: 1;
+        }
+
+        .layout-avatar-sm {
+          width: 34px;
+          height: 34px;
+          font-size: 11px;
+        }
+
+        .layout-avatar-md {
+          width: 46px;
+          height: 46px;
+          font-size: 14px;
+        }
+
+        .layout-sidebar-profile {
+          margin: 14px 0 10px;
+          border: 1px solid rgba(255,255,255,.14);
+          border-radius: 18px;
+          padding: 11px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: center;
+          background: rgba(255,255,255,.06);
+        }
+
+        .layout-sidebar-profile strong {
+          display: block;
+          color: #ffffff;
+          font-size: 13px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .layout-sidebar-profile small {
+          display: block;
+          margin-top: 3px;
+          color: rgba(255,255,255,.68);
+          font-size: 11px;
+          line-height: 1.35;
+        }
+
+        .layout-photo-aware .user-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 9px;
+          min-width: 0;
+        }
+
+        .layout-photo-aware .user-chip span:last-child {
+          max-width: 170px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .layout-photo-aware .notification-item {
+          text-align: left;
+        }
+
+        @media (max-width: 720px) {
+          .layout-photo-aware .user-chip span:last-child {
+            max-width: 110px;
+          }
+        }
+      `}</style>
+
       <button
         type="button"
         className={`mobile-menu-btn ${sidebarOpen ? 'active' : ''}`}
@@ -486,6 +691,18 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           <div>
             <b>HRMS</b>
             <small>Attendance • Leave • Projects</small>
+          </div>
+        </div>
+
+        <div className="layout-sidebar-profile">
+          <UserAvatar user={safeUser} size="md" />
+
+          <div>
+            <strong>{safeUser?.name || safeUser?.email || 'User'}</strong>
+            <small>
+              {displayRole}
+              {capabilityText ? ` • ${capabilityText}` : ''}
+            </small>
           </div>
         </div>
 
@@ -656,7 +873,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             </div>
 
             <div className="user-chip">
-              <User size={16} />
+              <UserAvatar user={safeUser} size="sm" />
               <span>{safeUser?.name || safeUser?.email || 'User'}</span>
             </div>
           </div>

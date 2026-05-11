@@ -101,6 +101,18 @@ const PAGE_ALIASES = {
   project_dashboard: 'projects',
   department_project_graph: 'projects',
   project_wise_graph: 'projects',
+  team_project_graph: 'projects',
+  project_team_tree: 'projects',
+  project_tree: 'projects',
+  team_tree: 'projects',
+  team_hierarchy: 'projects',
+  team_root_map: 'projects',
+  root_map: 'projects',
+  spider_map: 'projects',
+  spider_tree: 'projects',
+  collaborator_projects: 'projects',
+  assigned_projects: 'projects',
+  my_projects: 'projects',
 
   performance: 'performance_reviews',
   performance_review: 'performance_reviews',
@@ -117,6 +129,8 @@ const PAGE_ALIASES = {
 
   profile: 'profile',
   my_profile: 'profile',
+  profile_photo: 'profile',
+  avatar: 'profile',
 };
 
 function normalizeRoleValue(role) {
@@ -166,6 +180,77 @@ function hasAnyRole(userRoles = [], allowedRoles = []) {
   const normalizedAllowedRoles = allowedRoles.map((role) => normalizeRoleValue(role));
 
   return normalizedAllowedRoles.some((role) => normalizedUserRoles.includes(role));
+}
+
+function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
+  );
+}
+
+function applyProfilePhotoAliases(payload = {}, photoValue = '') {
+  const photo = String(photoValue || profilePhotoValue(payload) || '').trim();
+
+  if (photo) {
+    payload.avatar = photo;
+    payload.profile_photo = photo;
+    payload.profile_picture = photo;
+    payload.photo = photo;
+  }
+
+  return payload;
+}
+
+function readStoredEmployee() {
+  try {
+    return JSON.parse(localStorage.getItem('sds_hrms_employee') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function mergeUserWithEmployeeProfile(user = {}) {
+  const storedEmployee = readStoredEmployee();
+  const employee =
+    user.employee ||
+    user.employee_summary ||
+    user.employee_profile ||
+    storedEmployee ||
+    {};
+
+  const photo =
+    profilePhotoValue(employee) ||
+    profilePhotoValue(user);
+
+  const mergedUser = {
+    ...user,
+    employee,
+    employee_summary: user.employee_summary || employee,
+    employee_profile: user.employee_profile || employee,
+    roles: normalizeRoles(user),
+  };
+
+  applyProfilePhotoAliases(mergedUser, photo);
+
+  if (mergedUser.employee && typeof mergedUser.employee === 'object') {
+    applyProfilePhotoAliases(mergedUser.employee, photo);
+  }
+
+  if (mergedUser.employee_summary && typeof mergedUser.employee_summary === 'object') {
+    applyProfilePhotoAliases(mergedUser.employee_summary, photo);
+  }
+
+  if (mergedUser.employee_profile && typeof mergedUser.employee_profile === 'object') {
+    applyProfilePhotoAliases(mergedUser.employee_profile, photo);
+  }
+
+  return mergedUser;
 }
 
 function shouldUseEmployeeDashboard(userRoles = []) {
@@ -227,11 +312,7 @@ function UnauthorizedPage({ setPage }) {
 }
 
 function PageRouter({ page, user, setPage }) {
-  const safeUser = {
-    ...(user || {}),
-    roles: normalizeRoles(user),
-  };
-
+  const safeUser = mergeUserWithEmployeeProfile(user || {});
   const normalizedPage = normalizePageKey(page);
 
   if (normalizedPage === 'dashboard') {
@@ -279,8 +360,17 @@ function PageRouter({ page, user, setPage }) {
 
 export default function App() {
   const savedUser = currentUser();
+  const savedEmployee = readStoredEmployee();
 
-  const [user, setUser] = useState(savedUser?.email ? savedUser : null);
+  const initialUser = savedUser?.email
+    ? mergeUserWithEmployeeProfile({
+        ...savedUser,
+        employee: savedEmployee,
+        employee_summary: savedEmployee,
+      })
+    : null;
+
+  const [user, setUser] = useState(initialUser);
   const [page, setPage] = useState('dashboard');
 
   const normalizedUser = useMemo(() => {
@@ -288,10 +378,7 @@ export default function App() {
       return null;
     }
 
-    return {
-      ...user,
-      roles: normalizeRoles(user),
-    };
+    return mergeUserWithEmployeeProfile(user);
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
@@ -303,10 +390,19 @@ export default function App() {
       return;
     }
 
-    setUser({
-      ...nextUser,
-      roles: normalizeRoles(nextUser),
-    });
+    const nextEmployee =
+      nextUser.employee ||
+      nextUser.employee_summary ||
+      nextUser.employee_profile ||
+      readStoredEmployee();
+
+    setUser(
+      mergeUserWithEmployeeProfile({
+        ...nextUser,
+        employee: nextEmployee,
+        employee_summary: nextEmployee,
+      }),
+    );
 
     setPage('dashboard');
   }

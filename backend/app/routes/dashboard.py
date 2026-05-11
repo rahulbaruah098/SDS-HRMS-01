@@ -98,6 +98,37 @@ def normalize_text(value):
     return str(value or "").strip()
 
 
+def profile_photo_value(doc):
+    doc = doc or {}
+
+    return (
+        normalize_text(doc.get("avatar"))
+        or normalize_text(doc.get("profile_photo"))
+        or normalize_text(doc.get("profile_picture"))
+        or normalize_text(doc.get("photo"))
+        or normalize_text(doc.get("image"))
+        or normalize_text(doc.get("picture"))
+        or ""
+    )
+
+
+def apply_profile_photo_aliases(payload, photo_value=None):
+    payload = payload or {}
+    photo = normalize_text(photo_value) or profile_photo_value(payload)
+
+    if photo:
+        payload["avatar"] = photo
+        payload["profile_photo"] = photo
+        payload["profile_picture"] = photo
+        payload["photo"] = photo
+
+    return payload
+
+
+def employee_photo(employee):
+    return profile_photo_value(employee)
+
+
 def normalize_state(value):
     state = normalize_text(value)
 
@@ -150,6 +181,7 @@ def is_admin_dashboard_role_set(roles):
 
 
 def is_team_leader_capability(employee, roles=None):
+    employee = employee or {}
     roles = set(roles or [])
 
     return bool(
@@ -159,6 +191,7 @@ def is_team_leader_capability(employee, roles=None):
 
 
 def is_reporting_officer_capability(employee, roles=None):
+    employee = employee or {}
     roles = set(roles or [])
 
     return bool(
@@ -186,6 +219,8 @@ def current_employee(db):
 
 
 def employee_state(employee):
+    employee = employee or {}
+
     return normalize_state(
         employee.get("state")
         or employee.get("branch")
@@ -195,12 +230,59 @@ def employee_state(employee):
 
 
 def employee_code(employee):
+    employee = employee or {}
+
     return (
         employee.get("employee_id")
         or employee.get("emp_code")
         or employee.get("code")
         or ""
     )
+
+
+def employee_name(employee):
+    employee = employee or {}
+
+    return (
+        employee.get("name")
+        or employee.get("employee_name")
+        or employee.get("full_name")
+        or employee.get("email")
+        or "Employee"
+    )
+
+
+def employee_member_payload(employee, relation="member"):
+    if not employee:
+        return {}
+
+    payload = {
+        "_id": employee.get("_id"),
+        "employee_id": str(employee.get("_id", "")),
+        "employee_code": employee_code(employee),
+        "emp_code": employee.get("emp_code", ""),
+        "employee_name": employee_name(employee),
+        "name": employee_name(employee),
+        "display_name": employee_name(employee),
+        "email": employee.get("email", ""),
+        "phone": employee.get("phone", ""),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "user_id": employee.get("user_id", ""),
+        "role": "Employee",
+        "relation": relation,
+        "state": employee_state(employee),
+        "is_team_leader": truthy(employee.get("is_team_leader")),
+        "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
+    }
+
+    apply_profile_photo_aliases(payload, employee_photo(employee))
+
+    return payload
 
 
 def project_name(project):
@@ -511,9 +593,9 @@ def employee_snapshot(employee, roles=None):
     roles = set(roles or [])
     is_team_leader = is_team_leader_capability(employee, roles)
     is_reporting_officer = is_reporting_officer_capability(employee, roles)
-    display_name = employee.get("name") or employee.get("employee_name") or "Employee"
+    display_name = employee_name(employee)
 
-    return {
+    snapshot = {
         "_id": employee.get("_id"),
         "tenant_id": employee.get("tenant_id"),
         "user_id": employee.get("user_id"),
@@ -543,6 +625,10 @@ def employee_snapshot(employee, roles=None):
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
     }
+
+    apply_profile_photo_aliases(snapshot, employee_photo(employee))
+
+    return snapshot
 
 
 def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None):
@@ -630,6 +716,293 @@ def base_active_query(tenant_id):
 
 
 # -----------------------------------------------------------------------------
+# Team hierarchy / spider-root helpers
+# -----------------------------------------------------------------------------
+
+def unique_people(people):
+    result = []
+    seen = set()
+
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+
+        person_id = normalize_text(
+            person.get("employee_id")
+            or person.get("_id")
+            or person.get("id")
+            or person.get("user_id")
+            or person.get("email")
+        )
+
+        relation = normalize_text(person.get("relation"))
+        key = f"{person_id}:{relation}"
+
+        if not person_id or key in seen:
+            continue
+
+        seen.add(key)
+        result.append(person)
+
+    return result
+
+
+def employee_by_id(db, tenant_id, employee_id):
+    if not employee_id or not ObjectId.is_valid(str(employee_id)):
+        return None
+
+    return db.employees.find_one({
+        "_id": ObjectId(str(employee_id)),
+        "tenant_id": tenant_id,
+        "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
+    })
+
+
+def enrich_project_member(db, tenant_id, member, relation):
+    if not isinstance(member, dict):
+        return {}
+
+    emp_id = normalize_text(member.get("employee_id") or member.get("_id") or member.get("id"))
+    employee = employee_by_id(db, tenant_id, emp_id)
+
+    if employee:
+        return employee_member_payload(employee, relation)
+
+    fallback = dict(member)
+    fallback["employee_id"] = emp_id
+    fallback["employee_name"] = (
+        fallback.get("employee_name")
+        or fallback.get("name")
+        or fallback.get("email")
+        or "Employee"
+    )
+    fallback["name"] = fallback.get("employee_name")
+    fallback["display_name"] = fallback.get("employee_name")
+    fallback["relation"] = relation
+    apply_profile_photo_aliases(fallback)
+    return fallback
+
+
+def build_project_team_tree(db, tenant_id, project, latest=None):
+    latest = latest or {}
+
+    reporting_officer = employee_by_id(db, tenant_id, project.get("reporting_officer_id"))
+    team_leader = employee_by_id(db, tenant_id, project.get("team_leader_id"))
+
+    if not reporting_officer and team_leader and team_leader.get("reporting_officer_id"):
+        reporting_officer = employee_by_id(db, tenant_id, team_leader.get("reporting_officer_id"))
+
+    reporting_officer_payload = (
+        employee_member_payload(reporting_officer, "reporting_officer")
+        if reporting_officer
+        else {
+            "employee_id": project.get("reporting_officer_id", ""),
+            "employee_name": project.get("reporting_officer_name", ""),
+            "name": project.get("reporting_officer_name", ""),
+            "display_name": project.get("reporting_officer_name", ""),
+            "designation": "Reporting Officer",
+            "department": project.get("department", ""),
+            "relation": "reporting_officer",
+        }
+        if project.get("reporting_officer_name")
+        else {}
+    )
+    apply_profile_photo_aliases(reporting_officer_payload)
+
+    team_leader_payload = (
+        employee_member_payload(team_leader, "team_leader")
+        if team_leader
+        else {
+            "employee_id": project.get("team_leader_id", ""),
+            "employee_name": project.get("team_leader_name", ""),
+            "name": project.get("team_leader_name", ""),
+            "display_name": project.get("team_leader_name", ""),
+            "designation": "Team Leader",
+            "department": project.get("department", ""),
+            "relation": "team_leader",
+        }
+        if project.get("team_leader_name")
+        else {}
+    )
+    apply_profile_photo_aliases(team_leader_payload)
+
+    assigned_members = [
+        enrich_project_member(db, tenant_id, member, "assigned_member")
+        for member in project.get("assigned_members", [])
+        if isinstance(member, dict)
+    ]
+
+    collaborators = [
+        enrich_project_member(db, tenant_id, member, "collaborator")
+        for member in project.get("collaborators", [])
+        if isinstance(member, dict)
+    ]
+
+    latest_progress_person = {}
+    latest_progress_by = normalize_text(latest.get("employee_id") or project.get("latest_progress_by"))
+
+    if latest_progress_by:
+        latest_employee = employee_by_id(db, tenant_id, latest_progress_by)
+
+        if latest_employee:
+            latest_progress_person = employee_member_payload(latest_employee, "latest_progress_by")
+
+    if not latest_progress_person and (latest.get("employee_name") or project.get("latest_progress_by_name")):
+        latest_progress_person = {
+            "employee_id": latest_progress_by,
+            "employee_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
+            "name": latest.get("employee_name") or project.get("latest_progress_by_name"),
+            "display_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
+            "department": latest.get("employee_department") or project.get("department", ""),
+            "designation": latest.get("employee_designation", ""),
+            "relation": "latest_progress_by",
+        }
+        apply_profile_photo_aliases(
+            latest_progress_person,
+            latest.get("employee_avatar")
+            or latest.get("employee_profile_photo")
+            or project.get("latest_progress_by_avatar"),
+        )
+
+    doing_people = assigned_members if assigned_members else []
+    if not doing_people and latest_progress_person:
+        doing_people = [latest_progress_person]
+
+    all_people = unique_people([
+        reporting_officer_payload,
+        team_leader_payload,
+        *assigned_members,
+        *collaborators,
+        latest_progress_person,
+    ])
+
+    return {
+        "reporting_officer": reporting_officer_payload,
+        "team_leader": team_leader_payload,
+        "assigned_members": assigned_members,
+        "collaborators": collaborators,
+        "doing_people": doing_people,
+        "latest_progress_person": latest_progress_person,
+        "all_people": all_people,
+        "tree_levels": [
+            {
+                "level": 1,
+                "label": "Reporting Officer",
+                "people": [reporting_officer_payload] if reporting_officer_payload else [],
+            },
+            {
+                "level": 2,
+                "label": "Team Leader",
+                "people": [team_leader_payload] if team_leader_payload else [],
+            },
+            {
+                "level": 3,
+                "label": "Team Members Doing Project",
+                "people": assigned_members,
+            },
+            {
+                "level": 4,
+                "label": "Collaborators",
+                "people": collaborators,
+            },
+        ],
+        "connection_label": "Reporting Officer → Team Leader → Team Members → Collaborators",
+    }
+
+
+def build_employee_team_hierarchy_tree(db, tenant_id, employee, roles, team_members=None, reporting_members=None):
+    employee = employee or {}
+    emp_id = str(employee.get("_id", ""))
+    team_members = team_members or []
+    reporting_members = reporting_members or []
+
+    self_payload = employee_member_payload(employee, "self")
+
+    reporting_officer = None
+    team_leader = None
+
+    if employee.get("reporting_officer_id"):
+        reporting_officer = employee_by_id(db, tenant_id, employee.get("reporting_officer_id"))
+
+    if employee.get("team_leader_id"):
+        team_leader = employee_by_id(db, tenant_id, employee.get("team_leader_id"))
+
+    reporting_officer_payload = (
+        employee_member_payload(reporting_officer, "reporting_officer")
+        if reporting_officer
+        else employee_member_payload(employee, "reporting_officer")
+        if is_reporting_officer_capability(employee, roles)
+        else {}
+    )
+
+    team_leader_payload = (
+        employee_member_payload(team_leader, "team_leader")
+        if team_leader
+        else employee_member_payload(employee, "team_leader")
+        if is_team_leader_capability(employee, roles)
+        else {}
+    )
+
+    team_member_payloads = [
+        employee_member_payload(member, "team_member")
+        for member in team_members
+    ]
+
+    reporting_member_payloads = [
+        employee_member_payload(member, "reporting_member")
+        for member in reporting_members
+    ]
+
+    team_leaders_under_reporting = [
+        employee_member_payload(member, "team_leader_under_reporting")
+        for member in reporting_members
+        if truthy(member.get("is_team_leader"))
+    ]
+
+    all_people = unique_people([
+        reporting_officer_payload,
+        team_leader_payload,
+        self_payload,
+        *team_member_payloads,
+        *reporting_member_payloads,
+    ])
+
+    return {
+        "self": self_payload,
+        "reporting_officer": reporting_officer_payload,
+        "team_leader": team_leader_payload,
+        "team_members": team_member_payloads,
+        "reporting_members": reporting_member_payloads,
+        "team_leaders_under_reporting": team_leaders_under_reporting,
+        "all_people": all_people,
+        "tree_levels": [
+            {
+                "level": 1,
+                "label": "Reporting Officer",
+                "people": [reporting_officer_payload] if reporting_officer_payload else [],
+            },
+            {
+                "level": 2,
+                "label": "Team Leader",
+                "people": [team_leader_payload] if team_leader_payload else [],
+            },
+            {
+                "level": 3,
+                "label": "Team Members",
+                "people": team_member_payloads,
+            },
+            {
+                "level": 4,
+                "label": "Reporting Members",
+                "people": reporting_member_payloads,
+            },
+        ],
+        "connection_label": "Reporting Officer → Team Leader → Team Members",
+    }
+
+
+# -----------------------------------------------------------------------------
 # Project analytics helpers
 # -----------------------------------------------------------------------------
 
@@ -660,10 +1033,13 @@ def project_scope_for_employee(tenant_id, emp_id):
         "$or": [
             {"created_by_employee_id": emp_id},
             {"team_leader_id": emp_id},
+            {"reporting_officer_id": emp_id},
             {"assigned_to_id": emp_id},
             {"assigned_employee_ids": emp_id},
+            {"assigned_members.employee_id": emp_id},
             {"collaborator_ids": emp_id},
             {"collaborators.employee_id": emp_id},
+            {"latest_progress_by": emp_id},
         ],
     }
 
@@ -679,8 +1055,19 @@ def project_scope_for_team_leader(tenant_id, emp_id):
     }
 
 
-def project_scope_for_reporting_officer(tenant_id, team_leader_ids):
-    if not team_leader_ids:
+def project_scope_for_reporting_officer(tenant_id, team_leader_ids, reporting_officer_id=None):
+    scope_or = []
+
+    if team_leader_ids:
+        scope_or.extend([
+            {"created_by_employee_id": {"$in": team_leader_ids}},
+            {"team_leader_id": {"$in": team_leader_ids}},
+        ])
+
+    if reporting_officer_id:
+        scope_or.append({"reporting_officer_id": reporting_officer_id})
+
+    if not scope_or:
         return {
             "tenant_id": tenant_id,
             "is_deleted": {"$ne": True},
@@ -690,10 +1077,7 @@ def project_scope_for_reporting_officer(tenant_id, team_leader_ids):
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "$or": [
-            {"created_by_employee_id": {"$in": team_leader_ids}},
-            {"team_leader_id": {"$in": team_leader_ids}},
-        ],
+        "$or": scope_or,
     }
 
 
@@ -847,24 +1231,62 @@ def serialize_project_cards(db, tenant_id, projects):
         except Exception:
             latest_progress = 0
 
+        if normalize_project_status(project.get("status")) == "completed" and latest_progress == 0:
+            latest_progress = 100
+
+        project_team_tree = build_project_team_tree(db, tenant_id, project, latest)
+        doing_people = project_team_tree.get("doing_people", [])
+        doing_people_names = [
+            item.get("employee_name") or item.get("name")
+            for item in doing_people
+            if item.get("employee_name") or item.get("name")
+        ]
+
         cards.append({
             "_id": pid,
             "name": project_name(project),
             "project_name": project_name(project),
+            "title": project_name(project),
+            "description": project.get("description", ""),
             "status": normalize_project_status(project.get("status")),
             "department": project.get("department", ""),
+            "priority": project.get("priority", "medium"),
+            "start_date": project.get("start_date", ""),
+            "due_date": project.get("due_date", ""),
+
+            "reporting_officer_id": project.get("reporting_officer_id", ""),
+            "reporting_officer_name": project.get("reporting_officer_name", ""),
+            "reporting_officer": project_team_tree.get("reporting_officer", {}),
+
             "team_leader_id": project.get("team_leader_id", ""),
             "team_leader_name": project.get("team_leader_name", ""),
+            "team_leader": project_team_tree.get("team_leader", {}),
+
+            "assigned_to_id": project.get("assigned_to_id", ""),
+            "assigned_to_name": project.get("assigned_to_name", ""),
             "assigned_employee_ids": project.get("assigned_employee_ids", []),
-            "assigned_members": project.get("assigned_members", []),
+            "assigned_members": project_team_tree.get("assigned_members", []),
+
             "collaborator_ids": project.get("collaborator_ids", []),
-            "collaborators": project.get("collaborators", []),
+            "collaborators": project_team_tree.get("collaborators", []),
+
+            "doing_people": doing_people,
+            "doing_people_names": doing_people_names,
+            "doing_person_name": doing_people_names[0] if doing_people_names else project.get("assigned_to_name", ""),
+
+            "project_team_tree": project_team_tree,
+
+            "created_by_employee_id": project.get("created_by_employee_id", ""),
+            "created_by_employee_name": project.get("created_by_employee_name", ""),
             "created_at": project.get("created_at"),
             "completed_at": project.get("completed_at"),
+
             "latest_progress": latest_progress,
-            "latest_progress_note": latest.get("note") or latest.get("description") or "",
-            "latest_progress_date": latest.get("date") or "",
-            "latest_progress_by_name": latest.get("employee_name") or latest.get("created_by_name") or "",
+            "latest_progress_note": latest.get("note") or latest.get("description") or project.get("latest_progress_note", ""),
+            "latest_progress_date": latest.get("date") or project.get("latest_progress_date", ""),
+            "latest_progress_by": latest.get("employee_id") or project.get("latest_progress_by", ""),
+            "latest_progress_by_name": latest.get("employee_name") or latest.get("created_by_name") or project.get("latest_progress_by_name", ""),
+            "latest_progress_person": project_team_tree.get("latest_progress_person", {}),
         })
 
     return cards
@@ -892,6 +1314,7 @@ def department_project_performance(db, tenant_id):
                 "department": department,
                 "total_projects": 0,
                 "active_projects": 0,
+                "on_hold_projects": 0,
                 "completed_projects": 0,
                 "completion_rate": 0,
                 "score": 0,
@@ -904,6 +1327,9 @@ def department_project_performance(db, tenant_id):
 
         if status == "active":
             row["active_projects"] += 1
+
+        if status == "on_hold":
+            row["on_hold_projects"] += 1
 
         if status == "completed":
             row["completed_projects"] += 1
@@ -955,6 +1381,7 @@ def team_leader_project_performance(db, tenant_id, team_leader_ids=None):
                 "department": project.get("department", ""),
                 "total_projects": 0,
                 "active_projects": 0,
+                "on_hold_projects": 0,
                 "completed_projects": 0,
                 "completion_rate": 0,
             }
@@ -966,6 +1393,9 @@ def team_leader_project_performance(db, tenant_id, team_leader_ids=None):
 
         if status == "active":
             row["active_projects"] += 1
+
+        if status == "on_hold":
+            row["on_hold_projects"] += 1
 
         if status == "completed":
             row["completed_projects"] += 1
@@ -980,7 +1410,6 @@ def team_leader_project_performance(db, tenant_id, team_leader_ids=None):
         key=lambda item: (item["completion_rate"], item["completed_projects"]),
         reverse=True,
     )
-
 
 
 def to_float(value, default=0):
@@ -1021,39 +1450,24 @@ def project_wise_performance(db, tenant_id, limit=100):
 
     project_ids = [str(project["_id"]) for project in projects]
     latest_map = latest_project_progress_map(db, tenant_id, project_ids)
+    cards = serialize_project_cards(db, tenant_id, projects)
     rows = []
 
-    for project in projects:
-        project_id = str(project["_id"])
-        latest = latest_map.get(project_id) or {}
-        status = normalize_project_status(project.get("status"))
+    for card in cards:
+        latest = latest_map.get(card["_id"]) or {}
+        status = normalize_project_status(card.get("status"))
         latest_progress = latest_project_progress_value(latest)
 
         if status == "completed" and latest_progress == 0:
             latest_progress = 100
 
-        assigned_employee_ids = project.get("assigned_employee_ids") or []
-        collaborators = project.get("collaborator_ids") or []
+        card["latest_progress"] = latest_progress
+        card["progress_percent"] = latest_progress
+        card["assigned_count"] = len(card.get("assigned_employee_ids", [])) if isinstance(card.get("assigned_employee_ids"), list) else 0
+        card["collaborator_count"] = len(card.get("collaborator_ids", [])) if isinstance(card.get("collaborator_ids"), list) else 0
+        card["score"] = latest_progress + (20 if status == "completed" else 0)
 
-        rows.append({
-            "project_id": project_id,
-            "_id": project_id,
-            "name": project_name(project),
-            "project_name": project_name(project),
-            "department": normalize_text(project.get("department")) or "Unassigned",
-            "status": status,
-            "team_leader_id": project.get("team_leader_id", ""),
-            "team_leader_name": project.get("team_leader_name", "") or "Unassigned",
-            "assigned_count": len(assigned_employee_ids) if isinstance(assigned_employee_ids, list) else 0,
-            "collaborator_count": len(collaborators) if isinstance(collaborators, list) else 0,
-            "latest_progress": latest_progress,
-            "progress_percent": latest_progress,
-            "latest_progress_date": latest.get("date") or "",
-            "latest_progress_note": latest.get("note") or latest.get("description") or "",
-            "created_at": project.get("created_at"),
-            "completed_at": project.get("completed_at"),
-            "score": latest_progress + (20 if status == "completed" else 0),
-        })
+        rows.append(card)
 
     return sorted(
         rows,
@@ -1183,9 +1597,9 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
 
     for member_id in member_ids:
         employee = lookup.get(member_id, {})
-        grouped[member_id] = {
+        row = {
             "employee_id": member_id,
-            "employee_name": employee.get("name") or employee.get("employee_name") or "Employee",
+            "employee_name": employee_name(employee) if employee else "Employee",
             "emp_code": employee_code(employee) if employee else "",
             "department": employee.get("department", "") if employee else "",
             "designation": employee.get("designation", "") if employee else "",
@@ -1198,6 +1612,8 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
             "_rating_total": 0,
             "_rating_count": 0,
         }
+        apply_profile_photo_aliases(row, employee_photo(employee))
+        grouped[member_id] = row
 
     for review in reviews:
         member_id = review.get("employee_id")
@@ -1318,7 +1734,7 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
         team_leader_ids = [str(row["_id"]) for row in team_leaders]
         reporting_projects = list(
             db.projects
-            .find(project_scope_for_reporting_officer(tenant_id, team_leader_ids))
+            .find(project_scope_for_reporting_officer(tenant_id, team_leader_ids, emp_id))
             .sort("created_at", -1)
             .limit(200)
         )
@@ -1411,6 +1827,10 @@ def tenant_project_analytics(db, tenant_id):
         project for project in all_projects
         if normalize_project_status(project.get("status")) == "active"
     ]
+    on_hold_projects = [
+        project for project in all_projects
+        if normalize_project_status(project.get("status")) == "on_hold"
+    ]
     completed_projects = [
         project for project in all_projects
         if normalize_project_status(project.get("status")) == "completed"
@@ -1423,10 +1843,12 @@ def tenant_project_analytics(db, tenant_id):
         "summary": {
             "total_projects": len(all_projects),
             "active_projects": len(active_projects),
+            "on_hold_projects": len(on_hold_projects),
             "completed_projects": len(completed_projects),
             "average_progress": project_progress_average(db, tenant_id, all_project_ids),
         },
         "active_projects": serialize_project_cards(db, tenant_id, active_projects[:20]),
+        "on_hold_projects": serialize_project_cards(db, tenant_id, on_hold_projects[:20]),
         "completed_projects": serialize_project_cards(db, tenant_id, completed_projects[:20]),
         "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
         "department_performance": department_performance,
@@ -1585,6 +2007,9 @@ def superadmin_dashboard():
         .sort("created_at", -1)
         .limit(8)
     )
+
+    for user in recent_users:
+        apply_profile_photo_aliases(user)
 
     recent_audit = list(
         db.audit_logs
@@ -1833,6 +2258,9 @@ def admin_dashboard():
         .limit(8)
     )
 
+    for employee in recent_employees:
+        apply_profile_photo_aliases(employee, employee_photo(employee))
+
     recent_attendance = list(
         db.attendance_logs
         .find({
@@ -1915,6 +2343,7 @@ def admin_dashboard():
     my_pending_attendance_mode_requests = []
 
     if current_emp:
+        apply_profile_photo_aliases(current_emp, employee_photo(current_emp))
         current_emp_id = str(current_emp["_id"])
         team_scope_ids = scoped_employee_ids_for_manager(
             db,
@@ -2011,6 +2440,7 @@ def employee_dashboard():
             "is_reporting_officer": False,
             "team_members": [],
             "reporting_members": [],
+            "team_hierarchy_tree": {},
             "team_pending_leaves": [],
             "team_pending_attendance_mode_requests": [],
             "my_performance_reviews": [],
@@ -2035,6 +2465,8 @@ def employee_dashboard():
             "completed_projects": [],
         })
 
+    apply_profile_photo_aliases(emp, employee_photo(emp))
+
     tenant_id = emp.get("tenant_id") or current_tenant_id()
     emp_id = str(emp["_id"])
     today_date = date.today()
@@ -2042,7 +2474,7 @@ def employee_dashboard():
 
     is_team_leader_role = is_team_leader_capability(emp, roles)
     is_reporting_officer_role = is_reporting_officer_capability(emp, roles)
-    employee_name = emp.get("name") or emp.get("employee_name") or "Employee"
+    employee_name_value = employee_name(emp)
 
     team_members = []
 
@@ -2071,6 +2503,21 @@ def employee_dashboard():
             })
             .sort("name", 1)
         )
+
+    for member in team_members:
+        apply_profile_photo_aliases(member, employee_photo(member))
+
+    for member in reporting_members:
+        apply_profile_photo_aliases(member, employee_photo(member))
+
+    team_hierarchy_tree = build_employee_team_hierarchy_tree(
+        db,
+        tenant_id,
+        emp,
+        roles,
+        team_members,
+        reporting_members,
+    )
 
     team_member_ids = [str(member["_id"]) for member in team_members]
     reporting_member_ids = [str(member["_id"]) for member in reporting_members]
@@ -2271,10 +2718,12 @@ def employee_dashboard():
         "employee": clean_doc(emp),
         "employee_summary": clean_doc(employee_snapshot(emp, roles)),
         "dashboard_display": {
-            "title": employee_name,
+            "title": employee_name_value,
             "subtitle": "Employee Dashboard",
             "display_role": "Employee",
             "show_name_as_primary_heading": True,
+            "avatar": employee_photo(emp),
+            "profile_photo": employee_photo(emp),
         },
         "roles": list(roles),
         "is_team_leader": bool(is_team_leader_role),
@@ -2289,6 +2738,7 @@ def employee_dashboard():
         },
         "team_members": clean_doc(team_members),
         "reporting_members": clean_doc(reporting_members),
+        "team_hierarchy_tree": clean_doc(team_hierarchy_tree),
         "team_member_count": len(team_members),
         "reporting_member_count": len(reporting_members),
         "pending_approval_counts": {

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Save, X } from 'lucide-react';
-import { api } from '../api/client';
+import { Plus, Search, Save, X, ImagePlus } from 'lucide-react';
+import {
+  api,
+  getInitials,
+  getProfilePhotoUrl,
+} from '../api/client';
 import {
   allModules,
   templates,
@@ -122,6 +126,7 @@ const LEAVE_BALANCE_CREATE_FIELDS = [
 ];
 
 const EMPLOYEE_MASTER_TABLE_FIELDS = [
+  'profile_photo',
   'name',
   'employee_id',
   'designation',
@@ -324,96 +329,133 @@ function toNumber(value, fallback = 0) {
   return parsed;
 }
 
-function getStoredUser() {
-  const keys = [
-    'sds_hrms_user',
-    'user',
-    'currentUser',
-    'auth_user',
-    'hrms_user',
-  ];
-
-  for (const key of keys) {
-    try {
-      const raw = localStorage.getItem(key);
-
-      if (!raw) {
-        continue;
-      }
-
-      const parsed = JSON.parse(raw);
-
-      if (parsed && typeof parsed === 'object') {
-        return parsed;
-      }
-    } catch {
-      // Ignore malformed storage values.
-    }
-  }
-
-  return {};
-}
-
-function getCurrentUserRoles() {
-  const user = getStoredUser();
-  const roles = [];
-
-  if (Array.isArray(user.roles)) {
-    roles.push(...user.roles);
-  }
-
-  if (user.role) {
-    roles.push(user.role);
-  }
-
-  if (user.user?.role) {
-    roles.push(user.user.role);
-  }
-
-  if (Array.isArray(user.user?.roles)) {
-    roles.push(...user.user.roles);
-  }
-
-  return new Set(
-    roles
-      .map((role) => normalizeRole(role))
-      .filter(Boolean),
+function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
   );
 }
 
-function canManageLeaveBalances() {
-  if (isSuperAdmin()) {
-    return true;
+function applyProfilePhotoAliases(payload = {}, photoValue = '') {
+  const photo = String(photoValue || profilePhotoValue(payload) || '').trim();
+
+  if (photo) {
+    payload.avatar = photo;
+    payload.profile_photo = photo;
+    payload.profile_picture = photo;
+    payload.photo = photo;
   }
 
-  const roles = getCurrentUserRoles();
-
-  for (const role of LEAVE_BALANCE_MANAGER_ROLES) {
-    if (roles.has(role)) {
-      return true;
-    }
-  }
-
-  return false;
+  return payload;
 }
 
-function emptyLeaveBalanceForm(template = {}) {
-  return {
-    ...template,
-    employee_id: '',
-    employee_name: '',
-    department: '',
-    designation: '',
-    cl_opening_balance: 0,
-    cl_credited: 0,
-    cl_used: 0,
-    cl_available: 0,
-    el_opening_balance: 0,
-    el_credited: 0,
-    el_used: 0,
-    el_available: 0,
-    status: 'active',
-  };
+function employeeDisplayName(row = {}) {
+  return row.name || row.employee_name || row.full_name || row.email || 'Employee';
+}
+
+function EmployeeAvatar({ employee = {}, size = 'md' }) {
+  const photo = profilePhotoValue(employee);
+  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const name = employeeDisplayName(employee);
+
+  return (
+    <div className={`mc-avatar mc-avatar-${size}`}>
+      {photoUrl ? (
+        <img src={photoUrl} alt={name} />
+      ) : (
+        <span>{getInitials(name)}</span>
+      )}
+    </div>
+  );
+}
+
+function ProfilePhotoInput({ state, setState, isEditMode = false }) {
+  const photo = profilePhotoValue(state);
+  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const name = employeeDisplayName(state);
+
+  function updatePhoto(value) {
+    const next = { ...state };
+    applyProfilePhotoAliases(next, value);
+    setState(next);
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please choose an image file.');
+      return;
+    }
+
+    if (file.size > 1024 * 1024 * 2) {
+      alert('Image size should be below 2MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      updatePhoto(reader.result || '');
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <label className="mc-photo-field">
+      Profile Photo
+      <div className="mc-photo-box">
+        <div className="mc-photo-preview">
+          {photoUrl ? (
+            <img src={photoUrl} alt={name} />
+          ) : (
+            <span>{getInitials(name)}</span>
+          )}
+        </div>
+
+        <div className="mc-photo-controls">
+          <input
+            type="text"
+            value={photo}
+            placeholder="Paste image URL/path or upload image"
+            onChange={(event) => updatePhoto(event.target.value)}
+          />
+
+          <div className="mc-photo-actions">
+            <label className="mc-file-btn">
+              <ImagePlus size={16} />
+              Upload Photo
+              <input type="file" accept="image/*" onChange={handleFileChange} />
+            </label>
+
+            {photo && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => updatePhoto('')}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+
+          <small>
+            {isEditMode
+              ? 'This photo will sync with employee profile, login user, dashboard and project team cards.'
+              : 'This photo will be saved while creating the employee and linked login account.'}
+          </small>
+        </div>
+      </div>
+    </label>
+  );
 }
 
 function normalizeBalancePayload(payload) {
@@ -506,6 +548,98 @@ function groupLeaveBalanceRows(rows = []) {
   return Array.from(map.values()).sort((a, b) =>
     String(a.employee_name || '').localeCompare(String(b.employee_name || '')),
   );
+}
+
+function getStoredUser() {
+  const keys = [
+    'sds_hrms_user',
+    'user',
+    'currentUser',
+    'auth_user',
+    'hrms_user',
+  ];
+
+  for (const key of keys) {
+    try {
+      const raw = localStorage.getItem(key);
+
+      if (!raw) {
+        continue;
+      }
+
+      const parsed = JSON.parse(raw);
+
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      // Ignore malformed storage values.
+    }
+  }
+
+  return {};
+}
+
+function getCurrentUserRoles() {
+  const user = getStoredUser();
+  const roles = [];
+
+  if (Array.isArray(user.roles)) {
+    roles.push(...user.roles);
+  }
+
+  if (user.role) {
+    roles.push(user.role);
+  }
+
+  if (user.user?.role) {
+    roles.push(user.user.role);
+  }
+
+  if (Array.isArray(user.user?.roles)) {
+    roles.push(...user.user.roles);
+  }
+
+  return new Set(
+    roles
+      .map((role) => normalizeRole(role))
+      .filter(Boolean),
+  );
+}
+
+function canManageLeaveBalances() {
+  if (isSuperAdmin()) {
+    return true;
+  }
+
+  const roles = getCurrentUserRoles();
+
+  for (const role of LEAVE_BALANCE_MANAGER_ROLES) {
+    if (roles.has(role)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function emptyLeaveBalanceForm(template = {}) {
+  return {
+    ...template,
+    employee_id: '',
+    employee_name: '',
+    department: '',
+    designation: '',
+    cl_opening_balance: 0,
+    cl_credited: 0,
+    cl_used: 0,
+    cl_available: 0,
+    el_opening_balance: 0,
+    el_credited: 0,
+    el_used: 0,
+    el_available: 0,
+    status: 'active',
+  };
 }
 
 export default function ModuleCrud({ collection }) {
@@ -761,6 +895,7 @@ export default function ModuleCrud({ collection }) {
       if (collection === 'employees') {
         delete payload.password_mode;
         payload.role = 'Employee';
+        applyProfilePhotoAliases(payload);
       }
 
       if (collection === 'leave_requests') {
@@ -836,6 +971,7 @@ export default function ModuleCrud({ collection }) {
         editData.team_leader_name = row.team_leader_name || '';
         editData.reporting_officer_id = row.reporting_officer_id || '';
         editData.reporting_officer_name = row.reporting_officer_name || '';
+        applyProfilePhotoAliases(editData, profilePhotoValue(row));
       }
 
       if (collection === 'leave_requests') {
@@ -900,6 +1036,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         payload.role = 'Employee';
+        applyProfilePhotoAliases(payload);
       }
 
       if (collection === 'leave_requests') {
@@ -1085,7 +1222,7 @@ export default function ModuleCrud({ collection }) {
     setState({
       ...state,
       team_leader_id: employeeId,
-      team_leader_name: selectedEmployee?.name || '',
+      team_leader_name: selectedEmployee?.name || selectedEmployee?.employee_name || '',
     });
   }
 
@@ -1095,7 +1232,7 @@ export default function ModuleCrud({ collection }) {
     setState({
       ...state,
       reporting_officer_id: employeeId,
-      reporting_officer_name: selectedEmployee?.name || '',
+      reporting_officer_name: selectedEmployee?.name || selectedEmployee?.employee_name || '',
     });
   }
 
@@ -1349,6 +1486,24 @@ export default function ModuleCrud({ collection }) {
       requiredFields.includes(key)
         ? `${labelText} *`
         : labelText;
+
+    if (
+      collection === 'employees' &&
+      ['avatar', 'profile_photo', 'profile_picture', 'photo'].includes(key)
+    ) {
+      if (key !== 'avatar') {
+        return null;
+      }
+
+      return (
+        <ProfilePhotoInput
+          key={key}
+          state={state}
+          setState={setState}
+          isEditMode={isEditMode}
+        />
+      );
+    }
 
     if (collection === 'employees' && isEditMode && key === 'password') {
       return null;
@@ -1906,6 +2061,7 @@ export default function ModuleCrud({ collection }) {
 
   function tableHeaderLabel(key) {
     const labels = {
+      profile_photo: 'Photo',
       name: 'Employee Name',
       employee_id: 'Emp ID',
       designation: 'Designation',
@@ -1929,8 +2085,17 @@ export default function ModuleCrud({ collection }) {
   }
 
   function tableCellValue(row, key) {
+    if (key === 'profile_photo') {
+      return <EmployeeAvatar employee={row} size="sm" />;
+    }
+
     if (key === 'name') {
-      return displayValue(row.name || row.employee_name || row.full_name);
+      return (
+        <div className="mc-employee-name-cell">
+          <strong>{displayValue(row.name || row.employee_name || row.full_name)}</strong>
+          <small>{displayValue(row.email)}</small>
+        </div>
+      );
     }
 
     if (key === 'employee_id') {
@@ -2064,7 +2229,139 @@ export default function ModuleCrud({ collection }) {
   }
 
   return (
-    <div className="page-grid">
+    <div className="page-grid module-crud-page">
+      <style>{`
+        .module-crud-page .dynamic-form {
+          align-items: start;
+        }
+
+        .mc-photo-field {
+          grid-column: 1 / -1;
+        }
+
+        .mc-photo-box {
+          display: grid;
+          grid-template-columns: 96px minmax(0, 1fr);
+          gap: 16px;
+          align-items: center;
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 34%),
+            #f8fafc;
+          padding: 14px;
+          margin-top: 8px;
+        }
+
+        .mc-photo-preview {
+          width: 88px;
+          height: 88px;
+          border-radius: 24px;
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          border: 3px solid #ffffff;
+          box-shadow: 0 14px 32px rgba(15, 23, 42, .12);
+          color: #4338ca;
+          font-size: 24px;
+          font-weight: 900;
+        }
+
+        .mc-photo-preview img,
+        .mc-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .mc-photo-controls {
+          display: grid;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .mc-photo-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .mc-file-btn {
+          width: auto !important;
+          display: inline-flex !important;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 0;
+          border-radius: 999px;
+          background: #eef2ff;
+          color: #4338ca;
+          padding: 10px 14px;
+          font-weight: 800;
+          cursor: pointer;
+          margin: 0 !important;
+        }
+
+        .mc-file-btn input {
+          display: none;
+        }
+
+        .mc-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          color: #4338ca;
+          border: 2px solid #ffffff;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, .12);
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .mc-avatar-sm {
+          width: 42px;
+          height: 42px;
+          font-size: 12px;
+        }
+
+        .mc-avatar-md {
+          width: 54px;
+          height: 54px;
+          font-size: 15px;
+        }
+
+        .mc-employee-name-cell {
+          min-width: 180px;
+        }
+
+        .mc-employee-name-cell strong {
+          display: block;
+          color: #0f172a;
+        }
+
+        .mc-employee-name-cell small {
+          display: block;
+          color: #64748b;
+          margin-top: 2px;
+        }
+
+        @media (max-width: 720px) {
+          .mc-photo-box {
+            grid-template-columns: 1fr;
+          }
+
+          .mc-photo-preview {
+            width: 78px;
+            height: 78px;
+          }
+        }
+      `}</style>
+
       <section className="hero compact">
         <div>
           <span className="kicker">Module</span>
@@ -2073,8 +2370,8 @@ export default function ModuleCrud({ collection }) {
 
           {collection === 'employees' && (
             <p>
-              Create every staff member as an Employee. Mark Team Leader or
-              Reporting Officer only through capability mapping.
+              Create every staff member as an Employee. Add/update profile photo
+              here. Mark Team Leader or Reporting Officer only through capability mapping.
             </p>
           )}
 
@@ -2215,8 +2512,8 @@ export default function ModuleCrud({ collection }) {
 
               {collection === 'employees' && (
                 <p>
-                  HR/Admin/Super Admin can change employee details, Team Leader
-                  mapping, and Reporting Officer mapping from here.
+                  HR/Admin/Super Admin can change employee details, profile photo,
+                  Team Leader mapping, and Reporting Officer mapping from here.
                 </p>
               )}
 

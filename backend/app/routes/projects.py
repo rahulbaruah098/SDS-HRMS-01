@@ -149,6 +149,7 @@ def employee_display_name(employee):
     return (
         employee.get("name")
         or employee.get("employee_name")
+        or employee.get("full_name")
         or employee.get("email")
         or "Employee"
     )
@@ -161,7 +162,23 @@ def employee_code(employee):
     return (
         employee.get("employee_id")
         or employee.get("emp_code")
+        or employee.get("employee_code")
         or employee.get("code")
+        or ""
+    )
+
+
+def employee_avatar(employee):
+    if not employee:
+        return ""
+
+    return (
+        employee.get("avatar")
+        or employee.get("profile_photo")
+        or employee.get("profile_picture")
+        or employee.get("photo")
+        or employee.get("image")
+        or employee.get("picture")
         or ""
     )
 
@@ -214,7 +231,7 @@ def is_admin_view_user():
 
 def can_create_assign_or_collaborate_projects(db):
     """
-    New rule:
+    Rule:
     Only Team Leader and Reporting Officer capability users can create projects,
     assign team members, or add collaborators.
     """
@@ -234,7 +251,9 @@ def project_member_ids(project):
     for key in [
         "created_by_employee_id",
         "team_leader_id",
+        "reporting_officer_id",
         "assigned_to_id",
+        "latest_progress_by",
     ]:
         value = normalize_text(project.get(key))
         if value:
@@ -274,7 +293,6 @@ def can_view_project(db, project):
 
 def can_update_project_status_or_progress(db, project):
     """
-    New rule:
     Normal employees/team members can only view projects in scope and update
     project status/progress. They cannot create, assign, or add collaborators.
     """
@@ -308,11 +326,13 @@ def project_scope_query(db):
     q["$or"] = [
         {"created_by_employee_id": employee_id},
         {"team_leader_id": employee_id},
+        {"reporting_officer_id": employee_id},
         {"assigned_to_id": employee_id},
         {"assigned_employee_ids": employee_id},
         {"assigned_members.employee_id": employee_id},
         {"collaborator_ids": employee_id},
         {"collaborators.employee_id": employee_id},
+        {"latest_progress_by": employee_id},
     ]
 
     return q
@@ -368,15 +388,47 @@ def resolve_employee(db, employee_id, tenant_id=None):
     return db.employees.find_one(q)
 
 
-def employee_member_payload(employee):
+def resolve_employee_by_user_id(db, user_id, tenant_id=None):
+    if not user_id:
+        return None
+
+    q = {
+        "user_id": str(user_id),
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+    else:
+        q["tenant_id"] = current_tenant_id()
+
+    return db.employees.find_one(q)
+
+
+def employee_member_payload(employee, relation="member"):
+    if not employee:
+        return {}
+
     return {
         "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
         "employee_name": employee_display_name(employee),
+        "name": employee_display_name(employee),
         "email": employee.get("email", ""),
+        "phone": employee.get("phone", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "user_id": employee.get("user_id", ""),
+        "avatar": employee_avatar(employee),
+        "profile_photo": employee_avatar(employee),
+        "is_team_leader": truthy(employee.get("is_team_leader")),
+        "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
+        "relation": relation,
     }
 
 
@@ -409,7 +461,7 @@ def normalize_employee_id_list(value):
     return cleaned
 
 
-def resolve_member_list(db, tenant_id, employee_ids):
+def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member"):
     resolved_ids = []
     members = []
 
@@ -420,7 +472,7 @@ def resolve_member_list(db, tenant_id, employee_ids):
             raise ValueError("One or more selected employees were not found")
 
         resolved_ids.append(str(employee["_id"]))
-        members.append(employee_member_payload(employee))
+        members.append(employee_member_payload(employee, relation))
 
     return resolved_ids, members
 
@@ -443,6 +495,231 @@ def resolve_team_leader_for_project(db, tenant_id, data, creator_employee):
         return creator_employee
 
     return None
+
+
+def resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader=None):
+    raw_reporting_officer_id = normalize_text(data.get("reporting_officer_id"))
+
+    if raw_reporting_officer_id:
+        reporting_officer = resolve_employee(db, raw_reporting_officer_id, tenant_id)
+
+        if not reporting_officer:
+            raise ValueError("Selected Reporting Officer was not found")
+
+        if not employee_is_reporting_officer(reporting_officer):
+            raise ValueError("Selected Reporting Officer must have Reporting Officer capability")
+
+        return reporting_officer
+
+    if creator_employee and employee_is_reporting_officer(creator_employee):
+        return creator_employee
+
+    if team_leader:
+        mapped_ro_id = normalize_text(team_leader.get("reporting_officer_id"))
+        if mapped_ro_id:
+            reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
+            if reporting_officer:
+                return reporting_officer
+
+    if creator_employee:
+        mapped_ro_id = normalize_text(creator_employee.get("reporting_officer_id"))
+        if mapped_ro_id:
+            reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
+            if reporting_officer:
+                return reporting_officer
+
+    return None
+
+
+def find_project_employee(db, tenant_id, employee_id):
+    if not employee_id:
+        return None
+
+    return resolve_employee(db, employee_id, tenant_id)
+
+
+def enrich_member_from_db(db, tenant_id, member, relation):
+    if not isinstance(member, dict):
+        return {}
+
+    employee_id = normalize_text(member.get("employee_id") or member.get("_id") or member.get("id"))
+    employee = find_project_employee(db, tenant_id, employee_id)
+
+    if employee:
+        return employee_member_payload(employee, relation)
+
+    fallback = dict(member)
+    fallback["relation"] = relation
+    fallback["employee_id"] = employee_id
+    fallback["employee_name"] = (
+        fallback.get("employee_name")
+        or fallback.get("name")
+        or fallback.get("email")
+        or "Employee"
+    )
+    fallback["name"] = fallback.get("employee_name")
+    fallback["avatar"] = (
+        fallback.get("avatar")
+        or fallback.get("profile_photo")
+        or fallback.get("profile_picture")
+        or ""
+    )
+    fallback["profile_photo"] = fallback.get("avatar")
+    return fallback
+
+
+def unique_people(people):
+    result = []
+    seen = set()
+
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+
+        person_id = normalize_text(
+            person.get("employee_id")
+            or person.get("_id")
+            or person.get("id")
+            or person.get("user_id")
+            or person.get("email")
+        )
+
+        if not person_id:
+            continue
+
+        relation = normalize_text(person.get("relation"))
+        key = f"{person_id}:{relation}"
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(person)
+
+    return result
+
+
+def build_project_team_tree(db, project, latest=None):
+    tenant_id = project.get("tenant_id") or current_tenant_id()
+    latest = latest or {}
+
+    team_leader = None
+    reporting_officer = None
+
+    if project.get("team_leader_id"):
+        team_leader = resolve_employee(db, project.get("team_leader_id"), tenant_id)
+
+    if not team_leader and project.get("team_leader_name"):
+        team_leader = {
+            "_id": project.get("team_leader_id") or "",
+            "name": project.get("team_leader_name"),
+            "department": project.get("department", ""),
+            "designation": "Team Leader",
+            "is_team_leader": True,
+        }
+
+    if project.get("reporting_officer_id"):
+        reporting_officer = resolve_employee(db, project.get("reporting_officer_id"), tenant_id)
+
+    if not reporting_officer and team_leader and isinstance(team_leader, dict):
+        mapped_ro_id = normalize_text(team_leader.get("reporting_officer_id"))
+        if mapped_ro_id:
+            reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
+
+    if not reporting_officer and project.get("reporting_officer_name"):
+        reporting_officer = {
+            "_id": project.get("reporting_officer_id") or "",
+            "name": project.get("reporting_officer_name"),
+            "department": project.get("department", ""),
+            "designation": "Reporting Officer",
+            "is_reporting_officer": True,
+        }
+
+    assigned_members = [
+        enrich_member_from_db(db, tenant_id, member, "assigned_member")
+        for member in project.get("assigned_members", [])
+        if isinstance(member, dict)
+    ]
+
+    collaborators = [
+        enrich_member_from_db(db, tenant_id, member, "collaborator")
+        for member in project.get("collaborators", [])
+        if isinstance(member, dict)
+    ]
+
+    latest_progress_person = None
+    latest_employee_id = normalize_text(
+        latest.get("employee_id")
+        or project.get("latest_progress_by")
+    )
+
+    if latest_employee_id:
+        latest_employee = resolve_employee(db, latest_employee_id, tenant_id)
+        if latest_employee:
+            latest_progress_person = employee_member_payload(latest_employee, "latest_progress_by")
+
+    if not latest_progress_person and (latest.get("employee_name") or project.get("latest_progress_by_name")):
+        latest_progress_person = {
+            "employee_id": latest_employee_id,
+            "employee_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
+            "name": latest.get("employee_name") or project.get("latest_progress_by_name"),
+            "employee_code": latest.get("employee_code", ""),
+            "department": latest.get("employee_department") or project.get("department", ""),
+            "designation": latest.get("employee_designation", ""),
+            "avatar": "",
+            "profile_photo": "",
+            "relation": "latest_progress_by",
+        }
+
+    doing_people = assigned_members if assigned_members else []
+    if not doing_people and latest_progress_person:
+        doing_people = [latest_progress_person]
+
+    team_leader_payload = employee_member_payload(team_leader, "team_leader") if team_leader else {}
+    reporting_officer_payload = employee_member_payload(reporting_officer, "reporting_officer") if reporting_officer else {}
+
+    all_people = unique_people([
+        reporting_officer_payload,
+        team_leader_payload,
+        *assigned_members,
+        *collaborators,
+        latest_progress_person,
+    ])
+
+    project_team_tree = {
+        "reporting_officer": reporting_officer_payload,
+        "team_leader": team_leader_payload,
+        "assigned_members": assigned_members,
+        "collaborators": collaborators,
+        "doing_people": doing_people,
+        "latest_progress_person": latest_progress_person or {},
+        "all_people": all_people,
+        "tree_levels": [
+            {
+                "level": 1,
+                "label": "Reporting Officer",
+                "people": [reporting_officer_payload] if reporting_officer_payload else [],
+            },
+            {
+                "level": 2,
+                "label": "Team Leader",
+                "people": [team_leader_payload] if team_leader_payload else [],
+            },
+            {
+                "level": 3,
+                "label": "Team Members Doing Project",
+                "people": assigned_members,
+            },
+            {
+                "level": 4,
+                "label": "Collaborators",
+                "people": collaborators,
+            },
+        ],
+        "connection_label": "Reporting Officer → Team Leader → Team Members → Collaborators",
+    }
+
+    return project_team_tree
 
 
 # -----------------------------------------------------------------------------
@@ -499,7 +776,8 @@ def latest_project_progress_map(db, tenant_id, project_ids):
     return latest
 
 
-def project_card(project, latest=None):
+def project_card(project, latest=None, include_tree=True):
+    db = get_db()
     latest = latest or {}
 
     latest_progress = (
@@ -517,6 +795,18 @@ def project_card(project, latest=None):
     except Exception:
         latest_progress = 0
 
+    project_team_tree = build_project_team_tree(db, project, latest) if include_tree else {}
+
+    reporting_officer = project_team_tree.get("reporting_officer", {}) if project_team_tree else {}
+    team_leader = project_team_tree.get("team_leader", {}) if project_team_tree else {}
+    doing_people = project_team_tree.get("doing_people", []) if project_team_tree else []
+
+    doing_people_names = [
+        item.get("employee_name") or item.get("name")
+        for item in doing_people
+        if item.get("employee_name") or item.get("name")
+    ]
+
     return {
         "_id": str(project["_id"]),
         "name": project_name(project),
@@ -528,23 +818,41 @@ def project_card(project, latest=None):
         "start_date": project.get("start_date", ""),
         "due_date": project.get("due_date", ""),
         "priority": project.get("priority", "medium"),
-        "team_leader_id": project.get("team_leader_id", ""),
-        "team_leader_name": project.get("team_leader_name", ""),
+
+        "reporting_officer_id": project.get("reporting_officer_id", "") or reporting_officer.get("employee_id", ""),
+        "reporting_officer_name": project.get("reporting_officer_name", "") or reporting_officer.get("employee_name", ""),
+        "reporting_officer": reporting_officer,
+
+        "team_leader_id": project.get("team_leader_id", "") or team_leader.get("employee_id", ""),
+        "team_leader_name": project.get("team_leader_name", "") or team_leader.get("employee_name", ""),
+        "team_leader": team_leader,
+
         "assigned_to_id": project.get("assigned_to_id", ""),
         "assigned_to_name": project.get("assigned_to_name", ""),
         "assigned_employee_ids": project.get("assigned_employee_ids", []),
-        "assigned_members": project.get("assigned_members", []),
+        "assigned_members": project_team_tree.get("assigned_members", project.get("assigned_members", [])) if project_team_tree else project.get("assigned_members", []),
+
         "collaborator_ids": project.get("collaborator_ids", []),
-        "collaborators": project.get("collaborators", []),
+        "collaborators": project_team_tree.get("collaborators", project.get("collaborators", [])) if project_team_tree else project.get("collaborators", []),
+
+        "doing_people": doing_people,
+        "doing_people_names": doing_people_names,
+        "doing_person_name": doing_people_names[0] if doing_people_names else project.get("assigned_to_name", ""),
+        "project_team_tree": project_team_tree,
+
         "created_by_employee_id": project.get("created_by_employee_id", ""),
         "created_by_employee_name": project.get("created_by_employee_name", ""),
         "created_at": project.get("created_at"),
         "updated_at": project.get("updated_at"),
         "completed_at": project.get("completed_at"),
+
         "latest_progress": latest_progress,
         "latest_progress_note": latest.get("note") or latest.get("description") or project.get("latest_progress_note", ""),
         "latest_progress_date": latest.get("date") or project.get("latest_progress_date", ""),
+        "latest_progress_by": latest.get("employee_id") or project.get("latest_progress_by", ""),
         "latest_progress_by_name": latest.get("employee_name") or latest.get("created_by_name") or project.get("latest_progress_by_name", ""),
+        "latest_progress_person": project_team_tree.get("latest_progress_person", {}) if project_team_tree else {},
+
         "can_create_assign_collaborate": False,
     }
 
@@ -824,6 +1132,10 @@ def list_projects():
                 {"description": {"$regex": search, "$options": "i"}},
                 {"department": {"$regex": search, "$options": "i"}},
                 {"team_leader_name": {"$regex": search, "$options": "i"}},
+                {"reporting_officer_name": {"$regex": search, "$options": "i"}},
+                {"assigned_to_name": {"$regex": search, "$options": "i"}},
+                {"assigned_members.employee_name": {"$regex": search, "$options": "i"}},
+                {"collaborators.employee_name": {"$regex": search, "$options": "i"}},
             ]
         }]
 
@@ -889,21 +1201,28 @@ def create_project():
 
     try:
         team_leader = resolve_team_leader_for_project(db, tenant_id, data, creator_employee)
+        reporting_officer = resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader)
+
         assigned_employee_ids, assigned_members = resolve_member_list(
             db,
             tenant_id,
             data.get("assigned_employee_ids") or data.get("assigned_members") or [],
+            "assigned_member",
         )
         collaborator_ids, collaborators = resolve_member_list(
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
+            "collaborator",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
 
     team_leader_id = str(team_leader["_id"]) if team_leader else ""
     team_leader_name = employee_display_name(team_leader) if team_leader else ""
+
+    reporting_officer_id = str(reporting_officer["_id"]) if reporting_officer else ""
+    reporting_officer_name = employee_display_name(reporting_officer) if reporting_officer else ""
 
     now = now_utc()
 
@@ -918,19 +1237,27 @@ def create_project():
         "priority": normalize_text(data.get("priority") or "medium"),
         "start_date": normalize_text(data.get("start_date")),
         "due_date": normalize_text(data.get("due_date")),
+
+        "reporting_officer_id": reporting_officer_id,
+        "reporting_officer_name": reporting_officer_name,
+
         "team_leader_id": team_leader_id,
         "team_leader_name": team_leader_name,
+
         "assigned_to_id": assigned_employee_ids[0] if assigned_employee_ids else "",
         "assigned_to_name": assigned_members[0]["employee_name"] if assigned_members else "",
         "assigned_employee_ids": assigned_employee_ids,
         "assigned_members": assigned_members,
+
         "collaborator_ids": collaborator_ids,
         "collaborators": collaborators,
+
         "latest_progress": 0,
         "latest_progress_note": "",
         "latest_progress_date": "",
         "latest_progress_by": "",
         "latest_progress_by_name": "",
+
         "created_by_employee_id": str(creator_employee["_id"]),
         "created_by_employee_name": employee_display_name(creator_employee),
         "created_by": current_user_id(),
@@ -943,12 +1270,18 @@ def create_project():
         "is_deleted": False,
     }
 
+    doc["project_team_tree"] = build_project_team_tree(db, doc)
+
     result = db.projects.insert_one(doc)
     doc["_id"] = result.inserted_id
 
     audit("create_project", "projects", result.inserted_id, {
         "name": name,
         "status": status,
+        "team_leader_name": team_leader_name,
+        "reporting_officer_name": reporting_officer_name,
+        "assigned_members": assigned_members,
+        "collaborators": collaborators,
     })
 
     return jsonify({
@@ -997,6 +1330,22 @@ def update_project(project_id):
         update["status"] = status
         update["completed_at"] = now_utc() if status == "completed" else ""
 
+    if "team_leader_id" in data:
+        team_leader = resolve_team_leader_for_project(db, project.get("tenant_id"), data, get_current_employee(db))
+        update["team_leader_id"] = str(team_leader["_id"]) if team_leader else ""
+        update["team_leader_name"] = employee_display_name(team_leader) if team_leader else ""
+
+    if "reporting_officer_id" in data:
+        reporting_officer = resolve_reporting_officer_for_project(
+            db,
+            project.get("tenant_id"),
+            data,
+            get_current_employee(db),
+            None,
+        )
+        update["reporting_officer_id"] = str(reporting_officer["_id"]) if reporting_officer else ""
+        update["reporting_officer_name"] = employee_display_name(reporting_officer) if reporting_officer else ""
+
     if not update:
         return jsonify({"message": "No project fields received for update"}), 400
 
@@ -1009,6 +1358,13 @@ def update_project(project_id):
     db.projects.update_one(
         {"_id": project["_id"]},
         {"$set": update},
+    )
+
+    updated = db.projects.find_one({"_id": project["_id"]})
+
+    db.projects.update_one(
+        {"_id": project["_id"]},
+        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
     )
 
     updated = db.projects.find_one({"_id": project["_id"]})
@@ -1043,6 +1399,7 @@ def assign_project(project_id):
             db,
             tenant_id,
             data.get("assigned_employee_ids") or data.get("assigned_members") or [],
+            "assigned_member",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -1060,6 +1417,13 @@ def assign_project(project_id):
     db.projects.update_one(
         {"_id": project["_id"]},
         {"$set": update},
+    )
+
+    updated = db.projects.find_one({"_id": project["_id"]})
+
+    db.projects.update_one(
+        {"_id": project["_id"]},
+        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
     )
 
     updated = db.projects.find_one({"_id": project["_id"]})
@@ -1094,6 +1458,7 @@ def update_project_collaborators(project_id):
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
+            "collaborator",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -1109,6 +1474,13 @@ def update_project_collaborators(project_id):
     db.projects.update_one(
         {"_id": project["_id"]},
         {"$set": update},
+    )
+
+    updated = db.projects.find_one({"_id": project["_id"]})
+
+    db.projects.update_one(
+        {"_id": project["_id"]},
+        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
     )
 
     updated = db.projects.find_one({"_id": project["_id"]})
@@ -1392,11 +1764,15 @@ def add_project_progress(project_id):
         "project_name": project_name(project),
         "project_status": normalize_status(project.get("status")),
         "department": project.get("department", ""),
+        "reporting_officer_id": project.get("reporting_officer_id", ""),
+        "reporting_officer_name": project.get("reporting_officer_name", ""),
         "team_leader_id": project.get("team_leader_id", ""),
         "team_leader_name": project.get("team_leader_name", ""),
         "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
         "employee_name": employee_display_name(employee),
+        "employee_avatar": employee_avatar(employee),
+        "employee_profile_photo": employee_avatar(employee),
         "employee_department": employee.get("department", ""),
         "employee_designation": employee.get("designation", ""),
         "progress_percent": progress,
@@ -1424,6 +1800,7 @@ def add_project_progress(project_id):
                 "latest_progress_date": progress_date,
                 "latest_progress_by": str(employee["_id"]),
                 "latest_progress_by_name": employee_display_name(employee),
+                "latest_progress_by_avatar": employee_avatar(employee),
                 "updated_at": now,
                 "updated_by": current_user_id(),
                 "updated_by_name": current_user_name(),
@@ -1431,12 +1808,19 @@ def add_project_progress(project_id):
         },
     )
 
+    updated_project = db.projects.find_one({"_id": project["_id"]})
+
+    db.projects.update_one(
+        {"_id": project["_id"]},
+        {"$set": {"project_team_tree": build_project_team_tree(db, updated_project, doc)}},
+    )
+
+    updated_project = db.projects.find_one({"_id": project["_id"]})
+
     audit("add_project_progress", "project_progress", result.inserted_id, {
         "project_id": project_id_str,
         "progress_percent": progress,
     })
-
-    updated_project = db.projects.find_one({"_id": project["_id"]})
 
     return jsonify({
         "message": "Project progress submitted successfully",

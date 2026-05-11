@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Plus, Save, Search, KeyRound, X } from 'lucide-react';
-import { api } from '../api/client';
+import { Plus, Save, Search, KeyRound, X, ImagePlus } from 'lucide-react';
+import {
+  api,
+  getInitials,
+  getProfilePhotoUrl,
+} from '../api/client';
 import { emptyUser } from '../data/modules';
 
 const HOLIDAY_STATES = [
@@ -14,6 +18,10 @@ const USER_CREATE_TEMPLATE = {
   ...emptyUser,
 
   avatar: '',
+  profile_photo: '',
+  profile_picture: '',
+  photo: '',
+
   phone: '',
   country: 'India',
   joining_date: '',
@@ -31,8 +39,6 @@ const USER_CREATE_TEMPLATE = {
   previous_designation: '',
   previous_employment_tenure_end_date: '',
 
-  // Main employee profile role must remain Employee.
-  // Team Leader / Reporting Officer are handled by mapping fields below.
   role: 'Employee',
   roles: 'employee',
 
@@ -219,7 +225,6 @@ const SELECT_OPTIONS = {
   skill_level: ['', 'Skilled', 'Semi Skilled', 'Unskilled', 'Highly Skilled'],
   payment_mode: ['Cash', 'Bank Transfer', 'UPI', 'Cheque'],
 
-  // Do not create Team Leader / Reporting Officer as separate employee roles.
   role: ['Employee'],
 
   shift: ['General', 'Morning', 'Evening', 'Night'],
@@ -338,8 +343,43 @@ function textValue(value) {
   return String(value);
 }
 
+function profilePhotoValue(record = {}) {
+  return (
+    record.avatar ||
+    record.profile_photo ||
+    record.profile_picture ||
+    record.photo ||
+    record.image ||
+    record.picture ||
+    ''
+  );
+}
+
+function applyProfilePhotoAliases(payload = {}, photoValue = '') {
+  const photo = String(photoValue || profilePhotoValue(payload) || '').trim();
+
+  if (photo) {
+    payload.avatar = photo;
+    payload.profile_photo = photo;
+    payload.profile_picture = photo;
+    payload.photo = photo;
+  }
+
+  return payload;
+}
+
 function userEmployeeProfile(user = {}) {
   return user.employee_profile || {};
+}
+
+function userPhotoValue(user = {}) {
+  const employee = userEmployeeProfile(user);
+
+  return profilePhotoValue(employee) || profilePhotoValue(user);
+}
+
+function userDisplayName(user = {}) {
+  return user.name || user.full_name || user.email || 'User';
 }
 
 function employeeIdValue(user = {}) {
@@ -389,6 +429,116 @@ function employeeIsTeamLeader(user = {}) {
 function employeeIsReportingOfficer(user = {}) {
   const employee = userEmployeeProfile(user);
   return boolLabel(employee.is_reporting_officer || user.is_reporting_officer);
+}
+
+function UserAvatar({ user = {}, size = 'md' }) {
+  const photo = userPhotoValue(user);
+  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const name = userDisplayName(user);
+
+  return (
+    <div className={`uc-avatar uc-avatar-${size}`}>
+      {photoUrl ? (
+        <img src={photoUrl} alt={name} />
+      ) : (
+        <span>{getInitials(name)}</span>
+      )}
+    </div>
+  );
+}
+
+function ProfilePhotoInput({ state, setState, mode = 'create' }) {
+  const photo = profilePhotoValue(state);
+  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const name = state.name || state.email || 'Employee';
+
+  function updatePhoto(value) {
+    const next = {
+      ...state,
+    };
+
+    applyProfilePhotoAliases(next, value);
+
+    setState(next);
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please choose an image file.');
+      return;
+    }
+
+    if (file.size > 1024 * 1024 * 2) {
+      alert('Image size should be below 2MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      updatePhoto(reader.result || '');
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <label className="uc-photo-field">
+      Profile Photo
+      <div className="uc-photo-box">
+        <div className="uc-photo-preview">
+          {photoUrl ? (
+            <img src={photoUrl} alt={name} />
+          ) : (
+            <span>{getInitials(name)}</span>
+          )}
+        </div>
+
+        <div className="uc-photo-controls">
+          <input
+            type="text"
+            value={photo}
+            placeholder="Paste image URL/path or upload image"
+            onChange={(event) => updatePhoto(event.target.value)}
+          />
+
+          <div className="uc-photo-actions">
+            <label className="uc-file-btn">
+              <ImagePlus size={16} />
+              Upload Photo
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+              />
+            </label>
+
+            {photo && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => updatePhoto('')}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+
+          <small>
+            {mode === 'create'
+              ? 'This photo will be saved with the employee profile and linked login user.'
+              : 'Updating this will sync the photo in user control, employee profile, dashboard and project team cards.'}
+          </small>
+        </div>
+      </div>
+    </label>
+  );
 }
 
 export default function UserControl() {
@@ -559,6 +709,8 @@ export default function UserControl() {
       role: 'Employee',
     };
 
+    applyProfilePhotoAliases(payload);
+
     if (
       ['team_leader', 'reporting_officer', 'manager', 'ro'].includes(
         String(payload.roles || '').trim(),
@@ -606,6 +758,7 @@ export default function UserControl() {
       setMessage('');
 
       const employee = user.employee_profile || {};
+      const photo = profilePhotoValue(employee) || profilePhotoValue(user);
 
       await loadHelperOptions(user.tenant_id);
 
@@ -619,7 +772,11 @@ export default function UserControl() {
 
         roles: normalizeRolesInput(user.roles),
 
-        avatar: employee.avatar || '',
+        avatar: photo,
+        profile_photo: photo,
+        profile_picture: photo,
+        photo,
+
         phone: employee.phone || '',
         country: employee.country || 'India',
         joining_date: employee.joining_date || '',
@@ -807,7 +964,7 @@ export default function UserControl() {
     setState({
       ...state,
       team_leader_id: employeeId,
-      team_leader_name: selectedEmployee?.name || '',
+      team_leader_name: selectedEmployee?.name || selectedEmployee?.employee_name || '',
     });
   }
 
@@ -817,12 +974,23 @@ export default function UserControl() {
     setState({
       ...state,
       reporting_officer_id: employeeId,
-      reporting_officer_name: selectedEmployee?.name || '',
+      reporting_officer_name: selectedEmployee?.name || selectedEmployee?.employee_name || '',
     });
   }
 
   function renderCommonField(state, setState, key, mode = 'create') {
     const label = formatLabel(key);
+
+    if (key === 'avatar') {
+      return (
+        <ProfilePhotoInput
+          key={key}
+          state={state}
+          setState={setState}
+          mode={mode}
+        />
+      );
+    }
 
     if (key === 'department') {
       return (
@@ -988,7 +1156,7 @@ export default function UserControl() {
 
             {filteredEmployees.map((emp) => (
               <option key={emp._id} value={emp._id}>
-                {emp.name} — {emp.employee_id || emp.emp_code || emp.designation || emp.department || emp.email}
+                {emp.name || emp.employee_name} — {emp.employee_id || emp.emp_code || emp.designation || emp.department || emp.email}
               </option>
             ))}
           </select>
@@ -1112,16 +1280,157 @@ export default function UserControl() {
   }
 
   return (
-    <div className="page-grid">
+    <div className="page-grid user-control-page">
+      <style>{`
+        .user-control-page .dynamic-form {
+          align-items: start;
+        }
+
+        .uc-photo-field {
+          grid-column: 1 / -1;
+        }
+
+        .uc-photo-box {
+          display: grid;
+          grid-template-columns: 96px minmax(0, 1fr);
+          gap: 16px;
+          align-items: center;
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 34%),
+            #f8fafc;
+          padding: 14px;
+          margin-top: 8px;
+        }
+
+        .uc-photo-preview {
+          width: 88px;
+          height: 88px;
+          border-radius: 24px;
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          border: 3px solid #ffffff;
+          box-shadow: 0 14px 32px rgba(15, 23, 42, .12);
+          color: #4338ca;
+          font-size: 24px;
+          font-weight: 900;
+        }
+
+        .uc-photo-preview img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .uc-photo-controls {
+          display: grid;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .uc-photo-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .uc-file-btn {
+          width: auto !important;
+          display: inline-flex !important;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 0;
+          border-radius: 999px;
+          background: #eef2ff;
+          color: #4338ca;
+          padding: 10px 14px;
+          font-weight: 800;
+          cursor: pointer;
+          margin: 0 !important;
+        }
+
+        .uc-file-btn input {
+          display: none;
+        }
+
+        .uc-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          color: #4338ca;
+          border: 2px solid #ffffff;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, .12);
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .uc-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .uc-avatar-sm {
+          width: 38px;
+          height: 38px;
+          font-size: 12px;
+        }
+
+        .uc-avatar-md {
+          width: 52px;
+          height: 52px;
+          font-size: 15px;
+        }
+
+        .uc-user-cell {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 190px;
+        }
+
+        .uc-user-cell strong {
+          display: block;
+          color: #0f172a;
+        }
+
+        .uc-user-cell small {
+          display: block;
+          color: #64748b;
+          margin-top: 2px;
+        }
+
+        @media (max-width: 720px) {
+          .uc-photo-box {
+            grid-template-columns: 1fr;
+          }
+
+          .uc-photo-preview {
+            width: 78px;
+            height: 78px;
+          }
+        }
+      `}</style>
+
       <section className="hero compact">
         <div>
           <span className="kicker">User + Profile + Password Control</span>
           <h1>User Control</h1>
           <p>
-            Super Admin can create users, update employee profile, assign team
-            leader, assign reporting officer, change login access and reset
-            passwords. Team Leader and Reporting Officer are employee mappings,
-            not separate login roles.
+            Super Admin can create users, update employee profile, upload profile
+            photos, assign team leader, assign reporting officer, change login
+            access and reset passwords. Team Leader and Reporting Officer are
+            employee mappings, not separate login roles.
           </p>
         </div>
       </section>
@@ -1174,7 +1483,7 @@ export default function UserControl() {
           <table>
             <thead>
               <tr>
-                <th>Name</th>
+                <th>Photo / Name</th>
                 <th>Email</th>
                 <th>Tenant</th>
                 <th>Employee ID / Code</th>
@@ -1194,7 +1503,15 @@ export default function UserControl() {
             <tbody>
               {rows.map((user) => (
                 <tr key={user._id}>
-                  <td>{textValue(user.name)}</td>
+                  <td>
+                    <div className="uc-user-cell">
+                      <UserAvatar user={user} size="sm" />
+                      <div>
+                        <strong>{textValue(user.name)}</strong>
+                        <small>{employeeIdValue(user)}</small>
+                      </div>
+                    </div>
+                  </td>
                   <td>{textValue(user.email)}</td>
                   <td>{textValue(user.tenant_id)}</td>
                   <td>{employeeIdValue(user)}</td>
@@ -1246,8 +1563,8 @@ export default function UserControl() {
             <div>
               <h3>Edit Complete User Profile</h3>
               <p>
-                Update login details, employee profile, designation, state,
-                Team Leader capability, Reporting Officer capability and
+                Update login details, employee profile, profile photo, designation,
+                state, Team Leader capability, Reporting Officer capability and
                 employee reporting mapping.
               </p>
             </div>

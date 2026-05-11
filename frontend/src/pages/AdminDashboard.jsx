@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api/client';
+import {
+  api,
+  getInitials,
+  getProfilePhotoUrl,
+  normalizePeopleList,
+  normalizeProjectTeamTree,
+} from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 
@@ -141,6 +147,134 @@ function projectName(row = {}) {
   );
 }
 
+function personName(person = {}) {
+  return (
+    person.employee_name ||
+    person.name ||
+    person.display_name ||
+    person.full_name ||
+    person.email ||
+    'Employee'
+  );
+}
+
+function getPersonId(person = {}) {
+  return person.employee_id || person._id || person.id || person.user_id || person.email || personName(person);
+}
+
+function normalizePeople(value = []) {
+  return normalizePeopleList(Array.isArray(value) ? value : []);
+}
+
+function getProjectTree(project = {}) {
+  return normalizeProjectTeamTree(project.project_team_tree || {});
+}
+
+function getProjectDoingPeople(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.doing_people || []);
+
+  if (direct.length) return direct;
+  if (tree.doing_people?.length) return tree.doing_people;
+
+  return normalizePeople(project.assigned_members || []);
+}
+
+function getProjectAssignedMembers(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.assigned_members || []);
+
+  if (direct.length) return direct;
+
+  return tree.assigned_members || [];
+}
+
+function getProjectCollaborators(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.collaborators || []);
+
+  if (direct.length) return direct;
+
+  return tree.collaborators || [];
+}
+
+function getProjectTeamLeader(project = {}) {
+  const tree = getProjectTree(project);
+
+  return tree.team_leader || project.team_leader || {};
+}
+
+function getProjectReportingOfficer(project = {}) {
+  const tree = getProjectTree(project);
+
+  return tree.reporting_officer || project.reporting_officer || {};
+}
+
+function peopleNames(people = []) {
+  const names = normalizePeople(people)
+    .map((person) => personName(person))
+    .filter(Boolean);
+
+  return names.length ? names.join(', ') : '—';
+}
+
+function PersonAvatar({ person = {}, size = 'sm' }) {
+  const photoUrl = getProfilePhotoUrl(person);
+  const name = personName(person);
+
+  return (
+    <span className={`admin-avatar admin-avatar-${size}`}>
+      {photoUrl ? (
+        <img src={photoUrl} alt={name} />
+      ) : (
+        <b>{getInitials(name)}</b>
+      )}
+    </span>
+  );
+}
+
+function PeopleStack({ people = [], limit = 5 }) {
+  const list = normalizePeople(people).slice(0, limit);
+  const remaining = Math.max(0, normalizePeople(people).length - limit);
+
+  if (!list.length) {
+    return <span className="admin-team-empty">No members</span>;
+  }
+
+  return (
+    <div className="admin-avatar-stack">
+      {list.map((person, index) => (
+        <span
+          key={`${getPersonId(person)}-${index}`}
+          title={personName(person)}
+          className="admin-avatar-stack-item"
+        >
+          <PersonAvatar person={person} size="xs" />
+        </span>
+      ))}
+
+      {remaining > 0 && <span className="admin-avatar-more">+{remaining}</span>}
+    </div>
+  );
+}
+
+function PersonMiniCard({ person = {}, relation = 'Member' }) {
+  return (
+    <div className="admin-person-mini">
+      <PersonAvatar person={person} size="sm" />
+
+      <div>
+        <strong>{personName(person)}</strong>
+        <span>{relation}</span>
+        <small>
+          {person.department || 'No department'}
+          {person.designation ? ` • ${person.designation}` : ''}
+        </small>
+      </div>
+    </div>
+  );
+}
+
 function EmptyGraph({ message = 'No graph data available yet.' }) {
   return <div className="empty">{message}</div>;
 }
@@ -230,11 +364,15 @@ function ProjectStatusDonut({ rows = [] }) {
   );
 }
 
-function RankingCard({ index, title, subtitle, value, meta }) {
+function RankingCard({ index, title, subtitle, value, meta, project }) {
   const progress = percentValue(value);
+  const doingPeople = getProjectDoingPeople(project || {});
+  const collaborators = getProjectCollaborators(project || {});
+  const teamLeader = getProjectTeamLeader(project || {});
+  const reportingOfficer = getProjectReportingOfficer(project || {});
 
   return (
-    <div className="admin-rank-card">
+    <div className="admin-rank-card admin-rank-card-rich">
       <div className="admin-rank-number">{index + 1}</div>
 
       <div className="admin-rank-main">
@@ -246,6 +384,36 @@ function RankingCard({ index, title, subtitle, value, meta }) {
         </div>
 
         {meta && <small>{meta}</small>}
+
+        <div className="admin-rank-people">
+          <div>
+            <em>RO</em>
+            {reportingOfficer?.employee_name || reportingOfficer?.name ? (
+              <PersonMiniCard person={reportingOfficer} relation="Reporting Officer" />
+            ) : (
+              <small>Not mapped</small>
+            )}
+          </div>
+
+          <div>
+            <em>TL</em>
+            {teamLeader?.employee_name || teamLeader?.name ? (
+              <PersonMiniCard person={teamLeader} relation="Team Leader" />
+            ) : (
+              <small>Not mapped</small>
+            )}
+          </div>
+
+          <div>
+            <em>Doing</em>
+            <PeopleStack people={doingPeople} />
+          </div>
+
+          <div>
+            <em>Collaborators</em>
+            <PeopleStack people={collaborators} />
+          </div>
+        </div>
       </div>
 
       <div className="admin-rank-score">{progress}%</div>
@@ -276,6 +444,97 @@ function DailyTrendCard({ rows = [] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ProjectTeamRootCard({ project }) {
+  const tree = getProjectTree(project);
+  const reportingOfficer = tree.reporting_officer || getProjectReportingOfficer(project);
+  const teamLeader = tree.team_leader || getProjectTeamLeader(project);
+  const assignedMembers = tree.assigned_members || getProjectAssignedMembers(project);
+  const collaborators = tree.collaborators || getProjectCollaborators(project);
+  const allPeople = tree.all_people || [];
+
+  return (
+    <div className="admin-root-card">
+      <div className="admin-root-card-head">
+        <div>
+          <span>Project Team Root</span>
+          <strong>{projectName(project)}</strong>
+          <small>{project.department || 'No department'} • {statusLabel(project.status)}</small>
+        </div>
+
+        <div className="admin-root-progress">
+          <b>{percentValue(project.latest_progress ?? project.average_progress ?? project.progress_percent ?? project.progress)}%</b>
+          <small>Progress</small>
+        </div>
+      </div>
+
+      <div className="admin-root-map">
+        <div className="admin-root-node admin-root-ro">
+          {reportingOfficer?.employee_name || reportingOfficer?.name ? (
+            <PersonMiniCard person={reportingOfficer} relation="Reporting Officer" />
+          ) : (
+            <div className="admin-empty-node">No Reporting Officer</div>
+          )}
+        </div>
+
+        <div className="admin-root-line" />
+
+        <div className="admin-root-node admin-root-tl">
+          {teamLeader?.employee_name || teamLeader?.name ? (
+            <PersonMiniCard person={teamLeader} relation="Team Leader" />
+          ) : (
+            <div className="admin-empty-node">No Team Leader</div>
+          )}
+        </div>
+
+        <div className="admin-root-branches">
+          <div className="admin-root-branch">
+            <div className="admin-root-branch-title">
+              <span>Doing Project</span>
+              <strong>{assignedMembers.length}</strong>
+            </div>
+
+            <div className="admin-root-people">
+              {assignedMembers.map((person, index) => (
+                <PersonMiniCard
+                  key={`${getPersonId(person)}-${index}`}
+                  person={person}
+                  relation="Doing Project"
+                />
+              ))}
+
+              {!assignedMembers.length && <div className="admin-empty-node">No assigned members</div>}
+            </div>
+          </div>
+
+          <div className="admin-root-branch">
+            <div className="admin-root-branch-title collaborator">
+              <span>Collaborators</span>
+              <strong>{collaborators.length}</strong>
+            </div>
+
+            <div className="admin-root-people">
+              {collaborators.map((person, index) => (
+                <PersonMiniCard
+                  key={`${getPersonId(person)}-${index}`}
+                  person={person}
+                  relation="Collaborator"
+                />
+              ))}
+
+              {!collaborators.length && <div className="admin-empty-node">No collaborators</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="admin-root-footer">
+        <span>Total connected people</span>
+        <PeopleStack people={allPeople} limit={8} />
+      </div>
     </div>
   );
 }
@@ -413,6 +672,10 @@ export default function AdminDashboard({ setPage }) {
     projectAnalytics?.team_leader_performance ||
     [];
 
+  const projectRootCards = projectWisePerformance
+    .filter((project) => getProjectDoingPeople(project).length || getProjectCollaborators(project).length || getProjectTeamLeader(project)?.name || getProjectReportingOfficer(project)?.name)
+    .slice(0, 4);
+
   const leaveSummary = useMemo(() => {
     const pendingWithTeamLeader = pendingLeaveRequests.filter(
       (row) => String(row.approval_stage || '').toLowerCase() === 'team_leader',
@@ -463,15 +726,6 @@ export default function AdminDashboard({ setPage }) {
       ),
     );
   }, [departmentProjectPerformance]);
-
-  const maxProjectProgress = useMemo(() => {
-    return Math.max(
-      100,
-      ...projectWisePerformance.map((row) =>
-        numberValue(row.latest_progress ?? row.average_progress ?? row.progress ?? row.progress_percent, 0),
-      ),
-    );
-  }, [projectWisePerformance]);
 
   const projectTotal = projectSummary.total_projects || stats['Total Projects'] || 0;
   const projectActive = projectSummary.active_projects || stats['Active Projects'] || 0;
@@ -689,7 +943,10 @@ export default function AdminDashboard({ setPage }) {
     department: row.department || '—',
     status: statusLabel(row.status),
     progress: `${numberValue(row.latest_progress ?? row.average_progress ?? row.progress ?? row.progress_percent, 0)}%`,
-    team_leader: row.team_leader_name || '—',
+    doing_person: peopleNames(getProjectDoingPeople(row)),
+    collaborators: peopleNames(getProjectCollaborators(row)),
+    team_leader: row.team_leader_name || personName(getProjectTeamLeader(row)) || '—',
+    reporting_officer: row.reporting_officer_name || personName(getProjectReportingOfficer(row)) || '—',
     last_update: formatDate(row.latest_progress_date || row.updated_at || row.created_at),
   }));
 
@@ -1054,6 +1311,10 @@ export default function AdminDashboard({ setPage }) {
           padding: 12px;
         }
 
+        .admin-rank-card-rich {
+          align-items: flex-start;
+        }
+
         .admin-rank-number {
           width: 38px;
           height: 38px;
@@ -1100,6 +1361,32 @@ export default function AdminDashboard({ setPage }) {
           color: var(--primary);
           font-weight: 900;
           font-size: 16px;
+        }
+
+        .admin-rank-people {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin-top: 12px;
+        }
+
+        .admin-rank-people > div {
+          min-width: 0;
+          border: 1px solid var(--line);
+          background: #fff;
+          border-radius: 14px;
+          padding: 9px;
+        }
+
+        .admin-rank-people em {
+          display: block;
+          margin-bottom: 7px;
+          color: var(--muted);
+          font-style: normal;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
         }
 
         .admin-daily-trend {
@@ -1152,13 +1439,307 @@ export default function AdminDashboard({ setPage }) {
           font-weight: 900;
         }
 
+        .admin-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          color: var(--primary);
+          border: 2px solid #fff;
+          box-shadow: 0 8px 18px rgba(15,23,42,.10);
+          flex: 0 0 auto;
+          font-weight: 900;
+        }
+
+        .admin-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .admin-avatar-xs {
+          width: 28px;
+          height: 28px;
+          font-size: 10px;
+        }
+
+        .admin-avatar-sm {
+          width: 38px;
+          height: 38px;
+          font-size: 12px;
+        }
+
+        .admin-avatar-stack {
+          display: flex;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .admin-avatar-stack-item {
+          margin-left: -7px;
+        }
+
+        .admin-avatar-stack-item:first-child {
+          margin-left: 0;
+        }
+
+        .admin-avatar-more {
+          min-width: 28px;
+          height: 28px;
+          margin-left: -7px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--ink);
+          color: #fff;
+          border: 2px solid #fff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .admin-team-empty {
+          color: var(--muted);
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .admin-person-mini {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 9px;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .admin-person-mini strong {
+          display: block;
+          color: var(--ink);
+          font-size: 12px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .admin-person-mini span {
+          display: block;
+          margin-top: 2px;
+          color: var(--primary);
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+
+        .admin-person-mini small {
+          display: block;
+          margin-top: 2px;
+          color: var(--muted);
+          font-size: 10px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .admin-root-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+          margin-top: 16px;
+        }
+
+        .admin-root-card {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          border-radius: 24px;
+          background:
+            radial-gradient(circle at 10% 0%, rgba(79,70,229,.10), transparent 32%),
+            radial-gradient(circle at 90% 4%, rgba(5,150,105,.10), transparent 32%),
+            #fff;
+          padding: 16px;
+          box-shadow: 0 14px 36px rgba(15,23,42,.07);
+        }
+
+        .admin-root-card-head {
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          align-items: flex-start;
+        }
+
+        .admin-root-card-head span {
+          display: block;
+          color: var(--primary);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .07em;
+        }
+
+        .admin-root-card-head strong {
+          display: block;
+          margin-top: 5px;
+          color: var(--ink);
+          font-size: 17px;
+        }
+
+        .admin-root-card-head small {
+          display: block;
+          margin-top: 4px;
+          color: var(--muted);
+          font-size: 12px;
+        }
+
+        .admin-root-progress {
+          min-width: 72px;
+          height: 72px;
+          border-radius: 20px;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          background: var(--primarySoft);
+          color: var(--primary);
+          border: 1px solid var(--primaryRing);
+        }
+
+        .admin-root-progress b {
+          font-size: 20px;
+          line-height: 1;
+        }
+
+        .admin-root-progress small {
+          margin-top: 3px;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .admin-root-map {
+          display: grid;
+          gap: 12px;
+          margin-top: 15px;
+        }
+
+        .admin-root-node {
+          max-width: 330px;
+          margin: 0 auto;
+          width: 100%;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: rgba(255,255,255,.92);
+          padding: 11px;
+        }
+
+        .admin-root-ro {
+          border-color: var(--primaryRing);
+        }
+
+        .admin-root-tl {
+          border-color: #bbf7d0;
+        }
+
+        .admin-root-line {
+          width: 2px;
+          height: 24px;
+          margin: -3px auto;
+          background: linear-gradient(var(--primary), var(--success));
+          border-radius: 999px;
+        }
+
+        .admin-root-branches {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+
+        .admin-root-branch {
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: #f8fafc;
+          padding: 12px;
+        }
+
+        .admin-root-branch-title {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          align-items: center;
+          padding: 9px 10px;
+          border-radius: 14px;
+          background: var(--successSoft);
+          color: var(--success);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+        }
+
+        .admin-root-branch-title.collaborator {
+          background: var(--primarySoft);
+          color: var(--primary);
+        }
+
+        .admin-root-branch-title strong {
+          width: 24px;
+          height: 24px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          background: #fff;
+        }
+
+        .admin-root-people {
+          display: grid;
+          gap: 9px;
+          margin-top: 10px;
+        }
+
+        .admin-empty-node {
+          border: 1px dashed var(--line2);
+          border-radius: 14px;
+          padding: 11px;
+          background: #fff;
+          color: var(--muted);
+          text-align: center;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .admin-root-footer {
+          margin-top: 13px;
+          padding-top: 12px;
+          border-top: 1px solid var(--line);
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .admin-root-footer span {
+          color: var(--muted);
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
         @media (max-width: 1180px) {
           .admin-project-metric-grid {
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }
 
-          .admin-modern-grid {
+          .admin-modern-grid,
+          .admin-root-grid {
             grid-template-columns: 1fr;
+          }
+
+          .admin-rank-people {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
@@ -1185,9 +1766,18 @@ export default function AdminDashboard({ setPage }) {
             grid-column: 2;
           }
 
+          .admin-rank-people,
+          .admin-root-branches {
+            grid-template-columns: 1fr;
+          }
+
           .admin-daily-trend {
             overflow-x: auto;
             grid-template-columns: repeat(10, 42px);
+          }
+
+          .admin-root-card-head {
+            flex-direction: column;
           }
         }
       `}</style>
@@ -1265,8 +1855,8 @@ export default function AdminDashboard({ setPage }) {
           <h2>Executive Project Performance Graphs</h2>
           <p>
             Track department workload, project progress, status distribution,
-            daily progress updates and Team Leader performance from one modern
-            analytics view.
+            daily progress updates, Team Leader performance, assigned project
+            people and collaborator mapping from one modern analytics view.
           </p>
         </div>
 
@@ -1328,7 +1918,7 @@ export default function AdminDashboard({ setPage }) {
           <div className="toolbar">
             <div>
               <h3>Project Progress Ranking</h3>
-              <p>Top project-wise progress cards ranked by latest or average progress.</p>
+              <p>Top project-wise progress cards with RO, TL, doing people and collaborators.</p>
             </div>
           </div>
 
@@ -1349,7 +1939,8 @@ export default function AdminDashboard({ setPage }) {
                     title={projectName(row)}
                     subtitle={`${row.department || 'No Department'} • ${statusLabel(row.status)}`}
                     value={progress}
-                    meta={row.team_leader_name ? `Team Leader: ${row.team_leader_name}` : ''}
+                    meta={row.latest_progress_by_name ? `Last updated by: ${row.latest_progress_by_name}` : ''}
+                    project={row}
                   />
                 );
               })}
@@ -1425,13 +2016,37 @@ export default function AdminDashboard({ setPage }) {
         </div>
       </section>
 
+      {projectRootCards.length > 0 && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Project Team Root / Spider View</h3>
+              <p>
+                Visual mapping of Reporting Officer → Team Leader → doing members
+                and collaborators for active project ownership clarity.
+              </p>
+            </div>
+
+            <button type="button" className="secondary" onClick={() => goTo('projects')}>
+              Open Projects
+            </button>
+          </div>
+
+          <div className="admin-root-grid">
+            {projectRootCards.map((project) => (
+              <ProjectTeamRootCard key={project._id || projectName(project)} project={project} />
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="panel">
         <div className="toolbar">
           <div>
             <h3>Project-wise Performance Details</h3>
             <p>
-              Latest project progress, department and Team Leader mapping in one
-              table.
+              Latest project progress, department, doing person, collaborators,
+              Reporting Officer and Team Leader mapping in one table.
             </p>
           </div>
 
@@ -1440,7 +2055,7 @@ export default function AdminDashboard({ setPage }) {
           </button>
         </div>
 
-        <Table rows={projectWiseRows} maxColumns={8} />
+        <Table rows={projectWiseRows} maxColumns={10} />
       </section>
 
       {holidayRows.length > 0 && (

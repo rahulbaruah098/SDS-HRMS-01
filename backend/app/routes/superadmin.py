@@ -113,6 +113,11 @@ ATTENDANCE_SETTINGS = [
 
 EMPLOYEE_PROFILE_FIELDS = [
     "avatar",
+    "profile_photo",
+    "profile_picture",
+    "photo",
+    "image",
+    "picture",
     "phone",
     "country",
     "joining_date",
@@ -169,7 +174,7 @@ def now():
 
 def safe_object_id(value):
     try:
-        return ObjectId(value)
+        return ObjectId(str(value))
     except Exception:
         return None
 
@@ -200,6 +205,57 @@ def normalize_float(value, default=0):
         return float(value or default)
     except Exception:
         return float(default)
+
+
+def profile_photo_value(doc):
+    doc = doc or {}
+
+    return (
+        normalize_text(doc.get("avatar"))
+        or normalize_text(doc.get("profile_photo"))
+        or normalize_text(doc.get("profile_picture"))
+        or normalize_text(doc.get("photo"))
+        or normalize_text(doc.get("image"))
+        or normalize_text(doc.get("picture"))
+        or ""
+    )
+
+
+def apply_profile_photo_aliases(payload, photo_value=None):
+    photo = normalize_text(photo_value) or profile_photo_value(payload)
+
+    if photo:
+        payload["avatar"] = photo
+        payload["profile_photo"] = photo
+        payload["profile_picture"] = photo
+        payload["photo"] = photo
+
+    return payload
+
+
+def merge_profile_photo_from_sources(primary=None, fallback=None):
+    return profile_photo_value(primary) or profile_photo_value(fallback)
+
+
+def normalize_role_value(value):
+    role_key = normalize_text(value).lower().replace("-", "_").replace(" ", "_")
+
+    role_map = {
+        "super_admin": "super_admin",
+        "admin": "admin",
+        "hr": "hr",
+        "hr_admin": "hr_admin",
+        "hr_manager": "hr_manager",
+        "finance": "finance",
+        "accounts_finance": "accounts_finance",
+        "manager": "manager",
+        "ro": "ro",
+        "team_leader": "team_leader",
+        "reporting_officer": "reporting_officer",
+        "employee": "employee",
+    }
+
+    return role_map.get(role_key, "employee")
 
 
 def normalize_roles(value):
@@ -243,33 +299,6 @@ def normalize_state(value):
             return allowed
 
     return state
-
-
-def normalize_role_value(value):
-    role_key = normalize_text(value).lower()
-
-    role_map = {
-        "super admin": "super_admin",
-        "super_admin": "super_admin",
-        "admin": "admin",
-        "hr": "hr",
-        "hr admin": "hr_admin",
-        "hr_admin": "hr_admin",
-        "hr manager": "hr_manager",
-        "hr_manager": "hr_manager",
-        "finance": "finance",
-        "accounts finance": "accounts_finance",
-        "accounts_finance": "accounts_finance",
-        "manager": "manager",
-        "ro": "ro",
-        "team leader": "team_leader",
-        "team_leader": "team_leader",
-        "reporting officer": "reporting_officer",
-        "reporting_officer": "reporting_officer",
-        "employee": "employee",
-    }
-
-    return role_map.get(role_key, "employee")
 
 
 def resolve_employee_name(db, tenant_id, emp_id):
@@ -369,6 +398,7 @@ def user_profile_payload_from_employee(employee_doc, existing_user=None):
     email = normalize_email(employee_doc.get("email"))
     is_active = employee_status_is_active(employee_doc)
     roles = build_dynamic_employee_roles(employee_doc, existing_user.get("roles", []))
+    photo = merge_profile_photo_from_sources(employee_doc, existing_user)
 
     payload = {
         "tenant_id": employee_doc.get("tenant_id") or existing_user.get("tenant_id") or "sds",
@@ -387,6 +417,8 @@ def user_profile_payload_from_employee(employee_doc, existing_user=None):
         "status": "active" if is_active else "inactive",
         "updated_at": now(),
     }
+
+    apply_profile_photo_aliases(payload, photo)
 
     if employee_doc.get("department_id"):
         payload["department_id"] = employee_doc.get("department_id")
@@ -435,9 +467,14 @@ def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
     if not email:
         return None
 
+    apply_profile_photo_aliases(employee_doc)
+
     existing_user = find_user_for_employee(db, employee_doc)
 
     if existing_user:
+        photo = merge_profile_photo_from_sources(employee_doc, existing_user)
+        apply_profile_photo_aliases(employee_doc, photo)
+
         payload = user_profile_payload_from_employee(employee_doc, existing_user)
         payload["updated_by_name"] = "Super Admin User Control Sync"
 
@@ -446,17 +483,18 @@ def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
             {"$set": payload},
         )
 
+        employee_update = {
+            "user_id": str(existing_user["_id"]),
+            "name": employee_display_name(employee_doc),
+            "employee_name": employee_display_name(employee_doc),
+            "email": email,
+            "updated_at": now(),
+        }
+        apply_profile_photo_aliases(employee_update, photo)
+
         db.employees.update_one(
             {"_id": employee_doc["_id"]},
-            {
-                "$set": {
-                    "user_id": str(existing_user["_id"]),
-                    "name": employee_display_name(employee_doc),
-                    "employee_name": employee_display_name(employee_doc),
-                    "email": email,
-                    "updated_at": now(),
-                }
-            },
+            {"$set": employee_update},
         )
 
         return db.users.find_one({"_id": existing_user["_id"]})
@@ -472,17 +510,18 @@ def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
 
     user_res = db.users.insert_one(user_payload)
 
+    employee_update = {
+        "user_id": str(user_res.inserted_id),
+        "name": employee_display_name(employee_doc),
+        "employee_name": employee_display_name(employee_doc),
+        "email": email,
+        "updated_at": now(),
+    }
+    apply_profile_photo_aliases(employee_update, profile_photo_value(user_payload))
+
     db.employees.update_one(
         {"_id": employee_doc["_id"]},
-        {
-            "$set": {
-                "user_id": str(user_res.inserted_id),
-                "name": employee_display_name(employee_doc),
-                "employee_name": employee_display_name(employee_doc),
-                "email": email,
-                "updated_at": now(),
-            }
-        },
+        {"$set": employee_update},
     )
 
     return db.users.find_one({"_id": user_res.inserted_id})
@@ -494,18 +533,29 @@ def sync_employee_roles(db, employee_doc):
     if not user:
         return
 
+    photo = merge_profile_photo_from_sources(employee_doc, user)
+    apply_profile_photo_aliases(employee_doc, photo)
+
     payload = user_profile_payload_from_employee(employee_doc, user)
+    apply_profile_photo_aliases(payload, photo)
 
     db.users.update_one(
         {"_id": user["_id"]},
         {"$set": payload},
     )
 
+    employee_update = {
+        "updated_at": now(),
+    }
+    apply_profile_photo_aliases(employee_update, photo)
+
     if normalize_text(employee_doc.get("user_id")) != str(user["_id"]):
-        db.employees.update_one(
-            {"_id": employee_doc["_id"]},
-            {"$set": {"user_id": str(user["_id"]), "updated_at": now()}},
-        )
+        employee_update["user_id"] = str(user["_id"])
+
+    db.employees.update_one(
+        {"_id": employee_doc["_id"]},
+        {"$set": employee_update},
+    )
 
 
 def build_employee_profile_payload(data):
@@ -523,6 +573,8 @@ def build_employee_profile_payload(data):
     payload["branch"] = normalize_text(payload.get("branch"))
     payload["state"] = normalize_state(payload.get("state") or payload.get("branch"))
     payload["status"] = payload.get("status") or "Active"
+
+    apply_profile_photo_aliases(payload)
 
     payload["role"] = "Employee"
     payload["is_team_leader"] = str(payload.get("is_team_leader", "false")).lower()
@@ -571,7 +623,9 @@ def ensure_leave_balance_for_employee(db, tenant_id, employee, leave_type, total
         "available": float(total_days or 0),
         "status": "active",
         "created_at": now(),
+        "updated_at": now(),
         "created_by": str(g.current_user["_id"]),
+        "is_deleted": False,
     }
 
     res = db.leave_balances.insert_one(doc)
@@ -595,6 +649,7 @@ def seed_company_masters(db, tenant_id):
                     "name": name,
                     "status": "active",
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -609,6 +664,7 @@ def seed_company_masters(db, tenant_id):
                     "title": title,
                     "status": "active",
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -623,6 +679,7 @@ def seed_company_masters(db, tenant_id):
                     "name": name,
                     "status": "active",
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -635,8 +692,11 @@ def seed_company_masters(db, tenant_id):
                 "$setOnInsert": {
                     "tenant_id": tenant_id,
                     "name": name,
+                    "project_name": name,
+                    "title": name,
                     "status": "active",
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -660,6 +720,7 @@ def seed_company_masters(db, tenant_id):
                     "carry_forward": leave_type["carry_forward"],
                     "status": "active",
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -677,6 +738,7 @@ def seed_company_masters(db, tenant_id):
                     "tenant_id": tenant_id,
                     **setting,
                     "created_at": now(),
+                    "is_deleted": False,
                 }
             },
             upsert=True,
@@ -714,6 +776,7 @@ def list_companies():
         })
         row["user_count"] = db.users.count_documents({
             "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
         })
         row["present_today"] = db.attendance_logs.count_documents({
             "tenant_id": tenant_id,
@@ -768,6 +831,7 @@ def create_company():
         "plan": data.get("plan", "Internal / Trial"),
         "created_at": now(),
         "created_by": str(g.current_user["_id"]),
+        "is_deleted": False,
     }
 
     db.tenants.insert_one(doc)
@@ -776,15 +840,16 @@ def create_company():
     admin_email = normalize_email(data.get("admin_email"))
     admin_password = data.get("admin_password") or "Admin@123"
     admin_name = normalize_text(data.get("admin_name") or f"{name} Admin")
+    admin_photo = profile_photo_value(data)
 
     if admin_email:
-        if db.users.find_one({"email": admin_email}):
+        if db.users.find_one({"email": admin_email, "is_deleted": {"$ne": True}}):
             return jsonify({
                 "message": "Company created, but admin email already exists. Use User Control to assign a user.",
                 "item": clean_doc(db.tenants.find_one({"tenant_id": tenant_id})),
             }), 201
 
-        user_res = db.users.insert_one({
+        user_payload = {
             "tenant_id": tenant_id,
             "name": admin_name,
             "full_name": admin_name,
@@ -798,7 +863,10 @@ def create_company():
             "is_deleted": False,
             "created_at": now(),
             "created_by": str(g.current_user["_id"]),
-        })
+        }
+        apply_profile_photo_aliases(user_payload, admin_photo)
+
+        user_res = db.users.insert_one(user_payload)
 
         emp_doc = {
             "tenant_id": tenant_id,
@@ -806,6 +874,7 @@ def create_company():
             "emp_code": f"{tenant_id.upper()}-ADMIN",
             "employee_id": f"{tenant_id.upper()}-ADMIN",
             "name": admin_name,
+            "employee_name": admin_name,
             "email": admin_email,
             "phone": "",
             "country": "India",
@@ -831,25 +900,29 @@ def create_company():
             "reporting_officer_id": "",
             "reporting_officer_name": "",
             "created_at": now(),
+            "updated_at": now(),
             "created_by": str(g.current_user["_id"]),
+            "is_deleted": False,
         }
+        apply_profile_photo_aliases(emp_doc, admin_photo)
 
         emp_res = db.employees.insert_one(emp_doc)
         created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
         if created_emp:
+            user_update = {
+                "employee_id": str(created_emp["_id"]),
+                "employee_ref_id": str(created_emp["_id"]),
+                "emp_code": created_emp.get("emp_code", ""),
+                "department": created_emp.get("department", ""),
+                "designation": created_emp.get("designation", ""),
+                "updated_at": now(),
+            }
+            apply_profile_photo_aliases(user_update, profile_photo_value(created_emp))
+
             db.users.update_one(
                 {"_id": user_res.inserted_id},
-                {
-                    "$set": {
-                        "employee_id": str(created_emp["_id"]),
-                        "employee_ref_id": str(created_emp["_id"]),
-                        "emp_code": created_emp.get("emp_code", ""),
-                        "department": created_emp.get("department", ""),
-                        "designation": created_emp.get("designation", ""),
-                        "updated_at": now(),
-                    }
-                },
+                {"$set": user_update},
             )
             sync_employee_roles(db, created_emp)
             seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
@@ -973,12 +1046,45 @@ def list_users():
             })
 
         if emp:
+            photo = merge_profile_photo_from_sources(emp, user)
+
             if normalize_text(emp.get("user_id")) != str(user["_id"]):
+                employee_update = {
+                    "user_id": str(user["_id"]),
+                    "updated_at": now(),
+                }
+                apply_profile_photo_aliases(employee_update, photo)
+
                 db.employees.update_one(
                     {"_id": emp["_id"]},
-                    {"$set": {"user_id": str(user["_id"]), "updated_at": now()}},
+                    {"$set": employee_update},
                 )
                 emp["user_id"] = str(user["_id"])
+
+            if photo:
+                apply_profile_photo_aliases(emp, photo)
+                apply_profile_photo_aliases(user, photo)
+
+                db.employees.update_one(
+                    {"_id": emp["_id"]},
+                    {"$set": {
+                        "avatar": photo,
+                        "profile_photo": photo,
+                        "profile_picture": photo,
+                        "photo": photo,
+                        "updated_at": now(),
+                    }},
+                )
+                db.users.update_one(
+                    {"_id": user["_id"]},
+                    {"$set": {
+                        "avatar": photo,
+                        "profile_photo": photo,
+                        "profile_picture": photo,
+                        "photo": photo,
+                        "updated_at": now(),
+                    }},
+                )
 
             user["employee_profile"] = emp
             user["employee_ref_id"] = str(emp["_id"])
@@ -986,6 +1092,16 @@ def list_users():
             user["emp_code"] = employee_code(emp)
             user["department"] = emp.get("department", user.get("department", ""))
             user["designation"] = emp.get("designation", user.get("designation", ""))
+            user["avatar"] = photo
+            user["profile_photo"] = photo
+            user["profile_picture"] = photo
+            user["photo"] = photo
+        else:
+            photo = profile_photo_value(user)
+            user["avatar"] = photo
+            user["profile_photo"] = photo
+            user["profile_picture"] = photo
+            user["photo"] = photo
 
     return jsonify({"items": clean_doc(rows)})
 
@@ -1006,6 +1122,7 @@ def create_user():
     email = normalize_email(data.get("email"))
     password = data.get("password") or "User@123"
     name = normalize_text(data.get("name"))
+    photo = profile_photo_value(data)
 
     if not email or not name:
         return jsonify({"message": "Name and email are required"}), 400
@@ -1013,7 +1130,7 @@ def create_user():
     if len(password) < 6:
         return jsonify({"message": "Password must be at least 6 characters"}), 400
 
-    if db.users.find_one({"email": email}):
+    if db.users.find_one({"email": email, "is_deleted": {"$ne": True}}):
         return jsonify({"message": "Email already exists"}), 409
 
     employee_id = normalize_text(data.get("employee_id"))
@@ -1043,10 +1160,9 @@ def create_user():
     reporting_officer_id = data.get("reporting_officer_id") or ""
 
     roles = normalize_roles(data.get("roles") or ["employee"])
-
     is_active = truthy(data.get("is_active", True))
 
-    user_res = db.users.insert_one({
+    user_payload = {
         "tenant_id": tenant_id,
         "name": name,
         "full_name": name,
@@ -1059,14 +1175,19 @@ def create_user():
         "status": "active" if is_active else "inactive",
         "is_deleted": False,
         "created_at": now(),
+        "updated_at": now(),
         "created_by": str(g.current_user["_id"]),
-    })
+    }
+    apply_profile_photo_aliases(user_payload, photo)
+
+    user_res = db.users.insert_one(user_payload)
 
     emp = build_employee_profile_payload(data)
     emp.update({
         "tenant_id": tenant_id,
         "user_id": str(user_res.inserted_id),
         "name": name,
+        "employee_name": name,
         "email": email,
         "employee_id": employee_id,
         "emp_code": emp_code,
@@ -1075,8 +1196,11 @@ def create_user():
         "reporting_officer_id": reporting_officer_id,
         "reporting_officer_name": resolve_employee_name(db, tenant_id, reporting_officer_id),
         "created_at": now(),
+        "updated_at": now(),
         "created_by": str(g.current_user["_id"]),
+        "is_deleted": False,
     })
+    apply_profile_photo_aliases(emp, photo)
 
     emp.setdefault("country", "India")
     emp.setdefault("branch", "Assam(HO)")
@@ -1091,18 +1215,19 @@ def create_user():
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
     if created_emp:
+        user_update = {
+            "employee_id": str(created_emp["_id"]),
+            "employee_ref_id": str(created_emp["_id"]),
+            "emp_code": employee_code(created_emp),
+            "department": created_emp.get("department", ""),
+            "designation": created_emp.get("designation", ""),
+            "updated_at": now(),
+        }
+        apply_profile_photo_aliases(user_update, profile_photo_value(created_emp))
+
         db.users.update_one(
             {"_id": user_res.inserted_id},
-            {
-                "$set": {
-                    "employee_id": str(created_emp["_id"]),
-                    "employee_ref_id": str(created_emp["_id"]),
-                    "emp_code": employee_code(created_emp),
-                    "department": created_emp.get("department", ""),
-                    "designation": created_emp.get("designation", ""),
-                    "updated_at": now(),
-                }
-            },
+            {"$set": user_update},
         )
         sync_employee_roles(db, created_emp)
         seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
@@ -1115,6 +1240,8 @@ def create_user():
 
     created_user = db.users.find_one({"_id": user_res.inserted_id})
     created_user["employee_profile"] = created_emp
+    photo = merge_profile_photo_from_sources(created_emp, created_user)
+    apply_profile_photo_aliases(created_user, photo)
 
     return jsonify({
         "message": "User and employee profile created",
@@ -1139,6 +1266,10 @@ def update_user(user_id):
         return jsonify({"message": "User not found"}), 404
 
     user_update = {}
+    incoming_photo = profile_photo_value(data)
+
+    if incoming_photo:
+        apply_profile_photo_aliases(user_update, incoming_photo)
 
     if "name" in data:
         name = normalize_text(data.get("name"))
@@ -1158,6 +1289,7 @@ def update_user(user_id):
         duplicate = db.users.find_one({
             "email": email,
             "_id": {"$ne": user_obj_id},
+            "is_deleted": {"$ne": True},
         })
 
         if duplicate:
@@ -1214,8 +1346,12 @@ def update_user(user_id):
 
     emp_update = build_employee_profile_payload(data)
 
+    if incoming_photo:
+        apply_profile_photo_aliases(emp_update, incoming_photo)
+
     if "name" in user_update:
         emp_update["name"] = user_update["name"]
+        emp_update["employee_name"] = user_update["name"]
 
     if "email" in user_update:
         emp_update["email"] = user_update["email"]
@@ -1274,15 +1410,26 @@ def update_user(user_id):
         emp_update["updated_by"] = str(g.current_user["_id"])
 
         if existing_emp:
+            if not incoming_photo:
+                photo = merge_profile_photo_from_sources(existing_emp, updated_user)
+                if photo:
+                    apply_profile_photo_aliases(emp_update, photo)
+
             db.employees.update_one(
                 {"_id": existing_emp["_id"]},
                 {"$set": emp_update},
             )
             updated_emp = db.employees.find_one({"_id": existing_emp["_id"]})
         else:
+            if not incoming_photo:
+                photo = profile_photo_value(updated_user)
+                if photo:
+                    apply_profile_photo_aliases(emp_update, photo)
+
             emp_update.setdefault("tenant_id", tenant_for_lookup)
             emp_update.setdefault("user_id", user_id)
             emp_update.setdefault("name", updated_user.get("name", ""))
+            emp_update.setdefault("employee_name", updated_user.get("name", ""))
             emp_update.setdefault("email", updated_user.get("email", ""))
             emp_update.setdefault("country", "India")
             emp_update.setdefault("branch", "Assam(HO)")
@@ -1294,11 +1441,38 @@ def update_user(user_id):
             emp_update.setdefault("is_reporting_officer", "false")
             emp_update["created_at"] = now()
             emp_update["created_by"] = str(g.current_user["_id"])
+            emp_update["is_deleted"] = False
 
             res = db.employees.insert_one(emp_update)
             updated_emp = db.employees.find_one({"_id": res.inserted_id})
 
         if updated_emp:
+            photo = merge_profile_photo_from_sources(updated_emp, updated_user)
+            if photo:
+                apply_profile_photo_aliases(updated_emp, photo)
+
+                db.employees.update_one(
+                    {"_id": updated_emp["_id"]},
+                    {"$set": {
+                        "avatar": photo,
+                        "profile_photo": photo,
+                        "profile_picture": photo,
+                        "photo": photo,
+                        "updated_at": now(),
+                    }},
+                )
+
+                db.users.update_one(
+                    {"_id": user_obj_id},
+                    {"$set": {
+                        "avatar": photo,
+                        "profile_photo": photo,
+                        "profile_picture": photo,
+                        "photo": photo,
+                        "updated_at": now(),
+                    }},
+                )
+
             sync_employee_roles(db, updated_emp)
             seed_default_leave_balances_for_employee(
                 db,
@@ -1315,7 +1489,20 @@ def update_user(user_id):
     })
 
     if employee_profile:
+        photo = merge_profile_photo_from_sources(employee_profile, refreshed)
+        if photo:
+            apply_profile_photo_aliases(employee_profile, photo)
+            apply_profile_photo_aliases(refreshed, photo)
+
         refreshed["employee_profile"] = employee_profile
+        refreshed["employee_ref_id"] = str(employee_profile["_id"])
+        refreshed["employee_id"] = str(employee_profile["_id"])
+        refreshed["emp_code"] = employee_code(employee_profile)
+        refreshed["department"] = employee_profile.get("department", refreshed.get("department", ""))
+        refreshed["designation"] = employee_profile.get("designation", refreshed.get("designation", ""))
+    else:
+        photo = profile_photo_value(refreshed)
+        apply_profile_photo_aliases(refreshed, photo)
 
     return jsonify({
         "message": "User/profile updated",

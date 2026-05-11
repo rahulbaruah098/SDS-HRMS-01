@@ -37,13 +37,409 @@ export function getToken() {
   return localStorage.getItem('sds_hrms_token');
 }
 
+export function firstNonEmpty(...values) {
+  for (const value of values) {
+    const normalized = String(value || '').trim();
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+export function getProfilePhotoValue(record = {}) {
+  return firstNonEmpty(
+    record.avatar,
+    record.profile_photo,
+    record.profile_picture,
+    record.photo,
+    record.image,
+    record.picture,
+    record.employee_avatar,
+    record.employee_profile_photo,
+    record.latest_progress_by_avatar,
+  );
+}
+
+export function withProfilePhotoAliases(record = {}) {
+  if (!record || typeof record !== 'object') {
+    return record;
+  }
+
+  const cloned = { ...record };
+  const photo = getProfilePhotoValue(cloned);
+
+  if (photo) {
+    cloned.avatar = photo;
+    cloned.profile_photo = photo;
+    cloned.profile_picture = photo;
+    cloned.photo = photo;
+  }
+
+  return cloned;
+}
+
+export function normalizeProfilePhotoUrl(value = '') {
+  const raw = String(value || '').trim();
+
+  if (!raw) {
+    return '';
+  }
+
+  if (
+    raw.startsWith('http://') ||
+    raw.startsWith('https://') ||
+    raw.startsWith('data:') ||
+    raw.startsWith('blob:')
+  ) {
+    return raw;
+  }
+
+  if (raw.startsWith('/')) {
+    const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
+    return `${apiRoot}${raw}`;
+  }
+
+  if (raw.startsWith('uploads/') || raw.startsWith('static/')) {
+    const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
+    return `${apiRoot}/${raw}`;
+  }
+
+  return raw;
+}
+
+export function getProfilePhotoUrl(record = {}) {
+  return normalizeProfilePhotoUrl(getProfilePhotoValue(record));
+}
+
+export function getInitials(name = '') {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!parts.length) {
+    return 'U';
+  }
+
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+export function normalizePerson(person = {}) {
+  if (!person || typeof person !== 'object') {
+    return person;
+  }
+
+  const normalized = withProfilePhotoAliases(person);
+  const displayName =
+    normalized.employee_name ||
+    normalized.name ||
+    normalized.display_name ||
+    normalized.full_name ||
+    normalized.email ||
+    'Employee';
+
+  normalized.employee_name = normalized.employee_name || displayName;
+  normalized.name = normalized.name || displayName;
+  normalized.display_name = normalized.display_name || displayName;
+  normalized.initials = getInitials(displayName);
+  normalized.photo_url = getProfilePhotoUrl(normalized);
+
+  return normalized;
+}
+
+export function normalizePeopleList(people = []) {
+  if (!Array.isArray(people)) {
+    return [];
+  }
+
+  return people.map((person) => normalizePerson(person)).filter(Boolean);
+}
+
+export function normalizeProjectTeamTree(tree = {}) {
+  if (!tree || typeof tree !== 'object') {
+    return {
+      reporting_officer: {},
+      team_leader: {},
+      assigned_members: [],
+      collaborators: [],
+      doing_people: [],
+      latest_progress_person: {},
+      all_people: [],
+      tree_levels: [],
+      connection_label: 'Reporting Officer → Team Leader → Team Members → Collaborators',
+    };
+  }
+
+  const normalized = {
+    ...tree,
+    reporting_officer: normalizePerson(tree.reporting_officer || {}),
+    team_leader: normalizePerson(tree.team_leader || {}),
+    assigned_members: normalizePeopleList(tree.assigned_members || []),
+    collaborators: normalizePeopleList(tree.collaborators || []),
+    doing_people: normalizePeopleList(tree.doing_people || []),
+    latest_progress_person: normalizePerson(tree.latest_progress_person || {}),
+    all_people: normalizePeopleList(tree.all_people || []),
+    tree_levels: Array.isArray(tree.tree_levels)
+      ? tree.tree_levels.map((level) => ({
+          ...level,
+          people: normalizePeopleList(level.people || []),
+        }))
+      : [],
+    connection_label:
+      tree.connection_label ||
+      'Reporting Officer → Team Leader → Team Members → Collaborators',
+  };
+
+  if (!normalized.all_people.length) {
+    normalized.all_people = normalizePeopleList([
+      normalized.reporting_officer,
+      normalized.team_leader,
+      ...normalized.assigned_members,
+      ...normalized.collaborators,
+      normalized.latest_progress_person,
+    ]);
+  }
+
+  return normalized;
+}
+
+export function normalizeTeamHierarchyTree(tree = {}) {
+  if (!tree || typeof tree !== 'object') {
+    return {
+      self: {},
+      reporting_officer: {},
+      team_leader: {},
+      team_members: [],
+      reporting_members: [],
+      team_leaders_under_reporting: [],
+      all_people: [],
+      tree_levels: [],
+      connection_label: 'Reporting Officer → Team Leader → Team Members',
+    };
+  }
+
+  const normalized = {
+    ...tree,
+    self: normalizePerson(tree.self || {}),
+    reporting_officer: normalizePerson(tree.reporting_officer || {}),
+    team_leader: normalizePerson(tree.team_leader || {}),
+    team_members: normalizePeopleList(tree.team_members || []),
+    reporting_members: normalizePeopleList(tree.reporting_members || []),
+    team_leaders_under_reporting: normalizePeopleList(tree.team_leaders_under_reporting || []),
+    all_people: normalizePeopleList(tree.all_people || []),
+    tree_levels: Array.isArray(tree.tree_levels)
+      ? tree.tree_levels.map((level) => ({
+          ...level,
+          people: normalizePeopleList(level.people || []),
+        }))
+      : [],
+    connection_label:
+      tree.connection_label ||
+      'Reporting Officer → Team Leader → Team Members',
+  };
+
+  if (!normalized.all_people.length) {
+    normalized.all_people = normalizePeopleList([
+      normalized.reporting_officer,
+      normalized.team_leader,
+      normalized.self,
+      ...normalized.team_members,
+      ...normalized.reporting_members,
+    ]);
+  }
+
+  return normalized;
+}
+
+export function normalizeProject(project = {}) {
+  if (!project || typeof project !== 'object') {
+    return project;
+  }
+
+  const normalized = { ...project };
+
+  normalized.reporting_officer = normalizePerson(normalized.reporting_officer || {});
+  normalized.team_leader = normalizePerson(normalized.team_leader || {});
+  normalized.assigned_members = normalizePeopleList(normalized.assigned_members || []);
+  normalized.collaborators = normalizePeopleList(normalized.collaborators || []);
+  normalized.doing_people = normalizePeopleList(normalized.doing_people || []);
+  normalized.latest_progress_person = normalizePerson(normalized.latest_progress_person || {});
+  normalized.project_team_tree = normalizeProjectTeamTree(normalized.project_team_tree || {});
+
+  if (!normalized.doing_people.length) {
+    normalized.doing_people = normalizePeopleList(normalized.project_team_tree.doing_people || []);
+  }
+
+  normalized.doing_people_names = Array.isArray(normalized.doing_people_names)
+    ? normalized.doing_people_names
+    : normalized.doing_people
+        .map((person) => person.employee_name || person.name)
+        .filter(Boolean);
+
+  normalized.doing_person_name =
+    normalized.doing_person_name ||
+    normalized.doing_people_names[0] ||
+    normalized.assigned_to_name ||
+    '';
+
+  normalized.team_leader_name =
+    normalized.team_leader_name ||
+    normalized.team_leader?.employee_name ||
+    normalized.team_leader?.name ||
+    '';
+
+  normalized.reporting_officer_name =
+    normalized.reporting_officer_name ||
+    normalized.reporting_officer?.employee_name ||
+    normalized.reporting_officer?.name ||
+    '';
+
+  return normalized;
+}
+
+export function normalizeProjectList(projects = []) {
+  if (!Array.isArray(projects)) {
+    return [];
+  }
+
+  return projects.map((project) => normalizeProject(project));
+}
+
+export function normalizeDashboardPayload(data = {}) {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  const normalized = { ...data };
+
+  normalized.user = withProfilePhotoAliases(normalized.user || {});
+  normalized.employee = withProfilePhotoAliases(normalized.employee || {});
+  normalized.employee_summary = withProfilePhotoAliases(normalized.employee_summary || {});
+  normalized.dashboard_display = withProfilePhotoAliases(normalized.dashboard_display || {});
+
+  normalized.team_members = normalizePeopleList(normalized.team_members || []);
+  normalized.reporting_members = normalizePeopleList(normalized.reporting_members || []);
+  normalized.team_hierarchy_tree = normalizeTeamHierarchyTree(normalized.team_hierarchy_tree || {});
+
+  normalized.projects = normalizeProjectList(normalized.projects || []);
+  normalized.active_projects = normalizeProjectList(normalized.active_projects || []);
+  normalized.completed_projects = normalizeProjectList(normalized.completed_projects || []);
+  normalized.team_leader_projects = normalizeProjectList(normalized.team_leader_projects || []);
+  normalized.reporting_projects = normalizeProjectList(normalized.reporting_projects || []);
+
+  if (normalized.project_dashboard && typeof normalized.project_dashboard === 'object') {
+    normalized.project_dashboard = {
+      ...normalized.project_dashboard,
+      my_projects: normalizeProjectList(normalized.project_dashboard.my_projects || []),
+      active_projects: normalizeProjectList(normalized.project_dashboard.active_projects || []),
+      completed_projects: normalizeProjectList(normalized.project_dashboard.completed_projects || []),
+      team_leader_projects: normalizeProjectList(normalized.project_dashboard.team_leader_projects || []),
+      reporting_projects: normalizeProjectList(normalized.project_dashboard.reporting_projects || []),
+    };
+  }
+
+  if (normalized.project_analytics && typeof normalized.project_analytics === 'object') {
+    normalized.project_analytics = {
+      ...normalized.project_analytics,
+      projects: normalizeProjectList(normalized.project_analytics.projects || []),
+      active_projects: normalizeProjectList(normalized.project_analytics.active_projects || []),
+      on_hold_projects: normalizeProjectList(normalized.project_analytics.on_hold_projects || []),
+      completed_projects: normalizeProjectList(normalized.project_analytics.completed_projects || []),
+      project_wise_performance: normalizeProjectList(
+        normalized.project_analytics.project_wise_performance || [],
+      ),
+      project_performance: normalizeProjectList(
+        normalized.project_analytics.project_performance || [],
+      ),
+      top_project_performance: normalizeProjectList(
+        normalized.project_analytics.top_project_performance || [],
+      ),
+    };
+  }
+
+  normalized.project_wise_performance = normalizeProjectList(
+    normalized.project_wise_performance || [],
+  );
+  normalized.top_project_performance = normalizeProjectList(
+    normalized.top_project_performance || [],
+  );
+
+  return normalized;
+}
+
+export function normalizeApiPayload(data = {}) {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  const normalized = { ...data };
+
+  if (normalized.user) {
+    normalized.user = withProfilePhotoAliases(normalized.user);
+  }
+
+  if (normalized.employee) {
+    normalized.employee = withProfilePhotoAliases(normalized.employee);
+  }
+
+  if (normalized.employee_summary) {
+    normalized.employee_summary = withProfilePhotoAliases(normalized.employee_summary);
+  }
+
+  if (normalized.item) {
+    normalized.item = normalizeProject(withProfilePhotoAliases(normalized.item));
+  }
+
+  if (normalized.project) {
+    normalized.project = normalizeProject(normalized.project);
+  }
+
+  if (Array.isArray(normalized.items)) {
+    normalized.items = normalized.items.map((item) => normalizeProject(withProfilePhotoAliases(item)));
+  }
+
+  if (
+    normalized.project_dashboard ||
+    normalized.project_analytics ||
+    normalized.team_hierarchy_tree ||
+    normalized.employee_summary ||
+    normalized.dashboard_display
+  ) {
+    return normalizeDashboardPayload(normalized);
+  }
+
+  return normalized;
+}
+
+export function buildProfilePhotoPayload(photoValue, extra = {}) {
+  const photo = String(photoValue || '').trim();
+
+  return {
+    ...extra,
+    avatar: photo,
+    profile_photo: photo,
+    profile_picture: photo,
+    photo,
+  };
+}
+
 export function setSession(data = {}) {
+  const user = withProfilePhotoAliases(data.user || {});
+  const employee = withProfilePhotoAliases(data.employee || {});
+
   if (data.token) {
     localStorage.setItem('sds_hrms_token', data.token);
   }
 
-  localStorage.setItem('sds_hrms_user', JSON.stringify(data.user || {}));
-  localStorage.setItem('sds_hrms_employee', JSON.stringify(data.employee || {}));
+  localStorage.setItem('sds_hrms_user', JSON.stringify(user));
+  localStorage.setItem('sds_hrms_employee', JSON.stringify(employee));
 }
 
 export function clearSession() {
@@ -54,7 +450,7 @@ export function clearSession() {
 
 export function currentUser() {
   try {
-    return JSON.parse(localStorage.getItem('sds_hrms_user') || '{}');
+    return withProfilePhotoAliases(JSON.parse(localStorage.getItem('sds_hrms_user') || '{}'));
   } catch {
     return {};
   }
@@ -62,7 +458,7 @@ export function currentUser() {
 
 export function currentEmployee() {
   try {
-    return JSON.parse(localStorage.getItem('sds_hrms_employee') || '{}');
+    return withProfilePhotoAliases(JSON.parse(localStorage.getItem('sds_hrms_employee') || '{}'));
   } catch {
     return {};
   }
@@ -169,7 +565,7 @@ export async function api(path, options = {}) {
     clearTimeout(timeout);
   }
 
-  const data = await parseResponse(response);
+  const data = normalizeApiPayload(await parseResponse(response));
 
   if (response.status === 401) {
     clearSession();
@@ -200,6 +596,18 @@ export function checkBackendHealth() {
     method: 'GET',
     timeoutMs: 10000,
   });
+}
+
+export async function refreshCurrentSession() {
+  const data = await api('/auth/me');
+
+  setSession({
+    token: getToken(),
+    user: data.user || {},
+    employee: data.employee || {},
+  });
+
+  return data;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -285,6 +693,10 @@ export function getActiveProjects(params = {}) {
   return api(`/projects${buildQuery({ ...params, status: 'active' })}`);
 }
 
+export function getOnHoldProjects(params = {}) {
+  return api(`/projects${buildQuery({ ...params, status: 'on_hold' })}`);
+}
+
 export function getCompletedProjects(params = {}) {
   return api(`/projects${buildQuery({ ...params, status: 'completed' })}`);
 }
@@ -325,6 +737,13 @@ export function addProjectCollaborators(projectId, collaboratorIds = []) {
   return api(`/projects/${projectId}/collaborators`, {
     method: 'PATCH',
     body: JSON.stringify({ collaborator_ids: collaboratorIds }),
+  });
+}
+
+export function updateProjectCollaborators(projectId, payload = {}) {
+  return api(`/projects/${projectId}/collaborators`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
   });
 }
 
@@ -729,6 +1148,26 @@ export function resetUserPassword(userId, payload = {}) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Profile Photo Helpers                                                      */
+/* -------------------------------------------------------------------------- */
+
+export function updateUserProfilePhoto(userId, photoValue, extra = {}) {
+  return updateUser(userId, buildProfilePhotoPayload(photoValue, extra));
+}
+
+export function updateEmployeeProfilePhoto(employeeId, photoValue, extra = {}) {
+  return updateCollectionItem(
+    'employees',
+    employeeId,
+    buildProfilePhotoPayload(photoValue, extra),
+  );
+}
+
+export function updateMyEmployeeProfilePhoto(employeeId, photoValue, extra = {}) {
+  return updateEmployeeProfilePhoto(employeeId, photoValue, extra);
 }
 
 /* -------------------------------------------------------------------------- */

@@ -5,8 +5,12 @@ import {
   createProject,
   currentUser,
   getEmployeeDashboard,
+  getInitials,
+  getProfilePhotoUrl,
   getProjects,
   listCollection,
+  normalizePeopleList,
+  normalizeProjectTeamTree,
   updateProjectStatus,
 } from '../api/client';
 
@@ -24,6 +28,7 @@ function getName(item = {}) {
   return (
     item.name ||
     item.employee_name ||
+    item.display_name ||
     item.project_name ||
     item.title ||
     item.email ||
@@ -56,6 +61,10 @@ function normalizeRoles(user = {}) {
   return [];
 }
 
+function isTruthy(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase());
+}
+
 function isTeamLeaderOrReportingOfficer(user = {}, dashboardData = null) {
   const roles = normalizeRoles(user);
   const employee = dashboardData?.employee || dashboardData?.employee_summary || {};
@@ -65,8 +74,8 @@ function isTeamLeaderOrReportingOfficer(user = {}, dashboardData = null) {
   );
 
   const hasEmployeeCapability =
-    ['true', 'yes', '1', 'on'].includes(String(employee?.is_team_leader || dashboardData?.is_team_leader || '').toLowerCase()) ||
-    ['true', 'yes', '1', 'on'].includes(String(employee?.is_reporting_officer || dashboardData?.is_reporting_officer || '').toLowerCase());
+    isTruthy(employee?.is_team_leader || dashboardData?.is_team_leader) ||
+    isTruthy(employee?.is_reporting_officer || dashboardData?.is_reporting_officer);
 
   return hasRoleCapability || hasEmployeeCapability;
 }
@@ -133,6 +142,18 @@ function statusLabel(status) {
   return 'Active';
 }
 
+function relationLabel(relation) {
+  const value = String(relation || '').toLowerCase();
+
+  if (value === 'reporting_officer') return 'Reporting Officer';
+  if (value === 'team_leader') return 'Team Leader';
+  if (value === 'assigned_member') return 'Doing Project';
+  if (value === 'collaborator') return 'Collaborator';
+  if (value === 'latest_progress_by') return 'Last Updated By';
+
+  return 'Team Member';
+}
+
 function formatDate(value) {
   if (!value) return '—';
 
@@ -183,6 +204,259 @@ function projectEmployeeNames(items = []) {
     .join(', ') || 'No members mapped';
 }
 
+function normalizePeople(value = []) {
+  return normalizePeopleList(Array.isArray(value) ? value : []);
+}
+
+function getProjectTree(project = {}) {
+  return normalizeProjectTeamTree(project.project_team_tree || {});
+}
+
+function getProjectDoingPeople(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.doing_people || []);
+
+  if (direct.length) return direct;
+  if (tree.doing_people?.length) return tree.doing_people;
+
+  return normalizePeople(project.assigned_members || []);
+}
+
+function getProjectAssignedMembers(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.assigned_members || []);
+
+  if (direct.length) return direct;
+
+  return tree.assigned_members || [];
+}
+
+function getProjectCollaborators(project = {}) {
+  const tree = getProjectTree(project);
+  const direct = normalizePeople(project.collaborators || []);
+
+  if (direct.length) return direct;
+
+  return tree.collaborators || [];
+}
+
+function getProjectTeamLeader(project = {}) {
+  const tree = getProjectTree(project);
+
+  return tree.team_leader || project.team_leader || {};
+}
+
+function getProjectReportingOfficer(project = {}) {
+  const tree = getProjectTree(project);
+
+  return tree.reporting_officer || project.reporting_officer || {};
+}
+
+function PersonAvatar({ person = {}, size = 'md' }) {
+  const photoUrl = getProfilePhotoUrl(person);
+  const name = getName(person);
+
+  return (
+    <div className={`project-avatar project-avatar-${size}`}>
+      {photoUrl ? (
+        <img src={photoUrl} alt={name} />
+      ) : (
+        <span>{getInitials(name)}</span>
+      )}
+    </div>
+  );
+}
+
+function PersonMiniCard({ person = {}, relation, compact = false }) {
+  const name = getName(person);
+  const label = relation || relationLabel(person.relation);
+
+  return (
+    <div className={`project-person-mini ${compact ? 'is-compact' : ''}`}>
+      <PersonAvatar person={person} size={compact ? 'sm' : 'md'} />
+
+      <div>
+        <strong>{name}</strong>
+        <span>{label}</span>
+        {!compact && (
+          <small>
+            {person.department || 'No department'}
+            {person.designation ? ` • ${person.designation}` : ''}
+          </small>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PeopleStack({ people = [], limit = 5 }) {
+  const list = normalizePeople(people).slice(0, limit);
+  const remaining = Math.max(0, people.length - limit);
+
+  if (!list.length) {
+    return <span className="project-team-empty-text">No people mapped</span>;
+  }
+
+  return (
+    <div className="project-avatar-stack">
+      {list.map((person, index) => (
+        <div
+          key={`${getId(person)}-${index}`}
+          className="project-avatar-stack-item"
+          title={getName(person)}
+        >
+          <PersonAvatar person={person} size="xs" />
+        </div>
+      ))}
+
+      {remaining > 0 && (
+        <span className="project-avatar-more">+{remaining}</span>
+      )}
+    </div>
+  );
+}
+
+function ProjectTeamSummary({ project }) {
+  const reportingOfficer = getProjectReportingOfficer(project);
+  const teamLeader = getProjectTeamLeader(project);
+  const assignedMembers = getProjectAssignedMembers(project);
+  const collaborators = getProjectCollaborators(project);
+  const doingPeople = getProjectDoingPeople(project);
+
+  return (
+    <div className="project-team-summary">
+      <div className="project-team-summary-head">
+        <div>
+          <span>Project Ownership</span>
+          <strong>Who is doing this project</strong>
+        </div>
+
+        <PeopleStack people={doingPeople} />
+      </div>
+
+      <div className="project-team-grid">
+        <div className="project-team-box">
+          <span>Reporting Officer</span>
+          {reportingOfficer?.employee_name || reportingOfficer?.name ? (
+            <PersonMiniCard person={reportingOfficer} relation="Reporting Officer" compact />
+          ) : (
+            <p>No Reporting Officer mapped</p>
+          )}
+        </div>
+
+        <div className="project-team-box">
+          <span>Team Leader</span>
+          {teamLeader?.employee_name || teamLeader?.name ? (
+            <PersonMiniCard person={teamLeader} relation="Team Leader" compact />
+          ) : (
+            <p>No Team Leader mapped</p>
+          )}
+        </div>
+
+        <div className="project-team-box">
+          <span>Doing Project</span>
+          <p>{projectEmployeeNames(doingPeople)}</p>
+        </div>
+
+        <div className="project-team-box">
+          <span>Collaborators</span>
+          <p>{projectEmployeeNames(collaborators)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectSpiderTree({ project }) {
+  const tree = getProjectTree(project);
+  const reportingOfficer = tree.reporting_officer || {};
+  const teamLeader = tree.team_leader || {};
+  const assignedMembers = tree.assigned_members || [];
+  const collaborators = tree.collaborators || [];
+  const allPeople = tree.all_people || [];
+
+  return (
+    <div className="project-spider-map">
+      <div className="project-spider-bg" />
+
+      <div className="project-spider-header">
+        <span>Team Root Map</span>
+        <strong>{tree.connection_label || 'Reporting Officer → Team Leader → Team Members'}</strong>
+      </div>
+
+      <div className="project-root-node project-root-ro">
+        {reportingOfficer?.employee_name || reportingOfficer?.name ? (
+          <PersonMiniCard person={reportingOfficer} relation="Reporting Officer" />
+        ) : (
+          <div className="project-empty-node">No Reporting Officer</div>
+        )}
+      </div>
+
+      <div className="project-root-line vertical" />
+
+      <div className="project-root-node project-root-tl">
+        {teamLeader?.employee_name || teamLeader?.name ? (
+          <PersonMiniCard person={teamLeader} relation="Team Leader" />
+        ) : (
+          <div className="project-empty-node">No Team Leader</div>
+        )}
+      </div>
+
+      <div className="project-root-branches">
+        <div className="project-root-branch">
+          <div className="project-root-branch-label">
+            <span>Team Members Doing Project</span>
+            <strong>{assignedMembers.length}</strong>
+          </div>
+
+          <div className="project-root-people">
+            {assignedMembers.map((person, index) => (
+              <PersonMiniCard
+                key={`${getId(person)}-${index}`}
+                person={person}
+                relation="Doing Project"
+                compact
+              />
+            ))}
+
+            {!assignedMembers.length && (
+              <div className="project-empty-node">No assigned members</div>
+            )}
+          </div>
+        </div>
+
+        <div className="project-root-branch">
+          <div className="project-root-branch-label collaborator">
+            <span>Collaborators</span>
+            <strong>{collaborators.length}</strong>
+          </div>
+
+          <div className="project-root-people">
+            {collaborators.map((person, index) => (
+              <PersonMiniCard
+                key={`${getId(person)}-${index}`}
+                person={person}
+                relation="Collaborator"
+                compact
+              />
+            ))}
+
+            {!collaborators.length && (
+              <div className="project-empty-node">No collaborators</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="project-root-footer">
+        <span>Total connected people</span>
+        <strong>{allPeople.length}</strong>
+        <PeopleStack people={allPeople} limit={8} />
+      </div>
+    </div>
+  );
+}
+
 function MultiSelect({ label, value = [], options = [], onChange, helper, disabled = false }) {
   const selected = Array.isArray(value) ? value : [];
 
@@ -214,14 +488,17 @@ function MultiSelect({ label, value = [], options = [], onChange, helper, disabl
               onClick={() => toggle(id)}
               disabled={disabled}
             >
-              <span className="project-check-box">{checked ? '✓' : ''}</span>
-              <span>
+              <PersonAvatar person={employee} size="sm" />
+
+              <span className="project-check-main">
                 <strong>{getName(employee)}</strong>
                 <small>
                   {employee.department || 'No department'}
                   {employee.designation ? ` • ${employee.designation}` : ''}
                 </small>
               </span>
+
+              <span className="project-check-box">{checked ? '✓' : ''}</span>
             </button>
           );
         })}
@@ -417,6 +694,13 @@ function ProjectCard({
     project.latest_progress || project.progress_percent || '',
   );
   const [progressNote, setProgressNote] = useState('');
+  const [showTeamMap, setShowTeamMap] = useState(false);
+
+  const assignedMembers = getProjectAssignedMembers(project);
+  const collaborators = getProjectCollaborators(project);
+  const doingPeople = getProjectDoingPeople(project);
+  const teamLeader = getProjectTeamLeader(project);
+  const reportingOfficer = getProjectReportingOfficer(project);
 
   useEffect(() => {
     setAssignedIds(project.assigned_employee_ids || []);
@@ -449,7 +733,8 @@ function ProjectCard({
           <h3>{getName(project)}</h3>
           <p>
             {project.department || 'No department'}
-            {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
+            {teamLeader?.employee_name || teamLeader?.name ? ` • TL: ${teamLeader.employee_name || teamLeader.name}` : ''}
+            {reportingOfficer?.employee_name || reportingOfficer?.name ? ` • RO: ${reportingOfficer.employee_name || reportingOfficer.name}` : ''}
           </p>
         </div>
 
@@ -457,6 +742,8 @@ function ProjectCard({
           {statusLabel(status)}
         </span>
       </div>
+
+      <ProjectTeamSummary project={project} />
 
       <div className="project-progress-wrap">
         <div className="project-progress-meta">
@@ -473,8 +760,36 @@ function ProjectCard({
 
         <p className="project-muted">
           Last update: {project.latest_progress_date || 'No progress update yet'}
+          {project.latest_progress_by_name ? ` • ${project.latest_progress_by_name}` : ''}
         </p>
       </div>
+
+      <div className="project-people-strip">
+        <div>
+          <span>Doing</span>
+          <PeopleStack people={doingPeople} />
+        </div>
+
+        <div>
+          <span>Assigned</span>
+          <PeopleStack people={assignedMembers} />
+        </div>
+
+        <div>
+          <span>Collaborators</span>
+          <PeopleStack people={collaborators} />
+        </div>
+
+        <button
+          type="button"
+          className="project-btn project-btn-soft"
+          onClick={() => setShowTeamMap((previous) => !previous)}
+        >
+          {showTeamMap ? 'Hide Team Map' : 'View Team Map'}
+        </button>
+      </div>
+
+      {showTeamMap && <ProjectSpiderTree project={project} />}
 
       {canAssignThisProject ? (
         <>
@@ -524,12 +839,12 @@ function ProjectCard({
         <div className="project-readonly-box">
           <div>
             <strong>Assigned Team Members</strong>
-            <p>{projectEmployeeNames(project.assigned_members)}</p>
+            <p>{projectEmployeeNames(assignedMembers)}</p>
           </div>
 
           <div>
             <strong>Collaborators</strong>
-            <p>{projectEmployeeNames(project.collaborators)}</p>
+            <p>{projectEmployeeNames(collaborators)}</p>
           </div>
 
           <small>
@@ -1409,7 +1724,9 @@ export default function Projects() {
           border-radius: 16px;
           background: #ffffff;
           padding: 10px;
-          display: flex;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: center;
           gap: 10px;
           text-align: left;
           cursor: pointer;
@@ -1433,10 +1750,17 @@ export default function Projects() {
           flex: 0 0 auto;
         }
 
+        .project-check-main {
+          min-width: 0;
+        }
+
         .project-check strong {
           display: block;
           color: #0f172a;
           font-size: 13px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .project-check small {
@@ -1444,6 +1768,9 @@ export default function Projects() {
           margin-top: 3px;
           color: #64748b;
           font-size: 11px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .project-actions {
@@ -1527,6 +1854,382 @@ export default function Projects() {
           font-size: 13px;
         }
 
+        .project-avatar {
+          overflow: hidden;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+          border: 2px solid #ffffff;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, .10);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #4338ca;
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .project-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .project-avatar-xs {
+          width: 30px;
+          height: 30px;
+          font-size: 10px;
+        }
+
+        .project-avatar-sm {
+          width: 38px;
+          height: 38px;
+          font-size: 12px;
+        }
+
+        .project-avatar-md {
+          width: 48px;
+          height: 48px;
+          font-size: 14px;
+        }
+
+        .project-person-mini {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .project-person-mini strong {
+          display: block;
+          color: #0f172a;
+          font-size: 13px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .project-person-mini span {
+          display: block;
+          color: #4338ca;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+
+        .project-person-mini small {
+          display: block;
+          margin-top: 2px;
+          color: #64748b;
+          font-size: 11px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .project-person-mini.is-compact .project-avatar {
+          width: 36px;
+          height: 36px;
+        }
+
+        .project-avatar-stack {
+          display: flex;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .project-avatar-stack-item {
+          margin-left: -8px;
+        }
+
+        .project-avatar-stack-item:first-child {
+          margin-left: 0;
+        }
+
+        .project-avatar-more {
+          min-width: 30px;
+          height: 30px;
+          margin-left: -8px;
+          border-radius: 999px;
+          background: #0f172a;
+          color: #ffffff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 2px solid #ffffff;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .project-team-empty-text {
+          color: #94a3b8;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .project-team-summary {
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(79,70,229,.08), transparent 28%),
+            #f8fafc;
+          padding: 14px;
+          display: grid;
+          gap: 13px;
+        }
+
+        .project-team-summary-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .project-team-summary-head span,
+        .project-team-box span {
+          display: block;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .project-team-summary-head strong {
+          display: block;
+          color: #0f172a;
+          margin-top: 4px;
+        }
+
+        .project-team-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .project-team-box {
+          min-width: 0;
+          border: 1px solid #e2e8f0;
+          border-radius: 16px;
+          background: #ffffff;
+          padding: 11px;
+        }
+
+        .project-team-box p {
+          margin: 6px 0 0;
+          color: #334155;
+          font-size: 12px;
+          font-weight: 750;
+          line-height: 1.45;
+        }
+
+        .project-people-strip {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+          gap: 12px;
+          align-items: center;
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+          padding: 12px;
+          background: #ffffff;
+        }
+
+        .project-people-strip > div {
+          min-width: 0;
+        }
+
+        .project-people-strip span {
+          display: block;
+          margin-bottom: 7px;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .project-spider-map {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid #dbe4ff;
+          border-radius: 28px;
+          background:
+            radial-gradient(circle at 50% 0%, rgba(79,70,229,.13), transparent 32%),
+            radial-gradient(circle at 0% 100%, rgba(5,150,105,.10), transparent 28%),
+            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+          padding: 20px;
+          display: grid;
+          gap: 18px;
+          box-shadow: 0 18px 46px rgba(15, 23, 42, .08);
+        }
+
+        .project-spider-bg {
+          position: absolute;
+          inset: 0;
+          background-image:
+            linear-gradient(rgba(79,70,229,.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(79,70,229,.06) 1px, transparent 1px);
+          background-size: 24px 24px;
+          mask-image: radial-gradient(circle at 50% 35%, black, transparent 76%);
+          pointer-events: none;
+        }
+
+        .project-spider-map > *:not(.project-spider-bg) {
+          position: relative;
+          z-index: 1;
+        }
+
+        .project-spider-header {
+          text-align: center;
+        }
+
+        .project-spider-header span {
+          display: inline-flex;
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: #eef2ff;
+          color: #4338ca;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .07em;
+        }
+
+        .project-spider-header strong {
+          display: block;
+          margin-top: 8px;
+          color: #0f172a;
+          font-size: 16px;
+        }
+
+        .project-root-node {
+          max-width: 360px;
+          margin: 0 auto;
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background: rgba(255,255,255,.92);
+          padding: 12px;
+          box-shadow: 0 14px 32px rgba(15, 23, 42, .08);
+        }
+
+        .project-root-ro {
+          border-color: #c7d2fe;
+        }
+
+        .project-root-tl {
+          border-color: #bbf7d0;
+        }
+
+        .project-root-line.vertical {
+          width: 2px;
+          height: 30px;
+          margin: -4px auto;
+          background: linear-gradient(#4f46e5, #059669);
+          border-radius: 999px;
+        }
+
+        .project-root-branches {
+          position: relative;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-top: 4px;
+        }
+
+        .project-root-branches::before {
+          content: "";
+          position: absolute;
+          top: -14px;
+          left: 25%;
+          right: 25%;
+          height: 2px;
+          background: linear-gradient(90deg, #4f46e5, #059669);
+          border-radius: 999px;
+        }
+
+        .project-root-branch {
+          border: 1px solid #e2e8f0;
+          border-radius: 22px;
+          background: rgba(255,255,255,.90);
+          padding: 14px;
+          display: grid;
+          gap: 12px;
+        }
+
+        .project-root-branch-label {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-radius: 16px;
+          background: #ecfdf5;
+          color: #047857;
+          padding: 10px 12px;
+        }
+
+        .project-root-branch-label.collaborator {
+          background: #eef2ff;
+          color: #4338ca;
+        }
+
+        .project-root-branch-label span {
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+        }
+
+        .project-root-branch-label strong {
+          width: 28px;
+          height: 28px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          background: #ffffff;
+          color: inherit;
+        }
+
+        .project-root-people {
+          display: grid;
+          gap: 10px;
+        }
+
+        .project-empty-node {
+          border: 1px dashed #cbd5e1;
+          border-radius: 16px;
+          color: #64748b;
+          background: #f8fafc;
+          padding: 12px;
+          text-align: center;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .project-root-footer {
+          display: grid;
+          grid-template-columns: auto auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: center;
+          justify-content: center;
+          border-top: 1px solid #e2e8f0;
+          padding-top: 14px;
+        }
+
+        .project-root-footer span {
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .project-root-footer strong {
+          color: #0f172a;
+          font-size: 18px;
+        }
+
         @media (max-width: 1100px) {
           .project-analytics-two,
           .project-analytics-head {
@@ -1536,6 +2239,14 @@ export default function Projects() {
 
           .project-progress-ring {
             justify-self: start;
+          }
+
+          .project-team-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .project-people-strip {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
@@ -1548,8 +2259,13 @@ export default function Projects() {
           .project-form-grid,
           .project-grid-two,
           .project-progress-form,
-          .project-analytics-two {
+          .project-analytics-two,
+          .project-root-branches {
             grid-template-columns: 1fr;
+          }
+
+          .project-root-branches::before {
+            display: none;
           }
         }
 
@@ -1557,13 +2273,16 @@ export default function Projects() {
           .projects-hero,
           .project-form,
           .project-card,
-          .project-analytics-panel {
+          .project-analytics-panel,
+          .project-spider-map {
             border-radius: 20px;
             padding: 16px;
           }
 
           .project-summary-grid,
-          .project-graph-grid {
+          .project-graph-grid,
+          .project-team-grid,
+          .project-people-strip {
             grid-template-columns: 1fr;
           }
 
@@ -1587,6 +2306,11 @@ export default function Projects() {
 
           .project-rank-progress span {
             text-align: left;
+          }
+
+          .project-root-footer {
+            grid-template-columns: 1fr;
+            justify-items: start;
           }
         }
       `}</style>
