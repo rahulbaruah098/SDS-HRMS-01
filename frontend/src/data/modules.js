@@ -55,9 +55,13 @@ import {
       Rejected / Cancelled
 
   Project workflow:
-  - Team Leader can create projects.
-  - Team Leader can assign multiple team members and collaborators.
-  - Team members/collaborators update daily project progress.
+  - Projects module remains visible to employees so assigned/collaborator staff
+    can view projects and update status/progress.
+  - Only Team Leader and Reporting Officer capability users can create projects.
+  - Only Team Leader and Reporting Officer capability users can assign team members.
+  - Only Team Leader and Reporting Officer capability users can add collaborators.
+  - Normal employees/team members cannot create projects, assign members, or add collaborators.
+  - Normal employees/team members can view scoped projects and update status/progress only.
   - Active projects appear in handover dropdowns.
   - Completed projects are hidden from handover dropdowns but remain visible in dashboards.
   - Reporting Officer can see mapped Team Leader project progress.
@@ -82,6 +86,12 @@ export const CAPABILITY_ROLES = [
   'ro',
   'team_leader',
   'reporting_officer',
+];
+
+export const PROJECT_MANAGER_ROLES = [
+  'team_leader',
+  'reporting_officer',
+  'ro',
 ];
 
 export const ALL_COMMON_ROLES = [
@@ -118,6 +128,11 @@ export const EMPLOYEE_PORTAL_ROLES = [
 
 export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
+/*
+  PROJECT_ROLES controls who can open the Projects module.
+  Creation/assignment/collaborator permission is handled separately by
+  PROJECT_MANAGER_ROLES and canManageProjects().
+*/
 export const PROJECT_ROLES = [
   ...HR_ROLES,
   ...CAPABILITY_ROLES,
@@ -221,7 +236,7 @@ export const coreModules = [
     'projects',
     'Projects',
     Briefcase,
-    'Create projects, assign team members, add collaborators and submit daily progress.',
+    'Team Leaders and Reporting Officers create/assign projects; employees view scoped projects and update progress/status.',
     PROJECT_ROLES,
   ],
   [
@@ -442,8 +457,18 @@ export function hasAnyRole(userRoles = [], allowedRoles = []) {
   return normalizedAllowedRoles.some((role) => normalizedUserRoles.includes(role));
 }
 
+export function truthyValue(value) {
+  return ['true', 'yes', '1', 'on'].includes(
+    String(value || '').trim().toLowerCase(),
+  );
+}
+
 export function isCapabilityRole(role) {
   return CAPABILITY_ROLES.includes(normalizeRoleValue(role));
+}
+
+export function isProjectManagerRole(role) {
+  return PROJECT_MANAGER_ROLES.includes(normalizeRoleValue(role));
 }
 
 export function isEmployeePortalUser(user) {
@@ -466,9 +491,19 @@ export function isFinanceUser(user) {
   return hasAnyRole(roles, FINANCE_ROLES);
 }
 
+/*
+  This controls project creation/assignment/collaborator UI capability.
+  It does not control basic Projects module access.
+*/
 export function canManageProjects(user) {
   const roles = normalizeRoleList(user?.roles || []);
-  return hasAnyRole(roles, PROJECT_ROLES);
+  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+
+  return (
+    truthyValue(employee?.is_team_leader) ||
+    truthyValue(employee?.is_reporting_officer) ||
+    roles.some(isProjectManagerRole)
+  );
 }
 
 export function canManageLeaveBalances(user) {
@@ -479,11 +514,10 @@ export function canManageLeaveBalances(user) {
 export function canSubmitPerformanceReview(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = user?.employee_summary || user?.employee || user?.profile || {};
-  const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
 
   return (
-    truthy(employee?.is_team_leader) ||
-    truthy(employee?.is_reporting_officer) ||
+    truthyValue(employee?.is_team_leader) ||
+    truthyValue(employee?.is_reporting_officer) ||
     roles.includes('team_leader') ||
     roles.includes('reporting_officer') ||
     roles.includes('ro') ||
@@ -494,22 +528,21 @@ export function canSubmitPerformanceReview(user) {
 export function getEmployeeCapabilities(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = user?.employee_summary || user?.employee || user?.profile || {};
-  const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
+
+  const isTeamLeader =
+    truthyValue(employee?.is_team_leader) ||
+    roles.includes('team_leader');
+
+  const isReportingOfficer =
+    truthyValue(employee?.is_reporting_officer) ||
+    roles.includes('reporting_officer') ||
+    roles.includes('ro');
 
   return {
     isEmployee: isEmployeePortalUser(user),
-    isTeamLeader:
-      truthy(employee?.is_team_leader) ||
-      roles.includes('team_leader'),
-    isReportingOfficer:
-      truthy(employee?.is_reporting_officer) ||
-      roles.includes('reporting_officer') ||
-      roles.includes('manager') ||
-      roles.includes('ro'),
-    canManageProjects:
-      truthy(employee?.is_team_leader) ||
-      truthy(employee?.is_reporting_officer) ||
-      hasAnyRole(roles, PROJECT_ROLES),
+    isTeamLeader,
+    isReportingOfficer,
+    canManageProjects: isTeamLeader || isReportingOfficer,
     canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
     canSubmitPerformanceReview: canSubmitPerformanceReview(user),
     displayRole: 'Employee',
@@ -655,6 +688,11 @@ export const templates = {
     latest_progress_date: '',
     latest_progress_by: '',
     latest_progress_by_name: '',
+
+    can_create_projects: false,
+    can_assign_projects: false,
+    can_add_collaborators: false,
+    can_update_status_progress: false,
 
     start_date: '',
     due_date: '',

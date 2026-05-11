@@ -19,12 +19,7 @@ ADMIN_ROLES = {
     "hr",
 }
 
-PROJECT_MANAGER_ROLES = {
-    "super_admin",
-    "admin",
-    "hr_admin",
-    "hr_manager",
-    "hr",
+PROJECT_CREATOR_ROLES = {
     "team_leader",
     "reporting_officer",
 }
@@ -174,6 +169,12 @@ LEAVE_TYPE_ALIASES = {
 
 BALANCE_LEAVE_TYPES = {"CL", "EL"}
 
+PROJECT_WRITE_STATUSES = {
+    "active",
+    "on_hold",
+    "completed",
+}
+
 
 def safe_object_id(value):
     try:
@@ -188,6 +189,16 @@ def normalize_text(value):
 
 def normalize_key(value):
     return normalize_text(value).lower()
+
+
+def normalize_role_key(value):
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
 
 
 def now_utc():
@@ -225,19 +236,19 @@ def current_user_roles():
 
     if isinstance(roles, list):
         return {
-            normalize_text(role)
+            normalize_role_key(role)
             for role in roles
-            if normalize_text(role)
+            if normalize_role_key(role)
         }
 
     if isinstance(roles, str):
         return {
-            normalize_text(role)
+            normalize_role_key(role)
             for role in roles.split(",")
-            if normalize_text(role)
+            if normalize_role_key(role)
         }
 
-    role = normalize_text(current_user.get("role"))
+    role = normalize_role_key(current_user.get("role"))
     return {role} if role else set()
 
 
@@ -258,25 +269,19 @@ def normalize_email(value):
 
 
 def normalize_role_value(value):
-    role_key = normalize_text(value).lower()
+    role_key = normalize_role_key(value)
 
     role_map = {
-        "super admin": "super_admin",
         "super_admin": "super_admin",
         "admin": "admin",
         "hr": "hr",
-        "hr admin": "hr_admin",
         "hr_admin": "hr_admin",
-        "hr manager": "hr_manager",
         "hr_manager": "hr_manager",
         "finance": "finance",
-        "accounts finance": "accounts_finance",
         "accounts_finance": "accounts_finance",
         "manager": "manager",
         "ro": "ro",
-        "team leader": "team_leader",
         "team_leader": "team_leader",
-        "reporting officer": "reporting_officer",
         "reporting_officer": "reporting_officer",
         "employee": "employee",
     }
@@ -307,6 +312,27 @@ def normalize_roles(value):
             cleaned_roles.append(normalized)
 
     return cleaned_roles or ["employee"]
+
+
+def employee_role_set(employee_doc):
+    if not employee_doc:
+        return set()
+
+    raw_roles = employee_doc.get("roles", [])
+
+    if isinstance(raw_roles, list):
+        roles = {normalize_role_key(role) for role in raw_roles if normalize_role_key(role)}
+    elif isinstance(raw_roles, str):
+        roles = {normalize_role_key(role) for role in raw_roles.split(",") if normalize_role_key(role)}
+    else:
+        roles = set()
+
+    raw_role = normalize_role_key(employee_doc.get("role"))
+
+    if raw_role:
+        roles.add(raw_role)
+
+    return roles
 
 
 def build_employee_capability_roles(employee_doc, current_user_roles=None):
@@ -634,14 +660,72 @@ def employee_is_team_leader(employee):
     if not employee:
         return False
 
-    return truthy(employee.get("is_team_leader"))
+    return (
+        truthy(employee.get("is_team_leader"))
+        or "team_leader" in employee_role_set(employee)
+    )
 
 
 def employee_is_reporting_officer(employee):
     if not employee:
         return False
 
-    return truthy(employee.get("is_reporting_officer"))
+    return (
+        truthy(employee.get("is_reporting_officer"))
+        or "reporting_officer" in employee_role_set(employee)
+        or "ro" in employee_role_set(employee)
+    )
+
+
+def can_create_assign_or_collaborate_projects():
+    db = get_db()
+    roles = current_user_roles()
+    employee = get_current_employee(db)
+
+    return bool(
+        roles.intersection(PROJECT_CREATOR_ROLES)
+        or employee_is_team_leader(employee)
+        or employee_is_reporting_officer(employee)
+    )
+
+
+def project_member_ids(project):
+    ids = set()
+
+    for key in [
+        "created_by_employee_id",
+        "team_leader_id",
+        "assigned_to_id",
+    ]:
+        value = normalize_text(project.get(key))
+        if value:
+            ids.add(value)
+
+    for key in ["assigned_employee_ids", "collaborator_ids"]:
+        values = project.get(key, [])
+        if isinstance(values, list):
+            ids.update(normalize_text(value) for value in values if normalize_text(value))
+
+    for key in ["assigned_members", "collaborators"]:
+        values = project.get(key, [])
+        if isinstance(values, list):
+            for item in values:
+                if isinstance(item, dict):
+                    employee_id = normalize_text(item.get("employee_id") or item.get("_id") or item.get("id"))
+                    if employee_id:
+                        ids.add(employee_id)
+
+    return ids
+
+
+def can_update_project_status(project):
+    db = get_db()
+    employee = get_current_employee(db)
+
+    if not employee:
+        return False
+
+    return str(employee["_id"]) in project_member_ids(project)
 
 
 def can_write_collection(collection):
@@ -650,18 +734,11 @@ def can_write_collection(collection):
     if collection not in WRITE_ALLOWED_COLLECTIONS:
         return False
 
+    if collection == "projects":
+        return can_create_assign_or_collaborate_projects()
+
     if roles.intersection(ADMIN_ROLES):
         return True
-
-    if collection == "projects":
-        db = get_db()
-        employee = get_current_employee(db)
-
-        return (
-            roles.intersection(PROJECT_MANAGER_ROLES)
-            or employee_is_team_leader(employee)
-            or employee_is_reporting_officer(employee)
-        )
 
     return False
 
@@ -747,7 +824,10 @@ def apply_common_filters(collection, q):
     q_text = normalize_text(request.args.get("q") or request.args.get("search"))
 
     if status:
-        q["status"] = status
+        if collection == "projects":
+            q["status"] = normalize_project_status(status)
+        else:
+            q["status"] = status
 
     if department:
         q["department"] = department
@@ -814,6 +894,7 @@ def project_scope_query(db, q):
         {"team_leader_id": employee_id},
         {"assigned_to_id": employee_id},
         {"assigned_employee_ids": employee_id},
+        {"assigned_members.employee_id": employee_id},
         {"collaborator_ids": employee_id},
         {"collaborators.employee_id": employee_id},
     ]
@@ -956,7 +1037,7 @@ def scoped_query_for_collection(db, collection):
 def normalize_project_status(status):
     value = normalize_key(status)
 
-    if value in {"completed", "complete", "done", "closed", "inactive"}:
+    if value in {"completed", "complete", "done, closed", "closed", "inactive"}:
         return "completed"
 
     if value in {"active", "ongoing", "in_progress", "in-progress", "open"}:
@@ -968,9 +1049,82 @@ def normalize_project_status(status):
     return "active"
 
 
+def normalize_id_list(value):
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        raw_values = value
+    elif isinstance(value, str):
+        raw_values = value.split(",")
+    else:
+        raw_values = [value]
+
+    cleaned = []
+    seen = set()
+
+    for item in raw_values:
+        if isinstance(item, dict):
+            raw = item.get("employee_id") or item.get("_id") or item.get("id")
+        else:
+            raw = item
+
+        item_id = normalize_text(raw)
+
+        if item_id and item_id not in seen:
+            cleaned.append(item_id)
+            seen.add(item_id)
+
+    return cleaned
+
+
+def resolve_employee_for_project(db, employee_id, tenant_id):
+    employee_obj_id = safe_object_id(employee_id)
+
+    if not employee_obj_id:
+        return None
+
+    return db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
+    })
+
+
+def project_member_payload(employee):
+    return {
+        "employee_id": str(employee["_id"]),
+        "employee_code": employee_code(employee),
+        "employee_name": employee_display_name(employee),
+        "email": employee.get("email", ""),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "user_id": employee.get("user_id", ""),
+    }
+
+
+def resolve_project_member_list(db, tenant_id, employee_ids):
+    resolved_ids = []
+    members = []
+
+    for employee_id in normalize_id_list(employee_ids):
+        employee = resolve_employee_for_project(db, employee_id, tenant_id)
+
+        if not employee:
+            raise ValueError("One or more selected employees were not found")
+
+        resolved_ids.append(str(employee["_id"]))
+        members.append(project_member_payload(employee))
+
+    return resolved_ids, members
+
+
 def normalize_project_payload(payload, existing=None):
     existing = existing or {}
-    employee = get_current_employee(get_db())
+    db = get_db()
+    employee = get_current_employee(db)
+    tenant_id = payload.get("tenant_id") or existing.get("tenant_id") or current_tenant_id()
 
     name = (
         payload.get("name")
@@ -991,24 +1145,10 @@ def normalize_project_payload(payload, existing=None):
     collaborator_ids = payload.get("collaborator_ids")
 
     if assigned_employee_ids is None:
-        assigned_employee_ids = payload.get("assigned_to_ids")
+        assigned_employee_ids = payload.get("assigned_to_ids") or payload.get("assigned_members")
 
     if collaborator_ids is None:
-        collaborator_ids = payload.get("collaborators_ids")
-
-    if isinstance(assigned_employee_ids, str):
-        assigned_employee_ids = [
-            item.strip()
-            for item in assigned_employee_ids.split(",")
-            if item.strip()
-        ]
-
-    if isinstance(collaborator_ids, str):
-        collaborator_ids = [
-            item.strip()
-            for item in collaborator_ids.split(",")
-            if item.strip()
-        ]
+        collaborator_ids = payload.get("collaborators_ids") or payload.get("collaborators")
 
     if assigned_employee_ids is None:
         assigned_employee_ids = existing.get("assigned_employee_ids", [])
@@ -1016,31 +1156,43 @@ def normalize_project_payload(payload, existing=None):
     if collaborator_ids is None:
         collaborator_ids = existing.get("collaborator_ids", [])
 
-    if not isinstance(assigned_employee_ids, list):
-        assigned_employee_ids = []
-
-    if not isinstance(collaborator_ids, list):
-        collaborator_ids = []
+    try:
+        assigned_employee_ids, assigned_members = resolve_project_member_list(
+            db,
+            tenant_id,
+            assigned_employee_ids,
+        )
+        collaborator_ids, collaborators = resolve_project_member_list(
+            db,
+            tenant_id,
+            collaborator_ids,
+        )
+    except ValueError:
+        assigned_employee_ids = existing.get("assigned_employee_ids", []) if existing else []
+        assigned_members = existing.get("assigned_members", []) if existing else []
+        collaborator_ids = existing.get("collaborator_ids", []) if existing else []
+        collaborators = existing.get("collaborators", []) if existing else []
 
     payload["name"] = normalize_text(name)
     payload["project_name"] = normalize_text(name)
     payload["title"] = normalize_text(name)
     payload["status"] = status
-    payload["assigned_employee_ids"] = [
-        str(item)
-        for item in assigned_employee_ids
-        if normalize_text(item)
-    ]
-    payload["collaborator_ids"] = [
-        str(item)
-        for item in collaborator_ids
-        if normalize_text(item)
-    ]
+    payload["assigned_employee_ids"] = assigned_employee_ids
+    payload["assigned_members"] = assigned_members
+    payload["assigned_to_id"] = assigned_employee_ids[0] if assigned_employee_ids else ""
+    payload["assigned_to_name"] = assigned_members[0]["employee_name"] if assigned_members else ""
+    payload["collaborator_ids"] = collaborator_ids
+    payload["collaborators"] = collaborators
 
     if employee:
-        payload.setdefault("team_leader_id", str(employee["_id"]))
-        payload.setdefault("team_leader_name", employee.get("name") or employee.get("employee_name") or current_user_name())
-        payload.setdefault("department", employee.get("department", ""))
+        payload.setdefault("team_leader_id", str(employee["_id"]) if employee_is_team_leader(employee) else existing.get("team_leader_id", ""))
+        payload.setdefault("team_leader_name", employee_display_name(employee) if employee_is_team_leader(employee) else existing.get("team_leader_name", ""))
+        payload.setdefault("department", employee.get("department", "") or existing.get("department", ""))
+
+    if status == "completed":
+        payload["completed_at"] = existing.get("completed_at") or now_utc()
+    elif "completed_at" in payload:
+        payload["completed_at"] = ""
 
     return payload
 
@@ -1365,9 +1517,22 @@ def enrich_leave_request(row):
     return row
 
 
+def enrich_project_item(item):
+    item = dict(item or {})
+    item["can_create_assign_collaborate"] = can_create_assign_or_collaborate_projects()
+    item["can_create_projects"] = can_create_assign_or_collaborate_projects()
+    item["can_assign_projects"] = can_create_assign_or_collaborate_projects()
+    item["can_add_collaborators"] = can_create_assign_or_collaborate_projects()
+    item["can_update_status_progress"] = can_update_project_status(item)
+    return item
+
+
 def enrich_items(collection, items):
     if collection == "leave_requests":
         return [enrich_leave_request(item) for item in items]
+
+    if collection == "projects":
+        return [enrich_project_item(item) for item in items]
 
     return items
 
@@ -1423,13 +1588,24 @@ def list_collection(collection):
 
     items = enrich_items(collection, items)
 
-    return jsonify({
+    response = {
         "items": serialize_list(items),
         "total": total,
         "page": page,
         "limit": limit,
         "collection": collection,
-    })
+    }
+
+    if collection == "projects":
+        can_manage = can_create_assign_or_collaborate_projects()
+        response.update({
+            "can_create_assign_collaborate": can_manage,
+            "can_create_projects": can_manage,
+            "can_assign_projects": can_manage,
+            "can_add_collaborators": can_manage,
+        })
+
+    return jsonify(response)
 
 
 @crud_bp.get("/<collection>/<item_id>")
@@ -1461,6 +1637,9 @@ def get_collection_item(collection, item_id):
     if collection == "leave_requests":
         item = enrich_leave_request(item)
 
+    if collection == "projects":
+        item = enrich_project_item(item)
+
     return jsonify({
         "item": serialize_item(item),
     })
@@ -1475,6 +1654,11 @@ def create_collection_item(collection):
         return jsonify({
             "message": f"Collection '{collection}' is not available"
         }), 404
+
+    if collection == "projects" and not can_create_assign_or_collaborate_projects():
+        return jsonify({
+            "message": "Only Team Leaders and Reporting Officers can create projects"
+        }), 403
 
     if not can_write_collection(collection):
         return jsonify({
@@ -1549,7 +1733,7 @@ def create_collection_item(collection):
 
         if employee:
             payload.setdefault("created_by_employee_id", str(employee["_id"]))
-            payload.setdefault("created_by_employee_name", employee.get("name") or employee.get("employee_name") or current_user_name())
+            payload.setdefault("created_by_employee_name", employee_display_name(employee))
 
     result = mongo_collection.insert_one(payload)
     payload["_id"] = result.inserted_id
@@ -1578,6 +1762,9 @@ def create_collection_item(collection):
     if collection == "employees":
         message = "Employee and login account created successfully"
 
+    if collection == "projects":
+        message = "Project created successfully"
+
     return jsonify({
         "message": message,
         "item": serialize_item(payload),
@@ -1593,6 +1780,11 @@ def update_collection_item(collection, item_id):
         return jsonify({
             "message": f"Collection '{collection}' is not available"
         }), 404
+
+    if collection == "projects" and not can_create_assign_or_collaborate_projects():
+        return jsonify({
+            "message": "Only Team Leaders and Reporting Officers can edit project details"
+        }), 403
 
     if not can_write_collection(collection):
         return jsonify({
@@ -1706,6 +1898,9 @@ def update_collection_item(collection, item_id):
     if collection == "employees":
         message = "Employee and login account updated successfully"
 
+    if collection == "projects":
+        message = "Project updated successfully"
+
     return jsonify({
         "message": message,
         "item": serialize_item(updated),
@@ -1726,6 +1921,11 @@ def delete_collection_item(collection, item_id):
         return jsonify({
             "message": "Leave Balances should be updated instead of deleted"
         }), 400
+
+    if collection == "projects" and not can_create_assign_or_collaborate_projects():
+        return jsonify({
+            "message": "Only Team Leaders and Reporting Officers can delete projects"
+        }), 403
 
     if not can_write_collection(collection):
         return jsonify({
@@ -1777,6 +1977,9 @@ def delete_collection_item(collection, item_id):
     if collection == "employees":
         message = "Employee deleted and login account deactivated successfully"
 
+    if collection == "projects":
+        message = "Project deleted successfully"
+
     return jsonify({
         "message": message,
     })
@@ -1785,11 +1988,6 @@ def delete_collection_item(collection, item_id):
 @crud_bp.patch("/projects/<project_id>/status")
 @current_user_required
 def update_project_status(project_id):
-    if not can_write_collection("projects"):
-        return jsonify({
-            "message": "You do not have permission to update project status"
-        }), 403
-
     project_obj_id = safe_object_id(project_id)
 
     if not project_obj_id:
@@ -1804,8 +2002,18 @@ def update_project_status(project_id):
     if not existing:
         return jsonify({"message": "Project not found or not in your scope"}), 404
 
+    if not can_update_project_status(existing):
+        return jsonify({
+            "message": "You do not have permission to update status for this project"
+        }), 403
+
     data = request.get_json(silent=True) or {}
     status = normalize_project_status(data.get("status"))
+
+    if status not in PROJECT_WRITE_STATUSES:
+        return jsonify({
+            "message": "Project status must be active, on_hold, or completed"
+        }), 400
 
     update_data = {
         "status": status,
@@ -1818,6 +2026,8 @@ def update_project_status(project_id):
         update_data["completed_at"] = now_utc()
         update_data["completed_by"] = current_user_id()
         update_data["completed_by_name"] = current_user_name()
+    else:
+        update_data["completed_at"] = ""
 
     db.projects.update_one(
         {"_id": project_obj_id},
@@ -1830,16 +2040,16 @@ def update_project_status(project_id):
 
     return jsonify({
         "message": "Project status updated successfully",
-        "item": clean_doc(updated),
+        "item": clean_doc(enrich_project_item(updated)),
     })
 
 
 @crud_bp.patch("/projects/<project_id>/assign")
 @current_user_required
 def assign_project(project_id):
-    if not can_write_collection("projects"):
+    if not can_create_assign_or_collaborate_projects():
         return jsonify({
-            "message": "You do not have permission to assign this project"
+            "message": "Only Team Leaders and Reporting Officers can assign this project"
         }), 403
 
     project_obj_id = safe_object_id(project_id)
@@ -1857,81 +2067,28 @@ def assign_project(project_id):
         return jsonify({"message": "Project not found or not in your scope"}), 404
 
     data = request.get_json(silent=True) or {}
+    tenant_id = existing.get("tenant_id") or current_tenant_id()
 
-    assigned_employee_ids = data.get("assigned_employee_ids") or data.get("assigned_to_ids") or []
-    collaborator_ids = data.get("collaborator_ids") or []
-
-    if isinstance(assigned_employee_ids, str):
-        assigned_employee_ids = [
-            item.strip()
-            for item in assigned_employee_ids.split(",")
-            if item.strip()
-        ]
-
-    if isinstance(collaborator_ids, str):
-        collaborator_ids = [
-            item.strip()
-            for item in collaborator_ids.split(",")
-            if item.strip()
-        ]
-
-    if not isinstance(assigned_employee_ids, list):
-        assigned_employee_ids = []
-
-    if not isinstance(collaborator_ids, list):
-        collaborator_ids = []
-
-    employee_ids = list({
-        str(item)
-        for item in assigned_employee_ids + collaborator_ids
-        if normalize_text(item)
-    })
-
-    employee_obj_ids = [
-        safe_object_id(employee_id)
-        for employee_id in employee_ids
-        if safe_object_id(employee_id)
-    ]
-
-    employees = list(db.employees.find({
-        "_id": {"$in": employee_obj_ids},
-        "tenant_id": current_tenant_id(),
-        "is_deleted": {"$ne": True},
-    }))
-
-    employee_name_map = {
-        str(employee["_id"]): employee.get("name") or employee.get("employee_name") or employee.get("email") or ""
-        for employee in employees
-    }
-
-    collaborators = [
-        {
-            "employee_id": employee_id,
-            "employee_name": employee_name_map.get(employee_id, ""),
-        }
-        for employee_id in collaborator_ids
-    ]
-
-    assigned_members = [
-        {
-            "employee_id": employee_id,
-            "employee_name": employee_name_map.get(employee_id, ""),
-        }
-        for employee_id in assigned_employee_ids
-    ]
+    try:
+        assigned_employee_ids, assigned_members = resolve_project_member_list(
+            db,
+            tenant_id,
+            data.get("assigned_employee_ids") or data.get("assigned_to_ids") or [],
+        )
+        collaborator_ids, collaborators = resolve_project_member_list(
+            db,
+            tenant_id,
+            data.get("collaborator_ids") or [],
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     update_data = {
-        "assigned_employee_ids": [
-            str(item)
-            for item in assigned_employee_ids
-            if normalize_text(item)
-        ],
+        "assigned_to_id": assigned_employee_ids[0] if assigned_employee_ids else "",
+        "assigned_to_name": assigned_members[0]["employee_name"] if assigned_members else "",
+        "assigned_employee_ids": assigned_employee_ids,
         "assigned_members": assigned_members,
-        "collaborator_ids": [
-            str(item)
-            for item in collaborator_ids
-            if normalize_text(item)
-        ],
+        "collaborator_ids": collaborator_ids,
         "collaborators": collaborators,
         "updated_at": now_utc(),
         "updated_by": current_user_id(),
@@ -1949,16 +2106,16 @@ def assign_project(project_id):
 
     return jsonify({
         "message": "Project assignment updated successfully",
-        "item": clean_doc(updated),
+        "item": clean_doc(enrich_project_item(updated)),
     })
 
 
 @crud_bp.patch("/projects/<project_id>/collaborators")
 @current_user_required
 def update_project_collaborators(project_id):
-    if not can_write_collection("projects"):
+    if not can_create_assign_or_collaborate_projects():
         return jsonify({
-            "message": "You do not have permission to update collaborators"
+            "message": "Only Team Leaders and Reporting Officers can update collaborators"
         }), 403
 
     project_obj_id = safe_object_id(project_id)
@@ -1976,50 +2133,19 @@ def update_project_collaborators(project_id):
         return jsonify({"message": "Project not found or not in your scope"}), 404
 
     data = request.get_json(silent=True) or {}
-    collaborator_ids = data.get("collaborator_ids") or []
+    tenant_id = existing.get("tenant_id") or current_tenant_id()
 
-    if isinstance(collaborator_ids, str):
-        collaborator_ids = [
-            item.strip()
-            for item in collaborator_ids.split(",")
-            if item.strip()
-        ]
-
-    if not isinstance(collaborator_ids, list):
-        collaborator_ids = []
-
-    employee_obj_ids = [
-        safe_object_id(employee_id)
-        for employee_id in collaborator_ids
-        if safe_object_id(employee_id)
-    ]
-
-    employees = list(db.employees.find({
-        "_id": {"$in": employee_obj_ids},
-        "tenant_id": current_tenant_id(),
-        "is_deleted": {"$ne": True},
-    }))
-
-    employee_name_map = {
-        str(employee["_id"]): employee.get("name") or employee.get("employee_name") or employee.get("email") or ""
-        for employee in employees
-    }
-
-    collaborators = [
-        {
-            "employee_id": str(employee_id),
-            "employee_name": employee_name_map.get(str(employee_id), ""),
-        }
-        for employee_id in collaborator_ids
-        if normalize_text(employee_id)
-    ]
+    try:
+        collaborator_ids, collaborators = resolve_project_member_list(
+            db,
+            tenant_id,
+            data.get("collaborator_ids") or [],
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     update_data = {
-        "collaborator_ids": [
-            str(employee_id)
-            for employee_id in collaborator_ids
-            if normalize_text(employee_id)
-        ],
+        "collaborator_ids": collaborator_ids,
         "collaborators": collaborators,
         "updated_at": now_utc(),
         "updated_by": current_user_id(),
@@ -2037,5 +2163,5 @@ def update_project_collaborators(project_id):
 
     return jsonify({
         "message": "Project collaborators updated successfully",
-        "item": clean_doc(updated),
+        "item": clean_doc(enrich_project_item(updated)),
     })

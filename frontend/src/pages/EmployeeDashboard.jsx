@@ -183,6 +183,17 @@ function percentValue(value) {
   return Math.min(Math.max(number, 0), 100);
 }
 
+function averageProjectProgress(projects = []) {
+  if (!projects.length) return 0;
+
+  const total = projects.reduce(
+    (sum, project) => sum + percentValue(project.latest_progress || project.progress_percent || project.progress),
+    0,
+  );
+
+  return Math.round(total / projects.length);
+}
+
 function ratingPercent(value) {
   const rating = numberValue(value, 0);
   return Math.min(Math.max((rating / 5) * 100, 0), 100);
@@ -269,7 +280,7 @@ function MiniProgressBar({ value }) {
       <div className="emp-project-mini-progress-track">
         <div
           className="emp-project-mini-progress-fill"
-          style={{ width: `${percentage}%` }}
+          style={{ width: `${Math.max(percentage, 4)}%` }}
         />
       </div>
       <strong>{percentage}%</strong>
@@ -294,40 +305,176 @@ function RatingBar({ value }) {
   );
 }
 
-function ProjectChart({ title, rows = [] }) {
+function ProjectProgressRing({ value = 0, label = 'Avg Progress' }) {
+  const progress = percentValue(value);
+
+  return (
+    <div className="emp-project-ring" style={{ '--ringValue': `${progress}%` }}>
+      <div>
+        <strong>{progress}%</strong>
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
+function ProjectAccessCard({ isTeamLeader, isReportingOfficer }) {
+  const canCreate = isTeamLeader || isReportingOfficer;
+
+  return (
+    <div className={`emp-project-access-card ${canCreate ? 'can-create' : ''}`}>
+      <div>
+        <span>Project Access</span>
+        <strong>{canCreate ? 'Creator / Manager Access' : 'View + Progress Access'}</strong>
+        <p>
+          {canCreate
+            ? 'You can create projects, assign team members, add collaborators, and update project progress.'
+            : 'You can view scoped projects and update status/progress only when you are assigned or added as a collaborator.'}
+        </p>
+      </div>
+
+      <em>{canCreate ? 'TL / RO' : 'Employee'}</em>
+    </div>
+  );
+}
+
+function ProjectMetricCard({ label, value, meta, variant = 'indigo' }) {
+  return (
+    <div className={`emp-project-modern-stat ${variant}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{meta}</small>
+    </div>
+  );
+}
+
+function ProjectTrendGraph({ title, rows = [], description = 'Daily project progress trend based on submitted updates.' }) {
   const hasRows = rows.length > 0;
+  const maxUpdates = Math.max(1, ...rows.map((row) => numberValue(row.updates, 0)));
 
   return (
     <div className="panel emp-project-chart-card">
       <div className="toolbar">
         <div>
           <h3>{title}</h3>
-          <p>Daily progress trend based on submitted project updates.</p>
+          <p>{description}</p>
         </div>
       </div>
 
       {!hasRows && <div className="empty">No project progress data found.</div>}
 
       {hasRows && (
-        <div className="emp-project-chart">
-          {rows.map((row) => {
-            const value = percentValue(row.average_progress);
+        <div className="emp-project-trend-grid">
+          {rows.slice(-10).map((row) => {
+            const avgProgress = percentValue(row.average_progress);
+            const updates = numberValue(row.updates, 0);
+            const height = Math.max(12, (updates / maxUpdates) * 100);
 
             return (
-              <div className="emp-project-bar-row" key={row.date}>
-                <span>{String(row.date || '').slice(5) || '—'}</span>
-
-                <div className="emp-project-bar-track">
-                  <div
-                    className="emp-project-bar-fill"
-                    style={{ width: `${value}%` }}
-                  />
+              <div className="emp-project-trend-item" key={row.date}>
+                <div className="emp-project-trend-bar">
+                  <span style={{ height: `${height}%` }} />
                 </div>
 
-                <strong>{value}%</strong>
+                <strong>{updates}</strong>
+                <small>{String(row.date || '').slice(5) || '—'}</small>
+                <em>{avgProgress}%</em>
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectRankingGraph({ title, rows = [], emptyText = 'No project progress data found.' }) {
+  const sortedRows = [...rows]
+    .sort((a, b) => percentValue(b.latest_progress) - percentValue(a.latest_progress))
+    .slice(0, 8);
+
+  return (
+    <div className="panel emp-project-rank-panel">
+      <div className="toolbar">
+        <div>
+          <h3>{title}</h3>
+          <p>Projects ranked by latest progress percentage.</p>
+        </div>
+      </div>
+
+      {!sortedRows.length && <div className="empty">{emptyText}</div>}
+
+      {!!sortedRows.length && (
+        <div className="emp-project-rank-list">
+          {sortedRows.map((project, index) => {
+            const progress = percentValue(project.latest_progress);
+
+            return (
+              <div className="emp-project-rank-card" key={project._id || projectName(project)}>
+                <div className="emp-project-rank-no">{index + 1}</div>
+
+                <div className="emp-project-rank-main">
+                  <strong>{projectName(project)}</strong>
+                  <span>
+                    {project.department || 'No department'}
+                    {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
+                  </span>
+
+                  <div className="emp-project-rank-track">
+                    <div style={{ width: `${Math.max(progress, 4)}%` }} />
+                  </div>
+
+                  <small>
+                    Status: {statusLabel(project.status)} • Last update: {project.latest_progress_date || '—'}
+                  </small>
+                </div>
+
+                <div className="emp-project-rank-score">{progress}%</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectMiniBoard({
+  title,
+  description,
+  projects = [],
+  emptyText = 'No projects found.',
+}) {
+  return (
+    <div className="emp-project-card-grid">
+      {projects.slice(0, 6).map((project) => {
+        const status = normalizeProjectStatus(project.status);
+
+        return (
+          <div className="emp-project-card" key={project._id || projectName(project)}>
+            <h4>{projectName(project)}</h4>
+            <p>
+              {project.department || 'No department'}
+              {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
+            </p>
+
+            <span className={`emp-project-status ${status}`}>
+              {statusLabel(status)}
+            </span>
+
+            <MiniProgressBar value={project.latest_progress} />
+
+            <p>
+              Last update: {project.latest_progress_date || 'No update yet'}
+            </p>
+          </div>
+        );
+      })}
+
+      {!projects.length && (
+        <div className="panel">
+          <h3>{title}</h3>
+          <p>{description || emptyText}</p>
         </div>
       )}
     </div>
@@ -665,6 +812,8 @@ export default function EmployeeDashboard({ setPage }) {
     data?.is_reporting_officer || isTruthy(employee?.is_reporting_officer),
   );
 
+  const canCreateOrAssignProjects = isTeamLeader || isReportingOfficer;
+
   const holiday = attendanceStatus?.holiday || data?.holiday || {};
   const todayAttendance =
     attendanceStatus?.attendance || data?.today_attendance || null;
@@ -698,6 +847,10 @@ export default function EmployeeDashboard({ setPage }) {
     data?.reporting_project_daily_progress_chart ||
     projectDashboard?.reporting_daily_progress_chart ||
     [];
+
+  const myProjectAverage = projectSummary.average_progress || averageProjectProgress(myProjects);
+  const teamProjectAverage = projectSummary.team_average_progress || averageProjectProgress(teamLeaderProjects);
+  const reportingProjectAverage = projectSummary.reporting_average_progress || averageProjectProgress(reportingProjects);
 
   const performanceSummary = data?.performance_summary || {};
   const myPerformanceChart =
@@ -860,6 +1013,12 @@ export default function EmployeeDashboard({ setPage }) {
     {
       field: 'Employee Capability',
       value: mappedCapabilityLabel,
+    },
+    {
+      field: 'Project Permission',
+      value: canCreateOrAssignProjects
+        ? 'Can create projects, assign team members, and add collaborators'
+        : 'Can view scoped projects and update assigned/collaborator progress',
     },
     {
       field: 'Department',
@@ -1152,10 +1311,10 @@ export default function EmployeeDashboard({ setPage }) {
           position: relative;
           overflow: hidden;
           border: 1px solid #e2e8f0;
-          border-radius: 26px;
+          border-radius: 28px;
           padding: 22px;
           background:
-            radial-gradient(circle at 12% 0%, rgba(79, 70, 229, .12), transparent 34%),
+            radial-gradient(circle at 12% 0%, rgba(79, 70, 229, .13), transparent 34%),
             radial-gradient(circle at 92% 10%, rgba(5, 150, 105, .12), transparent 34%),
             #ffffff;
           box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
@@ -1176,14 +1335,117 @@ export default function EmployeeDashboard({ setPage }) {
           line-height: 1.65;
         }
 
-        .emp-project-stats {
+        .emp-project-head-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 18px;
+          align-items: center;
+        }
+
+        .emp-project-ring {
+          --ringValue: 0%;
+          width: 136px;
+          height: 136px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          background: conic-gradient(#4f46e5 var(--ringValue), #e2e8f0 0);
+          box-shadow: 0 18px 42px rgba(79, 70, 229, .18);
+        }
+
+        .emp-project-ring > div {
+          width: 100px;
+          height: 100px;
+          border-radius: 999px;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          display: grid;
+          place-items: center;
+          align-content: center;
+        }
+
+        .emp-project-ring strong {
+          color: #0f172a;
+          font-size: 25px;
+          line-height: 1;
+        }
+
+        .emp-project-ring span {
+          margin-top: 5px;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          text-align: center;
+        }
+
+        .emp-project-access-card {
+          border: 1px solid #cbd5e1;
+          border-radius: 22px;
+          background: #f8fafc;
+          padding: 15px;
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          align-items: flex-start;
+          margin-top: 18px;
+        }
+
+        .emp-project-access-card.can-create {
+          border-color: #bbf7d0;
+          background: #ecfdf5;
+        }
+
+        .emp-project-access-card span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .emp-project-access-card strong {
+          display: block;
+          margin-top: 5px;
+          color: #0f172a;
+          font-size: 16px;
+        }
+
+        .emp-project-access-card p {
+          margin: 6px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .emp-project-access-card em {
+          border-radius: 999px;
+          background: #eef2ff;
+          color: #4338ca;
+          padding: 7px 11px;
+          font-style: normal;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .emp-project-access-card.can-create em {
+          color: #047857;
+          background: #d1fae5;
+        }
+
+        .emp-project-stats,
+        .emp-project-modern-stat-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 12px;
           margin-top: 18px;
         }
 
-        .emp-project-stat {
+        .emp-project-stat,
+        .emp-project-modern-stat {
+          position: relative;
+          overflow: hidden;
           border: 1px solid #e2e8f0;
           border-radius: 20px;
           background: #ffffff;
@@ -1191,21 +1453,53 @@ export default function EmployeeDashboard({ setPage }) {
           box-shadow: 0 12px 28px rgba(15, 23, 42, .06);
         }
 
-        .emp-project-stat span {
+        .emp-project-modern-stat::after {
+          content: "";
+          position: absolute;
+          width: 72px;
+          height: 72px;
+          right: -28px;
+          top: -26px;
+          border-radius: 999px;
+          background: rgba(79, 70, 229, .12);
+        }
+
+        .emp-project-modern-stat.green::after {
+          background: rgba(5, 150, 105, .13);
+        }
+
+        .emp-project-modern-stat.amber::after {
+          background: rgba(217, 119, 6, .14);
+        }
+
+        .emp-project-modern-stat.sky::after {
+          background: rgba(2, 132, 199, .13);
+        }
+
+        .emp-project-stat span,
+        .emp-project-modern-stat span {
           display: block;
           color: #64748b;
           font-size: 12px;
-          font-weight: 800;
+          font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .06em;
         }
 
-        .emp-project-stat strong {
+        .emp-project-stat strong,
+        .emp-project-modern-stat strong {
           display: block;
           margin-top: 8px;
           color: #0f172a;
           font-size: 28px;
           line-height: 1;
+        }
+
+        .emp-project-modern-stat small {
+          display: block;
+          margin-top: 7px;
+          color: #64748b;
+          font-weight: 750;
         }
 
         .emp-project-card-grid {
@@ -1220,6 +1514,13 @@ export default function EmployeeDashboard({ setPage }) {
           padding: 16px;
           background: #ffffff;
           box-shadow: 0 12px 32px rgba(15, 23, 42, .07);
+          transition: .2s ease;
+        }
+
+        .emp-project-card:hover {
+          transform: translateY(-2px);
+          border-color: #c7d2fe;
+          box-shadow: 0 20px 52px rgba(15, 23, 42, .11);
         }
 
         .emp-project-card h4 {
@@ -1256,6 +1557,11 @@ export default function EmployeeDashboard({ setPage }) {
           background: #eef2ff;
         }
 
+        .emp-project-status.on_hold {
+          color: #92400e;
+          background: #fffbeb;
+        }
+
         .emp-project-mini-progress,
         .emp-rating-mini-progress {
           display: grid;
@@ -1276,7 +1582,7 @@ export default function EmployeeDashboard({ setPage }) {
         .emp-project-mini-progress-fill {
           height: 100%;
           border-radius: 999px;
-          background: linear-gradient(90deg, #4f46e5, #059669);
+          background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
         }
 
         .emp-rating-mini-progress-fill {
@@ -1321,6 +1627,134 @@ export default function EmployeeDashboard({ setPage }) {
           height: 100%;
           border-radius: 999px;
           background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
+        }
+
+        .emp-project-trend-grid {
+          height: 250px;
+          display: grid;
+          grid-template-columns: repeat(10, minmax(0, 1fr));
+          gap: 10px;
+          align-items: end;
+          margin-top: 12px;
+          padding: 14px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+        }
+
+        .emp-project-trend-item {
+          min-width: 0;
+          display: grid;
+          gap: 5px;
+          justify-items: center;
+          align-items: end;
+        }
+
+        .emp-project-trend-bar {
+          height: 142px;
+          width: 100%;
+          max-width: 28px;
+          display: flex;
+          align-items: end;
+          border-radius: 999px;
+          background: #e2e8f0;
+          overflow: hidden;
+        }
+
+        .emp-project-trend-bar span {
+          display: block;
+          width: 100%;
+          border-radius: 999px;
+          background: linear-gradient(180deg, #4f46e5, #0284c7, #059669);
+        }
+
+        .emp-project-trend-item strong {
+          color: #0f172a;
+          font-size: 12px;
+        }
+
+        .emp-project-trend-item small,
+        .emp-project-trend-item em {
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 900;
+          font-style: normal;
+        }
+
+        .emp-project-rank-panel {
+          overflow: hidden;
+        }
+
+        .emp-project-rank-list {
+          display: grid;
+          gap: 12px;
+          margin-top: 14px;
+        }
+
+        .emp-project-rank-card {
+          display: grid;
+          grid-template-columns: 42px minmax(0, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+          background: #f8fafc;
+          padding: 12px;
+          transition: .2s ease;
+        }
+
+        .emp-project-rank-card:hover {
+          transform: translateY(-2px);
+          border-color: #c7d2fe;
+          box-shadow: 0 16px 38px rgba(15, 23, 42, .08);
+        }
+
+        .emp-project-rank-no {
+          width: 38px;
+          height: 38px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          color: #fff;
+          background: linear-gradient(135deg, #4f46e5, #0284c7);
+          font-weight: 900;
+        }
+
+        .emp-project-rank-main strong {
+          display: block;
+          color: #0f172a;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .emp-project-rank-main span,
+        .emp-project-rank-main small {
+          display: block;
+          margin-top: 3px;
+          color: #64748b;
+          font-size: 12px;
+          line-height: 1.4;
+        }
+
+        .emp-project-rank-track {
+          height: 9px;
+          border-radius: 999px;
+          overflow: hidden;
+          background: #e2e8f0;
+          margin-top: 9px;
+        }
+
+        .emp-project-rank-track div {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #059669);
+        }
+
+        .emp-project-rank-score {
+          color: #4f46e5;
+          font-weight: 900;
+          font-size: 16px;
         }
 
         .emp-performance-graph {
@@ -1381,7 +1815,16 @@ export default function EmployeeDashboard({ setPage }) {
         }
 
         @media (max-width: 1024px) {
+          .emp-project-head-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .emp-project-ring {
+            justify-self: start;
+          }
+
           .emp-project-stats,
+          .emp-project-modern-stat-grid,
           .emp-project-card-grid,
           .emp-leave-status-grid,
           .emp-performance-stat-grid {
@@ -1391,6 +1834,7 @@ export default function EmployeeDashboard({ setPage }) {
 
         @media (max-width: 640px) {
           .emp-project-stats,
+          .emp-project-modern-stat-grid,
           .emp-project-card-grid,
           .emp-leave-status-grid,
           .emp-performance-stat-grid {
@@ -1401,6 +1845,23 @@ export default function EmployeeDashboard({ setPage }) {
           .emp-performance-hero {
             border-radius: 20px;
             padding: 16px;
+          }
+
+          .emp-project-access-card {
+            flex-direction: column;
+          }
+
+          .emp-project-trend-grid {
+            overflow-x: auto;
+            grid-template-columns: repeat(10, 42px);
+          }
+
+          .emp-project-rank-card {
+            grid-template-columns: 34px minmax(0, 1fr);
+          }
+
+          .emp-project-rank-score {
+            grid-column: 2;
           }
         }
       `}</style>
@@ -1449,52 +1910,27 @@ export default function EmployeeDashboard({ setPage }) {
           )}
 
           <div className="hero-actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => goTo('attendance')}
-            >
+            <button type="button" className="primary" onClick={() => goTo('attendance')}>
               Attendance
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Apply Leave
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('projects')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('projects')}>
               Projects
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('tickets')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('tickets')}>
               Raise Ticket
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('profile')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('profile')}>
               My Profile
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={loadDashboard}
-              disabled={loading}
-            >
+            <button type="button" className="secondary" onClick={loadDashboard} disabled={loading}>
               {loading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
@@ -1507,47 +1943,19 @@ export default function EmployeeDashboard({ setPage }) {
 
       <section className="stats-grid">
         <Stat label="Dashboard" value="Employee" />
-
         <Stat label="Today Status" value={todayStatus} />
-
-        <Stat
-          label="Attendance Mode"
-          value={modeLabel(todayAttendance?.mode || 'office')}
-        />
-
-        <Stat
-          label="Available Modes"
-          value={availableModes.map(modeLabel).join(', ')}
-        />
-
+        <Stat label="Attendance Mode" value={modeLabel(todayAttendance?.mode || 'office')} />
+        <Stat label="Available Modes" value={availableModes.map(modeLabel).join(', ')} />
         <Stat label="Available Leave" value={totalAvailableLeave} />
-
         <Stat label="Used / Deducted Leave" value={totalUsedLeave} />
-
         <Stat label="Available Comp-Off" value={availableCompOffs.length} />
-
         <Stat label="Pending WFH/Field" value={pendingModeRequests.length} />
-
         <Stat label="Active Projects" value={projectSummary.my_active_projects || activeProjects.length || 0} />
-
         <Stat label="Completed Projects" value={projectSummary.my_completed_projects || completedProjects.length || 0} />
-
         <Stat label="Team Members" value={data?.team_members?.length || 0} />
-
-        <Stat
-          label="Reporting Members"
-          value={data?.reporting_members?.length || 0}
-        />
-
-        <Stat
-          label="Pending Leave Approvals"
-          value={pendingApprovalLeaves.length || approvalCounts.leave_requests || 0}
-        />
-
-        <Stat
-          label="Pending WFH/Field Approvals"
-          value={approvalCounts.attendance_mode_requests || 0}
-        />
+        <Stat label="Reporting Members" value={data?.reporting_members?.length || 0} />
+        <Stat label="Pending Leave Approvals" value={pendingApprovalLeaves.length || approvalCounts.leave_requests || 0} />
+        <Stat label="Pending WFH/Field Approvals" value={approvalCounts.attendance_mode_requests || 0} />
 
         {loading && (
           <div className="panel">
@@ -1656,11 +2064,7 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Apply Leave
             </button>
           </div>
@@ -1706,11 +2110,7 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Open Leave Management
             </button>
           </div>
@@ -1732,11 +2132,7 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Open Leave Management
             </button>
           </div>
@@ -1751,81 +2147,72 @@ export default function EmployeeDashboard({ setPage }) {
 
       <section className="emp-project-dashboard">
         <div className="emp-project-hero">
-          <div className="toolbar">
+          <div className="emp-project-head-grid">
             <div>
               <span className="kicker">Project Progress</span>
               <h3>My Projects & Daily Progress</h3>
               <p>
-                Active projects stay visible for daily progress updates. Completed
-                projects are preserved here for dashboard reporting and analytics.
+                Team Leaders and Reporting Officers can create projects, assign team members,
+                and add collaborators. Employees can view scoped projects and update status/progress
+                only when assigned or added as collaborators.
               </p>
             </div>
 
-            <button
-              type="button"
-              className="primary"
-              onClick={() => goTo('projects')}
-            >
-              Open Projects
+            <ProjectProgressRing value={myProjectAverage} label="My Avg Progress" />
+          </div>
+
+          <ProjectAccessCard
+            isTeamLeader={isTeamLeader}
+            isReportingOfficer={isReportingOfficer}
+          />
+
+          <div className="emp-project-modern-stat-grid">
+            <ProjectMetricCard
+              label="My Total Projects"
+              value={projectSummary.my_total_projects || myProjects.length || 0}
+              meta="Assigned or collaborated"
+            />
+
+            <ProjectMetricCard
+              label="My Active"
+              value={projectSummary.my_active_projects || activeProjects.length || 0}
+              meta="Open for progress"
+              variant="green"
+            />
+
+            <ProjectMetricCard
+              label="My Completed"
+              value={projectSummary.my_completed_projects || completedProjects.length || 0}
+              meta="Closed projects"
+              variant="sky"
+            />
+
+            <ProjectMetricCard
+              label="Average Progress"
+              value={`${myProjectAverage || 0}%`}
+              meta="My scoped project average"
+              variant="amber"
+            />
+          </div>
+
+          <div className="hero-actions" style={{ marginTop: 16 }}>
+            <button type="button" className="primary" onClick={() => goTo('projects')}>
+              {canCreateOrAssignProjects ? 'Create / Manage Projects' : 'Open My Projects'}
             </button>
           </div>
-
-          <div className="emp-project-stats">
-            <div className="emp-project-stat">
-              <span>My Total Projects</span>
-              <strong>{projectSummary.my_total_projects || myProjects.length || 0}</strong>
-            </div>
-
-            <div className="emp-project-stat">
-              <span>My Active</span>
-              <strong>{projectSummary.my_active_projects || activeProjects.length || 0}</strong>
-            </div>
-
-            <div className="emp-project-stat">
-              <span>My Completed</span>
-              <strong>{projectSummary.my_completed_projects || completedProjects.length || 0}</strong>
-            </div>
-
-            <div className="emp-project-stat">
-              <span>Average Progress</span>
-              <strong>{projectSummary.average_progress || 0}%</strong>
-            </div>
-          </div>
         </div>
 
-        <div className="emp-project-card-grid">
-          {activeProjects.slice(0, 6).map((project) => {
-            const status = normalizeProjectStatus(project.status);
+        <ProjectMiniBoard
+          title="Active Projects"
+          description="No active projects assigned yet."
+          projects={activeProjects}
+          emptyText="No active projects assigned yet."
+        />
 
-            return (
-              <div className="emp-project-card" key={project._id}>
-                <h4>{projectName(project)}</h4>
-                <p>
-                  {project.department || 'No department'}
-                  {project.team_leader_name ? ` • ${project.team_leader_name}` : ''}
-                </p>
-
-                <span className={`emp-project-status ${status}`}>
-                  {statusLabel(status)}
-                </span>
-
-                <MiniProgressBar value={project.latest_progress} />
-
-                <p>
-                  Last update: {project.latest_progress_date || 'No update yet'}
-                </p>
-              </div>
-            );
-          })}
-
-          {!activeProjects.length && (
-            <div className="panel">
-              <p>No active projects assigned yet.</p>
-            </div>
-          )}
-        </div>
-
-        <ProjectChart title="My Daily Project Progress" rows={projectDailyChart} />
+        <section className="two-col">
+          <ProjectTrendGraph title="My Daily Project Progress" rows={projectDailyChart} />
+          <ProjectRankingGraph title="My Project Progress Ranking" rows={myProjects} />
+        </section>
 
         {isTeamLeader && (
           <>
@@ -1839,26 +2226,25 @@ export default function EmployeeDashboard({ setPage }) {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => goTo('projects')}
-                >
+                <button type="button" className="secondary" onClick={() => goTo('projects')}>
                   Manage Projects
                 </button>
               </div>
 
-              <div className="stats-grid">
-                <Stat label="Team Projects" value={projectSummary.team_total_projects || 0} />
-                <Stat label="Team Active" value={projectSummary.team_active_projects || 0} />
-                <Stat label="Team Completed" value={projectSummary.team_completed_projects || 0} />
-                <Stat label="Team Members" value={data?.team_members?.length || 0} />
+              <div className="emp-project-modern-stat-grid">
+                <ProjectMetricCard label="Team Projects" value={projectSummary.team_total_projects || teamLeaderProjects.length || 0} meta="Created/managed by you" />
+                <ProjectMetricCard label="Team Active" value={projectSummary.team_active_projects || 0} meta="Currently running" variant="green" />
+                <ProjectMetricCard label="Team Completed" value={projectSummary.team_completed_projects || 0} meta="Closed projects" variant="sky" />
+                <ProjectMetricCard label="Team Avg Progress" value={`${teamProjectAverage || 0}%`} meta="Team project average" variant="amber" />
               </div>
 
               <Table rows={teamProjectRows} maxColumns={8} />
             </section>
 
-            <ProjectChart title="Team Project Progress Graph" rows={teamProjectDailyChart} />
+            <section className="two-col">
+              <ProjectTrendGraph title="Team Project Progress Graph" rows={teamProjectDailyChart} />
+              <ProjectRankingGraph title="Team Project Ranking" rows={teamLeaderProjects} />
+            </section>
           </>
         )}
 
@@ -1869,23 +2255,30 @@ export default function EmployeeDashboard({ setPage }) {
                 <div>
                   <h3>Reporting Officer Project View</h3>
                   <p>
-                    Department/team-wise progress for team leaders mapped under
-                    your reporting officer assignment.
+                    Department/team-wise progress for Team Leaders mapped under
+                    your Reporting Officer assignment.
                   </p>
                 </div>
+
+                <button type="button" className="secondary" onClick={() => goTo('projects')}>
+                  Open Projects
+                </button>
               </div>
 
-              <div className="stats-grid">
-                <Stat label="Reporting Projects" value={projectSummary.reporting_total_projects || 0} />
-                <Stat label="Reporting Active" value={projectSummary.reporting_active_projects || 0} />
-                <Stat label="Reporting Completed" value={projectSummary.reporting_completed_projects || 0} />
-                <Stat label="Reporting Members" value={data?.reporting_members?.length || 0} />
+              <div className="emp-project-modern-stat-grid">
+                <ProjectMetricCard label="Reporting Projects" value={projectSummary.reporting_total_projects || reportingProjects.length || 0} meta="Reporting scope" />
+                <ProjectMetricCard label="Reporting Active" value={projectSummary.reporting_active_projects || 0} meta="Currently running" variant="green" />
+                <ProjectMetricCard label="Reporting Completed" value={projectSummary.reporting_completed_projects || 0} meta="Closed projects" variant="sky" />
+                <ProjectMetricCard label="Reporting Avg Progress" value={`${reportingProjectAverage || 0}%`} meta="Reporting project average" variant="amber" />
               </div>
 
               <Table rows={reportingProjectRows} maxColumns={8} />
             </section>
 
-            <ProjectChart title="Reporting Team Project Progress Graph" rows={reportingProjectDailyChart} />
+            <section className="two-col">
+              <ProjectTrendGraph title="Reporting Team Project Progress Graph" rows={reportingProjectDailyChart} />
+              <ProjectRankingGraph title="Reporting Project Ranking" rows={reportingProjects} />
+            </section>
 
             <section className="panel">
               <h3>Team Leader Performance Under Reporting Officer</h3>
@@ -1931,11 +2324,7 @@ export default function EmployeeDashboard({ setPage }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('attendance')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('attendance')}>
             Open Attendance
           </button>
         </div>
@@ -1970,11 +2359,7 @@ export default function EmployeeDashboard({ setPage }) {
             <p>Key employment details from Employee Master.</p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('profile')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('profile')}>
             View Full Profile
           </button>
         </div>
@@ -1991,19 +2376,12 @@ export default function EmployeeDashboard({ setPage }) {
 
               <tr>
                 <th>Is Team Leader</th>
-                <td>
-                  {boolLabel(employee.is_team_leader || data?.is_team_leader)}
-                </td>
+                <td>{boolLabel(employee.is_team_leader || data?.is_team_leader)}</td>
               </tr>
 
               <tr>
                 <th>Is Reporting Officer</th>
-                <td>
-                  {boolLabel(
-                    employee.is_reporting_officer ||
-                      data?.is_reporting_officer,
-                  )}
-                </td>
+                <td>{boolLabel(employee.is_reporting_officer || data?.is_reporting_officer)}</td>
               </tr>
             </tbody>
           </table>
@@ -2021,11 +2399,7 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('attendance')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('attendance')}>
               Request WFH / Field
             </button>
           </div>
@@ -2098,11 +2472,7 @@ export default function EmployeeDashboard({ setPage }) {
                 />
               </label>
 
-              <button
-                type="submit"
-                className="primary"
-                disabled={claimingCompOff}
-              >
+              <button type="submit" className="primary" disabled={claimingCompOff}>
                 {claimingCompOff ? 'Submitting...' : 'Claim Comp-Off'}
               </button>
             </form>
@@ -2210,11 +2580,7 @@ export default function EmployeeDashboard({ setPage }) {
               />
             </label>
 
-            <button
-              type="submit"
-              className="primary"
-              disabled={submittingReview}
-            >
+            <button type="submit" className="primary" disabled={submittingReview}>
               {submittingReview ? 'Submitting...' : 'Submit Rating'}
             </button>
           </form>
@@ -2246,11 +2612,7 @@ export default function EmployeeDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('attendance')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('attendance')}>
               Open Attendance
             </button>
           </div>

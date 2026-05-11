@@ -2310,3 +2310,581 @@ tr:hover td {
     min-width: 760px;
   }
 }
+/* ==========================================================================
+   Project Permission + Modern Graph UI Final Layer
+   Applies to:
+   - frontend/src/pages/Projects.jsx
+   - frontend/src/pages/AdminDashboard.jsx
+   - frontend/src/pages/EmployeeDashboard.jsx
+   ========================================================================== */
+
+/* ---------- Shared project permission cards ---------- */
+
+.emp-project-access-card,
+.project-permission-note {
+  position: relative;
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 35%),
+    #FFFFFF;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .06);
+}
+
+.emp-project-access-card::before,
+.project-permission-note::before {
+  content: "";
+  position: absolute;
+  width: 110px;
+  height: 110px;
+  right: -45px;
+  top: -45px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, .10);
+  pointer-events: none;
+}
+
+.emp-project-access-card.can-create::before {
+  background: rgba(5, 150, 105, .12);
+}
+
+.emp-project-access-card > *,
+.project-permission-note > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Global project analytics hero/card polish ---------- */
+
+.project-analytics-panel,
+.admin-project-hero,
+.emp-project-hero,
+.emp-performance-hero {
+  isolation: isolate;
+}
+
+.project-analytics-panel::after,
+.admin-project-hero::after,
+.emp-project-hero::after,
+.emp-performance-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .72), transparent 54%);
+  z-index: 0;
+}
+
+.project-analytics-panel > *,
+.admin-project-hero > *,
+.emp-project-hero > *,
+.emp-performance-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.project-graph-card,
+.project-modern-chart,
+.project-rank-card,
+.admin-project-metric,
+.admin-modern-panel,
+.admin-rank-card,
+.emp-project-modern-stat,
+.emp-project-card,
+.emp-project-rank-card,
+.emp-performance-row {
+  transition:
+    transform .22s ease,
+    box-shadow .22s ease,
+    border-color .22s ease,
+    background .22s ease;
+}
+
+.project-graph-card:hover,
+.project-modern-chart:hover,
+.project-rank-card:hover,
+.admin-project-metric:hover,
+.admin-modern-panel:hover,
+.admin-rank-card:hover,
+.emp-project-modern-stat:hover,
+.emp-project-card:hover,
+.emp-project-rank-card:hover,
+.emp-performance-row:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+/* ---------- Project ring charts ---------- */
+
+.project-progress-ring,
+.admin-project-ring,
+.emp-project-ring {
+  position: relative;
+  animation: softFadeUp .3s ease both;
+}
+
+.project-progress-ring::after,
+.admin-project-ring::after,
+.emp-project-ring::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  border: 1px solid rgba(79, 70, 229, .12);
+  opacity: .9;
+  pointer-events: none;
+}
+
+.project-progress-ring strong,
+.admin-project-ring strong,
+.emp-project-ring strong {
+  letter-spacing: -.04em;
+}
+
+/* ---------- Modern bar tracks ---------- */
+
+.project-modern-track,
+.project-rank-track,
+.project-progress-track,
+.admin-modern-track,
+.admin-rank-track,
+.dash-graph-track,
+.emp-project-mini-progress-track,
+.emp-project-rank-track,
+.emp-performance-track,
+.emp-rating-mini-progress-track {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .38), transparent),
+    #E2E8F0;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .10);
+}
+
+.project-modern-fill,
+.project-rank-track > div,
+.project-progress-fill,
+.admin-modern-fill,
+.admin-rank-track div,
+.dash-graph-fill,
+.emp-project-mini-progress-fill,
+.emp-project-rank-track div,
+.emp-performance-fill,
+.emp-rating-mini-progress-fill {
+  min-width: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.project-modern-fill::after,
+.project-rank-track > div::after,
+.project-progress-fill::after,
+.admin-modern-fill::after,
+.admin-rank-track div::after,
+.dash-graph-fill::after,
+.emp-project-mini-progress-fill::after,
+.emp-project-rank-track div::after,
+.emp-performance-fill::after,
+.emp-rating-mini-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, .32),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: graphShimmer 2.8s ease-in-out infinite;
+}
+
+@keyframes graphShimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  55% {
+    transform: translateX(100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- Projects page graph layout ---------- */
+
+.project-analytics-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.project-analytics-head {
+  min-width: 0;
+}
+
+.project-analytics-head h2 {
+  font-size: clamp(24px, 3vw, 34px);
+}
+
+.project-graph-grid,
+.admin-project-metric-grid,
+.emp-project-modern-stat-grid {
+  align-items: stretch;
+}
+
+.project-graph-card,
+.admin-project-metric,
+.emp-project-modern-stat {
+  min-height: 128px;
+}
+
+.project-graph-card strong,
+.admin-project-metric strong,
+.emp-project-modern-stat strong {
+  letter-spacing: -.04em;
+}
+
+.project-modern-bar,
+.project-rank-card,
+.admin-modern-bar,
+.admin-rank-card,
+.emp-project-rank-card {
+  min-width: 0;
+}
+
+.project-modern-bar-head span,
+.project-rank-card strong,
+.admin-modern-bar-head span,
+.admin-rank-main strong,
+.emp-project-rank-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Project module readonly permission box ---------- */
+
+.project-readonly-box {
+  position: relative;
+  overflow: hidden;
+}
+
+.project-readonly-box::before {
+  content: "";
+  position: absolute;
+  width: 82px;
+  height: 82px;
+  right: -32px;
+  top: -32px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, .08);
+  pointer-events: none;
+}
+
+.project-readonly-box > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Admin Dashboard graph polish ---------- */
+
+.admin-modern-panel {
+  min-width: 0;
+}
+
+.admin-status-donut-card {
+  min-width: 0;
+}
+
+.admin-status-donut {
+  box-shadow: 0 18px 42px rgba(15, 23, 42, .10);
+}
+
+.admin-status-legend div {
+  min-width: 0;
+}
+
+.admin-daily-trend {
+  min-width: 0;
+}
+
+.admin-daily-column-bar {
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.admin-daily-column-bar span {
+  min-height: 8px;
+  transition: height .35s ease;
+}
+
+/* ---------- Employee Dashboard project graph polish ---------- */
+
+.emp-project-head-grid {
+  min-width: 0;
+}
+
+.emp-project-modern-stat {
+  min-width: 0;
+}
+
+.emp-project-modern-stat strong {
+  overflow-wrap: anywhere;
+}
+
+.emp-project-trend-grid {
+  min-width: 0;
+}
+
+.emp-project-trend-bar {
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.emp-project-trend-bar span {
+  min-height: 8px;
+  transition: height .35s ease;
+}
+
+.emp-project-trend-item em {
+  background: #EEF2FF;
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 3px 6px;
+}
+
+.emp-project-rank-score,
+.admin-rank-score {
+  white-space: nowrap;
+}
+
+/* ---------- Project status badges ---------- */
+
+.project-status-active,
+.emp-project-status.active,
+.table-status-success {
+  background: var(--successSoft);
+  color: var(--success);
+  border: 1px solid #BBF7D0;
+}
+
+.project-status-completed,
+.emp-project-status.completed,
+.table-status-info {
+  background: var(--primarySoft);
+  color: var(--primary);
+  border: 1px solid var(--primaryRing);
+}
+
+.project-status-on_hold,
+.emp-project-status.on_hold,
+.table-status-warning {
+  background: var(--warningSoft);
+  color: var(--warning);
+  border: 1px solid #FED7AA;
+}
+
+/* ---------- Project form and multi-select improvements ---------- */
+
+.project-select-list {
+  scrollbar-width: thin;
+  scrollbar-color: #CBD5E1 transparent;
+}
+
+.project-select-list.is-disabled {
+  filter: grayscale(.1);
+}
+
+.project-check {
+  min-width: 0;
+}
+
+.project-check span:last-child {
+  min-width: 0;
+}
+
+.project-check strong,
+.project-check small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-check-box {
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .04);
+}
+
+.project-check.is-active .project-check-box {
+  background: var(--primary);
+  color: #FFFFFF;
+}
+
+/* ---------- Employee capability/project permission display ---------- */
+
+.capability-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.capability-card {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 32%),
+    #FFFFFF;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.capability-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.capability-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 26px;
+}
+
+/* ---------- Better mobile behavior for new graph cards ---------- */
+
+@media (max-width: 1180px) {
+  .project-graph-grid,
+  .admin-project-metric-grid,
+  .emp-project-modern-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .project-analytics-two,
+  .admin-modern-grid,
+  .emp-project-head-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .project-progress-ring,
+  .admin-project-ring,
+  .emp-project-ring {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 820px) {
+  .project-rank-card,
+  .admin-rank-card,
+  .emp-project-rank-card {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .project-rank-progress,
+  .admin-rank-score,
+  .emp-project-rank-score {
+    grid-column: 2;
+  }
+
+  .admin-status-donut-card {
+    grid-template-columns: 1fr !important;
+  }
+
+  .admin-status-donut,
+  .project-progress-ring,
+  .admin-project-ring,
+  .emp-project-ring {
+    width: 124px;
+    height: 124px;
+  }
+
+  .admin-status-donut > div,
+  .project-progress-ring > div,
+  .admin-project-ring-inner,
+  .emp-project-ring > div {
+    width: 92px;
+    height: 92px;
+  }
+}
+
+@media (max-width: 720px) {
+  .project-graph-grid,
+  .admin-project-metric-grid,
+  .emp-project-modern-stat-grid,
+  .capability-panel {
+    grid-template-columns: 1fr !important;
+  }
+
+  .project-analytics-head,
+  .admin-project-hero,
+  .emp-project-head-grid {
+    align-items: flex-start;
+  }
+
+  .project-modern-bar-head,
+  .admin-modern-bar-head,
+  .emp-performance-row-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .project-modern-bar-head span,
+  .admin-modern-bar-head span,
+  .emp-performance-row-head span,
+  .project-rank-card strong,
+  .admin-rank-main strong,
+  .emp-project-rank-main strong {
+    white-space: normal;
+  }
+
+  .admin-daily-trend,
+  .emp-project-trend-grid {
+    overflow-x: auto;
+    grid-template-columns: repeat(10, 44px) !important;
+    padding-bottom: 18px;
+  }
+
+  .project-readonly-box,
+  .emp-project-access-card {
+    border-radius: 18px;
+  }
+}
+
+@media (max-width: 520px) {
+  .project-progress-ring,
+  .admin-project-ring,
+  .emp-project-ring,
+  .admin-status-donut {
+    width: 112px;
+    height: 112px;
+  }
+
+  .project-progress-ring > div,
+  .admin-project-ring-inner,
+  .emp-project-ring > div,
+  .admin-status-donut > div {
+    width: 84px;
+    height: 84px;
+  }
+
+  .project-progress-ring strong,
+  .admin-project-ring-inner strong,
+  .emp-project-ring strong,
+  .admin-status-donut strong {
+    font-size: 22px;
+  }
+
+  .project-progress-ring span,
+  .admin-project-ring-inner span,
+  .emp-project-ring span,
+  .admin-status-donut span {
+    font-size: 10px;
+  }
+}

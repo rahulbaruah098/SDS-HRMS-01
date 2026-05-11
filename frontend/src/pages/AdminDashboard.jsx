@@ -141,39 +141,49 @@ function projectName(row = {}) {
   );
 }
 
-function GraphBar({ label, value, meta, max = 100 }) {
-  const numericValue = numberValue(value, 0);
-  const denominator = Math.max(numberValue(max, 100), 1);
-  const width = Math.max(4, Math.min((numericValue / denominator) * 100, 100));
+function EmptyGraph({ message = 'No graph data available yet.' }) {
+  return <div className="empty">{message}</div>;
+}
 
+function ProjectMetricCard({ label, value, meta, variant = 'indigo' }) {
   return (
-    <div className="dash-graph-row">
-      <div className="dash-graph-row-head">
-        <span>{label}</span>
-        <strong>{numericValue}</strong>
-      </div>
-
-      <div className="dash-graph-track">
-        <div className="dash-graph-fill" style={{ width: `${width}%` }} />
-      </div>
-
-      {meta && <small>{meta}</small>}
+    <div className={`admin-project-metric ${variant}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{meta}</small>
     </div>
   );
 }
 
-function ProgressBar({ label, value, meta }) {
+function ProjectProgressRing({ value = 0, label = 'Average Progress' }) {
   const progress = percentValue(value);
 
   return (
-    <div className="dash-graph-row">
-      <div className="dash-graph-row-head">
-        <span>{label}</span>
+    <div className="admin-project-ring" style={{ '--ringValue': `${progress}%` }}>
+      <div className="admin-project-ring-inner">
         <strong>{progress}%</strong>
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
+function ModernGraphBar({ label, value, max = 100, meta, progressValue, variant = 'indigo' }) {
+  const numericValue = numberValue(value, 0);
+  const denominator = Math.max(numberValue(max, 100), 1);
+  const width = progressValue !== undefined
+    ? percentValue(progressValue)
+    : Math.max(4, Math.min((numericValue / denominator) * 100, 100));
+
+  return (
+    <div className={`admin-modern-bar ${variant}`}>
+      <div className="admin-modern-bar-head">
+        <span>{label}</span>
+        <strong>{progressValue !== undefined ? `${percentValue(progressValue)}%` : numericValue}</strong>
       </div>
 
-      <div className="dash-graph-track">
-        <div className="dash-graph-fill" style={{ width: `${Math.max(progress, 4)}%` }} />
+      <div className="admin-modern-track">
+        <div className="admin-modern-fill" style={{ width: `${Math.max(width, 4)}%` }} />
       </div>
 
       {meta && <small>{meta}</small>}
@@ -181,8 +191,93 @@ function ProgressBar({ label, value, meta }) {
   );
 }
 
-function EmptyGraph({ message = 'No graph data available yet.' }) {
-  return <div className="empty">{message}</div>;
+function ProjectStatusDonut({ rows = [] }) {
+  const total = rows.reduce((sum, row) => sum + numberValue(row.count || row.total || row.total_projects, 0), 0);
+  const active = rows.find((row) => String(row.status || row.label || '').toLowerCase().includes('active'))?.count || 0;
+  const completed = rows.find((row) => String(row.status || row.label || '').toLowerCase().includes('completed'))?.count || 0;
+  const onHold = rows.find((row) => String(row.status || row.label || '').toLowerCase().includes('hold'))?.count || 0;
+
+  const activePct = total ? (numberValue(active, 0) / total) * 100 : 0;
+  const completedPct = total ? (numberValue(completed, 0) / total) * 100 : 0;
+  const onHoldPct = total ? (numberValue(onHold, 0) / total) * 100 : 0;
+
+  return (
+    <div className="admin-status-donut-card">
+      <div
+        className="admin-status-donut"
+        style={{
+          '--active': `${activePct}%`,
+          '--completed': `${activePct + completedPct}%`,
+          '--hold': `${activePct + completedPct + onHoldPct}%`,
+        }}
+      >
+        <div>
+          <strong>{total}</strong>
+          <span>Projects</span>
+        </div>
+      </div>
+
+      <div className="admin-status-legend">
+        {rows.map((row) => (
+          <div key={row.status || row.label}>
+            <span />
+            <strong>{statusLabel(row.status || row.label)}</strong>
+            <em>{row.count || row.total || row.total_projects || 0}</em>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RankingCard({ index, title, subtitle, value, meta }) {
+  const progress = percentValue(value);
+
+  return (
+    <div className="admin-rank-card">
+      <div className="admin-rank-number">{index + 1}</div>
+
+      <div className="admin-rank-main">
+        <strong>{title}</strong>
+        <span>{subtitle}</span>
+
+        <div className="admin-rank-track">
+          <div style={{ width: `${Math.max(progress, 4)}%` }} />
+        </div>
+
+        {meta && <small>{meta}</small>}
+      </div>
+
+      <div className="admin-rank-score">{progress}%</div>
+    </div>
+  );
+}
+
+function DailyTrendCard({ rows = [] }) {
+  const maxUpdates = Math.max(1, ...rows.map((row) => numberValue(row.updates, 0)));
+
+  if (!rows.length) {
+    return <EmptyGraph message="No recent project progress updates available yet." />;
+  }
+
+  return (
+    <div className="admin-daily-trend">
+      {rows.slice(-10).map((row) => {
+        const updates = numberValue(row.updates, 0);
+        const height = Math.max(12, (updates / maxUpdates) * 100);
+
+        return (
+          <div className="admin-daily-column" key={row.date}>
+            <div className="admin-daily-column-bar">
+              <span style={{ height: `${height}%` }} />
+            </div>
+            <strong>{updates}</strong>
+            <small>{String(row.date || '').slice(5) || '—'}</small>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function AdminDashboard({ setPage }) {
@@ -350,12 +445,12 @@ export default function AdminDashboard({ setPage }) {
         count: projectSummary.active_projects || stats['Active Projects'] || 0,
       },
       {
-        status: 'Completed',
-        count: projectSummary.completed_projects || stats['Completed Projects'] || 0,
+        status: 'On Hold',
+        count: projectSummary.on_hold_projects || stats['On Hold Projects'] || 0,
       },
       {
-        status: 'Total',
-        count: projectSummary.total_projects || stats['Total Projects'] || 0,
+        status: 'Completed',
+        count: projectSummary.completed_projects || stats['Completed Projects'] || 0,
       },
     ].filter((row) => Number(row.count || 0) > 0);
   }, [projectStatusChart, projectSummary, stats]);
@@ -369,21 +464,27 @@ export default function AdminDashboard({ setPage }) {
     );
   }, [departmentProjectPerformance]);
 
-  const maxProjectStatusCount = useMemo(() => {
+  const maxProjectProgress = useMemo(() => {
     return Math.max(
-      1,
-      ...projectStatusFallback.map((row) =>
-        numberValue(row.count || row.total || row.total_projects, 0),
+      100,
+      ...projectWisePerformance.map((row) =>
+        numberValue(row.latest_progress ?? row.average_progress ?? row.progress ?? row.progress_percent, 0),
       ),
     );
-  }, [projectStatusFallback]);
+  }, [projectWisePerformance]);
+
+  const projectTotal = projectSummary.total_projects || stats['Total Projects'] || 0;
+  const projectActive = projectSummary.active_projects || stats['Active Projects'] || 0;
+  const projectOnHold = projectSummary.on_hold_projects || stats['On Hold Projects'] || 0;
+  const projectCompleted = projectSummary.completed_projects || stats['Completed Projects'] || 0;
+  const projectAverageProgress = projectSummary.average_progress || stats['Average Project Progress'] || 0;
 
   const statItems = [
     ['Total Employees', stats['Total Employees'] || 0],
-    ['Total Projects', stats['Total Projects'] || projectSummary.total_projects || 0],
-    ['Active Projects', stats['Active Projects'] || projectSummary.active_projects || 0],
-    ['Completed Projects', stats['Completed Projects'] || projectSummary.completed_projects || 0],
-    ['Avg Project Progress', `${stats['Average Project Progress'] || projectSummary.average_progress || 0}%`],
+    ['Total Projects', projectTotal],
+    ['Active Projects', projectActive],
+    ['Completed Projects', projectCompleted],
+    ['Avg Project Progress', `${projectAverageProgress}%`],
     ['Present Today', stats['Present Today'] || 0],
     ['Late Today', stats['Late Today'] || 0],
     ['Early Checkout Today', stats['Early Checkout Today'] || 0],
@@ -596,8 +697,10 @@ export default function AdminDashboard({ setPage }) {
     department: row.department || 'Unassigned',
     total_projects: row.total_projects || 0,
     active_projects: row.active_projects || 0,
+    on_hold_projects: row.on_hold_projects || 0,
     completed_projects: row.completed_projects || 0,
     completion_rate: `${row.completion_rate || 0}%`,
+    average_progress: `${row.average_progress || 0}%`,
     score: row.score || 0,
   }));
 
@@ -606,12 +709,489 @@ export default function AdminDashboard({ setPage }) {
     department: row.department || '—',
     total_projects: row.total_projects || 0,
     active_projects: row.active_projects || 0,
+    on_hold_projects: row.on_hold_projects || 0,
     completed_projects: row.completed_projects || 0,
+    average_progress: `${row.average_progress || 0}%`,
     completion_rate: `${row.completion_rate || 0}%`,
   }));
 
   return (
     <div className="page-grid admin-dashboard-page">
+      <style>{`
+        .admin-project-hero {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          border-radius: 30px;
+          padding: 26px;
+          background:
+            radial-gradient(circle at 8% 0%, rgba(79,70,229,.16), transparent 34%),
+            radial-gradient(circle at 92% 6%, rgba(5,150,105,.14), transparent 34%),
+            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+          box-shadow: var(--shadow);
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 22px;
+          align-items: center;
+        }
+
+        .admin-project-hero h2 {
+          margin: 0;
+          color: var(--ink);
+          font-size: clamp(26px, 3vw, 38px);
+          letter-spacing: -.05em;
+          line-height: 1.04;
+        }
+
+        .admin-project-hero p {
+          margin: 10px 0 0;
+          color: var(--muted);
+          line-height: 1.65;
+          max-width: 820px;
+        }
+
+        .admin-project-metric-grid {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .admin-project-metric {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          border-radius: 22px;
+          background: #fff;
+          padding: 16px;
+          box-shadow: 0 12px 30px rgba(15,23,42,.06);
+        }
+
+        .admin-project-metric::after {
+          content: "";
+          position: absolute;
+          width: 74px;
+          height: 74px;
+          right: -28px;
+          top: -26px;
+          border-radius: 999px;
+          background: rgba(79,70,229,.12);
+        }
+
+        .admin-project-metric.green::after { background: rgba(5,150,105,.13); }
+        .admin-project-metric.amber::after { background: rgba(217,119,6,.14); }
+        .admin-project-metric.sky::after { background: rgba(2,132,199,.13); }
+        .admin-project-metric.rose::after { background: rgba(225,29,72,.11); }
+
+        .admin-project-metric span {
+          display: block;
+          color: var(--muted);
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .07em;
+          text-transform: uppercase;
+        }
+
+        .admin-project-metric strong {
+          display: block;
+          margin-top: 8px;
+          color: var(--ink);
+          font-size: 30px;
+          line-height: 1;
+        }
+
+        .admin-project-metric small {
+          display: block;
+          margin-top: 7px;
+          color: var(--muted);
+          font-weight: 750;
+        }
+
+        .admin-project-ring {
+          --ringValue: 0%;
+          width: 148px;
+          height: 148px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          background: conic-gradient(var(--primary) var(--ringValue), #e2e8f0 0);
+          box-shadow: 0 18px 42px rgba(79,70,229,.18);
+        }
+
+        .admin-project-ring-inner {
+          width: 110px;
+          height: 110px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          background: #fff;
+          border: 1px solid var(--line);
+        }
+
+        .admin-project-ring-inner strong {
+          color: var(--ink);
+          font-size: 28px;
+          line-height: 1;
+        }
+
+        .admin-project-ring-inner span {
+          display: block;
+          margin-top: 5px;
+          color: var(--muted);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          text-align: center;
+        }
+
+        .admin-modern-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 18px;
+        }
+
+        .admin-modern-panel {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          border-radius: 26px;
+          background:
+            radial-gradient(circle at 0 0, rgba(79,70,229,.08), transparent 32%),
+            #fff;
+          padding: 18px;
+          box-shadow: var(--shadow);
+        }
+
+        .admin-modern-panel h3 {
+          margin: 0;
+          color: var(--ink);
+        }
+
+        .admin-modern-panel p {
+          margin: 5px 0 0;
+          color: var(--muted);
+          line-height: 1.5;
+        }
+
+        .admin-modern-list {
+          display: grid;
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        .admin-modern-bar {
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: #f8fafc;
+          padding: 13px;
+          transition: .2s ease;
+        }
+
+        .admin-modern-bar:hover {
+          transform: translateY(-2px);
+          border-color: var(--primaryRing);
+          box-shadow: var(--shadowHover);
+        }
+
+        .admin-modern-bar-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          color: var(--ink);
+          font-weight: 900;
+        }
+
+        .admin-modern-bar-head span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .admin-modern-bar-head strong {
+          color: var(--primary);
+          white-space: nowrap;
+        }
+
+        .admin-modern-track {
+          height: 11px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e2e8f0;
+          margin-top: 10px;
+          box-shadow: inset 0 1px 2px rgba(15,23,42,.08);
+        }
+
+        .admin-modern-fill {
+          height: 100%;
+          min-width: 4px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--primary), var(--info), var(--success));
+        }
+
+        .admin-modern-bar.green .admin-modern-fill {
+          background: linear-gradient(90deg, var(--success), #22c55e);
+        }
+
+        .admin-modern-bar.amber .admin-modern-fill {
+          background: linear-gradient(90deg, var(--warning), #f59e0b);
+        }
+
+        .admin-modern-bar small {
+          display: block;
+          margin-top: 8px;
+          color: var(--muted);
+          font-weight: 750;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .admin-status-donut-card {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 18px;
+          align-items: center;
+          margin-top: 16px;
+        }
+
+        .admin-status-donut {
+          --active: 0%;
+          --completed: 0%;
+          --hold: 0%;
+          width: 160px;
+          height: 160px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          background:
+            conic-gradient(
+              var(--success) 0 var(--active),
+              var(--primary) var(--active) var(--completed),
+              var(--warning) var(--completed) var(--hold),
+              #e2e8f0 var(--hold) 100%
+            );
+        }
+
+        .admin-status-donut > div {
+          width: 112px;
+          height: 112px;
+          border-radius: 999px;
+          background: #fff;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          border: 1px solid var(--line);
+        }
+
+        .admin-status-donut strong {
+          color: var(--ink);
+          font-size: 28px;
+          line-height: 1;
+        }
+
+        .admin-status-donut span {
+          color: var(--muted);
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .admin-status-legend {
+          display: grid;
+          gap: 9px;
+        }
+
+        .admin-status-legend div {
+          display: grid;
+          grid-template-columns: 10px minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: center;
+          background: #f8fafc;
+          border: 1px solid var(--line);
+          border-radius: 14px;
+          padding: 10px;
+        }
+
+        .admin-status-legend span {
+          width: 10px;
+          height: 10px;
+          border-radius: 999px;
+          background: var(--primary);
+        }
+
+        .admin-status-legend div:nth-child(1) span { background: var(--success); }
+        .admin-status-legend div:nth-child(2) span { background: var(--warning); }
+        .admin-status-legend div:nth-child(3) span { background: var(--primary); }
+
+        .admin-status-legend strong {
+          color: var(--ink);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .admin-status-legend em {
+          color: var(--muted);
+          font-style: normal;
+          font-weight: 900;
+        }
+
+        .admin-rank-list {
+          display: grid;
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        .admin-rank-card {
+          display: grid;
+          grid-template-columns: 42px minmax(0, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: #f8fafc;
+          padding: 12px;
+        }
+
+        .admin-rank-number {
+          width: 38px;
+          height: 38px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          color: #fff;
+          background: linear-gradient(135deg, var(--primary), var(--info));
+          font-weight: 900;
+        }
+
+        .admin-rank-main strong {
+          display: block;
+          color: var(--ink);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .admin-rank-main span,
+        .admin-rank-main small {
+          display: block;
+          color: var(--muted);
+          font-size: 12px;
+          margin-top: 3px;
+          line-height: 1.4;
+        }
+
+        .admin-rank-track {
+          height: 9px;
+          border-radius: 999px;
+          overflow: hidden;
+          background: #e2e8f0;
+          margin-top: 9px;
+        }
+
+        .admin-rank-track div {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--primary), var(--success));
+        }
+
+        .admin-rank-score {
+          color: var(--primary);
+          font-weight: 900;
+          font-size: 16px;
+        }
+
+        .admin-daily-trend {
+          height: 250px;
+          display: grid;
+          grid-template-columns: repeat(10, minmax(0, 1fr));
+          gap: 10px;
+          align-items: end;
+          margin-top: 16px;
+          padding: 14px;
+          background: #f8fafc;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+        }
+
+        .admin-daily-column {
+          min-width: 0;
+          display: grid;
+          gap: 6px;
+          justify-items: center;
+          align-items: end;
+        }
+
+        .admin-daily-column-bar {
+          height: 150px;
+          width: 100%;
+          max-width: 28px;
+          display: flex;
+          align-items: end;
+          border-radius: 999px;
+          background: #e2e8f0;
+          overflow: hidden;
+        }
+
+        .admin-daily-column-bar span {
+          display: block;
+          width: 100%;
+          border-radius: 999px;
+          background: linear-gradient(180deg, var(--primary), var(--info), var(--success));
+        }
+
+        .admin-daily-column strong {
+          color: var(--ink);
+          font-size: 12px;
+        }
+
+        .admin-daily-column small {
+          color: var(--muted);
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        @media (max-width: 1180px) {
+          .admin-project-metric-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .admin-modern-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .admin-project-hero {
+            grid-template-columns: 1fr;
+            border-radius: 22px;
+            padding: 18px;
+          }
+
+          .admin-project-metric-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-status-donut-card {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-rank-card {
+            grid-template-columns: 34px minmax(0, 1fr);
+          }
+
+          .admin-rank-score {
+            grid-column: 2;
+          }
+
+          .admin-daily-trend {
+            overflow-x: auto;
+            grid-template-columns: repeat(10, 42px);
+          }
+        }
+      `}</style>
+
       <section className="hero compact">
         <div>
           <span className="kicker">Admin Dashboard</span>
@@ -626,60 +1206,31 @@ export default function AdminDashboard({ setPage }) {
           </p>
 
           <div className="hero-actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => goTo('attendance')}
-            >
+            <button type="button" className="primary" onClick={() => goTo('attendance')}>
               Attendance
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('projects')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('projects')}>
               Projects
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Leave Management
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_balances')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_balances')}>
               Leave Balances
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('employees')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('employees')}>
               Employee Master
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('reports')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('reports')}>
               Reports
             </button>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={loadDashboard}
-              disabled={loading}
-            >
+            <button type="button" className="secondary" onClick={loadDashboard} disabled={loading}>
               {loading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
@@ -708,63 +1259,46 @@ export default function AdminDashboard({ setPage }) {
         </section>
       )}
 
-      <section className="panel">
-        <div className="toolbar">
-          <div>
-            <h3>SDS Project Analytics</h3>
-            <p>
-              Department-wise and project-wise performance summary for current
-              project monitoring.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('projects')}
-          >
-            Open Projects
-          </button>
+      <section className="admin-project-hero">
+        <div>
+          <span className="kicker">SDS Project Analytics</span>
+          <h2>Executive Project Performance Graphs</h2>
+          <p>
+            Track department workload, project progress, status distribution,
+            daily progress updates and Team Leader performance from one modern
+            analytics view.
+          </p>
         </div>
 
-        <div className="stats-grid">
-          <Stat
-            label="Total Projects"
-            value={projectSummary.total_projects || stats['Total Projects'] || 0}
-          />
-          <Stat
-            label="Active Projects"
-            value={projectSummary.active_projects || stats['Active Projects'] || 0}
-          />
-          <Stat
-            label="Completed Projects"
-            value={projectSummary.completed_projects || stats['Completed Projects'] || 0}
-          />
-          <Stat
-            label="Average Progress"
-            value={`${projectSummary.average_progress || stats['Average Project Progress'] || 0}%`}
-          />
-        </div>
+        <ProjectProgressRing value={projectAverageProgress} />
       </section>
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="admin-project-metric-grid">
+        <ProjectMetricCard label="Total Projects" value={projectTotal} meta="All project records" />
+        <ProjectMetricCard label="Active Projects" value={projectActive} meta="Currently running" variant="green" />
+        <ProjectMetricCard label="On Hold" value={projectOnHold} meta="Paused workload" variant="amber" />
+        <ProjectMetricCard label="Completed" value={projectCompleted} meta="Closed projects" variant="sky" />
+        <ProjectMetricCard label="Avg Progress" value={`${projectAverageProgress}%`} meta="Across projects" variant="rose" />
+      </section>
+
+      <section className="admin-modern-grid">
+        <div className="admin-modern-panel">
           <div className="toolbar">
             <div>
-              <h3>Department-wise Project Graph</h3>
-              <p>Total, active and completed projects by department.</p>
+              <h3>Department Workload Graph</h3>
+              <p>Total, active, on-hold, completed and average progress by department.</p>
             </div>
           </div>
 
           {departmentProjectPerformance.length ? (
-            <div className="dash-graph-list">
+            <div className="admin-modern-list">
               {departmentProjectPerformance.slice(0, 10).map((row) => (
-                <GraphBar
+                <ModernGraphBar
                   key={row.department || 'Unassigned'}
                   label={row.department || 'Unassigned'}
                   value={row.total_projects || 0}
                   max={maxDepartmentProjects}
-                  meta={`Active: ${row.active_projects || 0} • Completed: ${row.completed_projects || 0} • Completion: ${row.completion_rate || 0}%`}
+                  meta={`Active: ${row.active_projects || 0} • On Hold: ${row.on_hold_projects || 0} • Completed: ${row.completed_projects || 0} • Avg: ${row.average_progress || 0}%`}
                 />
               ))}
             </div>
@@ -773,44 +1307,34 @@ export default function AdminDashboard({ setPage }) {
           )}
         </div>
 
-        <div className="panel">
+        <div className="admin-modern-panel">
           <div className="toolbar">
             <div>
-              <h3>Project Status Distribution</h3>
-              <p>Overall project count by current status.</p>
+              <h3>Project Status Split</h3>
+              <p>Visual distribution of active, on-hold and completed projects.</p>
             </div>
           </div>
 
           {projectStatusFallback.length ? (
-            <div className="dash-graph-list">
-              {projectStatusFallback.map((row) => (
-                <GraphBar
-                  key={row.status || row.label}
-                  label={statusLabel(row.status || row.label)}
-                  value={row.count || row.total || row.total_projects || 0}
-                  max={maxProjectStatusCount}
-                  meta="Project count"
-                />
-              ))}
-            </div>
+            <ProjectStatusDonut rows={projectStatusFallback} />
           ) : (
             <EmptyGraph message="No project status data available yet." />
           )}
         </div>
       </section>
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="admin-modern-grid">
+        <div className="admin-modern-panel">
           <div className="toolbar">
             <div>
-              <h3>Project-wise Progress Graph</h3>
-              <p>Latest progress percentage for active/project cards.</p>
+              <h3>Project Progress Ranking</h3>
+              <p>Top project-wise progress cards ranked by latest or average progress.</p>
             </div>
           </div>
 
           {projectWisePerformance.length ? (
-            <div className="dash-graph-list">
-              {projectWisePerformance.slice(0, 10).map((row) => {
+            <div className="admin-rank-list">
+              {projectWisePerformance.slice(0, 8).map((row, index) => {
                 const progress =
                   row.latest_progress ??
                   row.average_progress ??
@@ -819,11 +1343,13 @@ export default function AdminDashboard({ setPage }) {
                   0;
 
                 return (
-                  <ProgressBar
+                  <RankingCard
                     key={row._id || projectName(row)}
-                    label={projectName(row)}
+                    index={index}
+                    title={projectName(row)}
+                    subtitle={`${row.department || 'No Department'} • ${statusLabel(row.status)}`}
                     value={progress}
-                    meta={`${row.department || 'No Department'} • ${statusLabel(row.status)}`}
+                    meta={row.team_leader_name ? `Team Leader: ${row.team_leader_name}` : ''}
                   />
                 );
               })}
@@ -833,56 +1359,69 @@ export default function AdminDashboard({ setPage }) {
           )}
         </div>
 
-        <div className="panel">
+        <div className="admin-modern-panel">
           <div className="toolbar">
             <div>
-              <h3>Daily Project Progress Updates</h3>
-              <p>Recent project progress update trend.</p>
+              <h3>Daily Progress Trend</h3>
+              <p>Recent project update activity across the last progress dates.</p>
             </div>
           </div>
 
-          {projectDailyProgressChart.length ? (
-            <div className="dash-graph-list">
-              {projectDailyProgressChart.slice(-10).map((row) => (
-                <GraphBar
-                  key={row.date}
-                  label={formatDate(row.date)}
-                  value={row.updates || 0}
-                  max={Math.max(
-                    1,
-                    ...projectDailyProgressChart.map((item) => numberValue(item.updates, 0)),
-                  )}
-                  meta={`Avg progress: ${row.average_progress || 0}%`}
+          <DailyTrendCard rows={projectDailyProgressChart} />
+        </div>
+      </section>
+
+      <section className="admin-modern-grid">
+        <div className="admin-modern-panel">
+          <div className="toolbar">
+            <div>
+              <h3>Top Performing Departments</h3>
+              <p>Departments ranked by score, completion rate and project progress.</p>
+            </div>
+          </div>
+
+          {departmentProjectPerformance.length ? (
+            <div className="admin-modern-list">
+              {departmentProjectPerformance.slice(0, 8).map((row) => (
+                <ModernGraphBar
+                  key={row.department || 'Unassigned'}
+                  label={row.department || 'Unassigned'}
+                  value={row.score || row.completion_rate || 0}
+                  progressValue={row.completion_rate || row.average_progress || 0}
+                  meta={`Score: ${row.score || 0} • Completion: ${row.completion_rate || 0}% • Avg: ${row.average_progress || 0}%`}
+                  variant="green"
                 />
               ))}
             </div>
           ) : (
-            <EmptyGraph message="No recent project progress updates available yet." />
+            <Table rows={departmentProjectRows.length ? departmentProjectRows : topPerformingDepartments} maxColumns={8} />
           )}
         </div>
-      </section>
 
-      <section className="two-col">
-        <div className="panel">
+        <div className="admin-modern-panel">
           <div className="toolbar">
             <div>
-              <h3>Top Performing Departments</h3>
-              <p>Departments ranked by completion rate and active workload.</p>
+              <h3>Team Leader Performance</h3>
+              <p>Project ownership performance by assigned Team Leader.</p>
             </div>
           </div>
 
-          <Table rows={departmentProjectRows.length ? departmentProjectRows : topPerformingDepartments} maxColumns={8} />
-        </div>
-
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>Team Leader Project Performance</h3>
-              <p>Project completion summary by assigned Team Leader.</p>
+          {teamLeaderProjectPerformance.length ? (
+            <div className="admin-modern-list">
+              {teamLeaderProjectPerformance.slice(0, 8).map((row) => (
+                <ModernGraphBar
+                  key={row.team_leader_id || row.team_leader_name || 'Unassigned'}
+                  label={row.team_leader_name || 'Unassigned'}
+                  value={row.total_projects || 0}
+                  progressValue={row.completion_rate || row.average_progress || 0}
+                  meta={`Projects: ${row.total_projects || 0} • Active: ${row.active_projects || 0} • Completed: ${row.completed_projects || 0} • Avg: ${row.average_progress || 0}%`}
+                  variant="amber"
+                />
+              ))}
             </div>
-          </div>
-
-          <Table rows={teamLeaderProjectRows} maxColumns={8} />
+          ) : (
+            <Table rows={teamLeaderProjectRows} maxColumns={8} />
+          )}
         </div>
       </section>
 
@@ -896,11 +1435,7 @@ export default function AdminDashboard({ setPage }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('projects')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('projects')}>
             Manage Projects
           </button>
         </div>
@@ -920,11 +1455,7 @@ export default function AdminDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('holiday_calendar')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('holiday_calendar')}>
               Manage Holidays
             </button>
           </div>
@@ -946,11 +1477,7 @@ export default function AdminDashboard({ setPage }) {
                 </p>
               </div>
 
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => goTo('leave_requests')}
-              >
+              <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
                 Open Leave Management
               </button>
             </div>
@@ -968,11 +1495,7 @@ export default function AdminDashboard({ setPage }) {
                 </p>
               </div>
 
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => goTo('attendance_mode_requests')}
-              >
+              <button type="button" className="secondary" onClick={() => goTo('attendance_mode_requests')}>
                 Review Requests
               </button>
             </div>
@@ -994,11 +1517,7 @@ export default function AdminDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('leave_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
               Open Leaves
             </button>
           </div>
@@ -1015,11 +1534,7 @@ export default function AdminDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('attendance_mode_requests')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('attendance_mode_requests')}>
               Review Requests
             </button>
           </div>
@@ -1038,11 +1553,7 @@ export default function AdminDashboard({ setPage }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('attendance_logs')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('attendance_logs')}>
             View Logs
           </button>
         </div>
@@ -1060,11 +1571,7 @@ export default function AdminDashboard({ setPage }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('compoff_credits')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('compoff_credits')}>
             View Comp-Off
           </button>
         </div>
@@ -1080,11 +1587,7 @@ export default function AdminDashboard({ setPage }) {
               <p>Expense claims waiting for approval or finance action.</p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('expenses')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('expenses')}>
               Open Expenses
             </button>
           </div>
@@ -1099,11 +1602,7 @@ export default function AdminDashboard({ setPage }) {
               <p>Open and in-progress employee tickets.</p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('tickets')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('tickets')}>
               Open Tickets
             </button>
           </div>
@@ -1123,11 +1622,7 @@ export default function AdminDashboard({ setPage }) {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('employees')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('employees')}>
               Employee Master
             </button>
           </div>
@@ -1142,11 +1637,7 @@ export default function AdminDashboard({ setPage }) {
               <p>Employee count by department.</p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('departments')}
-            >
+            <button type="button" className="secondary" onClick={() => goTo('departments')}>
               Departments
             </button>
           </div>
@@ -1162,11 +1653,7 @@ export default function AdminDashboard({ setPage }) {
             <p>Employee count by designation.</p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('designations')}
-          >
+          <button type="button" className="secondary" onClick={() => goTo('designations')}>
             Designations
           </button>
         </div>
