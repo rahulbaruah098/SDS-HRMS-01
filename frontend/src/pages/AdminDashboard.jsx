@@ -115,6 +115,76 @@ function modeRequestLiveStatus(row = {}) {
   return row.approval_stage_label || statusLabel(row.status);
 }
 
+function numberValue(value, fallback = 0) {
+  const parsed = Number(value);
+
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function percentValue(value) {
+  const parsed = numberValue(value, 0);
+  return Math.max(0, Math.min(parsed, 100));
+}
+
+function projectName(row = {}) {
+  return (
+    row.name ||
+    row.project_name ||
+    row.title ||
+    row.project ||
+    row._id ||
+    'Unnamed Project'
+  );
+}
+
+function GraphBar({ label, value, meta, max = 100 }) {
+  const numericValue = numberValue(value, 0);
+  const denominator = Math.max(numberValue(max, 100), 1);
+  const width = Math.max(4, Math.min((numericValue / denominator) * 100, 100));
+
+  return (
+    <div className="dash-graph-row">
+      <div className="dash-graph-row-head">
+        <span>{label}</span>
+        <strong>{numericValue}</strong>
+      </div>
+
+      <div className="dash-graph-track">
+        <div className="dash-graph-fill" style={{ width: `${width}%` }} />
+      </div>
+
+      {meta && <small>{meta}</small>}
+    </div>
+  );
+}
+
+function ProgressBar({ label, value, meta }) {
+  const progress = percentValue(value);
+
+  return (
+    <div className="dash-graph-row">
+      <div className="dash-graph-row-head">
+        <span>{label}</span>
+        <strong>{progress}%</strong>
+      </div>
+
+      <div className="dash-graph-track">
+        <div className="dash-graph-fill" style={{ width: `${Math.max(progress, 4)}%` }} />
+      </div>
+
+      {meta && <small>{meta}</small>}
+    </div>
+  );
+}
+
+function EmptyGraph({ message = 'No graph data available yet.' }) {
+  return <div className="empty">{message}</div>;
+}
+
 export default function AdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
@@ -213,6 +283,41 @@ export default function AdminDashboard({ setPage }) {
   const teamScopeCount = data?.team_scope_employee_ids?.length || 0;
   const pendingLeaveRequests = data?.pending?.leave_requests || [];
 
+  const projectAnalytics = data?.project_analytics || {};
+  const projectSummary = projectAnalytics?.summary || {};
+
+  const departmentProjectPerformance =
+    data?.department_project_performance ||
+    projectAnalytics?.department_performance ||
+    [];
+
+  const topPerformingDepartments =
+    data?.top_performing_departments ||
+    projectAnalytics?.top_performing_departments ||
+    [];
+
+  const projectDailyProgressChart =
+    data?.project_daily_progress_chart ||
+    projectAnalytics?.daily_progress_chart ||
+    [];
+
+  const projectWisePerformance =
+    data?.project_wise_performance ||
+    projectAnalytics?.project_wise_performance ||
+    projectAnalytics?.project_performance ||
+    projectAnalytics?.active_projects ||
+    [];
+
+  const projectStatusChart =
+    data?.project_status_chart ||
+    projectAnalytics?.project_status_chart ||
+    [];
+
+  const teamLeaderProjectPerformance =
+    data?.team_leader_project_performance ||
+    projectAnalytics?.team_leader_performance ||
+    [];
+
   const leaveSummary = useMemo(() => {
     const pendingWithTeamLeader = pendingLeaveRequests.filter(
       (row) => String(row.approval_stage || '').toLowerCase() === 'team_leader',
@@ -234,8 +339,51 @@ export default function AdminDashboard({ setPage }) {
     };
   }, [pendingLeaveRequests, myPendingLeaves]);
 
+  const projectStatusFallback = useMemo(() => {
+    if (projectStatusChart.length) {
+      return projectStatusChart;
+    }
+
+    return [
+      {
+        status: 'Active',
+        count: projectSummary.active_projects || stats['Active Projects'] || 0,
+      },
+      {
+        status: 'Completed',
+        count: projectSummary.completed_projects || stats['Completed Projects'] || 0,
+      },
+      {
+        status: 'Total',
+        count: projectSummary.total_projects || stats['Total Projects'] || 0,
+      },
+    ].filter((row) => Number(row.count || 0) > 0);
+  }, [projectStatusChart, projectSummary, stats]);
+
+  const maxDepartmentProjects = useMemo(() => {
+    return Math.max(
+      1,
+      ...departmentProjectPerformance.map((row) =>
+        numberValue(row.total_projects || row.projects || row.count, 0),
+      ),
+    );
+  }, [departmentProjectPerformance]);
+
+  const maxProjectStatusCount = useMemo(() => {
+    return Math.max(
+      1,
+      ...projectStatusFallback.map((row) =>
+        numberValue(row.count || row.total || row.total_projects, 0),
+      ),
+    );
+  }, [projectStatusFallback]);
+
   const statItems = [
     ['Total Employees', stats['Total Employees'] || 0],
+    ['Total Projects', stats['Total Projects'] || projectSummary.total_projects || 0],
+    ['Active Projects', stats['Active Projects'] || projectSummary.active_projects || 0],
+    ['Completed Projects', stats['Completed Projects'] || projectSummary.completed_projects || 0],
+    ['Avg Project Progress', `${stats['Average Project Progress'] || projectSummary.average_progress || 0}%`],
     ['Present Today', stats['Present Today'] || 0],
     ['Late Today', stats['Late Today'] || 0],
     ['Early Checkout Today', stats['Early Checkout Today'] || 0],
@@ -435,8 +583,35 @@ export default function AdminDashboard({ setPage }) {
     status: statusLabel(row.status),
   }));
 
+  const projectWiseRows = projectWisePerformance.slice(0, 12).map((row) => ({
+    project: projectName(row),
+    department: row.department || '—',
+    status: statusLabel(row.status),
+    progress: `${numberValue(row.latest_progress ?? row.average_progress ?? row.progress ?? row.progress_percent, 0)}%`,
+    team_leader: row.team_leader_name || '—',
+    last_update: formatDate(row.latest_progress_date || row.updated_at || row.created_at),
+  }));
+
+  const departmentProjectRows = departmentProjectPerformance.map((row) => ({
+    department: row.department || 'Unassigned',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+    score: row.score || 0,
+  }));
+
+  const teamLeaderProjectRows = teamLeaderProjectPerformance.map((row) => ({
+    team_leader: row.team_leader_name || 'Unassigned',
+    department: row.department || '—',
+    total_projects: row.total_projects || 0,
+    active_projects: row.active_projects || 0,
+    completed_projects: row.completed_projects || 0,
+    completion_rate: `${row.completion_rate || 0}%`,
+  }));
+
   return (
-    <div className="page-grid">
+    <div className="page-grid admin-dashboard-page">
       <section className="hero compact">
         <div>
           <span className="kicker">Admin Dashboard</span>
@@ -446,7 +621,8 @@ export default function AdminDashboard({ setPage }) {
           <p>
             Monitor attendance, WFH/Field requests, holidays, leave approvals,
             leave balances, employee mappings, comp-off credits, tickets,
-            expenses and reports from one dashboard.
+            expenses, projects, department-wise progress and reports from one
+            dashboard.
           </p>
 
           <div className="hero-actions">
@@ -456,6 +632,14 @@ export default function AdminDashboard({ setPage }) {
               onClick={() => goTo('attendance')}
             >
               Attendance
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('projects')}
+            >
+              Projects
             </button>
 
             <button
@@ -523,6 +707,206 @@ export default function AdminDashboard({ setPage }) {
           ))}
         </section>
       )}
+
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>SDS Project Analytics</h3>
+            <p>
+              Department-wise and project-wise performance summary for current
+              project monitoring.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('projects')}
+          >
+            Open Projects
+          </button>
+        </div>
+
+        <div className="stats-grid">
+          <Stat
+            label="Total Projects"
+            value={projectSummary.total_projects || stats['Total Projects'] || 0}
+          />
+          <Stat
+            label="Active Projects"
+            value={projectSummary.active_projects || stats['Active Projects'] || 0}
+          />
+          <Stat
+            label="Completed Projects"
+            value={projectSummary.completed_projects || stats['Completed Projects'] || 0}
+          />
+          <Stat
+            label="Average Progress"
+            value={`${projectSummary.average_progress || stats['Average Project Progress'] || 0}%`}
+          />
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Department-wise Project Graph</h3>
+              <p>Total, active and completed projects by department.</p>
+            </div>
+          </div>
+
+          {departmentProjectPerformance.length ? (
+            <div className="dash-graph-list">
+              {departmentProjectPerformance.slice(0, 10).map((row) => (
+                <GraphBar
+                  key={row.department || 'Unassigned'}
+                  label={row.department || 'Unassigned'}
+                  value={row.total_projects || 0}
+                  max={maxDepartmentProjects}
+                  meta={`Active: ${row.active_projects || 0} • Completed: ${row.completed_projects || 0} • Completion: ${row.completion_rate || 0}%`}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyGraph message="No department-wise project data available yet." />
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Project Status Distribution</h3>
+              <p>Overall project count by current status.</p>
+            </div>
+          </div>
+
+          {projectStatusFallback.length ? (
+            <div className="dash-graph-list">
+              {projectStatusFallback.map((row) => (
+                <GraphBar
+                  key={row.status || row.label}
+                  label={statusLabel(row.status || row.label)}
+                  value={row.count || row.total || row.total_projects || 0}
+                  max={maxProjectStatusCount}
+                  meta="Project count"
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyGraph message="No project status data available yet." />
+          )}
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Project-wise Progress Graph</h3>
+              <p>Latest progress percentage for active/project cards.</p>
+            </div>
+          </div>
+
+          {projectWisePerformance.length ? (
+            <div className="dash-graph-list">
+              {projectWisePerformance.slice(0, 10).map((row) => {
+                const progress =
+                  row.latest_progress ??
+                  row.average_progress ??
+                  row.progress_percent ??
+                  row.progress ??
+                  0;
+
+                return (
+                  <ProgressBar
+                    key={row._id || projectName(row)}
+                    label={projectName(row)}
+                    value={progress}
+                    meta={`${row.department || 'No Department'} • ${statusLabel(row.status)}`}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyGraph message="No project-wise progress data available yet." />
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Daily Project Progress Updates</h3>
+              <p>Recent project progress update trend.</p>
+            </div>
+          </div>
+
+          {projectDailyProgressChart.length ? (
+            <div className="dash-graph-list">
+              {projectDailyProgressChart.slice(-10).map((row) => (
+                <GraphBar
+                  key={row.date}
+                  label={formatDate(row.date)}
+                  value={row.updates || 0}
+                  max={Math.max(
+                    1,
+                    ...projectDailyProgressChart.map((item) => numberValue(item.updates, 0)),
+                  )}
+                  meta={`Avg progress: ${row.average_progress || 0}%`}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyGraph message="No recent project progress updates available yet." />
+          )}
+        </div>
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Top Performing Departments</h3>
+              <p>Departments ranked by completion rate and active workload.</p>
+            </div>
+          </div>
+
+          <Table rows={departmentProjectRows.length ? departmentProjectRows : topPerformingDepartments} maxColumns={8} />
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Team Leader Project Performance</h3>
+              <p>Project completion summary by assigned Team Leader.</p>
+            </div>
+          </div>
+
+          <Table rows={teamLeaderProjectRows} maxColumns={8} />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>Project-wise Performance Details</h3>
+            <p>
+              Latest project progress, department and Team Leader mapping in one
+              table.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('projects')}
+          >
+            Manage Projects
+          </button>
+        </div>
+
+        <Table rows={projectWiseRows} maxColumns={8} />
+      </section>
 
       {holidayRows.length > 0 && (
         <section className="panel">

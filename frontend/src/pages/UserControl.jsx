@@ -293,13 +293,13 @@ function normalizeRolesInput(value) {
     return cleanRoles.length ? cleanRoles.join(', ') : 'employee';
   }
 
-  const text = String(value || 'employee');
+  const text = String(value || 'employee').trim();
 
   if (['team_leader', 'reporting_officer', 'manager', 'ro'].includes(text)) {
     return 'employee';
   }
 
-  return text;
+  return text || 'employee';
 }
 
 function displayRoles(value) {
@@ -313,10 +313,10 @@ function displayRoles(value) {
         .filter(Boolean);
 
   const cleaned = roles.map((role) => {
-    if (role === 'team_leader') return 'employee + team leader capability';
-    if (role === 'reporting_officer') return 'employee + reporting officer capability';
-    if (role === 'manager') return 'employee + manager capability';
-    if (role === 'ro') return 'employee + reporting officer capability';
+    if (role === 'team_leader') return 'team leader capability';
+    if (role === 'reporting_officer') return 'reporting officer capability';
+    if (role === 'manager') return 'manager capability';
+    if (role === 'ro') return 'reporting officer capability';
 
     return role;
   });
@@ -328,6 +328,67 @@ function boolLabel(value) {
   return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase())
     ? 'Yes'
     : 'No';
+}
+
+function textValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return '—';
+  }
+
+  return String(value);
+}
+
+function userEmployeeProfile(user = {}) {
+  return user.employee_profile || {};
+}
+
+function employeeIdValue(user = {}) {
+  const employee = userEmployeeProfile(user);
+
+  return (
+    employee.employee_id ||
+    employee.emp_code ||
+    user.emp_code ||
+    user.employee_code ||
+    user.employee_ref_id ||
+    user.employee_id ||
+    '—'
+  );
+}
+
+function employeeDepartmentValue(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return employee.department || user.department || '—';
+}
+
+function employeeDesignationValue(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return employee.designation || user.designation || '—';
+}
+
+function employeeStateValue(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return employee.state || employee.branch || user.state || user.branch || '—';
+}
+
+function employeeTeamLeaderName(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return employee.team_leader_name || user.team_leader_name || '—';
+}
+
+function employeeReportingOfficerName(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return employee.reporting_officer_name || user.reporting_officer_name || '—';
+}
+
+function employeeIsTeamLeader(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return boolLabel(employee.is_team_leader || user.is_team_leader);
+}
+
+function employeeIsReportingOfficer(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return boolLabel(employee.is_reporting_officer || user.is_reporting_officer);
 }
 
 export default function UserControl() {
@@ -554,7 +615,7 @@ export default function UserControl() {
         ...user,
 
         user_id_for_edit: user._id,
-        employee_id_for_edit: employee._id || '',
+        employee_id_for_edit: employee._id || user.employee_ref_id || '',
 
         roles: normalizeRolesInput(user.roles),
 
@@ -565,7 +626,7 @@ export default function UserControl() {
         date_of_birth: employee.date_of_birth || '',
         blood_group: employee.blood_group || '',
         gross_salary: employee.gross_salary || '',
-        branch: normalizeState(employee.branch || employee.state || 'Assam(HO)'),
+        branch: normalizeState(employee.branch || employee.state || user.branch || user.state || 'Assam(HO)'),
         aadhar_no: employee.aadhar_no || '',
         employee_uan_no: employee.employee_uan_no || '',
         employee_type: employee.employee_type || '',
@@ -579,8 +640,8 @@ export default function UserControl() {
         previous_employment_tenure_end_date:
           employee.previous_employment_tenure_end_date || '',
         role: 'Employee',
-        designation: employee.designation || '',
-        department: employee.department || '',
+        designation: employee.designation || user.designation || '',
+        department: employee.department || user.department || '',
         shift: employee.shift || 'General',
         gender: employee.gender || 'Male',
         address: employee.address || '',
@@ -598,22 +659,22 @@ export default function UserControl() {
         previous_employer_name: employee.previous_employer_name || '',
         previous_employment_tenure_from_date:
           employee.previous_employment_tenure_from_date || '',
-        employee_id: employee.employee_id || '',
+        employee_id: employee.employee_id || user.emp_code || '',
 
-        emp_code: employee.emp_code || '',
+        emp_code: employee.emp_code || user.emp_code || '',
         job_type: employee.job_type || 'Regular',
         project: employee.project || '',
-        state: normalizeState(employee.state || employee.branch || 'Assam(HO)'),
-        status: employee.status || 'Active',
+        state: normalizeState(employee.state || employee.branch || user.state || user.branch || 'Assam(HO)'),
+        status: employee.status || user.status || 'Active',
         salary: employee.salary || 0,
 
-        is_team_leader: String(employee.is_team_leader || 'false'),
-        is_reporting_officer: String(employee.is_reporting_officer || 'false'),
+        is_team_leader: String(employee.is_team_leader || user.is_team_leader || 'false'),
+        is_reporting_officer: String(employee.is_reporting_officer || user.is_reporting_officer || 'false'),
 
-        team_leader_id: employee.team_leader_id || '',
-        team_leader_name: employee.team_leader_name || '',
-        reporting_officer_id: employee.reporting_officer_id || '',
-        reporting_officer_name: employee.reporting_officer_name || '',
+        team_leader_id: employee.team_leader_id || user.team_leader_id || '',
+        team_leader_name: employee.team_leader_name || user.team_leader_name || '',
+        reporting_officer_id: employee.reporting_officer_id || user.reporting_officer_id || '',
+        reporting_officer_name: employee.reporting_officer_name || user.reporting_officer_name || '',
 
         password: '',
         is_active: String(user.is_active !== false),
@@ -1116,6 +1177,7 @@ export default function UserControl() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Tenant</th>
+                <th>Employee ID / Code</th>
                 <th>Login Access</th>
                 <th>Department</th>
                 <th>Designation</th>
@@ -1132,17 +1194,18 @@ export default function UserControl() {
             <tbody>
               {rows.map((user) => (
                 <tr key={user._id}>
-                  <td>{user.name || ''}</td>
-                  <td>{user.email || ''}</td>
-                  <td>{user.tenant_id || ''}</td>
+                  <td>{textValue(user.name)}</td>
+                  <td>{textValue(user.email)}</td>
+                  <td>{textValue(user.tenant_id)}</td>
+                  <td>{employeeIdValue(user)}</td>
                   <td>{displayRoles(user.roles)}</td>
-                  <td>{user.employee_profile?.department || ''}</td>
-                  <td>{user.employee_profile?.designation || ''}</td>
-                  <td>{user.employee_profile?.state || user.employee_profile?.branch || ''}</td>
-                  <td>{boolLabel(user.employee_profile?.is_team_leader)}</td>
-                  <td>{boolLabel(user.employee_profile?.is_reporting_officer)}</td>
-                  <td>{user.employee_profile?.team_leader_name || ''}</td>
-                  <td>{user.employee_profile?.reporting_officer_name || ''}</td>
+                  <td>{employeeDepartmentValue(user)}</td>
+                  <td>{employeeDesignationValue(user)}</td>
+                  <td>{employeeStateValue(user)}</td>
+                  <td>{employeeIsTeamLeader(user)}</td>
+                  <td>{employeeIsReportingOfficer(user)}</td>
+                  <td>{employeeTeamLeaderName(user)}</td>
+                  <td>{employeeReportingOfficerName(user)}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
 
                   <td>

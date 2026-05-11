@@ -1,5 +1,6 @@
-from flask import Blueprint, jsonify, g
-from datetime import date, datetime, timedelta
+from flask import Blueprint, jsonify, g, request
+from bson import ObjectId
+from datetime import datetime, date, timedelta
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required
@@ -981,6 +982,291 @@ def team_leader_project_performance(db, tenant_id, team_leader_ids=None):
     )
 
 
+
+def to_float(value, default=0):
+    try:
+        if value is None or value == "":
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def bounded_percentage(value):
+    return max(0, min(100, round(to_float(value, 0), 2)))
+
+
+def latest_project_progress_value(progress_log):
+    progress_log = progress_log or {}
+    raw_value = (
+        progress_log.get("progress_percent")
+        if progress_log.get("progress_percent") is not None
+        else progress_log.get("percentage")
+        if progress_log.get("percentage") is not None
+        else progress_log.get("progress")
+    )
+    return bounded_percentage(raw_value)
+
+
+def project_wise_performance(db, tenant_id, limit=100):
+    projects = list(
+        db.projects
+        .find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+
+    project_ids = [str(project["_id"]) for project in projects]
+    latest_map = latest_project_progress_map(db, tenant_id, project_ids)
+    rows = []
+
+    for project in projects:
+        project_id = str(project["_id"])
+        latest = latest_map.get(project_id) or {}
+        status = normalize_project_status(project.get("status"))
+        latest_progress = latest_project_progress_value(latest)
+
+        if status == "completed" and latest_progress == 0:
+            latest_progress = 100
+
+        assigned_employee_ids = project.get("assigned_employee_ids") or []
+        collaborators = project.get("collaborator_ids") or []
+
+        rows.append({
+            "project_id": project_id,
+            "_id": project_id,
+            "name": project_name(project),
+            "project_name": project_name(project),
+            "department": normalize_text(project.get("department")) or "Unassigned",
+            "status": status,
+            "team_leader_id": project.get("team_leader_id", ""),
+            "team_leader_name": project.get("team_leader_name", "") or "Unassigned",
+            "assigned_count": len(assigned_employee_ids) if isinstance(assigned_employee_ids, list) else 0,
+            "collaborator_count": len(collaborators) if isinstance(collaborators, list) else 0,
+            "latest_progress": latest_progress,
+            "progress_percent": latest_progress,
+            "latest_progress_date": latest.get("date") or "",
+            "latest_progress_note": latest.get("note") or latest.get("description") or "",
+            "created_at": project.get("created_at"),
+            "completed_at": project.get("completed_at"),
+            "score": latest_progress + (20 if status == "completed" else 0),
+        })
+
+    return sorted(
+        rows,
+        key=lambda item: (item["score"], item["latest_progress"], item["project_name"]),
+        reverse=True,
+    )
+
+
+def project_status_chart(db, tenant_id):
+    projects = list(
+        db.projects.find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        }, {"status": 1})
+    )
+
+    status_map = {}
+
+    for project in projects:
+        status = normalize_project_status(project.get("status"))
+        status_map[status] = status_map.get(status, 0) + 1
+
+    return [
+        {"status": key, "label": key.replace("_", " ").title(), "count": value}
+        for key, value in sorted(status_map.items())
+    ]
+
+
+def performance_rating_value(review):
+    raw_value = (
+        review.get("rating")
+        if review.get("rating") is not None
+        else review.get("score")
+        if review.get("score") is not None
+        else review.get("performance_score")
+    )
+    return to_float(raw_value, 0)
+
+
+def performance_rating_bucket(rating):
+    if rating >= 4.5:
+        return "Excellent"
+    if rating >= 3.5:
+        return "Good"
+    if rating >= 2.5:
+        return "Average"
+    if rating > 0:
+        return "Needs Improvement"
+    return "Not Rated"
+
+
+def performance_summary_from_reviews(reviews):
+    ratings = [performance_rating_value(review) for review in reviews]
+    ratings = [rating for rating in ratings if rating > 0]
+    distribution = {
+        "Excellent": 0,
+        "Good": 0,
+        "Average": 0,
+        "Needs Improvement": 0,
+        "Not Rated": 0,
+    }
+
+    for rating in ratings:
+        distribution[performance_rating_bucket(rating)] += 1
+
+    total = len(reviews)
+    rated = len(ratings)
+    average_rating = round(sum(ratings) / rated, 2) if rated else 0
+
+    return {
+        "total_reviews": total,
+        "rated_reviews": rated,
+        "average_rating": average_rating,
+        "rating_percentage": round((average_rating / 5) * 100, 2) if average_rating else 0,
+        "distribution": [
+            {"label": key, "count": value}
+            for key, value in distribution.items()
+        ],
+    }
+
+
+def employee_lookup_map(employees):
+    return {
+        str(employee["_id"]): employee
+        for employee in employees
+        if employee.get("_id")
+    }
+
+
+def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, title="Performance"):
+    member_ids = [str(member_id) for member_id in member_ids if normalize_text(member_id)]
+
+    if not member_ids:
+        return {
+            "title": title,
+            "summary": performance_summary_from_reviews([]),
+            "members": [],
+            "rating_distribution": performance_summary_from_reviews([])["distribution"],
+            "recent_reviews": [],
+        }
+
+    q = {
+        "tenant_id": tenant_id,
+        "employee_id": {"$in": member_ids},
+        "is_deleted": {"$ne": True},
+    }
+
+    if reviewer_id:
+        q["reviewer_employee_id"] = reviewer_id
+
+    reviews = list(
+        db.performance_reviews
+        .find(q)
+        .sort("created_at", -1)
+        .limit(500)
+    )
+
+    employees = list(
+        db.employees.find({
+            "tenant_id": tenant_id,
+            "_id": {"$in": [ObjectId(member_id) for member_id in member_ids if ObjectId.is_valid(member_id)]},
+            "is_deleted": {"$ne": True},
+        })
+    )
+    lookup = employee_lookup_map(employees)
+    grouped = {}
+
+    for member_id in member_ids:
+        employee = lookup.get(member_id, {})
+        grouped[member_id] = {
+            "employee_id": member_id,
+            "employee_name": employee.get("name") or employee.get("employee_name") or "Employee",
+            "emp_code": employee_code(employee) if employee else "",
+            "department": employee.get("department", "") if employee else "",
+            "designation": employee.get("designation", "") if employee else "",
+            "total_reviews": 0,
+            "average_rating": 0,
+            "rating_percentage": 0,
+            "latest_rating": 0,
+            "latest_review_date": "",
+            "latest_review_by_name": "",
+            "_rating_total": 0,
+            "_rating_count": 0,
+        }
+
+    for review in reviews:
+        member_id = review.get("employee_id")
+
+        if member_id not in grouped:
+            continue
+
+        rating = performance_rating_value(review)
+        row = grouped[member_id]
+        row["total_reviews"] += 1
+
+        if rating > 0:
+            row["_rating_total"] += rating
+            row["_rating_count"] += 1
+
+        if not row["latest_review_date"]:
+            row["latest_rating"] = rating
+            row["latest_review_date"] = review.get("review_date") or review.get("date") or review.get("created_at") or ""
+            row["latest_review_by_name"] = review.get("reviewer_name") or review.get("reviewer_employee_name") or ""
+
+    member_rows = []
+
+    for row in grouped.values():
+        rating_count = row.pop("_rating_count", 0)
+        rating_total = row.pop("_rating_total", 0)
+        row["average_rating"] = round(rating_total / rating_count, 2) if rating_count else 0
+        row["rating_percentage"] = round((row["average_rating"] / 5) * 100, 2) if row["average_rating"] else 0
+        row["rating_label"] = performance_rating_bucket(row["average_rating"])
+        member_rows.append(row)
+
+    member_rows = sorted(
+        member_rows,
+        key=lambda item: (item["average_rating"], item["total_reviews"], item["employee_name"]),
+        reverse=True,
+    )
+
+    summary = performance_summary_from_reviews(reviews)
+
+    return {
+        "title": title,
+        "summary": summary,
+        "members": member_rows,
+        "rating_distribution": summary["distribution"],
+        "recent_reviews": clean_doc(reviews[:10]),
+    }
+
+
+def performance_received_chart(db, tenant_id, employee_id, title="My Performance"):
+    reviews = list(
+        db.performance_reviews
+        .find({
+            "tenant_id": tenant_id,
+            "employee_id": employee_id,
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(100)
+    )
+
+    summary = performance_summary_from_reviews(reviews)
+
+    return {
+        "title": title,
+        "summary": summary,
+        "rating_distribution": summary["distribution"],
+        "recent_reviews": clean_doc(reviews[:10]),
+    }
+
+
 def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_member_ids=None, reporting_member_ids=None):
     team_member_ids = team_member_ids or []
     reporting_member_ids = reporting_member_ids or []
@@ -1130,6 +1416,9 @@ def tenant_project_analytics(db, tenant_id):
         if normalize_project_status(project.get("status")) == "completed"
     ]
 
+    department_performance = department_project_performance(db, tenant_id)
+    project_performance = project_wise_performance(db, tenant_id, 150)
+
     return {
         "summary": {
             "total_projects": len(all_projects),
@@ -1140,8 +1429,12 @@ def tenant_project_analytics(db, tenant_id):
         "active_projects": serialize_project_cards(db, tenant_id, active_projects[:20]),
         "completed_projects": serialize_project_cards(db, tenant_id, completed_projects[:20]),
         "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
-        "department_performance": department_project_performance(db, tenant_id),
-        "top_performing_departments": department_project_performance(db, tenant_id)[:8],
+        "department_performance": department_performance,
+        "top_performing_departments": department_performance[:8],
+        "project_performance": project_performance,
+        "project_wise_performance": project_performance,
+        "top_project_performance": project_performance[:12],
+        "project_status_chart": project_status_chart(db, tenant_id),
         "team_leader_performance": team_leader_project_performance(db, tenant_id)[:12],
     }
 
@@ -1336,6 +1629,9 @@ def superadmin_dashboard():
         "department_project_performance": clean_doc(project_analytics.get("department_performance", [])),
         "top_performing_departments": clean_doc(project_analytics.get("top_performing_departments", [])),
         "project_daily_progress_chart": clean_doc(project_analytics.get("daily_progress_chart", [])),
+        "project_wise_performance": clean_doc(project_analytics.get("project_wise_performance", [])),
+        "top_project_performance": clean_doc(project_analytics.get("top_project_performance", [])),
+        "project_status_chart": clean_doc(project_analytics.get("project_status_chart", [])),
     })
 
 
@@ -1687,6 +1983,9 @@ def admin_dashboard():
         "department_project_performance": clean_doc(project_analytics.get("department_performance", [])),
         "top_performing_departments": clean_doc(project_analytics.get("top_performing_departments", [])),
         "project_daily_progress_chart": clean_doc(project_analytics.get("daily_progress_chart", [])),
+        "project_wise_performance": clean_doc(project_analytics.get("project_wise_performance", [])),
+        "top_project_performance": clean_doc(project_analytics.get("top_project_performance", [])),
+        "project_status_chart": clean_doc(project_analytics.get("project_status_chart", [])),
     })
 
 
@@ -1716,6 +2015,10 @@ def employee_dashboard():
             "team_pending_attendance_mode_requests": [],
             "my_performance_reviews": [],
             "reviews_given": [],
+            "my_performance_chart": {},
+            "team_performance_chart": {},
+            "reporting_performance_chart": {},
+            "performance_summary": {},
             "today_attendance": None,
             "holiday": None,
             "available_attendance_modes": ["office"],
@@ -1917,6 +2220,51 @@ def employee_dashboard():
         reporting_member_ids,
     )
 
+    my_performance_chart = performance_received_chart(
+        db,
+        tenant_id,
+        emp_id,
+        "My Performance Reviews",
+    )
+
+    team_performance_chart = performance_chart_for_members(
+        db,
+        tenant_id,
+        team_member_ids,
+        emp_id if is_team_leader_role else None,
+        "Team Member Performance",
+    ) if is_team_leader_role else {
+        "title": "Team Member Performance",
+        "summary": performance_summary_from_reviews([]),
+        "members": [],
+        "rating_distribution": performance_summary_from_reviews([])["distribution"],
+        "recent_reviews": [],
+    }
+
+    reporting_performance_chart = performance_chart_for_members(
+        db,
+        tenant_id,
+        reporting_member_ids,
+        emp_id if is_reporting_officer_role else None,
+        "Team Leader Performance by Reporting Officer",
+    ) if is_reporting_officer_role else {
+        "title": "Team Leader Performance by Reporting Officer",
+        "summary": performance_summary_from_reviews([]),
+        "members": [],
+        "rating_distribution": performance_summary_from_reviews([])["distribution"],
+        "recent_reviews": [],
+    }
+
+    performance_summary = {
+        "my_average_rating": my_performance_chart.get("summary", {}).get("average_rating", 0),
+        "team_average_rating": team_performance_chart.get("summary", {}).get("average_rating", 0),
+        "reporting_average_rating": reporting_performance_chart.get("summary", {}).get("average_rating", 0),
+        "reviews_received": my_performance_chart.get("summary", {}).get("total_reviews", 0),
+        "reviews_given": len(reviews_given),
+        "team_reviews_given": team_performance_chart.get("summary", {}).get("total_reviews", 0),
+        "reporting_reviews_given": reporting_performance_chart.get("summary", {}).get("total_reviews", 0),
+    }
+
     balance_summary = leave_balance_summary(leave_balances)
 
     return jsonify({
@@ -1951,6 +2299,10 @@ def employee_dashboard():
         "team_pending_attendance_mode_requests": clean_doc(team_pending_attendance_mode_requests),
         "my_performance_reviews": clean_doc(my_reviews),
         "reviews_given": clean_doc(reviews_given),
+        "my_performance_chart": clean_doc(my_performance_chart),
+        "team_performance_chart": clean_doc(team_performance_chart),
+        "reporting_performance_chart": clean_doc(reporting_performance_chart),
+        "performance_summary": clean_doc(performance_summary),
         "today_attendance": clean_doc(today_attendance),
         "holiday": clean_doc(holiday),
         "available_attendance_modes": available_modes,

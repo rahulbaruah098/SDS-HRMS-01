@@ -211,6 +211,36 @@ function notificationTarget(meta = {}) {
     return 'application_status';
   }
 
+  if (
+    [
+      'performance',
+      'performance_review',
+      'performance_reviews',
+      'team_performance',
+      'team_leader_performance',
+      'reporting_officer_performance',
+    ].includes(target)
+  ) {
+    return 'performance_reviews';
+  }
+
+  if (
+    [
+      'project',
+      'projects',
+      'project_progress',
+      'project_analytics',
+      'department_project_graph',
+      'project_wise_graph',
+    ].includes(target)
+  ) {
+    return 'projects';
+  }
+
+  if (meta.performance_review_id) {
+    return 'performance_reviews';
+  }
+
   if (meta.leave_request_id) {
     return 'application_status';
   }
@@ -304,6 +334,10 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const projectCount = modules.filter(([key]) => key === 'projects').length;
 
   const reportsCount = modules.filter(([key]) => key === 'reports').length;
+
+  const performanceCount = modules.filter(([key]) =>
+    ['performance_reviews', 'trainings'].includes(key),
+  ).length;
 
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
@@ -505,6 +539,13 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <div>
               <BarChart3 size={16} />
               <span>{reportsCount} Reports Module</span>
+            </div>
+          )}
+
+          {performanceCount > 0 && (
+            <div>
+              <BarChart3 size={16} />
+              <span>{performanceCount} Performance Modules</span>
             </div>
           )}
         </div>

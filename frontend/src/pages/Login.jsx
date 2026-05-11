@@ -49,9 +49,9 @@ export default function Login({ onLogin }) {
       <div className="login-card">
         <div className="brand-mark">SDS</div>
 
-        <h1>SDS HRMS</h1>
+        <h1>SAYANANT GROUP'S HRMS</h1>
 
-        <p>Multi-company SaaS-ready HRMS built with React Vite + Flask + MongoDB</p>
+       
 
         <form onSubmit={submit}>
           <label>Email</label>

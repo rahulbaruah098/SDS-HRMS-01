@@ -335,33 +335,177 @@ def build_dynamic_employee_roles(employee_doc, current_user_roles=None):
     return sorted(list(roles))
 
 
-def sync_employee_roles(db, employee_doc):
-    user_id = employee_doc.get("user_id")
+def employee_display_name(employee_doc):
+    return (
+        normalize_text(employee_doc.get("name"))
+        or normalize_text(employee_doc.get("employee_name"))
+        or normalize_text(employee_doc.get("full_name"))
+        or normalize_email(employee_doc.get("email"))
+        or "Employee"
+    )
 
-    if not user_id:
-        return
 
+def employee_code(employee_doc):
+    return (
+        normalize_text(employee_doc.get("employee_id"))
+        or normalize_text(employee_doc.get("emp_code"))
+        or normalize_text(employee_doc.get("code"))
+        or ""
+    )
+
+
+def employee_status_is_active(employee_doc):
+    status = normalize_text(employee_doc.get("status") or "active").lower()
+
+    return not (
+        status in {"inactive", "disabled", "deleted", "terminated"}
+        or truthy(employee_doc.get("is_deleted"))
+    )
+
+
+def user_profile_payload_from_employee(employee_doc, existing_user=None):
+    existing_user = existing_user or {}
+    name = employee_display_name(employee_doc)
+    email = normalize_email(employee_doc.get("email"))
+    is_active = employee_status_is_active(employee_doc)
+    roles = build_dynamic_employee_roles(employee_doc, existing_user.get("roles", []))
+
+    payload = {
+        "tenant_id": employee_doc.get("tenant_id") or existing_user.get("tenant_id") or "sds",
+        "name": name,
+        "full_name": name,
+        "email": email,
+        "username": email,
+        "role": "employee",
+        "roles": roles,
+        "employee_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
+        "employee_ref_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
+        "emp_code": employee_code(employee_doc),
+        "department": employee_doc.get("department", ""),
+        "designation": employee_doc.get("designation", ""),
+        "is_active": is_active,
+        "status": "active" if is_active else "inactive",
+        "updated_at": now(),
+    }
+
+    if employee_doc.get("department_id"):
+        payload["department_id"] = employee_doc.get("department_id")
+
+    if employee_doc.get("designation_id"):
+        payload["designation_id"] = employee_doc.get("designation_id")
+
+    return payload
+
+
+def find_user_for_employee(db, employee_doc):
+    user_id = normalize_text(employee_doc.get("user_id"))
     user_obj_id = safe_object_id(user_id)
 
-    if not user_obj_id:
-        return
+    if user_obj_id:
+        user = db.users.find_one({"_id": user_obj_id})
 
-    user = db.users.find_one({"_id": user_obj_id})
+        if user:
+            return user
 
-    if not user:
-        return
+    email = normalize_email(employee_doc.get("email"))
 
-    roles = build_dynamic_employee_roles(employee_doc, user.get("roles", []))
+    if not email:
+        return None
 
-    db.users.update_one(
-        {"_id": user_obj_id},
+    tenant_id = employee_doc.get("tenant_id") or "sds"
+
+    user = db.users.find_one({
+        "email": email,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if user:
+        return user
+
+    return db.users.find_one({
+        "email": email,
+        "is_deleted": {"$ne": True},
+    })
+
+
+def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
+    email = normalize_email(employee_doc.get("email"))
+
+    if not email:
+        return None
+
+    existing_user = find_user_for_employee(db, employee_doc)
+
+    if existing_user:
+        payload = user_profile_payload_from_employee(employee_doc, existing_user)
+        payload["updated_by_name"] = "Super Admin User Control Sync"
+
+        db.users.update_one(
+            {"_id": existing_user["_id"]},
+            {"$set": payload},
+        )
+
+        db.employees.update_one(
+            {"_id": employee_doc["_id"]},
+            {
+                "$set": {
+                    "user_id": str(existing_user["_id"]),
+                    "name": employee_display_name(employee_doc),
+                    "employee_name": employee_display_name(employee_doc),
+                    "email": email,
+                    "updated_at": now(),
+                }
+            },
+        )
+
+        return db.users.find_one({"_id": existing_user["_id"]})
+
+    user_payload = user_profile_payload_from_employee(employee_doc)
+    user_payload.update({
+        "password_hash": generate_password_hash(default_password),
+        "created_at": now(),
+        "created_by_name": "Super Admin User Control Sync",
+        "updated_by_name": "Super Admin User Control Sync",
+        "is_deleted": False,
+    })
+
+    user_res = db.users.insert_one(user_payload)
+
+    db.employees.update_one(
+        {"_id": employee_doc["_id"]},
         {
             "$set": {
-                "roles": roles,
+                "user_id": str(user_res.inserted_id),
+                "name": employee_display_name(employee_doc),
+                "employee_name": employee_display_name(employee_doc),
+                "email": email,
                 "updated_at": now(),
             }
         },
     )
+
+    return db.users.find_one({"_id": user_res.inserted_id})
+
+
+def sync_employee_roles(db, employee_doc):
+    user = find_user_for_employee(db, employee_doc)
+
+    if not user:
+        return
+
+    payload = user_profile_payload_from_employee(employee_doc, user)
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": payload},
+    )
+
+    if normalize_text(employee_doc.get("user_id")) != str(user["_id"]):
+        db.employees.update_one(
+            {"_id": employee_doc["_id"]},
+            {"$set": {"user_id": str(user["_id"]), "updated_at": now()}},
+        )
 
 
 def build_employee_profile_payload(data):
@@ -643,10 +787,15 @@ def create_company():
         user_res = db.users.insert_one({
             "tenant_id": tenant_id,
             "name": admin_name,
+            "full_name": admin_name,
             "email": admin_email,
+            "username": admin_email,
             "password_hash": generate_password_hash(admin_password),
+            "role": "admin",
             "roles": ["admin", "hr_manager"],
             "is_active": True,
+            "status": "active",
+            "is_deleted": False,
             "created_at": now(),
             "created_by": str(g.current_user["_id"]),
         })
@@ -689,6 +838,19 @@ def create_company():
         created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
         if created_emp:
+            db.users.update_one(
+                {"_id": user_res.inserted_id},
+                {
+                    "$set": {
+                        "employee_id": str(created_emp["_id"]),
+                        "employee_ref_id": str(created_emp["_id"]),
+                        "emp_code": created_emp.get("emp_code", ""),
+                        "department": created_emp.get("department", ""),
+                        "designation": created_emp.get("designation", ""),
+                        "updated_at": now(),
+                    }
+                },
+            )
             sync_employee_roles(db, created_emp)
             seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
 
@@ -731,7 +893,9 @@ def update_company(tenant_id):
 @roles_required("super_admin")
 def list_users():
     db = get_db()
-    q = {}
+    q = {
+        "is_deleted": {"$ne": True},
+    }
 
     tenant_id = normalize_text(request.args.get("tenant_id"))
     search = normalize_text(request.args.get("q"))
@@ -739,11 +903,49 @@ def list_users():
     if tenant_id:
         q["tenant_id"] = tenant_id
 
+    employee_repair_query = {
+        "is_deleted": {"$ne": True},
+        "email": {"$exists": True, "$nin": ["", None]},
+        "$or": [
+            {"user_id": {"$exists": False}},
+            {"user_id": ""},
+            {"user_id": None},
+        ],
+    }
+
+    if tenant_id:
+        employee_repair_query["tenant_id"] = tenant_id
+
+    if search:
+        employee_repair_query["$and"] = [
+            {
+                "$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"employee_name": {"$regex": search, "$options": "i"}},
+                    {"email": {"$regex": search, "$options": "i"}},
+                    {"employee_id": {"$regex": search, "$options": "i"}},
+                    {"emp_code": {"$regex": search, "$options": "i"}},
+                    {"department": {"$regex": search, "$options": "i"}},
+                    {"designation": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        ]
+
+    orphan_employees = list(db.employees.find(employee_repair_query).limit(500))
+
+    for emp in orphan_employees:
+        ensure_user_for_employee(db, emp)
+
     if search:
         q["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
+            {"full_name": {"$regex": search, "$options": "i"}},
             {"email": {"$regex": search, "$options": "i"}},
+            {"username": {"$regex": search, "$options": "i"}},
             {"tenant_id": {"$regex": search, "$options": "i"}},
+            {"emp_code": {"$regex": search, "$options": "i"}},
+            {"department": {"$regex": search, "$options": "i"}},
+            {"designation": {"$regex": search, "$options": "i"}},
         ]
 
     rows = list(db.users.find(q).sort("created_at", -1).limit(1000))
@@ -754,8 +956,36 @@ def list_users():
             "is_deleted": {"$ne": True},
         })
 
+        if not emp and user.get("employee_ref_id"):
+            emp_obj_id = safe_object_id(user.get("employee_ref_id"))
+
+            if emp_obj_id:
+                emp = db.employees.find_one({
+                    "_id": emp_obj_id,
+                    "is_deleted": {"$ne": True},
+                })
+
+        if not emp and user.get("email"):
+            emp = db.employees.find_one({
+                "email": normalize_email(user.get("email")),
+                "tenant_id": user.get("tenant_id"),
+                "is_deleted": {"$ne": True},
+            })
+
         if emp:
+            if normalize_text(emp.get("user_id")) != str(user["_id"]):
+                db.employees.update_one(
+                    {"_id": emp["_id"]},
+                    {"$set": {"user_id": str(user["_id"]), "updated_at": now()}},
+                )
+                emp["user_id"] = str(user["_id"])
+
             user["employee_profile"] = emp
+            user["employee_ref_id"] = str(emp["_id"])
+            user["employee_id"] = str(emp["_id"])
+            user["emp_code"] = employee_code(emp)
+            user["department"] = emp.get("department", user.get("department", ""))
+            user["designation"] = emp.get("designation", user.get("designation", ""))
 
     return jsonify({"items": clean_doc(rows)})
 
@@ -814,13 +1044,20 @@ def create_user():
 
     roles = normalize_roles(data.get("roles") or ["employee"])
 
+    is_active = truthy(data.get("is_active", True))
+
     user_res = db.users.insert_one({
         "tenant_id": tenant_id,
         "name": name,
+        "full_name": name,
         "email": email,
+        "username": email,
         "password_hash": generate_password_hash(password),
+        "role": "employee",
         "roles": roles,
-        "is_active": truthy(data.get("is_active", True)),
+        "is_active": is_active,
+        "status": "active" if is_active else "inactive",
+        "is_deleted": False,
         "created_at": now(),
         "created_by": str(g.current_user["_id"]),
     })
@@ -854,6 +1091,19 @@ def create_user():
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
     if created_emp:
+        db.users.update_one(
+            {"_id": user_res.inserted_id},
+            {
+                "$set": {
+                    "employee_id": str(created_emp["_id"]),
+                    "employee_ref_id": str(created_emp["_id"]),
+                    "emp_code": employee_code(created_emp),
+                    "department": created_emp.get("department", ""),
+                    "designation": created_emp.get("designation", ""),
+                    "updated_at": now(),
+                }
+            },
+        )
         sync_employee_roles(db, created_emp)
         seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
 
@@ -897,6 +1147,7 @@ def update_user(user_id):
             return jsonify({"message": "Name is required"}), 400
 
         user_update["name"] = name
+        user_update["full_name"] = name
 
     if "email" in data:
         email = normalize_email(data.get("email"))
@@ -913,6 +1164,7 @@ def update_user(user_id):
             return jsonify({"message": "Email already exists for another user"}), 409
 
         user_update["email"] = email
+        user_update["username"] = email
 
     if "tenant_id" in data:
         tenant_id = normalize_text(data.get("tenant_id")).lower()
@@ -927,7 +1179,9 @@ def update_user(user_id):
         seed_company_masters(db, tenant_id)
 
     if "is_active" in data:
-        user_update["is_active"] = truthy(data.get("is_active"))
+        is_active = truthy(data.get("is_active"))
+        user_update["is_active"] = is_active
+        user_update["status"] = "active" if is_active else "inactive"
 
     if "roles" in data:
         user_update["roles"] = normalize_roles(data.get("roles"))

@@ -1427,6 +1427,298 @@ tr:hover td {
   text-transform: capitalize;
 }
 
+/* Admin dashboard project analytics */
+
+.admin-dashboard-page {
+  animation: softFadeUp .28s ease both;
+}
+
+.admin-dashboard-page .panel {
+  position: relative;
+}
+
+.admin-dashboard-page .panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .055), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(5, 150, 105, .055), transparent 28%);
+}
+
+.admin-dashboard-page .panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dash-graph-list {
+  display: grid;
+  gap: 13px;
+  margin-top: 14px;
+}
+
+.dash-graph-row {
+  background: #FFFFFF;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+  transition: .2s ease;
+}
+
+.dash-graph-row:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+.dash-graph-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.dash-graph-row-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-graph-row-head strong {
+  color: var(--primary);
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.dash-graph-track {
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #E2E8F0;
+  margin-top: 10px;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.dash-graph-fill {
+  height: 100%;
+  min-width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--info), var(--success));
+  transition: width .35s ease;
+}
+
+.dash-graph-row small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+/* Employee dashboard performance */
+
+.employee-dashboard-page {
+  animation: softFadeUp .28s ease both;
+}
+
+.emp-performance-dashboard {
+  display: grid;
+  gap: 18px;
+}
+
+.emp-performance-card {
+  position: relative;
+}
+
+.emp-performance-card::before,
+.emp-performance-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(217, 119, 6, .08), transparent 30%),
+    radial-gradient(circle at 100% 6%, rgba(79, 70, 229, .08), transparent 30%);
+}
+
+.emp-performance-card > *,
+.emp-performance-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.emp-performance-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(79, 70, 229, .12), transparent 34%),
+    radial-gradient(circle at 92% 10%, rgba(5, 150, 105, .12), transparent 34%),
+    #FFFFFF;
+  box-shadow: var(--shadow);
+}
+
+.emp-performance-hero h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(22px, 3vw, 32px);
+  letter-spacing: -.04em;
+}
+
+.emp-performance-hero p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.emp-performance-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 18px;
+}
+
+.emp-performance-stat-card {
+  border: 1px solid var(--line);
+  background: #FFFFFF;
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+}
+
+.emp-performance-stat-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.emp-performance-stat-card strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink);
+  font-size: 26px;
+}
+
+.emp-performance-note {
+  background: #F8FAFC;
+  border: 1px dashed var(--line2);
+  color: var(--muted);
+  border-radius: 16px;
+  padding: 12px;
+  line-height: 1.5;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.emp-performance-graph {
+  display: grid;
+  gap: 12px;
+}
+
+.emp-performance-row {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #FFFFFF;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+  transition: .2s ease;
+}
+
+.emp-performance-row:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+.emp-performance-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.emp-performance-row-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emp-performance-track {
+  height: 11px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #E2E8F0;
+  margin-top: 10px;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.emp-performance-fill {
+  height: 100%;
+  min-width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--info), var(--success));
+  transition: width .35s ease;
+}
+
+.emp-performance-row small {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.emp-rating-mini-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.emp-rating-mini-progress-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #E2E8F0;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08);
+}
+
+.emp-rating-mini-progress-fill {
+  height: 100%;
+  min-width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--warning), var(--primary), var(--success));
+  transition: width .35s ease;
+}
+
+.emp-rating-mini-progress strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.emp-review-option-help {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: -4px;
+}
+
 /* Project module global polish */
 
 .projects-page,
@@ -1762,7 +2054,8 @@ tr:hover td {
   }
 
   .attendance-summary,
-  .report-summary-grid {
+  .report-summary-grid,
+  .emp-performance-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1843,7 +2136,8 @@ tr:hover td {
   .project-summary-grid,
   .emp-project-stats,
   .sa-project-stats,
-  .emp-project-card-grid {
+  .emp-project-card-grid,
+  .emp-performance-stat-grid {
     grid-template-columns: 1fr !important;
   }
 
@@ -1970,6 +2264,7 @@ tr:hover td {
   .project-form,
   .project-card,
   .emp-project-hero,
+  .emp-performance-hero,
   .sa-project-hero {
     border-radius: 20px !important;
     padding: 16px !important;
@@ -1997,6 +2292,18 @@ tr:hover td {
   .emp-project-bar-row,
   .sa-project-chart-row {
     grid-template-columns: 46px minmax(0, 1fr) 42px !important;
+  }
+
+  .dash-graph-row-head,
+  .emp-performance-row-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .dash-graph-row-head span,
+  .emp-performance-row-head span {
+    white-space: normal;
   }
 
   table {

@@ -62,6 +62,17 @@ import {
   - Completed projects are hidden from handover dropdowns but remain visible in dashboards.
   - Reporting Officer can see mapped Team Leader project progress.
   - Super Admin / Managing Director can see department-wise and top-performing department analytics.
+  - SDS Admin dashboard can see department-wise and project-wise project graphs.
+
+  Performance workflow:
+  - Team Leader can give performance rating only to mapped team members.
+  - Reporting Officer can give performance rating to mapped Team Leaders/reporting members.
+  - Review target type is tracked separately:
+      team_member
+      team_leader
+      reporting_member
+      admin_review
+  - Performance graphs are shown on Team Leader and Reporting Officer dashboard.
 */
 
 export const BASE_EMPLOYEE_ROLE = 'employee';
@@ -152,6 +163,19 @@ export const PROJECT_STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'on_hold', label: 'On Hold' },
   { value: 'completed', label: 'Completed' },
+];
+
+export const PERFORMANCE_REVIEW_TARGET_TYPES = [
+  { value: 'team_member', label: 'Team Member' },
+  { value: 'team_leader', label: 'Team Leader' },
+  { value: 'reporting_member', label: 'Reporting Member' },
+  { value: 'admin_review', label: 'Admin / HR Review' },
+];
+
+export const PERFORMANCE_REVIEWER_ROLES = [
+  { value: 'team_leader', label: 'Team Leader' },
+  { value: 'reporting_officer', label: 'Reporting Officer' },
+  { value: 'admin_hr', label: 'Admin / HR' },
 ];
 
 export const superModules = [
@@ -295,7 +319,7 @@ export const coreModules = [
     'performance_reviews',
     'Performance',
     BarChart3,
-    'KPI and appraisal records.',
+    'Team Leader to team member ratings, Reporting Officer to Team Leader ratings, and appraisal records.',
     TEAM_ROLES,
   ],
   [
@@ -452,6 +476,21 @@ export function canManageLeaveBalances(user) {
   return hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES);
 }
 
+export function canSubmitPerformanceReview(user) {
+  const roles = normalizeRoleList(user?.roles || []);
+  const employee = user?.employee_summary || user?.employee || user?.profile || {};
+  const truthy = (value) => String(value || '').trim().toLowerCase() === 'true';
+
+  return (
+    truthy(employee?.is_team_leader) ||
+    truthy(employee?.is_reporting_officer) ||
+    roles.includes('team_leader') ||
+    roles.includes('reporting_officer') ||
+    roles.includes('ro') ||
+    hasAnyRole(roles, HR_ROLES)
+  );
+}
+
 export function getEmployeeCapabilities(user) {
   const roles = normalizeRoleList(user?.roles || []);
   const employee = user?.employee_summary || user?.employee || user?.profile || {};
@@ -472,6 +511,7 @@ export function getEmployeeCapabilities(user) {
       truthy(employee?.is_reporting_officer) ||
       hasAnyRole(roles, PROJECT_ROLES),
     canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
+    canSubmitPerformanceReview: canSubmitPerformanceReview(user),
     displayRole: 'Employee',
   };
 }
@@ -792,13 +832,32 @@ export const templates = {
   performance_reviews: {
     employee_id: '',
     employee_name: '',
+    employee_code: '',
+    employee_user_id: '',
     department: '',
     designation: '',
+
+    team_leader_id: '',
+    team_leader_name: '',
+    reporting_officer_id: '',
+    reporting_officer_name: '',
+
     cycle: '',
     rating: 0,
     comments: '',
+
+    reviewer_id: '',
+    reviewer_employee_id: '',
+    reviewer_employee_code: '',
     reviewer_name: '',
     reviewer_role: '',
+
+    review_target_type: '',
+    review_scope_label: '',
+    reviewed_employee_is_team_leader: false,
+    reviewed_employee_is_reporting_officer: false,
+    visibility: [],
+
     status: 'submitted',
   },
 

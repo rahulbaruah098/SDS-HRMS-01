@@ -121,6 +121,16 @@ const LEAVE_BALANCE_CREATE_FIELDS = [
   'status',
 ];
 
+const EMPLOYEE_MASTER_TABLE_FIELDS = [
+  'name',
+  'employee_id',
+  'designation',
+  'department',
+  'joining_date',
+  'team_leader_name',
+  'reporting_officer_name',
+];
+
 const EMPLOYEE_READONLY_SNAPSHOT_FIELDS = new Set([
   'employee_name',
   'department',
@@ -785,7 +795,9 @@ export default function ModuleCrud({ collection }) {
           ? 'Casual Leave and Earned Leave balances saved successfully'
           : collection === 'leave_requests'
             ? 'Leave request submitted successfully'
-            : 'Record created successfully',
+            : collection === 'employees'
+              ? 'Employee and login account created successfully'
+              : 'Record created successfully',
       );
       await load();
       await reloadEmployeeHelpers();
@@ -878,6 +890,7 @@ export default function ModuleCrud({ collection }) {
 
       delete payload._id;
       delete payload.password_hash;
+      delete payload.password;
       delete payload.password_mode;
       delete payload.created_at;
       delete payload.updated_at;
@@ -911,7 +924,9 @@ export default function ModuleCrud({ collection }) {
       setMessage(
         collection === 'leave_balances'
           ? 'Casual Leave and Earned Leave balances updated successfully'
-          : 'Record updated successfully',
+          : collection === 'employees'
+            ? 'Employee and login account updated successfully'
+            : 'Record updated successfully',
       );
       await load();
       await reloadEmployeeHelpers();
@@ -951,7 +966,11 @@ export default function ModuleCrud({ collection }) {
         method: 'DELETE',
       });
 
-      setMessage('Record deleted successfully');
+      setMessage(
+        collection === 'employees'
+          ? 'Employee deleted and login account deactivated successfully'
+          : 'Record deleted successfully',
+      );
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
@@ -1848,6 +1867,10 @@ export default function ModuleCrud({ collection }) {
   }
 
   function visibleTableKeys(row) {
+    if (collection === 'employees') {
+      return EMPLOYEE_MASTER_TABLE_FIELDS;
+    }
+
     if (collection === 'leave_requests') {
       return [
         'employee_name',
@@ -1883,6 +1906,13 @@ export default function ModuleCrud({ collection }) {
 
   function tableHeaderLabel(key) {
     const labels = {
+      name: 'Employee Name',
+      employee_id: 'Emp ID',
+      designation: 'Designation',
+      department: 'Department',
+      joining_date: 'Date of Joining',
+      team_leader_name: 'Team Leader',
+      reporting_officer_name: 'Reporting Officer',
       employee_name: 'Employee Name',
       cl_opening_balance: 'CL Opening',
       cl_credited: 'CL Credited',
@@ -1899,6 +1929,18 @@ export default function ModuleCrud({ collection }) {
   }
 
   function tableCellValue(row, key) {
+    if (key === 'name') {
+      return displayValue(row.name || row.employee_name || row.full_name);
+    }
+
+    if (key === 'employee_id') {
+      return displayValue(row.employee_id || row.emp_code || row.code);
+    }
+
+    if (key === 'joining_date') {
+      return displayValue(row.joining_date || row.date_of_joining || row.doj);
+    }
+
     if (key === 'leave_type') {
       return leaveTypeLabel(row.leave_type_label || row.leave_type);
     }

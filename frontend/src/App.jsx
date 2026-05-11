@@ -40,6 +40,20 @@ const PAGE_ALIASES = {
   home: 'dashboard',
   dashboard_home: 'dashboard',
 
+  employee: 'employees',
+  employees: 'employees',
+  employee_master: 'employees',
+  employee_management: 'employees',
+  staff_master: 'employees',
+  staff_management: 'employees',
+
+  user: 'users',
+  users: 'users',
+  user_control: 'users',
+  user_management: 'users',
+  superadmin_user_control: 'users',
+  super_admin_user_control: 'users',
+
   leave: 'leave_requests',
   leave_request: 'leave_requests',
   leave_requests: 'leave_requests',
@@ -81,6 +95,22 @@ const PAGE_ALIASES = {
 
   project: 'projects',
   projects: 'projects',
+  project_management: 'projects',
+  project_progress: 'projects',
+  project_analytics: 'projects',
+  project_dashboard: 'projects',
+  department_project_graph: 'projects',
+  project_wise_graph: 'projects',
+
+  performance: 'performance_reviews',
+  performance_review: 'performance_reviews',
+  performance_reviews: 'performance_reviews',
+  appraisal: 'performance_reviews',
+  appraisals: 'performance_reviews',
+  ratings: 'performance_reviews',
+  team_performance: 'performance_reviews',
+  team_leader_performance: 'performance_reviews',
+  reporting_officer_performance: 'performance_reviews',
 
   report: 'reports',
   reports: 'reports',
@@ -121,6 +151,7 @@ function normalizeRoles(user) {
 function normalizePageKey(page) {
   const key = String(page || 'dashboard')
     .trim()
+    .replaceAll('-', '_')
     .replaceAll(' ', '_');
 
   if (!key) {

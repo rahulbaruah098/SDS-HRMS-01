@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime
 from bson import ObjectId
+from werkzeug.security import generate_password_hash
 import re
 
 from app.extensions import get_db
@@ -250,6 +251,317 @@ def is_super_admin():
 
 def truthy(value):
     return str(value or "").strip().lower() in {"true", "1", "yes", "on"}
+
+
+def normalize_email(value):
+    return normalize_text(value).lower()
+
+
+def normalize_role_value(value):
+    role_key = normalize_text(value).lower()
+
+    role_map = {
+        "super admin": "super_admin",
+        "super_admin": "super_admin",
+        "admin": "admin",
+        "hr": "hr",
+        "hr admin": "hr_admin",
+        "hr_admin": "hr_admin",
+        "hr manager": "hr_manager",
+        "hr_manager": "hr_manager",
+        "finance": "finance",
+        "accounts finance": "accounts_finance",
+        "accounts_finance": "accounts_finance",
+        "manager": "manager",
+        "ro": "ro",
+        "team leader": "team_leader",
+        "team_leader": "team_leader",
+        "reporting officer": "reporting_officer",
+        "reporting_officer": "reporting_officer",
+        "employee": "employee",
+    }
+
+    return role_map.get(role_key, "employee")
+
+
+def normalize_roles(value):
+    if not value:
+        return ["employee"]
+
+    if isinstance(value, str):
+        roles = [role.strip() for role in value.split(",") if role.strip()]
+    elif isinstance(value, list):
+        roles = [str(role).strip() for role in value if str(role).strip()]
+    else:
+        roles = ["employee"]
+
+    cleaned_roles = []
+
+    for role in roles:
+        normalized = normalize_role_value(role)
+
+        if normalized in {"team_leader", "reporting_officer", "manager", "ro"}:
+            normalized = "employee"
+
+        if normalized not in cleaned_roles:
+            cleaned_roles.append(normalized)
+
+    return cleaned_roles or ["employee"]
+
+
+def build_employee_capability_roles(employee_doc, current_user_roles=None):
+    current_user_roles = set(current_user_roles or [])
+
+    protected_roles = {
+        "super_admin",
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "finance",
+        "accounts_finance",
+    }
+
+    capability_roles = {
+        "manager",
+        "ro",
+        "team_leader",
+        "reporting_officer",
+    }
+
+    roles = set(current_user_roles)
+
+    if not roles.intersection(protected_roles):
+        roles.difference_update(capability_roles)
+        roles.add("employee")
+
+    if truthy(employee_doc.get("is_team_leader")):
+        roles.add("team_leader")
+    else:
+        roles.discard("team_leader")
+
+    if truthy(employee_doc.get("is_reporting_officer")):
+        roles.add("reporting_officer")
+    else:
+        roles.discard("reporting_officer")
+        roles.discard("manager")
+        roles.discard("ro")
+
+    if not roles:
+        roles.add("employee")
+
+    return sorted(list(roles))
+
+
+def employee_name_from_payload(payload):
+    return (
+        normalize_text(payload.get("name"))
+        or normalize_text(payload.get("employee_name"))
+        or normalize_text(payload.get("full_name"))
+    )
+
+
+def employee_email_from_payload(payload):
+    return normalize_email(payload.get("email") or payload.get("official_email"))
+
+
+def employee_joining_date(payload):
+    return (
+        normalize_text(payload.get("joining_date"))
+        or normalize_text(payload.get("date_of_joining"))
+        or normalize_text(payload.get("doj"))
+    )
+
+
+def remove_employee_auth_fields(payload):
+    for key in [
+        "password",
+        "confirm_password",
+        "password_confirm",
+        "new_password",
+        "password_mode",
+    ]:
+        payload.pop(key, None)
+
+    return payload
+
+
+def find_employee_user(db, employee_doc):
+    user_id = employee_doc.get("user_id")
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        user = db.users.find_one({"_id": user_obj_id})
+        if user:
+            return user
+
+    email = employee_email_from_payload(employee_doc)
+
+    if email:
+        return db.users.find_one({
+            "email": email,
+            "tenant_id": employee_doc.get("tenant_id") or current_tenant_id(),
+            "is_deleted": {"$ne": True},
+        })
+
+    return None
+
+
+def build_user_sync_payload(employee_doc, existing_user=None):
+    existing_user = existing_user or {}
+    name = employee_name_from_payload(employee_doc)
+    email = employee_email_from_payload(employee_doc)
+    status = normalize_text(employee_doc.get("status") or "active")
+    is_active = not (
+        status.lower() in {"inactive", "disabled", "deleted"}
+        or truthy(employee_doc.get("is_deleted"))
+    )
+
+    roles = build_employee_capability_roles(
+        employee_doc,
+        normalize_roles(existing_user.get("roles") if existing_user else ["employee"]),
+    )
+
+    payload = {
+        "tenant_id": employee_doc.get("tenant_id") or current_tenant_id(),
+        "name": name,
+        "full_name": name,
+        "email": email,
+        "username": email,
+        "roles": roles,
+        "role": "employee",
+        "employee_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else employee_doc.get("employee_id", ""),
+        "employee_ref_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
+        "emp_code": employee_doc.get("emp_code") or employee_doc.get("employee_id") or employee_doc.get("code") or "",
+        "department": employee_doc.get("department", ""),
+        "designation": employee_doc.get("designation", ""),
+        "is_active": is_active,
+        "status": "active" if is_active else "inactive",
+        "updated_at": now_utc(),
+    }
+
+    if employee_doc.get("department_id"):
+        payload["department_id"] = employee_doc.get("department_id")
+
+    if employee_doc.get("designation_id"):
+        payload["designation_id"] = employee_doc.get("designation_id")
+
+    return payload
+
+
+def ensure_employee_login_user(db, employee_doc, raw_password=None):
+    email = employee_email_from_payload(employee_doc)
+    name = employee_name_from_payload(employee_doc)
+
+    if not name:
+        return None, "Employee name is required"
+
+    if not email:
+        return None, "Employee email is required to create login account"
+
+    existing_user = find_employee_user(db, employee_doc)
+
+    if existing_user:
+        employee_doc["user_id"] = str(existing_user["_id"])
+        sync_payload = build_user_sync_payload(employee_doc, existing_user)
+        update_doc = {"$set": sync_payload}
+
+        if raw_password:
+            if len(str(raw_password)) < 6:
+                return None, "Password must be at least 6 characters"
+            update_doc["$set"]["password_hash"] = generate_password_hash(str(raw_password))
+
+        db.users.update_one({"_id": existing_user["_id"]}, update_doc)
+        return db.users.find_one({"_id": existing_user["_id"]}), ""
+
+    duplicate = db.users.find_one({
+        "email": email,
+        "is_deleted": {"$ne": True},
+    })
+
+    if duplicate:
+        return None, "A user with this email already exists"
+
+    password = str(raw_password or "User@123")
+
+    if len(password) < 6:
+        return None, "Password must be at least 6 characters"
+
+    now = now_utc()
+    user_payload = build_user_sync_payload(employee_doc, {})
+    user_payload.update({
+        "password_hash": generate_password_hash(password),
+        "created_at": now,
+        "created_by": current_user_id(),
+        "created_by_name": current_user_name(),
+        "updated_by": current_user_id(),
+        "updated_by_name": current_user_name(),
+        "is_deleted": False,
+    })
+
+    result = db.users.insert_one(user_payload)
+    user_payload["_id"] = result.inserted_id
+    employee_doc["user_id"] = str(result.inserted_id)
+
+    return user_payload, ""
+
+
+def sync_employee_login_user(db, employee_doc, raw_password=None):
+    user = find_employee_user(db, employee_doc)
+
+    if not user:
+        return ensure_employee_login_user(db, employee_doc, raw_password)
+
+    email = employee_email_from_payload(employee_doc)
+
+    if email and email != normalize_email(user.get("email")):
+        duplicate = db.users.find_one({
+            "email": email,
+            "_id": {"$ne": user["_id"]},
+            "is_deleted": {"$ne": True},
+        })
+
+        if duplicate:
+            return None, "A user with this email already exists"
+
+    update_data = build_user_sync_payload(employee_doc, user)
+    update_data.update({
+        "updated_by": current_user_id(),
+        "updated_by_name": current_user_name(),
+    })
+
+    if raw_password:
+        if len(str(raw_password)) < 6:
+            return None, "Password must be at least 6 characters"
+
+        update_data["password_hash"] = generate_password_hash(str(raw_password))
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": update_data},
+    )
+
+    return db.users.find_one({"_id": user["_id"]}), ""
+
+
+def deactivate_employee_login_user(db, employee_doc):
+    user = find_employee_user(db, employee_doc)
+
+    if not user:
+        return
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "is_active": False,
+                "status": "inactive",
+                "updated_at": now_utc(),
+                "updated_by": current_user_id(),
+                "updated_by_name": current_user_name(),
+            }
+        },
+    )
 
 
 def normalize_leave_type(value):
@@ -1184,6 +1496,7 @@ def create_collection_item(collection):
         return jsonify(result), 201
 
     payload = clean_payload(data)
+    raw_password = data.get("password") or data.get("new_password")
 
     if collection == "projects":
         payload = normalize_project_payload(payload)
@@ -1198,6 +1511,28 @@ def create_collection_item(collection):
     now = now_utc()
 
     payload.setdefault("tenant_id", current_tenant_id())
+
+    if collection == "employees":
+        payload["name"] = employee_name_from_payload(payload)
+        payload["employee_name"] = payload["name"]
+        payload["email"] = employee_email_from_payload(payload)
+        payload.setdefault("status", "active")
+
+        joining_date = employee_joining_date(payload)
+
+        if joining_date:
+            payload["joining_date"] = joining_date
+            payload.setdefault("date_of_joining", joining_date)
+
+        remove_employee_auth_fields(payload)
+
+        user, user_error = ensure_employee_login_user(db, payload, raw_password)
+
+        if user_error:
+            return jsonify({"message": user_error}), 400
+
+        if user:
+            payload["user_id"] = str(user["_id"])
 
     payload.update({
         "created_at": now,
@@ -1219,10 +1554,32 @@ def create_collection_item(collection):
     result = mongo_collection.insert_one(payload)
     payload["_id"] = result.inserted_id
 
+    if collection == "employees":
+        user, user_error = sync_employee_login_user(db, payload, raw_password)
+
+        if user_error:
+            mongo_collection.delete_one({"_id": result.inserted_id})
+            return jsonify({"message": user_error}), 400
+
+        if user:
+            mongo_collection.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"user_id": str(user["_id"])}},
+            )
+            payload["user_id"] = str(user["_id"])
+
+        for leave_type in BALANCE_LEAVE_TYPES:
+            ensure_leave_balance(db, payload, leave_type)
+
     audit("create", collection, result.inserted_id, payload)
 
+    message = "Record created successfully"
+
+    if collection == "employees":
+        message = "Employee and login account created successfully"
+
     return jsonify({
-        "message": "Record created successfully",
+        "message": message,
         "item": serialize_item(payload),
     }), 201
 
@@ -1273,9 +1630,48 @@ def update_collection_item(collection, item_id):
         return jsonify({"message": "Record not found or not in your scope"}), 404
 
     payload = clean_payload(data)
+    raw_password = data.get("password") or data.get("new_password")
 
     if collection == "projects":
         payload = normalize_project_payload(payload, existing)
+
+    if collection == "employees":
+        merged_employee = dict(existing)
+        merged_employee.update(payload)
+        merged_employee["_id"] = existing["_id"]
+        merged_employee.setdefault("tenant_id", existing.get("tenant_id") or current_tenant_id())
+
+        if payload.get("name") or payload.get("employee_name") or payload.get("full_name"):
+            payload["name"] = employee_name_from_payload(merged_employee)
+            payload["employee_name"] = payload["name"]
+            merged_employee["name"] = payload["name"]
+            merged_employee["employee_name"] = payload["name"]
+
+        if payload.get("email") or payload.get("official_email"):
+            payload["email"] = employee_email_from_payload(merged_employee)
+            merged_employee["email"] = payload["email"]
+
+        joining_date = employee_joining_date(merged_employee)
+
+        if joining_date and (
+            payload.get("joining_date")
+            or payload.get("date_of_joining")
+            or payload.get("doj")
+        ):
+            payload["joining_date"] = joining_date
+            payload["date_of_joining"] = joining_date
+            merged_employee["joining_date"] = joining_date
+            merged_employee["date_of_joining"] = joining_date
+
+        remove_employee_auth_fields(payload)
+
+        user, user_error = sync_employee_login_user(db, merged_employee, raw_password)
+
+        if user_error:
+            return jsonify({"message": user_error}), 400
+
+        if user:
+            payload["user_id"] = str(user["_id"])
 
     validation_error = validate_required_fields(collection, payload)
 
@@ -1295,10 +1691,23 @@ def update_collection_item(collection, item_id):
 
     updated = mongo_collection.find_one({"_id": item_obj_id})
 
+    if collection == "employees":
+        sync_employee_login_user(db, updated)
+
+        for leave_type in BALANCE_LEAVE_TYPES:
+            ensure_leave_balance(db, updated, leave_type)
+
+        updated = mongo_collection.find_one({"_id": item_obj_id})
+
     audit("update", collection, item_id, payload)
 
+    message = "Record updated successfully"
+
+    if collection == "employees":
+        message = "Employee and login account updated successfully"
+
     return jsonify({
-        "message": "Record updated successfully",
+        "message": message,
         "item": serialize_item(updated),
     })
 
@@ -1339,6 +1748,9 @@ def delete_collection_item(collection, item_id):
     if not existing:
         return jsonify({"message": "Record not found or not in your scope"}), 404
 
+    if collection == "employees":
+        deactivate_employee_login_user(db, existing)
+
     if collection in SOFT_DELETE_COLLECTIONS:
         mongo_collection.update_one(
             {"_id": item_obj_id},
@@ -1360,8 +1772,13 @@ def delete_collection_item(collection, item_id):
 
     audit("delete", collection, item_id)
 
+    message = "Record deleted successfully"
+
+    if collection == "employees":
+        message = "Employee deleted and login account deactivated successfully"
+
     return jsonify({
-        "message": "Record deleted successfully",
+        "message": message,
     })
 
 

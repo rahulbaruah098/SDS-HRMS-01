@@ -246,6 +246,25 @@ export function getEmployeeDashboard() {
   return api('/dashboard/employee');
 }
 
+export function getDashboardByRole(role = 'employee') {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+
+  if (normalizedRole === 'super_admin' || normalizedRole === 'superadmin') {
+    return getSuperAdminDashboard();
+  }
+
+  if (
+    normalizedRole === 'admin' ||
+    normalizedRole === 'hr' ||
+    normalizedRole === 'hr_admin' ||
+    normalizedRole === 'hr_manager'
+  ) {
+    return getAdminDashboard();
+  }
+
+  return getEmployeeDashboard();
+}
+
 /* -------------------------------------------------------------------------- */
 /* Application Status APIs                                                    */
 /* -------------------------------------------------------------------------- */
@@ -326,6 +345,27 @@ export function getMyProjectProgress(params = {}) {
 
 export function getProjectAnalytics(params = {}) {
   return api(`/projects/analytics${buildQuery(params)}`);
+}
+
+export function getDepartmentProjectAnalytics(params = {}) {
+  return getProjectAnalytics({
+    ...params,
+    view: params.view || 'department',
+  });
+}
+
+export function getProjectWiseAnalytics(params = {}) {
+  return getProjectAnalytics({
+    ...params,
+    view: params.view || 'project',
+  });
+}
+
+export function getTeamLeaderProjectAnalytics(params = {}) {
+  return getProjectAnalytics({
+    ...params,
+    view: params.view || 'team_leader',
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -532,6 +572,39 @@ export function getAttendanceLogs(params = {}) {
 
 export function getCompOffCredits(params = {}) {
   return listCollection('compoff_credits', params);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Performance Review APIs                                                    */
+/* -------------------------------------------------------------------------- */
+
+export function submitPerformanceReview(payload = {}) {
+  return api('/performance/reviews', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createPerformanceReview(payload = {}) {
+  return submitPerformanceReview(payload);
+}
+
+export function getPerformanceReviews(params = {}) {
+  return listCollection('performance_reviews', params);
+}
+
+export function getMyPerformanceReviews(params = {}) {
+  return getPerformanceReviews({
+    ...params,
+    scope: params.scope || 'mine',
+  });
+}
+
+export function getReviewsGivenByMe(params = {}) {
+  return getPerformanceReviews({
+    ...params,
+    scope: params.scope || 'given_by_me',
+  });
 }
 
 /* -------------------------------------------------------------------------- */

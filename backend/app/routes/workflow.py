@@ -2236,6 +2236,110 @@ def payroll_run():
     })
 
 
+# -----------------------------------------------------------------------------
+# Performance review helpers
+# -----------------------------------------------------------------------------
+
+def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
+    if not reviewer_emp:
+        return None, "", "Reviewer employee profile was not found"
+
+    reviewer_emp_id = str(reviewer_emp["_id"])
+    reviewed_is_team_leader = employee_is_team_leader(employee)
+    reviewed_is_reporting_officer = employee_is_reporting_officer(employee)
+
+    if (
+        ("team_leader" in reviewer_roles or employee_is_team_leader(reviewer_emp))
+        and employee.get("team_leader_id") == reviewer_emp_id
+    ):
+        return {
+            "reviewer_role": "team_leader",
+            "review_target_type": "team_member",
+            "review_scope_label": "Team Leader to Team Member",
+            "reviewed_employee_is_team_leader": reviewed_is_team_leader,
+            "reviewed_employee_is_reporting_officer": reviewed_is_reporting_officer,
+            "visibility": [
+                "employee_self",
+                "team_leader_dashboard",
+                "reporting_officer_dashboard",
+                "hr",
+                "md",
+            ],
+        }, "", ""
+
+    if (
+        ("reporting_officer" in reviewer_roles or "ro" in reviewer_roles or employee_is_reporting_officer(reviewer_emp))
+        and employee.get("reporting_officer_id") == reviewer_emp_id
+    ):
+        if reviewed_is_team_leader:
+            review_target_type = "team_leader"
+            review_scope_label = "Reporting Officer to Team Leader"
+        else:
+            review_target_type = "reporting_member"
+            review_scope_label = "Reporting Officer to Reporting Member"
+
+        return {
+            "reviewer_role": "reporting_officer",
+            "review_target_type": review_target_type,
+            "review_scope_label": review_scope_label,
+            "reviewed_employee_is_team_leader": reviewed_is_team_leader,
+            "reviewed_employee_is_reporting_officer": reviewed_is_reporting_officer,
+            "visibility": [
+                "employee_self",
+                "team_leader_dashboard",
+                "reporting_officer_dashboard",
+                "hr",
+                "md",
+            ],
+        }, "", ""
+
+    return None, "", "You can review only employees or team leaders directly mapped under you"
+
+
+def notify_performance_review_submitted(db, employee, reviewer_emp, review):
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    notify_ids = []
+
+    if employee.get("user_id"):
+        notify_ids.append(employee.get("user_id"))
+
+    if employee.get("reporting_officer_id"):
+        reporting_user_id = employee_user_id(db, employee.get("reporting_officer_id"), tenant_id)
+        if reporting_user_id:
+            notify_ids.append(reporting_user_id)
+
+    if employee.get("team_leader_id"):
+        team_leader_user_id = employee_user_id(db, employee.get("team_leader_id"), tenant_id)
+        if team_leader_user_id:
+            notify_ids.append(team_leader_user_id)
+
+    notify_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
+
+    reviewer_name = (
+        employee_display_name(reviewer_emp)
+        if reviewer_emp
+        else g.current_user.get("name") or g.current_user.get("email")
+    )
+
+    notify_users(
+        db,
+        notify_ids,
+        "Performance Review Submitted",
+        f"{reviewer_name} submitted a performance review for {employee_display_name(employee)}.",
+        {
+            "target": "performance_reviews",
+            "performance_review_id": str(review.get("_id", "")),
+            "employee_id": str(employee.get("_id")),
+            "reviewer_employee_id": review.get("reviewer_employee_id", ""),
+            "reviewer_role": review.get("reviewer_role", ""),
+            "review_target_type": review.get("review_target_type", ""),
+            "rating": review.get("rating"),
+            "cycle": review.get("cycle"),
+        },
+        tenant_id=tenant_id,
+    )
+
+
 @workflow_bp.post("/performance/reviews")
 @roles_required(
     "super_admin",
@@ -2250,10 +2354,10 @@ def create_performance_review():
     db = get_db()
     data = request.get_json(silent=True) or {}
 
-    employee_id = data.get("employee_id")
+    employee_id = normalize_text(data.get("employee_id"))
     rating = data.get("rating")
-    comments = data.get("comments", "")
-    cycle = data.get("cycle") or datetime.utcnow().strftime("%B %Y")
+    comments = normalize_text(data.get("comments", ""))
+    cycle = normalize_text(data.get("cycle")) or datetime.utcnow().strftime("%B %Y")
 
     employee_obj_id = safe_object_id(employee_id)
 
@@ -2285,67 +2389,87 @@ def create_performance_review():
     reviewer_emp = current_employee(db)
     reviewer_emp_id = str(reviewer_emp["_id"]) if reviewer_emp else ""
 
-    if not roles.intersection(ADMIN_HR_ROLES):
-        can_review = False
-
-        if (
-            reviewer_emp
-            and ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
-            and employee.get("team_leader_id") == reviewer_emp_id
-        ):
-            can_review = True
-
-        if (
-            reviewer_emp
-            and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp))
-            and employee.get("reporting_officer_id") == reviewer_emp_id
-        ):
-            can_review = True
-
-        if not can_review:
-            return jsonify({"message": "You can review only employees assigned to you"}), 403
-
     reviewer_role = "admin_hr"
+    review_target_type = "admin_review"
+    review_scope_label = "Admin / HR Review"
+    reviewed_employee_is_team_leader = employee_is_team_leader(employee)
+    reviewed_employee_is_reporting_officer = employee_is_reporting_officer(employee)
+    visibility = ["md", "hr", "employee_self"]
 
-    if (
-        reviewer_emp
-        and ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
-        and employee.get("team_leader_id") == reviewer_emp_id
-    ):
-        reviewer_role = "team_leader"
+    if not roles.intersection(ADMIN_HR_ROLES):
+        scope_payload, _, scope_error = resolve_performance_review_scope(
+            reviewer_emp,
+            roles,
+            employee,
+        )
 
-    if (
-        reviewer_emp
-        and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp))
-        and employee.get("reporting_officer_id") == reviewer_emp_id
-    ):
-        reviewer_role = "reporting_officer"
+        if scope_error:
+            return jsonify({"message": scope_error}), 403
+
+        reviewer_role = scope_payload["reviewer_role"]
+        review_target_type = scope_payload["review_target_type"]
+        review_scope_label = scope_payload["review_scope_label"]
+        reviewed_employee_is_team_leader = scope_payload["reviewed_employee_is_team_leader"]
+        reviewed_employee_is_reporting_officer = scope_payload["reviewed_employee_is_reporting_officer"]
+        visibility = scope_payload["visibility"]
+    else:
+        if reviewer_emp:
+            reviewer_scope_payload, _, _ = resolve_performance_review_scope(
+                reviewer_emp,
+                roles,
+                employee,
+            )
+
+            if reviewer_scope_payload:
+                reviewer_role = reviewer_scope_payload["reviewer_role"]
+                review_target_type = reviewer_scope_payload["review_target_type"]
+                review_scope_label = reviewer_scope_payload["review_scope_label"]
+                visibility = list(set(visibility + reviewer_scope_payload["visibility"]))
 
     review = {
         "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-        "employee_id": employee_id,
+        "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
-        "employee_name": employee.get("name"),
+        "employee_name": employee_display_name(employee),
+        "employee_user_id": employee.get("user_id", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
         "cycle": cycle,
         "rating": rating,
         "comments": comments,
         "reviewer_id": str(g.current_user["_id"]),
         "reviewer_employee_id": reviewer_emp_id,
-        "reviewer_name": g.current_user.get("name") or g.current_user.get("email"),
+        "reviewer_employee_code": employee_code(reviewer_emp) if reviewer_emp else "",
+        "reviewer_name": (
+            employee_display_name(reviewer_emp)
+            if reviewer_emp
+            else g.current_user.get("name") or g.current_user.get("email")
+        ),
         "reviewer_role": reviewer_role,
-        "visibility": ["md", "hr", "employee_self"],
+        "review_target_type": review_target_type,
+        "review_scope_label": review_scope_label,
+        "reviewed_employee_is_team_leader": reviewed_employee_is_team_leader,
+        "reviewed_employee_is_reporting_officer": reviewed_employee_is_reporting_officer,
+        "visibility": visibility,
         "status": "submitted",
         "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
         "created_by": str(g.current_user["_id"]),
+        "created_by_name": g.current_user.get("name") or g.current_user.get("email"),
     }
 
     res = db.performance_reviews.insert_one(review)
+    review["_id"] = res.inserted_id
+
+    notify_performance_review_submitted(db, employee, reviewer_emp, review)
 
     audit("create_performance_review", "performance_reviews", res.inserted_id, review)
 
     return jsonify({
         "message": "Performance review submitted",
-        "item": str(res.inserted_id),
+        "item": clean_doc(review),
     }), 201

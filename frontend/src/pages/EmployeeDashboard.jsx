@@ -163,6 +163,16 @@ function projectName(project = {}) {
   return project.name || project.project_name || project.title || 'Untitled Project';
 }
 
+function numberValue(value, fallback = 0) {
+  const number = Number(value);
+
+  if (Number.isNaN(number)) {
+    return fallback;
+  }
+
+  return number;
+}
+
 function percentValue(value) {
   const number = Number(value || 0);
 
@@ -171,6 +181,53 @@ function percentValue(value) {
   }
 
   return Math.min(Math.max(number, 0), 100);
+}
+
+function ratingPercent(value) {
+  const rating = numberValue(value, 0);
+  return Math.min(Math.max((rating / 5) * 100, 0), 100);
+}
+
+function ratingValue(row = {}) {
+  return numberValue(
+    row.average_rating ??
+      row.avg_rating ??
+      row.rating_average ??
+      row.rating ??
+      row.score,
+    0,
+  );
+}
+
+function reviewCount(row = {}) {
+  return numberValue(row.review_count ?? row.count ?? row.total_reviews, 0);
+}
+
+function reviewTargetLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+
+  if (normalized === 'team_member') return 'Team Member';
+  if (normalized === 'team_leader') return 'Team Leader';
+  if (normalized === 'reporting_member') return 'Reporting Member';
+  if (normalized === 'admin_review') return 'Admin / HR Review';
+
+  return statusLabel(value);
+}
+
+function reviewerRoleLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+
+  if (normalized === 'team_leader') return 'Team Leader';
+  if (normalized === 'reporting_officer') return 'Reporting Officer';
+  if (normalized === 'admin_hr') return 'Admin / HR';
+
+  return statusLabel(value);
+}
+
+function employeeOptionLabel(row = {}) {
+  return `${row.name || row.employee_name || 'Employee'} — ${
+    row.designation || row.department || row.email || row.employee_id || row.emp_code || ''
+  }`;
 }
 
 function leaveLiveStatus(row = {}) {
@@ -220,6 +277,23 @@ function MiniProgressBar({ value }) {
   );
 }
 
+function RatingBar({ value }) {
+  const rating = ratingValue({ rating: value });
+  const width = ratingPercent(rating);
+
+  return (
+    <div className="emp-rating-mini-progress">
+      <div className="emp-rating-mini-progress-track">
+        <div
+          className="emp-rating-mini-progress-fill"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <strong>{rating ? rating.toFixed(1) : '0.0'}/5</strong>
+    </div>
+  );
+}
+
 function ProjectChart({ title, rows = [] }) {
   const hasRows = rows.length > 0;
 
@@ -251,6 +325,67 @@ function ProjectChart({ title, rows = [] }) {
                 </div>
 
                 <strong>{value}%</strong>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PerformanceGraph({ title, description, rows = [], emptyText }) {
+  return (
+    <div className="panel emp-performance-card">
+      <div className="toolbar">
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+      </div>
+
+      {!rows.length && (
+        <div className="empty">
+          {emptyText || 'No performance graph data available yet.'}
+        </div>
+      )}
+
+      {!!rows.length && (
+        <div className="emp-performance-graph">
+          {rows.slice(0, 10).map((row, index) => {
+            const label =
+              row.employee_name ||
+              row.team_leader_name ||
+              row.reviewer_name ||
+              row.cycle ||
+              row.label ||
+              `Review ${index + 1}`;
+
+            const rating = ratingValue(row);
+            const count = reviewCount(row);
+            const width = ratingPercent(rating);
+
+            return (
+              <div className="emp-performance-row" key={`${label}-${index}`}>
+                <div className="emp-performance-row-head">
+                  <span>{label}</span>
+                  <strong>{rating ? rating.toFixed(1) : '0.0'}/5</strong>
+                </div>
+
+                <div className="emp-performance-track">
+                  <div
+                    className="emp-performance-fill"
+                    style={{ width: `${Math.max(width, 4)}%` }}
+                  />
+                </div>
+
+                <small>
+                  {row.review_scope_label ||
+                    reviewTargetLabel(row.review_target_type) ||
+                    'Performance Review'}
+                  {count ? ` • ${count} review${count > 1 ? 's' : ''}` : ''}
+                  {row.cycle ? ` • ${row.cycle}` : ''}
+                </small>
               </div>
             );
           })}
@@ -564,6 +699,52 @@ export default function EmployeeDashboard({ setPage }) {
     projectDashboard?.reporting_daily_progress_chart ||
     [];
 
+  const performanceSummary = data?.performance_summary || {};
+  const myPerformanceChart =
+    data?.my_performance_chart ||
+    data?.own_performance_chart ||
+    performanceSummary?.my_performance_chart ||
+    [];
+
+  const teamPerformanceChart =
+    data?.team_member_performance_chart ||
+    data?.team_performance_chart ||
+    performanceSummary?.team_member_performance_chart ||
+    performanceSummary?.team_performance_chart ||
+    [];
+
+  const reportingPerformanceChart =
+    data?.reporting_performance_chart ||
+    data?.reporting_officer_performance_chart ||
+    performanceSummary?.reporting_performance_chart ||
+    performanceSummary?.reporting_officer_performance_chart ||
+    [];
+
+  const teamLeaderReviewGraph =
+    data?.team_leader_review_graph ||
+    performanceSummary?.team_leader_review_graph ||
+    teamPerformanceChart;
+
+  const reportingOfficerReviewGraph =
+    data?.reporting_officer_review_graph ||
+    performanceSummary?.reporting_officer_review_graph ||
+    reportingPerformanceChart;
+
+  const averageMyRating =
+    performanceSummary?.my_average_rating ??
+    performanceSummary?.average_rating_received ??
+    0;
+
+  const averageTeamRating =
+    performanceSummary?.team_average_rating ??
+    performanceSummary?.team_member_average_rating ??
+    0;
+
+  const averageReportingRating =
+    performanceSummary?.reporting_average_rating ??
+    performanceSummary?.reporting_officer_average_rating ??
+    0;
+
   const availableCompOffs = useMemo(
     () => compOffs.filter((item) => item.status === 'available'),
     [compOffs],
@@ -574,17 +755,51 @@ export default function EmployeeDashboard({ setPage }) {
     [modeRequests],
   );
 
-  const reviewableEmployeesMap = new Map();
+  const teamReviewableEmployees = useMemo(() => {
+    if (!isTeamLeader) {
+      return [];
+    }
 
-  [...(data?.team_members || []), ...(data?.reporting_members || [])].forEach(
-    (employeeRow) => {
-      if (employeeRow?._id) {
-        reviewableEmployeesMap.set(employeeRow._id, employeeRow);
-      }
-    },
+    return (data?.team_members || []).filter((employeeRow) => employeeRow?._id);
+  }, [data?.team_members, isTeamLeader]);
+
+  const reportingReviewableEmployees = useMemo(() => {
+    if (!isReportingOfficer) {
+      return [];
+    }
+
+    return (data?.reporting_members || []).filter((employeeRow) => employeeRow?._id);
+  }, [data?.reporting_members, isReportingOfficer]);
+
+  const reviewableEmployees = useMemo(() => {
+    const map = new Map();
+
+    teamReviewableEmployees.forEach((employeeRow) => {
+      map.set(employeeRow._id, {
+        ...employeeRow,
+        review_group_label: 'Team Member',
+        review_help_text: 'Team Leader to Team Member',
+      });
+    });
+
+    reportingReviewableEmployees.forEach((employeeRow) => {
+      const isMappedTeamLeader = isTruthy(employeeRow.is_team_leader);
+
+      map.set(employeeRow._id, {
+        ...employeeRow,
+        review_group_label: isMappedTeamLeader ? 'Team Leader' : 'Reporting Member',
+        review_help_text: isMappedTeamLeader
+          ? 'Reporting Officer to Team Leader'
+          : 'Reporting Officer to Reporting Member',
+      });
+    });
+
+    return Array.from(map.values());
+  }, [teamReviewableEmployees, reportingReviewableEmployees]);
+
+  const selectedReviewEmployee = reviewableEmployees.find(
+    (row) => row._id === reviewForm.employee_id,
   );
-
-  const reviewableEmployees = Array.from(reviewableEmployeesMap.values());
 
   const dashboardLeaveBalances = data?.leave_balances || [];
   const leaveBalanceSource = leaveBalances.length ? leaveBalances : dashboardLeaveBalances;
@@ -779,6 +994,7 @@ export default function EmployeeDashboard({ setPage }) {
     email: row.email || '—',
     department: row.department || '—',
     designation: row.designation || '—',
+    is_team_leader: boolLabel(row.is_team_leader),
     state: row.state || row.branch || '—',
     status: row.status || row.employment_status || '—',
   }));
@@ -801,8 +1017,21 @@ export default function EmployeeDashboard({ setPage }) {
     rating: row.rating ?? '—',
     comments: row.comments || '—',
     reviewer_name: row.reviewer_name || '—',
-    reviewer_role: statusLabel(row.reviewer_role),
+    reviewer_role: reviewerRoleLabel(row.reviewer_role),
+    review_type: reviewTargetLabel(row.review_target_type),
+    scope: row.review_scope_label || '—',
     status: statusLabel(row.status),
+    created_at: formatDateTime(row.created_at),
+  }));
+
+  const reviewsGivenRows = (data?.reviews_given || []).map((row) => ({
+    employee_name: row.employee_name || '—',
+    employee_code: row.employee_code || '—',
+    cycle: row.cycle || '—',
+    rating: row.rating ?? '—',
+    review_type: reviewTargetLabel(row.review_target_type),
+    scope: row.review_scope_label || '—',
+    comments: row.comments || '—',
     created_at: formatDateTime(row.created_at),
   }));
 
@@ -865,19 +1094,22 @@ export default function EmployeeDashboard({ setPage }) {
   return (
     <div className="page-grid employee-dashboard-page">
       <style>{`
-        .emp-project-dashboard {
+        .emp-project-dashboard,
+        .emp-performance-dashboard {
           display: grid;
           gap: 18px;
         }
 
-        .emp-leave-status-grid {
+        .emp-leave-status-grid,
+        .emp-performance-stat-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 12px;
           margin: 14px 0 18px;
         }
 
-        .emp-leave-status-card {
+        .emp-leave-status-card,
+        .emp-performance-stat-card {
           border: 1px solid #e2e8f0;
           background: #ffffff;
           border-radius: 18px;
@@ -885,7 +1117,8 @@ export default function EmployeeDashboard({ setPage }) {
           box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
         }
 
-        .emp-leave-status-card span {
+        .emp-leave-status-card span,
+        .emp-performance-stat-card span {
           display: block;
           color: #64748b;
           font-size: 12px;
@@ -894,14 +1127,16 @@ export default function EmployeeDashboard({ setPage }) {
           letter-spacing: .06em;
         }
 
-        .emp-leave-status-card strong {
+        .emp-leave-status-card strong,
+        .emp-performance-stat-card strong {
           display: block;
           margin-top: 7px;
           color: #0f172a;
           font-size: 26px;
         }
 
-        .emp-leave-note {
+        .emp-leave-note,
+        .emp-performance-note {
           background: #f8fafc;
           border: 1px dashed #cbd5e1;
           color: #64748b;
@@ -912,7 +1147,8 @@ export default function EmployeeDashboard({ setPage }) {
           margin-bottom: 14px;
         }
 
-        .emp-project-hero {
+        .emp-project-hero,
+        .emp-performance-hero {
           position: relative;
           overflow: hidden;
           border: 1px solid #e2e8f0;
@@ -925,14 +1161,16 @@ export default function EmployeeDashboard({ setPage }) {
           box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
         }
 
-        .emp-project-hero h3 {
+        .emp-project-hero h3,
+        .emp-performance-hero h3 {
           margin: 0;
           color: #0f172a;
           font-size: clamp(22px, 3vw, 32px);
           letter-spacing: -.04em;
         }
 
-        .emp-project-hero p {
+        .emp-project-hero p,
+        .emp-performance-hero p {
           margin: 8px 0 0;
           color: #64748b;
           line-height: 1.65;
@@ -1018,7 +1256,8 @@ export default function EmployeeDashboard({ setPage }) {
           background: #eef2ff;
         }
 
-        .emp-project-mini-progress {
+        .emp-project-mini-progress,
+        .emp-rating-mini-progress {
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
           gap: 10px;
@@ -1026,7 +1265,8 @@ export default function EmployeeDashboard({ setPage }) {
           margin-top: 14px;
         }
 
-        .emp-project-mini-progress-track {
+        .emp-project-mini-progress-track,
+        .emp-rating-mini-progress-track {
           height: 9px;
           overflow: hidden;
           border-radius: 999px;
@@ -1039,7 +1279,14 @@ export default function EmployeeDashboard({ setPage }) {
           background: linear-gradient(90deg, #4f46e5, #059669);
         }
 
-        .emp-project-mini-progress strong {
+        .emp-rating-mini-progress-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #d97706, #4f46e5, #059669);
+        }
+
+        .emp-project-mini-progress strong,
+        .emp-rating-mini-progress strong {
           color: #0f172a;
           font-size: 13px;
         }
@@ -1076,10 +1323,68 @@ export default function EmployeeDashboard({ setPage }) {
           background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
         }
 
+        .emp-performance-graph {
+          display: grid;
+          gap: 12px;
+        }
+
+        .emp-performance-row {
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+          background: #ffffff;
+          padding: 14px;
+          box-shadow: 0 10px 26px rgba(15, 23, 42, .05);
+        }
+
+        .emp-performance-row-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          color: #0f172a;
+          font-weight: 900;
+        }
+
+        .emp-performance-row-head span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .emp-performance-track {
+          height: 11px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #e2e8f0;
+          margin-top: 10px;
+        }
+
+        .emp-performance-fill {
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
+        }
+
+        .emp-performance-row small {
+          display: block;
+          margin-top: 9px;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        .emp-review-option-help {
+          color: #64748b;
+          font-size: 12px;
+          margin-top: -4px;
+        }
+
         @media (max-width: 1024px) {
           .emp-project-stats,
           .emp-project-card-grid,
-          .emp-leave-status-grid {
+          .emp-leave-status-grid,
+          .emp-performance-stat-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
@@ -1087,11 +1392,13 @@ export default function EmployeeDashboard({ setPage }) {
         @media (max-width: 640px) {
           .emp-project-stats,
           .emp-project-card-grid,
-          .emp-leave-status-grid {
+          .emp-leave-status-grid,
+          .emp-performance-stat-grid {
             grid-template-columns: 1fr;
           }
 
-          .emp-project-hero {
+          .emp-project-hero,
+          .emp-performance-hero {
             border-radius: 20px;
             padding: 16px;
           }
@@ -1108,7 +1415,8 @@ export default function EmployeeDashboard({ setPage }) {
 
           <p className="employee-dashboard-subtitle">
             Employee dashboard for attendance, leave, profile, tickets,
-            notifications, assigned approval responsibilities, and project progress.
+            notifications, assigned approval responsibilities, performance, and
+            project progress.
           </p>
 
           <div className="employee-badges">
@@ -1251,6 +1559,89 @@ export default function EmployeeDashboard({ setPage }) {
           <div className="panel">
             <p>No dashboard data available.</p>
           </div>
+        )}
+      </section>
+
+      <section className="emp-performance-dashboard">
+        <div className="emp-performance-hero">
+          <div className="toolbar">
+            <div>
+              <span className="kicker">Performance Analytics</span>
+              <h3>Team Performance & Ratings</h3>
+              <p>
+                Team Leaders can rate their mapped team members. Reporting
+                Officers can rate Team Leaders or reporting members mapped under
+                them. Ratings are reflected in dashboard graphs.
+              </p>
+            </div>
+          </div>
+
+          <div className="emp-performance-stat-grid">
+            <div className="emp-performance-stat-card">
+              <span>My Avg Rating</span>
+              <strong>{numberValue(averageMyRating, 0).toFixed(1)}/5</strong>
+              <RatingBar value={averageMyRating} />
+            </div>
+
+            <div className="emp-performance-stat-card">
+              <span>Reviews Received</span>
+              <strong>{data?.my_performance_reviews?.length || performanceSummary?.my_review_count || 0}</strong>
+            </div>
+
+            <div className="emp-performance-stat-card">
+              <span>Reviews Given</span>
+              <strong>{data?.reviews_given?.length || performanceSummary?.reviews_given_count || 0}</strong>
+            </div>
+
+            <div className="emp-performance-stat-card">
+              <span>Reviewable Employees</span>
+              <strong>{reviewableEmployees.length}</strong>
+            </div>
+          </div>
+
+          <div className="emp-performance-note">
+            This separates Team Leader → Team Member reviews from Reporting
+            Officer → Team Leader reviews, so both dashboards can display the
+            right graph and history.
+          </div>
+        </div>
+
+        <section className="two-col">
+          <PerformanceGraph
+            title="My Received Performance"
+            description="Ratings received from Team Leader, Reporting Officer, or HR/Admin."
+            rows={myPerformanceChart.length ? myPerformanceChart : data?.my_performance_reviews || []}
+            emptyText="No received performance review yet."
+          />
+
+          <PerformanceGraph
+            title="Reviews Given By Me"
+            description="Ratings you have submitted for mapped employees."
+            rows={data?.reviews_given || []}
+            emptyText="No performance review submitted yet."
+          />
+        </section>
+
+        {(isTeamLeader || isReportingOfficer) && (
+          <section className="two-col">
+            {isTeamLeader && (
+              <PerformanceGraph
+                title="Team Member Performance Graph"
+                description={`Average Team Member Rating: ${numberValue(averageTeamRating, 0).toFixed(1)}/5`}
+                rows={teamLeaderReviewGraph}
+                emptyText="No team member performance graph data yet."
+              />
+            )}
+
+            {isReportingOfficer && (
+              <PerformanceGraph
+                title="Reporting Officer Performance Graph"
+                description={`Average Reporting Rating: ${numberValue(averageReportingRating, 0).toFixed(1)}/5`}
+                rows={reportingOfficerReviewGraph}
+                emptyText="No reporting officer performance graph data yet."
+              />
+            )}
+          </section>
         )}
       </section>
 
@@ -1725,8 +2116,9 @@ export default function EmployeeDashboard({ setPage }) {
         <section className="panel">
           <h3>Performance Rating</h3>
           <p>
-            This section appears because this employee is mapped as Team Leader
-            and/or Reporting Officer for assigned employees.
+            Team Leaders can rate only their mapped team members. Reporting
+            Officers can rate Team Leaders or reporting members mapped under
+            them.
           </p>
 
           <form className="dynamic-form" onSubmit={submitReview}>
@@ -1744,15 +2136,32 @@ export default function EmployeeDashboard({ setPage }) {
               >
                 <option value="">Select employee</option>
 
-                {reviewableEmployees.map((employeeRow) => (
-                  <option key={employeeRow._id} value={employeeRow._id}>
-                    {employeeRow.name} —{' '}
-                    {employeeRow.designation ||
-                      employeeRow.department ||
-                      employeeRow.email}
-                  </option>
-                ))}
+                {teamReviewableEmployees.length > 0 && (
+                  <optgroup label="Team Leader → Team Members">
+                    {teamReviewableEmployees.map((employeeRow) => (
+                      <option key={`team-${employeeRow._id}`} value={employeeRow._id}>
+                        {employeeOptionLabel(employeeRow)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+
+                {reportingReviewableEmployees.length > 0 && (
+                  <optgroup label="Reporting Officer → Team Leaders / Reporting Members">
+                    {reportingReviewableEmployees.map((employeeRow) => (
+                      <option key={`reporting-${employeeRow._id}`} value={employeeRow._id}>
+                        {employeeOptionLabel(employeeRow)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
+
+              {selectedReviewEmployee?.review_help_text && (
+                <small className="emp-review-option-help">
+                  Selected review type: {selectedReviewEmployee.review_help_text}
+                </small>
+              )}
             </label>
 
             <label>
@@ -1850,10 +2259,18 @@ export default function EmployeeDashboard({ setPage }) {
         </section>
       )}
 
-      <section className="panel">
-        <h3>My Performance Reviews</h3>
-        <p>This is visible to the employee, HR, and Super Admin.</p>
-        <Table rows={myReviewRows} maxColumns={8} />
+      <section className="two-col">
+        <div className="panel">
+          <h3>My Performance Reviews</h3>
+          <p>This is visible to the employee, HR, and Super Admin.</p>
+          <Table rows={myReviewRows} maxColumns={9} />
+        </div>
+
+        <div className="panel">
+          <h3>Reviews Given By Me</h3>
+          <p>Ratings submitted by you for mapped employees.</p>
+          <Table rows={reviewsGivenRows} maxColumns={9} />
+        </div>
       </section>
 
       <section className="two-col">
