@@ -124,6 +124,18 @@ function employeePhotoRecord(row = {}) {
 }
 
 function liveStatus(row = {}) {
+  const stage = String(row.approval_stage || '').toLowerCase();
+  const status = String(row.status || '').toLowerCase();
+  const teamLeaderApproved =
+    String(row.team_leader_status || '').toLowerCase() === 'approved' ||
+    Boolean(row.approved_by_team_leader) ||
+    Boolean(row.approved_by_team_leader_name) ||
+    Boolean(row.team_leader_decision_by_name);
+
+  if (status === 'pending' && stage === 'reporting_officer' && teamLeaderApproved) {
+    return 'Approved by Team Leader, Pending with Reporting Officer';
+  }
+
   return (
     row.live_status ||
     row.status_text ||
@@ -162,7 +174,9 @@ function isApprovedRecord(row = {}) {
     Boolean(row.team_leader_decision_by_name) ||
     Boolean(row.approved_by_reporting_officer) ||
     Boolean(row.approved_by_reporting_officer_name) ||
-    Boolean(row.reporting_officer_decision_by_name)
+    Boolean(row.reporting_officer_decision_by_name) ||
+    String(row.team_leader_status || '').toLowerCase() === 'approved' ||
+    String(row.reporting_officer_status || '').toLowerCase() === 'approved'
   );
 }
 
@@ -174,9 +188,9 @@ function isRejectedRecord(row = {}) {
     status === 'rejected' ||
     stage === 'rejected' ||
     Boolean(row.rejected_by_name) ||
-    Boolean(row.team_leader_status === 'rejected') ||
-    Boolean(row.reporting_officer_status === 'rejected') ||
-    Boolean(row.hr_status === 'rejected')
+    String(row.team_leader_status || '').toLowerCase() === 'rejected' ||
+    String(row.reporting_officer_status || '').toLowerCase() === 'rejected' ||
+    String(row.hr_status || '').toLowerCase() === 'rejected'
   );
 }
 
@@ -238,7 +252,10 @@ function Timeline({ history = [] }) {
   return (
     <div className="ta-timeline">
       {history.map((item, index) => (
-        <div className="ta-timeline-item" key={`${item.at || item.created_at || index}-${item.name || index}`}>
+        <div
+          className="ta-timeline-item"
+          key={`${item.at || item.created_at || index}-${item.name || index}`}
+        >
           <div className="ta-timeline-dot" />
 
           <div>
@@ -298,7 +315,11 @@ function ApprovalFlags({ row }) {
           Team Leader
           <small>
             {teamLeaderDone
-              ? `Approved by ${row.approved_by_team_leader_name || row.team_leader_decision_by_name || 'Team Leader'}`
+              ? `Approved by ${
+                  row.approved_by_team_leader_name ||
+                  row.team_leader_decision_by_name ||
+                  'Team Leader'
+                }`
               : row.team_leader_name
                 ? `Pending / mapped to ${row.team_leader_name}`
                 : 'Not mapped / skipped'}
@@ -312,9 +333,15 @@ function ApprovalFlags({ row }) {
           Reporting Officer
           <small>
             {reportingOfficerDone
-              ? `Approved by ${row.approved_by_reporting_officer_name || row.reporting_officer_decision_by_name || 'Reporting Officer'}`
+              ? `Approved by ${
+                  row.approved_by_reporting_officer_name ||
+                  row.reporting_officer_decision_by_name ||
+                  'Reporting Officer'
+                }`
               : row.reporting_officer_name
-                ? `Pending / mapped to ${row.reporting_officer_name}`
+                ? String(row.approval_stage || '').toLowerCase() === 'reporting_officer'
+                  ? `Pending with ${row.reporting_officer_name}`
+                  : `Mapped to ${row.reporting_officer_name}`
                 : 'Not mapped'}
           </small>
         </span>
@@ -491,13 +518,13 @@ export default function TeamApprovals({ setPage }) {
   const approvedCount = rows.filter(isApprovedRecord).length;
   const rejectedCount = rows.filter(isRejectedRecord).length;
 
-  async function loadData() {
+  async function loadData(nextFilter = filter) {
     try {
       setLoading(true);
       setMessage('');
 
       const data = await getTeamApprovals({
-        status: filter === 'all' ? '' : filter,
+        status: nextFilter === 'all' ? '' : nextFilter,
       });
 
       const items = normalizeLeaveApprovalList(
@@ -518,7 +545,7 @@ export default function TeamApprovals({ setPage }) {
   }
 
   useEffect(() => {
-    loadData();
+    loadData(filter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
@@ -540,8 +567,19 @@ export default function TeamApprovals({ setPage }) {
 
       const data = await approveTeamLeaveRequest(requestId);
 
-      setMessage(data.message || 'Leave request approved successfully.');
-      await loadData();
+      const updatedStage = String(data?.item?.approval_stage || '').toLowerCase();
+      const updatedStatus = String(data?.item?.status || '').toLowerCase();
+
+      if (updatedStage === 'reporting_officer' && updatedStatus === 'pending') {
+        setMessage(
+          data.message ||
+            'Approved by Team Leader. The request has now been sent to the Reporting Officer.',
+        );
+      } else {
+        setMessage(data.message || 'Leave request approved successfully.');
+      }
+
+      await loadData(filter);
     } catch (error) {
       setMessage(error.message || 'Unable to approve leave request.');
     } finally {
@@ -568,7 +606,7 @@ export default function TeamApprovals({ setPage }) {
       const data = await rejectTeamLeaveRequest(requestId, reason || '');
 
       setMessage(data.message || 'Leave request rejected successfully.');
-      await loadData();
+      await loadData(filter);
     } catch (error) {
       setMessage(error.message || 'Unable to reject leave request.');
     } finally {
@@ -1100,7 +1138,7 @@ export default function TeamApprovals({ setPage }) {
             <button
               type="button"
               className="primary"
-              onClick={loadData}
+              onClick={() => loadData(filter)}
               disabled={loading}
             >
               <RefreshCcw size={16} />

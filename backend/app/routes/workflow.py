@@ -629,12 +629,32 @@ def build_initial_leave_stage(employee):
     return "hr"
 
 
-def next_leave_stage(employee, current_stage):
-    if current_stage == "team_leader":
-        if employee.get("reporting_officer_id"):
-            return "reporting_officer"
+def next_leave_stage(employee, current_stage, leave_doc=None):
+    """
+    Decide the next leave approval stage.
 
-        return "hr"
+    Important two-step rule:
+    - If the current stage is Team Leader and a Reporting Officer is mapped,
+      the leave must remain pending and move to Reporting Officer.
+    - If no Reporting Officer is mapped, move to HR.
+    - Reporting Officer approval is final approval.
+    - HR approval is final approval only when the leave directly reached HR.
+
+    We check both the employee master and the leave document because older
+    records may have the Reporting Officer saved on the leave request even if
+    the employee master was later changed.
+    """
+
+    leave_doc = leave_doc or {}
+    current_stage = normalize_text(current_stage)
+
+    reporting_officer_id = (
+        normalize_text(leave_doc.get("reporting_officer_id"))
+        or normalize_text(employee.get("reporting_officer_id") if employee else "")
+    )
+
+    if current_stage == "team_leader":
+        return "reporting_officer" if reporting_officer_id else "hr"
 
     if current_stage == "reporting_officer":
         return "final"
@@ -1022,13 +1042,19 @@ def create_leave_history_entry(status, stage, note):
     }
 
 def notify_next_leave_approvers(db, employee, leave_doc, stage):
-    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    tenant_id = employee.get("tenant_id") or leave_doc.get("tenant_id") or current_tenant_id()
     user_ids = []
 
+    # Prefer the approver mapping saved on the leave request, then fallback to
+    # the current employee master. This prevents the Team Leader approval from
+    # getting stuck if mappings changed after the leave was applied.
+    team_leader_id = normalize_text(leave_doc.get("team_leader_id")) or normalize_text(employee.get("team_leader_id"))
+    reporting_officer_id = normalize_text(leave_doc.get("reporting_officer_id")) or normalize_text(employee.get("reporting_officer_id"))
+
     if stage == "team_leader":
-        user_ids.append(employee_user_id(db, employee.get("team_leader_id"), tenant_id))
+        user_ids.append(employee_user_id(db, team_leader_id, tenant_id))
     elif stage == "reporting_officer":
-        user_ids.append(employee_user_id(db, employee.get("reporting_officer_id"), tenant_id))
+        user_ids.append(employee_user_id(db, reporting_officer_id, tenant_id))
     elif stage == "hr":
         user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
 
@@ -2234,21 +2260,45 @@ def leave_decision(req_id):
             "item": clean_doc(enrich_leave_request_doc(updated)),
         })
 
-    next_stage = next_leave_stage(employee, current_stage)
+    next_stage = next_leave_stage(employee, current_stage, existing)
     current_stage_fields = approval_stage_update_fields(current_stage, "approved", note)
 
     if next_stage != "final":
+        # This is the critical two-step leave approval fix.
+        # Team Leader approval must NOT final-approve the leave when a Reporting
+        # Officer exists. It must keep status pending and move the request to
+        # approval_stage="reporting_officer" so the RO can see it in Team Approvals.
         next_pending_fields = {}
 
         if next_stage == "reporting_officer":
-            next_pending_fields["reporting_officer_status"] = "pending"
+            next_pending_fields.update({
+                "reporting_officer_status": "pending",
+                "hr_status": existing.get("hr_status") or "view_only",
+            })
         elif next_stage == "hr":
-            next_pending_fields["hr_status"] = "pending"
+            next_pending_fields.update({
+                "hr_status": "pending",
+            })
 
         update_set = {
             "status": "pending",
             "approval_stage": next_stage,
             "approval_stage_label": leave_stage_label(next_stage),
+            "live_status": (
+                "Approved by Team Leader, Pending with Reporting Officer"
+                if current_stage == "team_leader" and next_stage == "reporting_officer"
+                else f"Pending with {leave_stage_label(next_stage)}"
+            ),
+            "status_text": (
+                "Approved by Team Leader, Pending with Reporting Officer"
+                if current_stage == "team_leader" and next_stage == "reporting_officer"
+                else f"Pending with {leave_stage_label(next_stage)}"
+            ),
+            "status_display": (
+                "Approved by Team Leader, Pending with Reporting Officer"
+                if current_stage == "team_leader" and next_stage == "reporting_officer"
+                else f"Pending with {leave_stage_label(next_stage)}"
+            ),
             "updated_at": now,
             **current_stage_fields,
             **next_pending_fields,
