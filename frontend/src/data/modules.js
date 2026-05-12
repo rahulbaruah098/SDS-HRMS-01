@@ -32,64 +32,13 @@ import {
       is_reporting_officer
       team_leader_id
       reporting_officer_id
-  - Capability roles are still kept below for backward compatibility with older
-    users/tokens and for approval-scoped pages, but the dashboard should display
-    the person as Employee unless they are an admin/HR/finance user.
-
-  Profile photo workflow:
-  - Employee Master, User Control, login user, dashboards and projects all use
-    the same avatar/photo aliases:
-      avatar
-      profile_photo
-      profile_picture
-      photo
-  - Frontend pages should read any available alias and keep all aliases synced
-    when creating/updating users or employees.
-
-  Leave approval workflow:
-  - Employees apply leave from Leave Management.
-  - Leave first goes to mapped Team Leader.
-  - If employee has no Team Leader, leave directly goes to Reporting Officer.
-  - After Team Leader approval, leave moves to Reporting Officer.
-  - After Reporting Officer approval, leave is finally approved.
-  - HR/Admin receives notification after final approval/rejection for record keeping.
-  - Team Leader, Reporting Officer, HR/Admin and Super Admin can open Team Approvals.
-  - Team Leader and Reporting Officer use Team Approvals for approval decisions.
-  - HR/Admin use Team Approvals as the HR leave record/approval panel.
-  - Application Status shows live stage, approval history and final approval status.
-
-  Project workflow:
-  - Projects module remains visible to employees so assigned/collaborator staff
-    can view projects and update status/progress.
-  - Only Team Leader and Reporting Officer capability users can create projects.
-  - Only Team Leader and Reporting Officer capability users can assign team members.
-  - Only Team Leader and Reporting Officer capability users can add collaborators.
-  - Team Leader / Reporting Officer can assign a project to himself/herself.
-  - Normal employees/team members cannot create projects, assign members, or add collaborators.
-  - Normal employees/team members can view scoped projects and update status/progress only.
-  - Active projects appear in handover dropdowns.
-  - Completed projects are hidden from handover dropdowns but remain visible in dashboards.
-  - Reporting Officer can see mapped Team Leader project progress.
-  - Super Admin / Managing Director can see department-wise and top-performing department analytics.
-  - SDS Admin dashboard can see department-wise and project-wise project graphs.
-  - Project cards/dashboards can show:
-      Reporting Officer
-      Team Leader
-      assigned_members
-      collaborators
-      doing_people
-      project_team_tree
-      team_hierarchy_tree
 
   Performance workflow:
-  - Team Leader can give performance rating only to mapped team members.
-  - Reporting Officer can give performance rating to mapped Team Leaders/reporting members.
-  - Review target type is tracked separately:
-      team_member
-      team_leader
-      reporting_member
-      admin_review
-  - Performance graphs are shown on Team Leader and Reporting Officer dashboard.
+  - Performance page is available only for Team Leader and Reporting Officer capability users.
+  - Team Leader can give weekly performance rating only to mapped team members.
+  - Reporting Officer can give weekly performance rating to mapped Team Leaders/reporting members.
+  - Monthly and yearly performance graphs are generated from weekly review data.
+  - HR/Admin should not submit performance reviews from this module.
 */
 
 export const BASE_EMPLOYEE_ROLE = 'employee';
@@ -99,6 +48,12 @@ export const CAPABILITY_ROLES = [
   'ro',
   'team_leader',
   'reporting_officer',
+];
+
+export const PERFORMANCE_REVIEW_ROLES = [
+  'team_leader',
+  'reporting_officer',
+  'ro',
 ];
 
 export const HR_ROLES = [
@@ -214,13 +169,17 @@ export const PERFORMANCE_REVIEW_TARGET_TYPES = [
   { value: 'team_member', label: 'Team Member' },
   { value: 'team_leader', label: 'Team Leader' },
   { value: 'reporting_member', label: 'Reporting Member' },
-  { value: 'admin_review', label: 'Admin / HR Review' },
 ];
 
 export const PERFORMANCE_REVIEWER_ROLES = [
   { value: 'team_leader', label: 'Team Leader' },
   { value: 'reporting_officer', label: 'Reporting Officer' },
-  { value: 'admin_hr', label: 'Admin / HR' },
+];
+
+export const PERFORMANCE_PERIOD_OPTIONS = [
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
 ];
 
 export const PROFILE_PHOTO_FIELDS = [
@@ -378,8 +337,8 @@ export const coreModules = [
     'performance_reviews',
     'Performance',
     BarChart3,
-    'Team Leader to team member ratings, Reporting Officer to Team Leader ratings, and appraisal records.',
-    TEAM_ROLES,
+    'Weekly performance rating page for Team Leaders and Reporting Officers with auto monthly/yearly analytics.',
+    PERFORMANCE_REVIEW_ROLES,
   ],
   [
     'expenses',
@@ -502,7 +461,7 @@ export function hasAnyRole(userRoles = [], allowedRoles = []) {
 }
 
 export function truthyValue(value) {
-  return ['true', 'yes', '1', 'on'].includes(
+  return ['true', 'yes', '1', 'on', '1.0'].includes(
     String(value || '').trim().toLowerCase(),
   );
 }
@@ -550,8 +509,41 @@ export function isProjectManagerRole(role) {
   return PROJECT_MANAGER_ROLES.includes(normalizeRoleValue(role));
 }
 
-export function isEmployeePortalUser(user) {
+export function isPerformanceReviewerRole(role) {
+  return PERFORMANCE_REVIEW_ROLES.includes(normalizeRoleValue(role));
+}
+
+export function getEmployeeProfile(user = {}) {
+  return user.employee_summary || user.employee || user.employee_profile || user.profile || {};
+}
+
+export function effectiveRoleList(user = {}) {
   const roles = normalizeRoleList(user?.roles || []);
+  const employee = getEmployeeProfile(user);
+
+  if (truthyValue(employee?.is_team_leader) && !roles.includes('team_leader')) {
+    roles.push('team_leader');
+  }
+
+  if (truthyValue(employee?.is_reporting_officer)) {
+    if (!roles.includes('reporting_officer')) {
+      roles.push('reporting_officer');
+    }
+
+    if (!roles.includes('ro')) {
+      roles.push('ro');
+    }
+  }
+
+  if (!roles.length && user?.email) {
+    roles.push(BASE_EMPLOYEE_ROLE);
+  }
+
+  return [...new Set(roles)];
+}
+
+export function isEmployeePortalUser(user) {
+  const roles = effectiveRoleList(user);
 
   if (!roles.length) {
     return false;
@@ -561,21 +553,17 @@ export function isEmployeePortalUser(user) {
 }
 
 export function isAdminHrUser(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   return hasAnyRole(roles, HR_ROLES);
 }
 
 export function isFinanceUser(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   return hasAnyRole(roles, FINANCE_ROLES);
 }
 
-export function getEmployeeProfile(user = {}) {
-  return user.employee_summary || user.employee || user.employee_profile || user.profile || {};
-}
-
 export function canManageProjects(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   const employee = getEmployeeProfile(user);
 
   return (
@@ -594,7 +582,7 @@ export function canAddProjectCollaborators(user) {
 }
 
 export function canUpdateProjectProgress(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
 
   return (
     roles.includes(BASE_EMPLOYEE_ROLE) ||
@@ -604,7 +592,7 @@ export function canUpdateProjectProgress(user) {
 }
 
 export function canViewProjectTeamTree(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
 
   return (
     roles.includes(BASE_EMPLOYEE_ROLE) ||
@@ -614,12 +602,12 @@ export function canViewProjectTeamTree(user) {
 }
 
 export function canManageLeaveBalances(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   return hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES);
 }
 
 export function canApproveTeamRequests(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   const employee = getEmployeeProfile(user);
 
   return (
@@ -631,7 +619,7 @@ export function canApproveTeamRequests(user) {
 }
 
 export function canSubmitPerformanceReview(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   const employee = getEmployeeProfile(user);
 
   return (
@@ -639,13 +627,12 @@ export function canSubmitPerformanceReview(user) {
     truthyValue(employee?.is_reporting_officer) ||
     roles.includes('team_leader') ||
     roles.includes('reporting_officer') ||
-    roles.includes('ro') ||
-    hasAnyRole(roles, HR_ROLES)
+    roles.includes('ro')
   );
 }
 
 export function getEmployeeCapabilities(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
   const employee = getEmployeeProfile(user);
 
   const isTeamLeader =
@@ -677,7 +664,7 @@ export function getEmployeeCapabilities(user) {
 }
 
 export function getDisplayRole(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
 
   if (roles.includes('super_admin')) return 'Super Admin';
   if (roles.includes('admin')) return 'Admin';
@@ -709,7 +696,7 @@ export function getCapabilityDisplayText(user) {
 }
 
 export function moduleList(user) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
 
   if (roles.includes('super_admin')) {
     return allModules;
@@ -719,7 +706,7 @@ export function moduleList(user) {
 }
 
 export function canAccessModule(user, moduleKey) {
-  const roles = normalizeRoleList(user?.roles || []);
+  const roles = effectiveRoleList(user);
 
   if (roles.includes('super_admin')) {
     return true;
@@ -1098,7 +1085,9 @@ export const templates = {
 
   performance_reviews: {
     employee_id: '',
+    target_employee_id: '',
     employee_name: '',
+    target_employee_name: '',
     employee_code: '',
     employee_user_id: '',
     department: '',
@@ -1109,22 +1098,52 @@ export const templates = {
     reporting_officer_id: '',
     reporting_officer_name: '',
 
+    period_type: 'weekly',
+    review_frequency: 'weekly',
     cycle: '',
+    review_date: '',
+    week_start: '',
+    week_end: '',
+    week_key: '',
+    week_label: '',
+    month: '',
+    month_key: '',
+    month_label: '',
+    year: '',
+    year_key: '',
+
     rating: 0,
+    rating_value: 0,
+    rating_percent: 0,
+    rating_percentage: 0,
+    rating_bucket: '',
+    rating_label: '',
+    score: 0,
+    performance_score: 0,
+    score_label: '',
+
     comments: '',
+    remarks: '',
+    strengths: '',
+    improvement_areas: '',
 
     reviewer_id: '',
     reviewer_employee_id: '',
     reviewer_employee_code: '',
     reviewer_name: '',
+    reviewer_employee_name: '',
     reviewer_role: '',
 
     review_target_type: '',
     review_scope_label: '',
     reviewed_employee_is_team_leader: false,
     reviewed_employee_is_reporting_officer: false,
-    visibility: [],
 
+    graph_group: '',
+    graph_label: '',
+    graph_value: 0,
+
+    visibility: [],
     status: 'submitted',
   },
 

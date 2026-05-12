@@ -38,6 +38,7 @@ READ_ALLOWED_COLLECTIONS = {
     "companies",
     "users",
     "notifications",
+    "performance_reviews",
 }
 
 WRITE_ALLOWED_COLLECTIONS = {
@@ -151,6 +152,28 @@ SEARCH_FIELDS = {
         "title",
         "body",
         "status",
+    ],
+    "performance_reviews": [
+        "employee_name",
+        "employee_code",
+        "emp_code",
+        "department",
+        "designation",
+        "reviewer_name",
+        "reviewer_employee_name",
+        "reviewer_role",
+        "review_target_type",
+        "review_scope_label",
+        "cycle",
+        "period_type",
+        "week_label",
+        "month_label",
+        "year",
+        "rating_label",
+        "score_label",
+        "remarks",
+        "comment",
+        "notes",
     ],
 }
 
@@ -920,6 +943,12 @@ def apply_common_filters(collection, q):
     leave_type = normalize_leave_type(request.args.get("leave_type"))
     approval_stage = normalize_text(request.args.get("approval_stage"))
     mode = normalize_text(request.args.get("mode"))
+    reviewer_employee_id = normalize_text(request.args.get("reviewer_employee_id") or request.args.get("reviewer_id"))
+    review_target_type = normalize_text(request.args.get("review_target_type") or request.args.get("target_type"))
+    period_type = normalize_text(request.args.get("period_type") or request.args.get("period"))
+    week_key = normalize_text(request.args.get("week_key"))
+    month_key = normalize_text(request.args.get("month_key"))
+    year_key = normalize_text(request.args.get("year_key") or request.args.get("year"))
     date_from = normalize_text(request.args.get("date_from"))
     date_to = normalize_text(request.args.get("date_to"))
     q_text = normalize_text(request.args.get("q") or request.args.get("search"))
@@ -935,6 +964,25 @@ def apply_common_filters(collection, q):
 
     if employee_id:
         q["employee_id"] = employee_id
+
+    if collection == "performance_reviews":
+        if reviewer_employee_id:
+            q["reviewer_employee_id"] = reviewer_employee_id
+
+        if review_target_type:
+            q["review_target_type"] = review_target_type
+
+        if period_type:
+            q["period_type"] = period_type
+
+        if week_key:
+            q["week_key"] = week_key
+
+        if month_key:
+            q["month_key"] = month_key
+
+        if year_key:
+            q["year_key"] = year_key
 
     if leave_type and collection in {"leave_balances", "leave_requests"}:
         q["leave_type"] = leave_type
@@ -953,6 +1001,15 @@ def apply_common_filters(collection, q):
 
         if date_to:
             q["date"]["$lte"] = date_to
+
+    if collection == "performance_reviews" and (date_from or date_to):
+        q["review_date"] = {}
+
+        if date_from:
+            q["review_date"]["$gte"] = date_from
+
+        if date_to:
+            q["review_date"]["$lte"] = date_to
 
     if collection == "leave_requests" and (date_from or date_to):
         start = date_from or "0000-01-01"
@@ -1053,6 +1110,96 @@ def employee_owned_collection_scope(db, q, employee_field="employee_id"):
     return q
 
 
+def performance_rating_value(review):
+    raw_value = (
+        review.get("rating")
+        if review.get("rating") is not None
+        else review.get("score")
+        if review.get("score") is not None
+        else review.get("performance_score")
+    )
+
+    try:
+        return float(raw_value or 0)
+    except Exception:
+        return 0.0
+
+
+def performance_rating_bucket(rating):
+    try:
+        rating = float(rating or 0)
+    except Exception:
+        rating = 0
+
+    if rating >= 4.5:
+        return "Excellent"
+    if rating >= 3.5:
+        return "Good"
+    if rating >= 2.5:
+        return "Average"
+    if rating > 0:
+        return "Needs Improvement"
+    return "Not Rated"
+
+
+def performance_review_scope_query(db, q):
+    employee = get_current_employee(db)
+
+    if not employee:
+        q["_id"] = {"$exists": False}
+        return q
+
+    employee_id = str(employee["_id"])
+    scope_or = [
+        {"employee_id": employee_id},
+        {"reviewer_employee_id": employee_id},
+        {"reviewer_id": current_user_id()},
+    ]
+
+    if employee_is_team_leader(employee):
+        team_members = list(db.employees.find({
+            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+            "team_leader_id": employee_id,
+            "status": {"$ne": "Inactive"},
+            "is_deleted": {"$ne": True},
+        }, {"_id": 1}))
+
+        team_member_ids = [str(row["_id"]) for row in team_members]
+
+        if team_member_ids:
+            scope_or.append({
+                "employee_id": {"$in": team_member_ids},
+                "reviewer_employee_id": employee_id,
+            })
+
+    if employee_is_reporting_officer(employee):
+        reporting_members = list(db.employees.find({
+            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+            "reporting_officer_id": employee_id,
+            "status": {"$ne": "Inactive"},
+            "is_deleted": {"$ne": True},
+        }, {"_id": 1}))
+
+        reporting_member_ids = [str(row["_id"]) for row in reporting_members]
+
+        if reporting_member_ids:
+            scope_or.append({
+                "employee_id": {"$in": reporting_member_ids},
+                "reviewer_employee_id": employee_id,
+            })
+
+    if "$or" in q:
+        return {
+            "$and": [
+                q,
+                {"$or": scope_or},
+            ]
+        }
+
+    q["$or"] = scope_or
+    return q
+
+
 def leave_request_scope_query(db, q):
     roles = current_user_roles()
 
@@ -1118,6 +1265,9 @@ def scoped_query_for_collection(db, collection):
 
     if collection == "notifications":
         q = notification_scope_query(q)
+
+    if collection == "performance_reviews":
+        q = performance_review_scope_query(db, q)
 
     if collection == "employees":
         roles = current_user_roles()
@@ -1940,12 +2090,37 @@ def enrich_project_item(item):
     return item
 
 
+def enrich_performance_review(item):
+    item = dict(item or {})
+    rating_value = performance_rating_value(item)
+    rating_percent = round((rating_value / 5) * 100, 2) if rating_value else 0
+    rating_bucket = performance_rating_bucket(rating_value)
+
+    item["rating_value"] = rating_value
+    item["rating_percent"] = rating_percent
+    item["rating_percentage"] = rating_percent
+    item["rating_bucket"] = item.get("rating_bucket") or rating_bucket
+    item["rating_label"] = item.get("rating_label") or item.get("score_label") or rating_bucket
+    item["score_label"] = item.get("score_label") or item["rating_label"]
+    item["review_date"] = item.get("review_date") or item.get("date") or item.get("created_at") or ""
+    item["period_type"] = item.get("period_type") or item.get("review_frequency") or "weekly"
+    item["review_frequency"] = item.get("review_frequency") or item["period_type"]
+    item["graph_value"] = item.get("graph_value") if item.get("graph_value") is not None else rating_percent
+    item["graph_label"] = item.get("graph_label") or item.get("employee_name") or "Employee"
+    item["graph_group"] = item.get("graph_group") or item.get("review_target_type") or "performance"
+
+    return item
+
+
 def enrich_items(collection, items):
     if collection == "leave_requests":
         return [enrich_leave_request(item) for item in items]
 
     if collection == "projects":
         return [enrich_project_item(item) for item in items]
+
+    if collection == "performance_reviews":
+        return [enrich_performance_review(item) for item in items]
 
     return items
 
@@ -1988,6 +2163,9 @@ def list_collection(collection):
 
     if collection == "leave_requests" and sort_by == "created_at":
         sort_by = "from_date"
+
+    if collection == "performance_reviews" and sort_by == "created_at":
+        sort_by = "review_date"
 
     total = mongo_collection.count_documents(q)
 
@@ -2052,6 +2230,9 @@ def get_collection_item(collection, item_id):
 
     if collection == "projects":
         item = enrich_project_item(item)
+
+    if collection == "performance_reviews":
+        item = enrich_performance_review(item)
 
     return jsonify({
         "item": serialize_item(item),

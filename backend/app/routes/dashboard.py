@@ -1504,7 +1504,16 @@ def performance_rating_value(review):
         if review.get("score") is not None
         else review.get("performance_score")
     )
-    return to_float(raw_value, 0)
+
+    rating = to_float(raw_value, 0)
+
+    if rating < 0:
+        return 0
+
+    if rating > 5:
+        return 5
+
+    return round(rating, 2)
 
 
 def performance_rating_bucket(rating):
@@ -1517,6 +1526,76 @@ def performance_rating_bucket(rating):
     if rating > 0:
         return "Needs Improvement"
     return "Not Rated"
+
+
+def performance_review_date(review):
+    raw_value = (
+        review.get("review_date")
+        or review.get("date")
+        or review.get("week_start")
+        or review.get("created_at")
+    )
+
+    if isinstance(raw_value, datetime):
+        return raw_value.date()
+
+    if isinstance(raw_value, date):
+        return raw_value
+
+    raw_text = normalize_text(raw_value)
+
+    if not raw_text:
+        return date.today()
+
+    for fmt in ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d-%m-%Y"]:
+        try:
+            return datetime.strptime(raw_text[:19], fmt).date()
+        except Exception:
+            pass
+
+    try:
+        return datetime.fromisoformat(raw_text.replace("Z", "+00:00")).date()
+    except Exception:
+        return date.today()
+
+
+def performance_week_bounds(base_date=None):
+    base = base_date or date.today()
+    start = base - timedelta(days=base.weekday())
+    return start, start + timedelta(days=6)
+
+
+def performance_period_key_label(review, period):
+    review_date_value = performance_review_date(review)
+    period = normalize_text(period).lower()
+
+    if period in ["month", "monthly"]:
+        month_key = review.get("month_key") or review.get("month") or review_date_value.strftime("%Y-%m")
+        month_label = review.get("month_label") or review_date_value.strftime("%b %Y")
+        return normalize_text(month_key), normalize_text(month_label)
+
+    if period in ["year", "yearly"]:
+        year_key = review.get("year_key") or review.get("year") or str(review_date_value.year)
+        year_label = str(review.get("year") or review_date_value.year)
+        return normalize_text(year_key), normalize_text(year_label)
+
+    week_start = normalize_text(review.get("week_start"))
+    week_end = normalize_text(review.get("week_end"))
+    week_key = normalize_text(review.get("week_key"))
+    week_label = normalize_text(review.get("week_label"))
+
+    if not week_start or not week_end:
+        start, end = performance_week_bounds(review_date_value)
+        week_start = start.isoformat()
+        week_end = end.isoformat()
+
+    if not week_key:
+        week_key = f"{week_start}:{week_end}"
+
+    if not week_label:
+        week_label = f"{week_start} to {week_end}"
+
+    return week_key, week_label
 
 
 def performance_summary_from_reviews(reviews):
@@ -1542,6 +1621,7 @@ def performance_summary_from_reviews(reviews):
         "rated_reviews": rated,
         "average_rating": average_rating,
         "rating_percentage": round((average_rating / 5) * 100, 2) if average_rating else 0,
+        "rating_label": performance_rating_bucket(average_rating),
         "distribution": [
             {"label": key, "count": value}
             for key, value in distribution.items()
@@ -1557,17 +1637,149 @@ def employee_lookup_map(employees):
     }
 
 
+def empty_performance_chart(title="Performance"):
+    summary = performance_summary_from_reviews([])
+
+    return {
+        "title": title,
+        "summary": summary,
+        "members": [],
+        "rating_distribution": summary["distribution"],
+        "recent_reviews": [],
+        "weekly_chart": [],
+        "monthly_chart": [],
+        "yearly_chart": [],
+        "performance_3d_graph": [],
+        "three_d_graph": [],
+        "graph_mode": "3d-ready",
+    }
+
+
+def performance_period_series(reviews, period="weekly", limit=12):
+    grouped = {}
+
+    for review in reviews:
+        key, label = performance_period_key_label(review, period)
+        rating = performance_rating_value(review)
+
+        if not key:
+            continue
+
+        if key not in grouped:
+            grouped[key] = {
+                "key": key,
+                "period_key": key,
+                "label": label,
+                "period_label": label,
+                "period": period,
+                "reviews": 0,
+                "rated_reviews": 0,
+                "average_rating": 0,
+                "rating_percentage": 0,
+                "rating_label": "Not Rated",
+                "_total": 0,
+            }
+
+        row = grouped[key]
+        row["reviews"] += 1
+
+        if rating > 0:
+            row["rated_reviews"] += 1
+            row["_total"] += rating
+
+    rows = []
+
+    for row in grouped.values():
+        rated = row.get("rated_reviews", 0)
+        total = row.pop("_total", 0)
+        average = round(total / rated, 2) if rated else 0
+        row["average_rating"] = average
+        row["rating_percentage"] = round((average / 5) * 100, 2) if average else 0
+        row["rating_label"] = performance_rating_bucket(average)
+        row["graph_value"] = row["rating_percentage"]
+        row["score"] = average
+        rows.append(row)
+
+    rows = sorted(rows, key=lambda item: item.get("key", ""))
+
+    if limit and len(rows) > limit:
+        rows = rows[-limit:]
+
+    return rows
+
+
+def performance_member_period_matrix(reviews, employee_lookup, period="weekly", limit=8):
+    grouped = {}
+
+    for review in reviews:
+        employee_id = normalize_text(review.get("employee_id"))
+
+        if not employee_id:
+            continue
+
+        key, label = performance_period_key_label(review, period)
+        rating = performance_rating_value(review)
+        employee = employee_lookup.get(employee_id, {})
+        matrix_key = f"{employee_id}:{key}"
+
+        if matrix_key not in grouped:
+            grouped[matrix_key] = {
+                "employee_id": employee_id,
+                "employee_name": review.get("employee_name") or employee_name(employee),
+                "emp_code": review.get("employee_code") or employee_code(employee),
+                "department": review.get("employee_department") or employee.get("department", ""),
+                "designation": review.get("employee_designation") or employee.get("designation", ""),
+                "period": period,
+                "period_key": key,
+                "period_label": label,
+                "x": label,
+                "y": review.get("employee_name") or employee_name(employee),
+                "z": 0,
+                "reviews": 0,
+                "rated_reviews": 0,
+                "average_rating": 0,
+                "rating_percentage": 0,
+                "rating_label": "Not Rated",
+                "_total": 0,
+            }
+            apply_profile_photo_aliases(grouped[matrix_key], employee_photo(employee))
+
+        row = grouped[matrix_key]
+        row["reviews"] += 1
+
+        if rating > 0:
+            row["rated_reviews"] += 1
+            row["_total"] += rating
+
+    rows = []
+
+    for row in grouped.values():
+        rated = row.get("rated_reviews", 0)
+        total = row.pop("_total", 0)
+        average = round(total / rated, 2) if rated else 0
+        row["average_rating"] = average
+        row["rating_percentage"] = round((average / 5) * 100, 2) if average else 0
+        row["rating_label"] = performance_rating_bucket(average)
+        row["z"] = row["rating_percentage"]
+        row["graph_value"] = row["rating_percentage"]
+        rows.append(row)
+
+    rows = sorted(
+        rows,
+        key=lambda item: (item.get("period_key", ""), item.get("average_rating", 0), item.get("employee_name", "")),
+    )
+
+    if limit and len(rows) > limit * max(len(employee_lookup), 1):
+        rows = rows[-limit * max(len(employee_lookup), 1):]
+
+    return rows
+
+
 def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, title="Performance"):
     member_ids = [str(member_id) for member_id in member_ids if normalize_text(member_id)]
 
     if not member_ids:
-        return {
-            "title": title,
-            "summary": performance_summary_from_reviews([]),
-            "members": [],
-            "rating_distribution": performance_summary_from_reviews([])["distribution"],
-            "recent_reviews": [],
-        }
+        return empty_performance_chart(title)
 
     q = {
         "tenant_id": tenant_id,
@@ -1582,16 +1794,23 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
         db.performance_reviews
         .find(q)
         .sort("created_at", -1)
-        .limit(500)
+        .limit(1000)
     )
+
+    valid_object_ids = [
+        ObjectId(member_id)
+        for member_id in member_ids
+        if ObjectId.is_valid(member_id)
+    ]
 
     employees = list(
         db.employees.find({
             "tenant_id": tenant_id,
-            "_id": {"$in": [ObjectId(member_id) for member_id in member_ids if ObjectId.is_valid(member_id)]},
+            "_id": {"$in": valid_object_ids},
             "is_deleted": {"$ne": True},
         })
-    )
+    ) if valid_object_ids else []
+
     lookup = employee_lookup_map(employees)
     grouped = {}
 
@@ -1600,23 +1819,41 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
         row = {
             "employee_id": member_id,
             "employee_name": employee_name(employee) if employee else "Employee",
+            "name": employee_name(employee) if employee else "Employee",
+            "display_name": employee_name(employee) if employee else "Employee",
             "emp_code": employee_code(employee) if employee else "",
+            "employee_code": employee_code(employee) if employee else "",
             "department": employee.get("department", "") if employee else "",
             "designation": employee.get("designation", "") if employee else "",
+            "is_team_leader": truthy(employee.get("is_team_leader")) if employee else False,
+            "is_reporting_officer": truthy(employee.get("is_reporting_officer")) if employee else False,
             "total_reviews": 0,
             "average_rating": 0,
             "rating_percentage": 0,
             "latest_rating": 0,
+            "latest_rating_label": "Not Rated",
             "latest_review_date": "",
             "latest_review_by_name": "",
+            "latest_week_label": "",
+            "latest_month_label": "",
+            "year": "",
+            "weekly_average_rating": 0,
+            "monthly_average_rating": 0,
+            "yearly_average_rating": 0,
             "_rating_total": 0,
             "_rating_count": 0,
         }
         apply_profile_photo_aliases(row, employee_photo(employee))
         grouped[member_id] = row
 
+    today_value = date.today()
+    current_week_key, _ = performance_period_key_label({"review_date": today_value}, "weekly")
+    current_month_key, _ = performance_period_key_label({"review_date": today_value}, "monthly")
+    current_year_key, _ = performance_period_key_label({"review_date": today_value}, "yearly")
+    member_period_totals = {}
+
     for review in reviews:
-        member_id = review.get("employee_id")
+        member_id = normalize_text(review.get("employee_id"))
 
         if member_id not in grouped:
             continue
@@ -1629,10 +1866,40 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
             row["_rating_total"] += rating
             row["_rating_count"] += 1
 
+        for period_name, period_key in [
+            ("weekly", current_week_key),
+            ("monthly", current_month_key),
+            ("yearly", current_year_key),
+        ]:
+            review_period_key, review_period_label = performance_period_key_label(review, period_name)
+
+            if review_period_key != period_key:
+                continue
+
+            metric_key = f"{member_id}:{period_name}"
+
+            if metric_key not in member_period_totals:
+                member_period_totals[metric_key] = {
+                    "total": 0,
+                    "count": 0,
+                    "label": review_period_label,
+                }
+
+            if rating > 0:
+                member_period_totals[metric_key]["total"] += rating
+                member_period_totals[metric_key]["count"] += 1
+
         if not row["latest_review_date"]:
+            week_key, week_label = performance_period_key_label(review, "weekly")
+            month_key, month_label = performance_period_key_label(review, "monthly")
+            year_key, year_label = performance_period_key_label(review, "yearly")
             row["latest_rating"] = rating
+            row["latest_rating_label"] = performance_rating_bucket(rating)
             row["latest_review_date"] = review.get("review_date") or review.get("date") or review.get("created_at") or ""
             row["latest_review_by_name"] = review.get("reviewer_name") or review.get("reviewer_employee_name") or ""
+            row["latest_week_label"] = week_label
+            row["latest_month_label"] = month_label
+            row["year"] = year_label
 
     member_rows = []
 
@@ -1642,6 +1909,16 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
         row["average_rating"] = round(rating_total / rating_count, 2) if rating_count else 0
         row["rating_percentage"] = round((row["average_rating"] / 5) * 100, 2) if row["average_rating"] else 0
         row["rating_label"] = performance_rating_bucket(row["average_rating"])
+
+        for period_name in ["weekly", "monthly", "yearly"]:
+            metric_key = f"{row['employee_id']}:{period_name}"
+            metric = member_period_totals.get(metric_key, {})
+            count = metric.get("count", 0)
+            avg = round(metric.get("total", 0) / count, 2) if count else 0
+            row[f"{period_name}_average_rating"] = avg
+            row[f"{period_name}_rating_percentage"] = round((avg / 5) * 100, 2) if avg else 0
+            row[f"{period_name}_rating_label"] = performance_rating_bucket(avg)
+
         member_rows.append(row)
 
     member_rows = sorted(
@@ -1651,13 +1928,28 @@ def performance_chart_for_members(db, tenant_id, member_ids, reviewer_id=None, t
     )
 
     summary = performance_summary_from_reviews(reviews)
+    weekly_chart = performance_period_series(reviews, "weekly", 12)
+    monthly_chart = performance_period_series(reviews, "monthly", 12)
+    yearly_chart = performance_period_series(reviews, "yearly", 5)
+    weekly_3d_graph = performance_member_period_matrix(reviews, lookup, "weekly", 8)
+    monthly_3d_graph = performance_member_period_matrix(reviews, lookup, "monthly", 6)
+    yearly_3d_graph = performance_member_period_matrix(reviews, lookup, "yearly", 5)
 
     return {
         "title": title,
         "summary": summary,
         "members": member_rows,
         "rating_distribution": summary["distribution"],
-        "recent_reviews": clean_doc(reviews[:10]),
+        "recent_reviews": clean_doc(reviews[:20]),
+        "weekly_chart": weekly_chart,
+        "monthly_chart": monthly_chart,
+        "yearly_chart": yearly_chart,
+        "weekly_3d_graph": weekly_3d_graph,
+        "monthly_3d_graph": monthly_3d_graph,
+        "yearly_3d_graph": yearly_3d_graph,
+        "performance_3d_graph": weekly_3d_graph,
+        "three_d_graph": weekly_3d_graph,
+        "graph_mode": "3d-ready",
     }
 
 
@@ -1670,18 +1962,56 @@ def performance_received_chart(db, tenant_id, employee_id, title="My Performance
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
-        .limit(100)
+        .limit(500)
     )
 
     summary = performance_summary_from_reviews(reviews)
+    weekly_chart = performance_period_series(reviews, "weekly", 12)
+    monthly_chart = performance_period_series(reviews, "monthly", 12)
+    yearly_chart = performance_period_series(reviews, "yearly", 5)
+    employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "_id": ObjectId(employee_id),
+        "is_deleted": {"$ne": True},
+    }) if ObjectId.is_valid(str(employee_id)) else None
+    lookup = {employee_id: employee} if employee else {}
+    weekly_3d_graph = performance_member_period_matrix(reviews, lookup, "weekly", 8)
+    monthly_3d_graph = performance_member_period_matrix(reviews, lookup, "monthly", 6)
+    yearly_3d_graph = performance_member_period_matrix(reviews, lookup, "yearly", 5)
 
     return {
         "title": title,
         "summary": summary,
         "rating_distribution": summary["distribution"],
-        "recent_reviews": clean_doc(reviews[:10]),
+        "recent_reviews": clean_doc(reviews[:20]),
+        "weekly_chart": weekly_chart,
+        "monthly_chart": monthly_chart,
+        "yearly_chart": yearly_chart,
+        "weekly_3d_graph": weekly_3d_graph,
+        "monthly_3d_graph": monthly_3d_graph,
+        "yearly_3d_graph": yearly_3d_graph,
+        "performance_3d_graph": weekly_3d_graph,
+        "three_d_graph": weekly_3d_graph,
+        "graph_mode": "3d-ready",
     }
 
+
+def combined_performance_3d_graph(*charts):
+    rows = []
+
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+
+        title = chart.get("title") or "Performance"
+
+        for row in chart.get("performance_3d_graph", []) or chart.get("weekly_3d_graph", []):
+            item = dict(row)
+            item["group"] = title
+            item["graph_group"] = title
+            rows.append(item)
+
+    return rows
 
 def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_member_ids=None, reporting_member_ids=None):
     team_member_ids = team_member_ids or []
@@ -2449,6 +2779,12 @@ def employee_dashboard():
             "team_performance_chart": {},
             "reporting_performance_chart": {},
             "performance_summary": {},
+            "weekly_performance_chart": [],
+            "monthly_performance_chart": [],
+            "yearly_performance_chart": [],
+            "team_member_weekly_graph": [],
+            "reporting_team_leader_weekly_graph": [],
+            "performance_3d_graph": [],
             "today_attendance": None,
             "holiday": None,
             "available_attendance_modes": ["office"],
@@ -2702,6 +3038,17 @@ def employee_dashboard():
         "recent_reviews": [],
     }
 
+    weekly_performance_chart = my_performance_chart.get("weekly_chart", [])
+    monthly_performance_chart = my_performance_chart.get("monthly_chart", [])
+    yearly_performance_chart = my_performance_chart.get("yearly_chart", [])
+    team_member_weekly_graph = team_performance_chart.get("performance_3d_graph", [])
+    reporting_team_leader_weekly_graph = reporting_performance_chart.get("performance_3d_graph", [])
+    performance_3d_graph = combined_performance_3d_graph(
+        my_performance_chart,
+        team_performance_chart,
+        reporting_performance_chart,
+    )
+
     performance_summary = {
         "my_average_rating": my_performance_chart.get("summary", {}).get("average_rating", 0),
         "team_average_rating": team_performance_chart.get("summary", {}).get("average_rating", 0),
@@ -2710,6 +3057,11 @@ def employee_dashboard():
         "reviews_given": len(reviews_given),
         "team_reviews_given": team_performance_chart.get("summary", {}).get("total_reviews", 0),
         "reporting_reviews_given": reporting_performance_chart.get("summary", {}).get("total_reviews", 0),
+        "weekly_periods": len(weekly_performance_chart),
+        "monthly_periods": len(monthly_performance_chart),
+        "yearly_periods": len(yearly_performance_chart),
+        "team_member_graph_points": len(team_member_weekly_graph),
+        "reporting_graph_points": len(reporting_team_leader_weekly_graph),
     }
 
     balance_summary = leave_balance_summary(leave_balances)
@@ -2753,6 +3105,12 @@ def employee_dashboard():
         "team_performance_chart": clean_doc(team_performance_chart),
         "reporting_performance_chart": clean_doc(reporting_performance_chart),
         "performance_summary": clean_doc(performance_summary),
+        "weekly_performance_chart": clean_doc(weekly_performance_chart),
+        "monthly_performance_chart": clean_doc(monthly_performance_chart),
+        "yearly_performance_chart": clean_doc(yearly_performance_chart),
+        "team_member_weekly_graph": clean_doc(team_member_weekly_graph),
+        "reporting_team_leader_weekly_graph": clean_doc(reporting_team_leader_weekly_graph),
+        "performance_3d_graph": clean_doc(performance_3d_graph),
         "today_attendance": clean_doc(today_attendance),
         "holiday": clean_doc(holiday),
         "available_attendance_modes": available_modes,

@@ -17,6 +17,7 @@ import Reports from './pages/Reports';
 import Projects from './pages/Projects';
 import ApplicationStatus from './pages/ApplicationStatus';
 import TeamApprovals from './pages/TeamApprovals';
+import Performance from './pages/Performance';
 
 import './styles.css';
 
@@ -365,6 +366,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'team_approvals') {
     return <TeamApprovals setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'performance_reviews') {
+    return <Performance setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'profile') {

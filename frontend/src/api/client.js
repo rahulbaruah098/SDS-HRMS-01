@@ -162,6 +162,170 @@ export function normalizePeopleList(people = []) {
   return people.map((person) => normalizePerson(person)).filter(Boolean);
 }
 
+
+export function toNumber(value, fallback = 0) {
+  const number = Number(value);
+
+  if (Number.isFinite(number)) {
+    return number;
+  }
+
+  return fallback;
+}
+
+export function clampNumber(value, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, toNumber(value, min)));
+}
+
+export function ratingBucket(rating = 0) {
+  const value = toNumber(rating, 0);
+
+  if (value >= 4.5) return 'Excellent';
+  if (value >= 3.5) return 'Good';
+  if (value >= 2.5) return 'Average';
+  if (value > 0) return 'Needs Improvement';
+  return 'Not Rated';
+}
+
+export function normalizePerformanceReview(review = {}) {
+  if (!review || typeof review !== 'object') {
+    return review;
+  }
+
+  const normalized = withProfilePhotoAliases({ ...review });
+  const ratingValue = toNumber(
+    normalized.rating_value ??
+      normalized.rating ??
+      normalized.score ??
+      normalized.performance_score,
+    0,
+  );
+  const ratingPercent = clampNumber(
+    normalized.rating_percent ??
+      normalized.rating_percentage ??
+      normalized.graph_value ??
+      (ratingValue ? (ratingValue / 5) * 100 : 0),
+    0,
+    100,
+  );
+
+  normalized.rating_value = ratingValue;
+  normalized.rating = normalized.rating ?? ratingValue;
+  normalized.score = normalized.score ?? ratingValue;
+  normalized.rating_percent = ratingPercent;
+  normalized.rating_percentage = ratingPercent;
+  normalized.rating_bucket = normalized.rating_bucket || ratingBucket(ratingValue);
+  normalized.rating_label = normalized.rating_label || normalized.rating_bucket;
+  normalized.score_label = normalized.score_label || normalized.rating_bucket;
+  normalized.graph_value = clampNumber(normalized.graph_value ?? ratingPercent, 0, 100);
+  normalized.graph_label =
+    normalized.graph_label ||
+    normalized.employee_name ||
+    normalized.target_employee_name ||
+    normalized.name ||
+    'Employee';
+  normalized.graph_group =
+    normalized.graph_group ||
+    normalized.review_target_type ||
+    normalized.period_type ||
+    'performance';
+
+  normalized.employee_name =
+    normalized.employee_name ||
+    normalized.target_employee_name ||
+    normalized.name ||
+    'Employee';
+  normalized.name = normalized.name || normalized.employee_name;
+  normalized.reviewer_name =
+    normalized.reviewer_name ||
+    normalized.reviewer_employee_name ||
+    normalized.created_by_name ||
+    '';
+
+  normalized.period_type = normalized.period_type || normalized.review_frequency || 'weekly';
+  normalized.review_frequency = normalized.review_frequency || normalized.period_type;
+  normalized.review_date = normalized.review_date || normalized.date || normalized.created_at || '';
+  normalized.week_label = normalized.week_label || normalized.cycle || '';
+  normalized.month_label = normalized.month_label || normalized.month || '';
+  normalized.year_label = normalized.year_label || normalized.year_key || normalized.year || '';
+
+  return normalized;
+}
+
+export function normalizePerformanceReviewList(reviews = []) {
+  if (!Array.isArray(reviews)) {
+    return [];
+  }
+
+  return reviews.map((review) => normalizePerformanceReview(review)).filter(Boolean);
+}
+
+export function normalizePerformanceMember(member = {}) {
+  if (!member || typeof member !== 'object') {
+    return member;
+  }
+
+  const normalized = normalizePerson(member);
+  const averageRating = toNumber(
+    normalized.average_rating ?? normalized.rating_value ?? normalized.latest_rating,
+    0,
+  );
+  const ratingPercent = clampNumber(
+    normalized.rating_percentage ?? normalized.rating_percent ?? (averageRating ? (averageRating / 5) * 100 : 0),
+    0,
+    100,
+  );
+
+  normalized.average_rating = averageRating;
+  normalized.rating_value = normalized.rating_value ?? averageRating;
+  normalized.rating_percent = ratingPercent;
+  normalized.rating_percentage = ratingPercent;
+  normalized.rating_bucket = normalized.rating_bucket || ratingBucket(averageRating);
+  normalized.rating_label = normalized.rating_label || normalized.rating_bucket;
+  normalized.graph_value = clampNumber(normalized.graph_value ?? ratingPercent, 0, 100);
+  normalized.graph_label =
+    normalized.graph_label ||
+    normalized.employee_name ||
+    normalized.name ||
+    'Employee';
+
+  return normalized;
+}
+
+export function normalizePerformanceChart(chart = {}) {
+  if (!chart || typeof chart !== 'object') {
+    return {
+      title: 'Performance',
+      summary: {},
+      members: [],
+      items: [],
+      rows: [],
+      rating_distribution: [],
+      recent_reviews: [],
+    };
+  }
+
+  const normalized = { ...chart };
+
+  normalized.members = Array.isArray(normalized.members)
+    ? normalized.members.map((member) => normalizePerformanceMember(member))
+    : [];
+  normalized.items = Array.isArray(normalized.items)
+    ? normalizePerformanceReviewList(normalized.items)
+    : [];
+  normalized.rows = Array.isArray(normalized.rows)
+    ? normalizePerformanceReviewList(normalized.rows)
+    : [];
+  normalized.recent_reviews = Array.isArray(normalized.recent_reviews)
+    ? normalizePerformanceReviewList(normalized.recent_reviews)
+    : [];
+  normalized.rating_distribution = Array.isArray(normalized.rating_distribution)
+    ? normalized.rating_distribution
+    : [];
+
+  return normalized;
+}
+
 export function normalizeApprovalHistory(history = []) {
   if (!Array.isArray(history)) {
     return [];
@@ -510,6 +674,44 @@ export function normalizeDashboardPayload(data = {}) {
     normalized.top_project_performance || [],
   );
 
+  normalized.my_reviews = normalizePerformanceReviewList(normalized.my_reviews || []);
+  normalized.reviews_given = normalizePerformanceReviewList(normalized.reviews_given || []);
+
+  normalized.my_performance_reviews = normalizePerformanceReviewList(
+    normalized.my_performance_reviews || normalized.my_reviews || [],
+  );
+  normalized.reviews_given_by_me = normalizePerformanceReviewList(
+    normalized.reviews_given_by_me || normalized.reviews_given || [],
+  );
+
+  normalized.my_performance_chart = normalizePerformanceChart(
+    normalized.my_performance_chart || {},
+  );
+  normalized.team_performance_chart = normalizePerformanceChart(
+    normalized.team_performance_chart || {},
+  );
+  normalized.reporting_performance_chart = normalizePerformanceChart(
+    normalized.reporting_performance_chart || {},
+  );
+  normalized.weekly_performance_chart = normalizePerformanceChart(
+    normalized.weekly_performance_chart || {},
+  );
+  normalized.monthly_performance_chart = normalizePerformanceChart(
+    normalized.monthly_performance_chart || {},
+  );
+  normalized.yearly_performance_chart = normalizePerformanceChart(
+    normalized.yearly_performance_chart || {},
+  );
+  normalized.team_member_weekly_graph = normalizePerformanceChart(
+    normalized.team_member_weekly_graph || {},
+  );
+  normalized.reporting_team_leader_weekly_graph = normalizePerformanceChart(
+    normalized.reporting_team_leader_weekly_graph || {},
+  );
+  normalized.performance_3d_graph = normalizePerformanceChart(
+    normalized.performance_3d_graph || {},
+  );
+
   return normalized;
 }
 
@@ -544,7 +746,9 @@ export function normalizeApiPayload(data = {}) {
 
   if (Array.isArray(normalized.items)) {
     normalized.items = normalized.items.map((item) =>
-      normalizeLeaveApprovalRecord(normalizeProject(withProfilePhotoAliases(item))),
+      normalizePerformanceReview(
+        normalizeLeaveApprovalRecord(normalizeProject(withProfilePhotoAliases(item))),
+      ),
     );
   }
 
@@ -1198,10 +1402,35 @@ export function getCompOffCredits(params = {}) {
 /* Performance Review APIs                                                    */
 /* -------------------------------------------------------------------------- */
 
+export function normalizePerformancePayload(payload = {}) {
+  const normalizedPayload = { ...payload };
+
+  if (normalizedPayload.employee_id && !normalizedPayload.target_employee_id) {
+    normalizedPayload.target_employee_id = normalizedPayload.employee_id;
+  }
+
+  if (normalizedPayload.target_employee_id && !normalizedPayload.employee_id) {
+    normalizedPayload.employee_id = normalizedPayload.target_employee_id;
+  }
+
+  normalizedPayload.period_type = normalizedPayload.period_type || 'weekly';
+  normalizedPayload.review_frequency = normalizedPayload.review_frequency || normalizedPayload.period_type;
+
+  return normalizedPayload;
+}
+
 export function submitPerformanceReview(payload = {}) {
   return api('/performance/reviews', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(normalizePerformancePayload(payload)),
+  });
+}
+
+export function submitWeeklyPerformanceReview(payload = {}) {
+  return submitPerformanceReview({
+    ...payload,
+    period_type: 'weekly',
+    review_frequency: 'weekly',
   });
 }
 
@@ -1209,8 +1438,44 @@ export function createPerformanceReview(payload = {}) {
   return submitPerformanceReview(payload);
 }
 
+export async function getPerformanceDashboard(params = {}) {
+  const data = await getEmployeeDashboard();
+  const normalized = normalizeDashboardPayload(data || {});
+
+  if (!params || !Object.keys(params).length) {
+    return normalized;
+  }
+
+  return {
+    ...normalized,
+    params,
+  };
+}
+
 export function getPerformanceReviews(params = {}) {
-  return listCollection('performance_reviews', params);
+  return listCollection('performance_reviews', params).then((data = {}) => ({
+    ...data,
+    items: normalizePerformanceReviewList(data.items || []),
+  }));
+}
+
+export function getPerformanceReviewsByPeriod(periodType = 'weekly', params = {}) {
+  return getPerformanceReviews({
+    ...params,
+    period_type: periodType,
+  });
+}
+
+export function getWeeklyPerformanceReviews(params = {}) {
+  return getPerformanceReviewsByPeriod('weekly', params);
+}
+
+export function getMonthlyPerformanceReviews(params = {}) {
+  return getPerformanceReviewsByPeriod('monthly', params);
+}
+
+export function getYearlyPerformanceReviews(params = {}) {
+  return getPerformanceReviewsByPeriod('yearly', params);
 }
 
 export function getMyPerformanceReviews(params = {}) {
@@ -1220,10 +1485,32 @@ export function getMyPerformanceReviews(params = {}) {
   });
 }
 
+export function getMyReceivedPerformanceReviews(params = {}) {
+  return getMyPerformanceReviews(params);
+}
+
 export function getReviewsGivenByMe(params = {}) {
   return getPerformanceReviews({
     ...params,
     scope: params.scope || 'given_by_me',
+  });
+}
+
+export function getPerformanceReviewsGiven(params = {}) {
+  return getReviewsGivenByMe(params);
+}
+
+export function getEmployeePerformanceReviews(employeeId, params = {}) {
+  return getPerformanceReviews({
+    ...params,
+    employee_id: employeeId,
+  });
+}
+
+export function getReviewerPerformanceReviews(reviewerEmployeeId, params = {}) {
+  return getPerformanceReviews({
+    ...params,
+    reviewer_employee_id: reviewerEmployeeId,
   });
 }
 

@@ -212,14 +212,53 @@ function ratingValue(row = {}) {
     row.average_rating ??
       row.avg_rating ??
       row.rating_average ??
+      row.rating_value ??
+      row.latest_rating ??
       row.rating ??
-      row.score,
+      row.score ??
+      row.performance_score,
     0,
   );
 }
 
 function reviewCount(row = {}) {
-  return numberValue(row.review_count ?? row.count ?? row.total_reviews, 0);
+  return numberValue(row.review_count ?? row.count ?? row.total_reviews ?? row.rated_reviews, 0);
+}
+
+function performanceRows(chart = {}) {
+  if (Array.isArray(chart)) {
+    return chart;
+  }
+
+  if (!chart || typeof chart !== 'object') {
+    return [];
+  }
+
+  if (Array.isArray(chart.members) && chart.members.length) {
+    return chart.members;
+  }
+
+  if (Array.isArray(chart.rows) && chart.rows.length) {
+    return chart.rows;
+  }
+
+  if (Array.isArray(chart.items) && chart.items.length) {
+    return chart.items;
+  }
+
+  if (Array.isArray(chart.recent_reviews) && chart.recent_reviews.length) {
+    return chart.recent_reviews;
+  }
+
+  return [];
+}
+
+function performanceSummaryOf(chart = {}) {
+  if (!chart || typeof chart !== 'object' || Array.isArray(chart)) {
+    return {};
+  }
+
+  return chart.summary || {};
 }
 
 function reviewTargetLabel(value) {
@@ -747,6 +786,8 @@ function ProjectMiniBoard({
 }
 
 function PerformanceGraph({ title, description, rows = [], emptyText }) {
+  const graphRows = performanceRows(rows);
+
   return (
     <div className="panel emp-performance-card">
       <div className="toolbar">
@@ -756,20 +797,25 @@ function PerformanceGraph({ title, description, rows = [], emptyText }) {
         </div>
       </div>
 
-      {!rows.length && (
+      {!graphRows.length && (
         <div className="empty">
           {emptyText || 'No performance graph data available yet.'}
         </div>
       )}
 
-      {!!rows.length && (
+      {!!graphRows.length && (
         <div className="emp-performance-graph">
-          {rows.slice(0, 10).map((row, index) => {
+          {graphRows.slice(0, 10).map((row, index) => {
             const label =
+              row.graph_label ||
               row.employee_name ||
+              row.target_employee_name ||
               row.team_leader_name ||
               row.reviewer_name ||
               row.cycle ||
+              row.week_label ||
+              row.month_label ||
+              row.year_label ||
               row.label ||
               `Review ${index + 1}`;
 
@@ -796,7 +842,7 @@ function PerformanceGraph({ title, description, rows = [], emptyText }) {
                     reviewTargetLabel(row.review_target_type) ||
                     'Performance Review'}
                   {count ? ` • ${count} review${count > 1 ? 's' : ''}` : ''}
-                  {row.cycle ? ` • ${row.cycle}` : ''}
+                  {row.week_label || row.month_label || row.year_label || row.cycle ? ` • ${row.week_label || row.month_label || row.year_label || row.cycle}` : ''}
                 </small>
               </div>
             );
@@ -888,15 +934,7 @@ export default function EmployeeDashboard({ setPage }) {
     reason: '',
   });
 
-  const [reviewForm, setReviewForm] = useState({
-    employee_id: '',
-    cycle: '',
-    rating: 5,
-    comments: '',
-  });
-
   const [message, setMessage] = useState('');
-  const [submittingReview, setSubmittingReview] = useState(false);
   const [claimingCompOff, setClaimingCompOff] = useState(false);
   const [leaveDecisionSaving, setLeaveDecisionSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -954,50 +992,6 @@ export default function EmployeeDashboard({ setPage }) {
   function goTo(page) {
     if (typeof setPage === 'function') {
       setPage(page);
-    }
-  }
-
-  async function submitReview(event) {
-    event.preventDefault();
-    setMessage('');
-
-    if (!reviewForm.employee_id) {
-      setMessage('Please select an employee to review');
-      return;
-    }
-
-    const ratingValue = Number(reviewForm.rating);
-
-    if (!ratingValue || ratingValue < 1 || ratingValue > 5) {
-      setMessage('Rating must be between 1 and 5');
-      return;
-    }
-
-    try {
-      setSubmittingReview(true);
-
-      const res = await api('/performance/reviews', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...reviewForm,
-          rating: ratingValue,
-        }),
-      });
-
-      setMessage(res.message || 'Performance review submitted');
-
-      setReviewForm({
-        employee_id: '',
-        cycle: '',
-        rating: 5,
-        comments: '',
-      });
-
-      await loadDashboard();
-    } catch (error) {
-      setMessage(error.message || 'Unable to submit performance review');
-    } finally {
-      setSubmittingReview(false);
     }
   }
 
@@ -1129,32 +1123,45 @@ export default function EmployeeDashboard({ setPage }) {
   const reportingProjectAverage = projectSummary.reporting_average_progress || averageProjectProgress(reportingProjects);
 
   const performanceSummary = data?.performance_summary || {};
+
   const myPerformanceChart =
     data?.my_performance_chart ||
     data?.own_performance_chart ||
     performanceSummary?.my_performance_chart ||
-    [];
+    {};
 
   const teamPerformanceChart =
+    data?.team_member_weekly_graph ||
     data?.team_member_performance_chart ||
     data?.team_performance_chart ||
     performanceSummary?.team_member_performance_chart ||
     performanceSummary?.team_performance_chart ||
-    [];
+    {};
 
   const reportingPerformanceChart =
+    data?.reporting_team_leader_weekly_graph ||
     data?.reporting_performance_chart ||
     data?.reporting_officer_performance_chart ||
     performanceSummary?.reporting_performance_chart ||
     performanceSummary?.reporting_officer_performance_chart ||
-    [];
+    {};
+
+  const weeklyPerformanceChart =
+    data?.weekly_performance_chart ||
+    data?.performance_3d_graph ||
+    {};
+
+  const monthlyPerformanceChart = data?.monthly_performance_chart || {};
+  const yearlyPerformanceChart = data?.yearly_performance_chart || {};
 
   const teamLeaderReviewGraph =
+    data?.team_member_weekly_graph ||
     data?.team_leader_review_graph ||
     performanceSummary?.team_leader_review_graph ||
     teamPerformanceChart;
 
   const reportingOfficerReviewGraph =
+    data?.reporting_team_leader_weekly_graph ||
     data?.reporting_officer_review_graph ||
     performanceSummary?.reporting_officer_review_graph ||
     reportingPerformanceChart;
@@ -1162,16 +1169,19 @@ export default function EmployeeDashboard({ setPage }) {
   const averageMyRating =
     performanceSummary?.my_average_rating ??
     performanceSummary?.average_rating_received ??
+    performanceSummaryOf(myPerformanceChart)?.average_rating ??
     0;
 
   const averageTeamRating =
     performanceSummary?.team_average_rating ??
     performanceSummary?.team_member_average_rating ??
+    performanceSummaryOf(teamPerformanceChart)?.average_rating ??
     0;
 
   const averageReportingRating =
     performanceSummary?.reporting_average_rating ??
     performanceSummary?.reporting_officer_average_rating ??
+    performanceSummaryOf(reportingPerformanceChart)?.average_rating ??
     0;
 
   const availableCompOffs = useMemo(
@@ -1225,10 +1235,6 @@ export default function EmployeeDashboard({ setPage }) {
 
     return Array.from(map.values());
   }, [teamReviewableEmployees, reportingReviewableEmployees]);
-
-  const selectedReviewEmployee = reviewableEmployees.find(
-    (row) => row._id === reviewForm.employee_id,
-  );
 
   const dashboardLeaveBalances = data?.leave_balances || [];
   const leaveBalanceSource = leaveBalances.length ? leaveBalances : dashboardLeaveBalances;
@@ -1449,27 +1455,27 @@ export default function EmployeeDashboard({ setPage }) {
     status: statusLabel(row.status),
   }));
 
-  const myReviewRows = (data?.my_performance_reviews || []).map((row) => ({
-    cycle: row.cycle || '—',
-    rating: row.rating ?? '—',
-    comments: row.comments || '—',
-    reviewer_name: row.reviewer_name || '—',
+  const myReviewRows = (data?.my_performance_reviews || data?.my_reviews || []).map((row) => ({
+    period: row.week_label || row.month_label || row.year_label || row.cycle || 'Weekly',
+    rating: row.rating_value ?? row.rating ?? row.score ?? '—',
+    remarks: row.remarks || row.comments || row.note || '—',
+    reviewer_name: row.reviewer_name || row.reviewer_employee_name || '—',
     reviewer_role: reviewerRoleLabel(row.reviewer_role),
     review_type: reviewTargetLabel(row.review_target_type),
     scope: row.review_scope_label || '—',
     status: statusLabel(row.status),
-    created_at: formatDateTime(row.created_at),
+    review_date: formatDate(row.review_date || row.created_at),
   }));
 
-  const reviewsGivenRows = (data?.reviews_given || []).map((row) => ({
-    employee_name: row.employee_name || '—',
+  const reviewsGivenRows = (data?.reviews_given || data?.reviews_given_by_me || []).map((row) => ({
+    employee_name: row.employee_name || row.target_employee_name || '—',
     employee_code: row.employee_code || '—',
-    cycle: row.cycle || '—',
-    rating: row.rating ?? '—',
+    period: row.week_label || row.month_label || row.year_label || row.cycle || 'Weekly',
+    rating: row.rating_value ?? row.rating ?? row.score ?? '—',
     review_type: reviewTargetLabel(row.review_target_type),
     scope: row.review_scope_label || '—',
-    comments: row.comments || '—',
-    created_at: formatDateTime(row.created_at),
+    remarks: row.remarks || row.comments || row.note || '—',
+    review_date: formatDate(row.review_date || row.created_at),
   }));
 
   const projectRows = myProjects.map((project) => ({
@@ -2654,9 +2660,8 @@ export default function EmployeeDashboard({ setPage }) {
               <span className="kicker">Performance Analytics</span>
               <h3>Team Performance & Ratings</h3>
               <p>
-                Team Leaders can rate their mapped team members. Reporting
-                Officers can rate Team Leaders or reporting members mapped under
-                them. Ratings are reflected in dashboard graphs.
+                This dashboard now shows performance analytics only. Weekly ratings are submitted from the dedicated Performance page.
+                Monthly and yearly views are generated automatically from weekly review records.
               </p>
             </div>
           </div>
@@ -2685,9 +2690,7 @@ export default function EmployeeDashboard({ setPage }) {
           </div>
 
           <div className="emp-performance-note">
-            This separates Team Leader → Team Member reviews from Reporting
-            Officer → Team Leader reviews, so both dashboards can display the
-            right graph and history.
+            Team Leader → Team Member and Reporting Officer → Team Leader ratings are separated, so every employee gets the correct graph and history.
           </div>
         </div>
 
@@ -2695,7 +2698,7 @@ export default function EmployeeDashboard({ setPage }) {
           <PerformanceGraph
             title="My Received Performance"
             description="Ratings received from Team Leader, Reporting Officer, or HR/Admin."
-            rows={myPerformanceChart.length ? myPerformanceChart : data?.my_performance_reviews || []}
+            rows={performanceRows(myPerformanceChart).length ? myPerformanceChart : data?.my_performance_reviews || data?.my_reviews || []}
             emptyText="No received performance review yet."
           />
 
@@ -2704,6 +2707,29 @@ export default function EmployeeDashboard({ setPage }) {
             description="Ratings you have submitted for mapped employees."
             rows={data?.reviews_given || []}
             emptyText="No performance review submitted yet."
+          />
+        </section>
+
+        <section className="three-col">
+          <PerformanceGraph
+            title="Weekly 3D Performance"
+            description="Current weekly graph generated from submitted ratings."
+            rows={weeklyPerformanceChart}
+            emptyText="No weekly performance data yet."
+          />
+
+          <PerformanceGraph
+            title="Monthly Performance"
+            description="Auto-generated monthly performance from weekly reviews."
+            rows={monthlyPerformanceChart}
+            emptyText="No monthly performance data yet."
+          />
+
+          <PerformanceGraph
+            title="Yearly Performance"
+            description="Auto-generated yearly performance from weekly reviews."
+            rows={yearlyPerformanceChart}
+            emptyText="No yearly performance data yet."
           />
         </section>
 
@@ -3171,107 +3197,21 @@ export default function EmployeeDashboard({ setPage }) {
       </section>
 
       {isMappedApprover && (
-        <section className="panel">
-          <h3>Performance Rating</h3>
-          <p>
-            Team Leaders can rate only their mapped team members. Reporting
-            Officers can rate Team Leaders or reporting members mapped under
-            them.
-          </p>
+        <section className="panel emp-performance-cta-panel">
+          <div className="toolbar">
+            <div>
+              <span className="kicker">Dedicated Performance Page</span>
+              <h3>Submit Weekly Performance Rating</h3>
+              <p>
+                The rating form has been moved from dashboard to the Performance page.
+                Team Leaders can rate mapped team members, and Reporting Officers can rate mapped Team Leaders/reporting members there.
+              </p>
+            </div>
 
-          <form className="dynamic-form" onSubmit={submitReview}>
-            <label>
-              Employee
-              <select
-                value={reviewForm.employee_id}
-                onChange={(event) =>
-                  setReviewForm({
-                    ...reviewForm,
-                    employee_id: event.target.value,
-                  })
-                }
-                disabled={submittingReview}
-              >
-                <option value="">Select employee</option>
-
-                {teamReviewableEmployees.length > 0 && (
-                  <optgroup label="Team Leader → Team Members">
-                    {teamReviewableEmployees.map((employeeRow) => (
-                      <option key={`team-${employeeRow._id}`} value={employeeRow._id}>
-                        {employeeOptionLabel(employeeRow)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-
-                {reportingReviewableEmployees.length > 0 && (
-                  <optgroup label="Reporting Officer → Team Leaders / Reporting Members">
-                    {reportingReviewableEmployees.map((employeeRow) => (
-                      <option key={`reporting-${employeeRow._id}`} value={employeeRow._id}>
-                        {employeeOptionLabel(employeeRow)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-
-              {selectedReviewEmployee?.review_help_text && (
-                <small className="emp-review-option-help">
-                  Selected review type: {selectedReviewEmployee.review_help_text}
-                </small>
-              )}
-            </label>
-
-            <label>
-              Cycle
-              <input
-                value={reviewForm.cycle}
-                placeholder="May 2026"
-                onChange={(event) =>
-                  setReviewForm({
-                    ...reviewForm,
-                    cycle: event.target.value,
-                  })
-                }
-                disabled={submittingReview}
-              />
-            </label>
-
-            <label>
-              Rating 1 to 5
-              <input
-                type="number"
-                min="1"
-                max="5"
-                value={reviewForm.rating}
-                onChange={(event) =>
-                  setReviewForm({
-                    ...reviewForm,
-                    rating: event.target.value,
-                  })
-                }
-                disabled={submittingReview}
-              />
-            </label>
-
-            <label>
-              Comments
-              <input
-                value={reviewForm.comments}
-                onChange={(event) =>
-                  setReviewForm({
-                    ...reviewForm,
-                    comments: event.target.value,
-                  })
-                }
-                disabled={submittingReview}
-              />
-            </label>
-
-            <button type="submit" className="primary" disabled={submittingReview}>
-              {submittingReview ? 'Submitting...' : 'Submit Rating'}
+            <button type="button" className="primary" onClick={() => goTo('performance_reviews')}>
+              Open Performance Page
             </button>
-          </form>
+          </div>
         </section>
       )}
 

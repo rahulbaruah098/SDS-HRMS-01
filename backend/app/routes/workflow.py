@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from bson import ObjectId
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta, date
 
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
@@ -2588,6 +2588,43 @@ def payroll_run():
 # Performance review helpers
 # -----------------------------------------------------------------------------
 
+def performance_period_payload(base_value=None):
+    """
+    Build automatic weekly/monthly/yearly period metadata from a review date.
+
+    The review is always stored as a weekly entry. Monthly and yearly graph
+    data can be generated from these weekly records by grouping month/year.
+    """
+
+    base = parse_date(base_value) or date.today()
+    week_start = base - timedelta(days=base.weekday())
+    week_end = week_start + timedelta(days=6)
+    month_key = base.strftime("%Y-%m")
+    month_label = base.strftime("%B %Y")
+    year_key = str(base.year)
+    week_number = base.isocalendar()[1]
+    week_key = f"{base.isocalendar()[0]}-W{week_number:02d}"
+    week_label = f"Week {week_number:02d} ({week_start.strftime('%d %b')} - {week_end.strftime('%d %b %Y')})"
+
+    return {
+        "period_type": "weekly",
+        "review_frequency": "weekly",
+        "review_date": base.isoformat(),
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "week_key": week_key,
+        "week_label": week_label,
+        "month": month_key,
+        "month_key": month_key,
+        "month_label": month_label,
+        "year": year_key,
+        "year_key": year_key,
+        "cycle": week_label,
+        "auto_monthly_enabled": True,
+        "auto_yearly_enabled": True,
+    }
+
+
 def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
     if not reviewer_emp:
         return None, "", "Reviewer employee profile was not found"
@@ -2595,6 +2632,9 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
     reviewer_emp_id = str(reviewer_emp["_id"])
     reviewed_is_team_leader = employee_is_team_leader(employee)
     reviewed_is_reporting_officer = employee_is_reporting_officer(employee)
+
+    if str(employee.get("_id")) == reviewer_emp_id:
+        return None, "", "You cannot submit your own performance review"
 
     if (
         ("team_leader" in reviewer_roles or employee_is_team_leader(reviewer_emp))
@@ -2610,8 +2650,7 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
                 "employee_self",
                 "team_leader_dashboard",
                 "reporting_officer_dashboard",
-                "hr",
-                "md",
+                "performance_page",
             ],
         }, "", ""
 
@@ -2636,12 +2675,28 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
                 "employee_self",
                 "team_leader_dashboard",
                 "reporting_officer_dashboard",
-                "hr",
-                "md",
+                "performance_page",
             ],
         }, "", ""
 
     return None, "", "You can review only employees or team leaders directly mapped under you"
+
+
+def performance_score_bucket(rating):
+    try:
+        value = float(rating or 0)
+    except Exception:
+        value = 0
+
+    if value >= 4.5:
+        return "Excellent"
+    if value >= 3.8:
+        return "Very Good"
+    if value >= 3.0:
+        return "Good"
+    if value >= 2.0:
+        return "Needs Improvement"
+    return "Critical"
 
 
 def notify_performance_review_submitted(db, employee, reviewer_emp, review):
@@ -2661,8 +2716,6 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
         if team_leader_user_id:
             notify_ids.append(team_leader_user_id)
 
-    notify_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
-
     reviewer_name = (
         employee_display_name(reviewer_emp)
         if reviewer_emp
@@ -2672,16 +2725,23 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
     notify_users(
         db,
         notify_ids,
-        "Performance Review Submitted",
-        f"{reviewer_name} submitted a performance review for {employee_display_name(employee)}.",
+        "Weekly Performance Review Submitted",
+        f"{reviewer_name} submitted a weekly performance review for {employee_display_name(employee)}.",
         {
             "target": "performance_reviews",
+            "page": "performance_reviews",
             "performance_review_id": str(review.get("_id", "")),
             "employee_id": str(employee.get("_id")),
             "reviewer_employee_id": review.get("reviewer_employee_id", ""),
             "reviewer_role": review.get("reviewer_role", ""),
             "review_target_type": review.get("review_target_type", ""),
             "rating": review.get("rating"),
+            "rating_bucket": review.get("rating_bucket", ""),
+            "period_type": review.get("period_type", "weekly"),
+            "week_key": review.get("week_key", ""),
+            "week_label": review.get("week_label", ""),
+            "month": review.get("month", ""),
+            "year": review.get("year", ""),
             "cycle": review.get("cycle"),
         },
         tenant_id=tenant_id,
@@ -2689,23 +2749,43 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
 
 
 @workflow_bp.post("/performance/reviews")
-@roles_required(
-    "super_admin",
-    "admin",
-    "hr_admin",
-    "hr_manager",
-    "hr",
-    "team_leader",
-    "reporting_officer",
-)
+@current_user_required
 def create_performance_review():
+    """
+    Weekly performance review submission.
+
+    Important:
+    - Team Leader / Reporting Officer are employee capabilities, not separate
+      login identities.
+    - So this endpoint must check the current employee profile mapping also,
+      not only JWT roles.
+    - One reviewer can submit only one review per employee per week. If the
+      same weekly review already exists, it is updated instead of duplicated.
+    """
     db = get_db()
     data = request.get_json(silent=True) or {}
 
-    employee_id = normalize_text(data.get("employee_id"))
+    employee_id = normalize_text(
+        data.get("employee_id")
+        or data.get("target_employee_id")
+        or data.get("review_employee_id")
+    )
+
     rating = data.get("rating")
-    comments = normalize_text(data.get("comments", ""))
-    cycle = normalize_text(data.get("cycle")) or datetime.utcnow().strftime("%B %Y")
+    comments = normalize_text(
+        data.get("comments")
+        or data.get("remarks")
+        or data.get("note")
+        or ""
+    )
+    strengths = normalize_text(data.get("strengths") or "")
+    improvement_areas = normalize_text(data.get("improvement_areas") or "")
+    review_date = normalize_text(
+        data.get("review_date")
+        or data.get("date")
+        or data.get("period_date")
+        or ""
+    )
 
     employee_obj_id = safe_object_id(employee_id)
 
@@ -2720,12 +2800,35 @@ def create_performance_review():
     if rating < 1 or rating > 5:
         return jsonify({"message": "rating must be between 1 and 5"}), 400
 
+    roles = current_user_roles()
+    reviewer_emp = current_employee(db)
+
+    if not reviewer_emp:
+        return jsonify({"message": "Reviewer employee profile was not found"}), 403
+
+    reviewer_emp_id = str(reviewer_emp["_id"])
+
+    reviewer_is_team_leader = bool(
+        "team_leader" in roles
+        or employee_is_team_leader(reviewer_emp)
+    )
+    reviewer_is_reporting_officer = bool(
+        "reporting_officer" in roles
+        or "ro" in roles
+        or employee_is_reporting_officer(reviewer_emp)
+    )
+
+    if not (reviewer_is_team_leader or reviewer_is_reporting_officer):
+        return jsonify({
+            "message": "Only Team Leaders and Reporting Officers can submit performance reviews"
+        }), 403
+
     q = {
         "_id": employee_obj_id,
         "is_deleted": {"$ne": True},
     }
 
-    if "super_admin" not in current_user_roles():
+    if "super_admin" not in roles:
         q["tenant_id"] = current_tenant_id()
 
     employee = db.employees.find_one(q)
@@ -2733,91 +2836,127 @@ def create_performance_review():
     if not employee:
         return jsonify({"message": "Employee not found"}), 404
 
-    roles = current_user_roles()
-    reviewer_emp = current_employee(db)
-    reviewer_emp_id = str(reviewer_emp["_id"]) if reviewer_emp else ""
+    if reviewer_emp_id == str(employee["_id"]):
+        return jsonify({"message": "You cannot submit your own performance review"}), 400
 
-    reviewer_role = "admin_hr"
-    review_target_type = "admin_review"
-    review_scope_label = "Admin / HR Review"
-    reviewed_employee_is_team_leader = employee_is_team_leader(employee)
-    reviewed_employee_is_reporting_officer = employee_is_reporting_officer(employee)
-    visibility = ["md", "hr", "employee_self"]
+    scope_payload, _, scope_error = resolve_performance_review_scope(
+        reviewer_emp,
+        roles,
+        employee,
+    )
 
-    if not roles.intersection(ADMIN_HR_ROLES):
-        scope_payload, _, scope_error = resolve_performance_review_scope(
-            reviewer_emp,
-            roles,
-            employee,
-        )
+    if scope_error:
+        return jsonify({"message": scope_error}), 403
 
-        if scope_error:
-            return jsonify({"message": scope_error}), 403
+    if not scope_payload:
+        return jsonify({
+            "message": "You can review only employees or team leaders directly mapped under you"
+        }), 403
 
-        reviewer_role = scope_payload["reviewer_role"]
-        review_target_type = scope_payload["review_target_type"]
-        review_scope_label = scope_payload["review_scope_label"]
-        reviewed_employee_is_team_leader = scope_payload["reviewed_employee_is_team_leader"]
-        reviewed_employee_is_reporting_officer = scope_payload["reviewed_employee_is_reporting_officer"]
-        visibility = scope_payload["visibility"]
-    else:
-        if reviewer_emp:
-            reviewer_scope_payload, _, _ = resolve_performance_review_scope(
-                reviewer_emp,
-                roles,
-                employee,
-            )
+    period_payload = performance_period_payload(review_date)
+    now = datetime.utcnow()
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    rating_percent = round((rating / 5) * 100, 2)
+    rating_bucket = performance_score_bucket(rating)
 
-            if reviewer_scope_payload:
-                reviewer_role = reviewer_scope_payload["reviewer_role"]
-                review_target_type = reviewer_scope_payload["review_target_type"]
-                review_scope_label = reviewer_scope_payload["review_scope_label"]
-                visibility = list(set(visibility + reviewer_scope_payload["visibility"]))
+    review_payload = {
+        "tenant_id": tenant_id,
 
-    review = {
-        "tenant_id": employee.get("tenant_id") or current_tenant_id(),
         "employee_id": str(employee["_id"]),
+        "target_employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
         "employee_name": employee_display_name(employee),
+        "target_employee_name": employee_display_name(employee),
         "employee_user_id": employee.get("user_id", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
+
         "team_leader_id": employee.get("team_leader_id", ""),
         "team_leader_name": employee.get("team_leader_name", ""),
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
-        "cycle": cycle,
+
+        **period_payload,
+
         "rating": rating,
+        "rating_value": rating,
+        "rating_percent": rating_percent,
+        "rating_percentage": rating_percent,
+        "rating_bucket": rating_bucket,
+        "rating_label": rating_bucket,
+        "score": rating,
+        "performance_score": rating,
+        "score_label": rating_bucket,
+
         "comments": comments,
+        "remarks": comments,
+        "strengths": strengths,
+        "improvement_areas": improvement_areas,
+
         "reviewer_id": str(g.current_user["_id"]),
         "reviewer_employee_id": reviewer_emp_id,
-        "reviewer_employee_code": employee_code(reviewer_emp) if reviewer_emp else "",
-        "reviewer_name": (
-            employee_display_name(reviewer_emp)
-            if reviewer_emp
-            else g.current_user.get("name") or g.current_user.get("email")
-        ),
-        "reviewer_role": reviewer_role,
-        "review_target_type": review_target_type,
-        "review_scope_label": review_scope_label,
-        "reviewed_employee_is_team_leader": reviewed_employee_is_team_leader,
-        "reviewed_employee_is_reporting_officer": reviewed_employee_is_reporting_officer,
-        "visibility": visibility,
+        "reviewer_employee_code": employee_code(reviewer_emp),
+        "reviewer_name": employee_display_name(reviewer_emp),
+        "reviewer_employee_name": employee_display_name(reviewer_emp),
+        "reviewer_role": scope_payload["reviewer_role"],
+
+        "review_target_type": scope_payload["review_target_type"],
+        "review_scope_label": scope_payload["review_scope_label"],
+        "reviewed_employee_is_team_leader": scope_payload["reviewed_employee_is_team_leader"],
+        "reviewed_employee_is_reporting_officer": scope_payload["reviewed_employee_is_reporting_officer"],
+        "visibility": scope_payload["visibility"],
+
+        "graph_group": scope_payload["review_target_type"],
+        "graph_label": employee_display_name(employee),
+        "graph_value": rating_percent,
+
         "status": "submitted",
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
-        "created_by": str(g.current_user["_id"]),
-        "created_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "submitted_at": now,
+        "updated_at": now,
+        "updated_by": str(g.current_user["_id"]),
+        "updated_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "is_deleted": False,
     }
 
-    res = db.performance_reviews.insert_one(review)
-    review["_id"] = res.inserted_id
+    existing = db.performance_reviews.find_one({
+        "tenant_id": tenant_id,
+        "employee_id": str(employee["_id"]),
+        "reviewer_employee_id": reviewer_emp_id,
+        "week_key": period_payload["week_key"],
+        "period_type": "weekly",
+        "is_deleted": {"$ne": True},
+    })
+
+    if existing:
+        db.performance_reviews.update_one(
+            {"_id": existing["_id"]},
+            {
+                "$set": review_payload,
+            },
+        )
+        review = db.performance_reviews.find_one({"_id": existing["_id"]})
+        message = "Weekly performance review updated successfully"
+        audit_action = "update_performance_review"
+        status_code = 200
+    else:
+        review_payload.update({
+            "created_at": now,
+            "created_by": str(g.current_user["_id"]),
+            "created_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        })
+
+        res = db.performance_reviews.insert_one(review_payload)
+        review = db.performance_reviews.find_one({"_id": res.inserted_id})
+        message = "Weekly performance review submitted successfully"
+        audit_action = "create_performance_review"
+        status_code = 201
 
     notify_performance_review_submitted(db, employee, reviewer_emp, review)
 
-    audit("create_performance_review", "performance_reviews", res.inserted_id, review)
+    audit(audit_action, "performance_reviews", review["_id"], review)
 
     return jsonify({
-        "message": "Performance review submitted",
+        "message": message,
         "item": clean_doc(review),
-    }), 201
+    }), status_code
+
