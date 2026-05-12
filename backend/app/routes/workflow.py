@@ -2748,6 +2748,55 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
     )
 
 
+def resolve_performance_review_employee(db, raw_employee_id, roles):
+    """
+    Resolve selected employee for performance review submission.
+
+    The frontend should send the MongoDB employee _id. However, older screens
+    or cached builds may send employee_id/emp_code/code/user_id instead. This
+    helper accepts all supported identifiers so the form does not refresh/fail
+    without saving.
+    """
+
+    employee_id = normalize_text(raw_employee_id)
+
+    if not employee_id:
+        return None
+
+    tenant_id = current_tenant_id()
+    base_query = {
+        "is_deleted": {"$ne": True},
+    }
+
+    if "super_admin" not in roles:
+        base_query["tenant_id"] = tenant_id
+
+    employee_obj_id = safe_object_id(employee_id)
+
+    if employee_obj_id:
+        employee = db.employees.find_one({
+            **base_query,
+            "_id": employee_obj_id,
+        })
+
+        if employee:
+            return employee
+
+    lookup_or = [
+        {"employee_id": employee_id},
+        {"employee_code": employee_id},
+        {"emp_code": employee_id},
+        {"code": employee_id},
+        {"user_id": employee_id},
+        {"email": employee_id},
+    ]
+
+    return db.employees.find_one({
+        **base_query,
+        "$or": lookup_or,
+    })
+
+
 @workflow_bp.post("/performance/reviews")
 @current_user_required
 def create_performance_review():
@@ -2757,18 +2806,22 @@ def create_performance_review():
     Important:
     - Team Leader / Reporting Officer are employee capabilities, not separate
       login identities.
-    - So this endpoint must check the current employee profile mapping also,
-      not only JWT roles.
+    - The selected employee can arrive as Mongo _id, employee_id, employee_code,
+      emp_code, code, or user_id. Resolve all of them before validation.
     - One reviewer can submit only one review per employee per week. If the
       same weekly review already exists, it is updated instead of duplicated.
     """
     db = get_db()
     data = request.get_json(silent=True) or {}
 
-    employee_id = normalize_text(
+    raw_employee_id = normalize_text(
         data.get("employee_id")
         or data.get("target_employee_id")
         or data.get("review_employee_id")
+        or data.get("employee_code")
+        or data.get("emp_code")
+        or data.get("code")
+        or data.get("user_id")
     )
 
     rating = data.get("rating")
@@ -2787,10 +2840,8 @@ def create_performance_review():
         or ""
     )
 
-    employee_obj_id = safe_object_id(employee_id)
-
-    if not employee_obj_id:
-        return jsonify({"message": "Valid employee_id is required"}), 400
+    if not raw_employee_id:
+        return jsonify({"message": "employee_id is required"}), 400
 
     try:
         rating = float(rating)
@@ -2823,18 +2874,12 @@ def create_performance_review():
             "message": "Only Team Leaders and Reporting Officers can submit performance reviews"
         }), 403
 
-    q = {
-        "_id": employee_obj_id,
-        "is_deleted": {"$ne": True},
-    }
-
-    if "super_admin" not in roles:
-        q["tenant_id"] = current_tenant_id()
-
-    employee = db.employees.find_one(q)
+    employee = resolve_performance_review_employee(db, raw_employee_id, roles)
 
     if not employee:
-        return jsonify({"message": "Employee not found"}), 404
+        return jsonify({
+            "message": "Employee not found. Please refresh the Performance page and try again."
+        }), 404
 
     if reviewer_emp_id == str(employee["_id"]):
         return jsonify({"message": "You cannot submit your own performance review"}), 400
@@ -2959,4 +3004,3 @@ def create_performance_review():
         "message": message,
         "item": clean_doc(review),
     }), status_code
-

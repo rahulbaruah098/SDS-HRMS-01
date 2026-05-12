@@ -25,6 +25,10 @@ function isTruthy(value) {
   );
 }
 
+function isMongoObjectId(value = '') {
+  return /^[a-f\d]{24}$/i.test(String(value || '').trim());
+}
+
 function getRoles(user = {}, employee = {}) {
   const rawRoles = [];
 
@@ -45,8 +49,39 @@ function getRoles(user = {}, employee = {}) {
   return [...new Set(rawRoles.map(normalizeRole).filter(Boolean))];
 }
 
+function getEmployeeDbId(item = {}) {
+  const candidates = [
+    item._id,
+    item.id,
+    item.employee_db_id,
+    item.employee_object_id,
+    item.employee_mongo_id,
+    item.target_employee_id,
+  ];
+
+  const mongoId = candidates.find((value) => isMongoObjectId(value));
+
+  if (mongoId) {
+    return String(mongoId).trim();
+  }
+
+  const fallback = candidates.find((value) => String(value || '').trim());
+
+  return String(fallback || '').trim();
+}
+
+function getEmployeeCode(item = {}) {
+  return String(
+    item.employee_code ||
+      item.emp_code ||
+      item.code ||
+      (!isMongoObjectId(item.employee_id) ? item.employee_id : '') ||
+      '',
+  ).trim();
+}
+
 function getEmployeeId(item = {}) {
-  return String(item.employee_id || item._id || item.id || item.user_id || '').trim();
+  return getEmployeeDbId(item);
 }
 
 function getEmployeeName(item = {}) {
@@ -108,6 +143,10 @@ function buildUniqueReviewableEmployees(teamMembers = [], reportingMembers = [],
       map.set(id, {
         ...item,
         employee_id: id,
+        target_employee_id: id,
+        employee_db_id: id,
+        employee_code: getEmployeeCode(item),
+        raw_employee_id: item.employee_id,
         employee_name: getEmployeeName(item),
         review_target_type: 'team_member',
         review_scope_label: 'Team Member',
@@ -129,6 +168,10 @@ function buildUniqueReviewableEmployees(teamMembers = [], reportingMembers = [],
       map.set(id, {
         ...item,
         employee_id: id,
+        target_employee_id: id,
+        employee_db_id: id,
+        employee_code: getEmployeeCode(item),
+        raw_employee_id: item.employee_id,
         employee_name: getEmployeeName(item),
         review_target_type: isTeamLeader ? 'team_leader' : 'reporting_member',
         review_scope_label: isTeamLeader ? 'Team Leader' : 'Reporting Member',
@@ -515,10 +558,18 @@ export default function Performance({ setPage }) {
         defaultMode,
       );
 
-      setForm((prev) => ({
-        ...prev,
-        employee_id: prev.employee_id || defaultReviewable[0]?.employee_id || '',
-      }));
+      setForm((prev) => {
+        const existingStillValid = defaultReviewable.some(
+          (item) => item.employee_id === prev.employee_id,
+        );
+
+        return {
+          ...prev,
+          employee_id: existingStillValid
+            ? prev.employee_id
+            : defaultReviewable[0]?.employee_id || '',
+        };
+      });
     } catch (err) {
       setError(err.message || 'Unable to load performance dashboard.');
     } finally {
@@ -565,6 +616,16 @@ export default function Performance({ setPage }) {
       return;
     }
 
+    const targetEmployeeId =
+      selectedEmployee.employee_db_id ||
+      selectedEmployee.target_employee_id ||
+      selectedEmployee.employee_id;
+
+    if (!targetEmployeeId) {
+      setError('Selected employee record is missing a valid database ID.');
+      return;
+    }
+
     const rating = Number(form.rating);
 
     if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
@@ -576,9 +637,10 @@ export default function Performance({ setPage }) {
 
     try {
       const payload = {
-        employee_id: selectedEmployee.employee_id,
-        target_employee_id: selectedEmployee.employee_id,
+        employee_id: targetEmployeeId,
+        target_employee_id: targetEmployeeId,
         target_employee_name: selectedEmployee.employee_name,
+        employee_code: selectedEmployee.employee_code || selectedEmployee.raw_employee_id || '',
 
         review_target_type: selectedEmployee.review_target_type,
         review_scope_label: selectedEmployee.review_scope_label,
@@ -831,7 +893,12 @@ export default function Performance({ setPage }) {
               <div>
                 <h3>{selectedEmployee.employee_name}</h3>
                 <p>{selectedEmployee.email || 'Email not available'}</p>
-                <span>{selectedEmployee.employee_code || selectedEmployee.emp_code || 'No employee code'}</span>
+                <span>
+                  {selectedEmployee.employee_code ||
+                    selectedEmployee.raw_employee_id ||
+                    selectedEmployee.emp_code ||
+                    'No employee code'}
+                </span>
               </div>
             </div>
           ) : (
