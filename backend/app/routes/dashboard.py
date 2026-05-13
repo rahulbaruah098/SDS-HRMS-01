@@ -202,20 +202,45 @@ def is_reporting_officer_capability(employee, roles=None):
 
 def current_employee(db):
     tenant_id = current_tenant_id()
+    user_id = str(g.current_user["_id"])
+    user_email = normalize_text(g.current_user.get("email")).lower()
 
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
-        "user_id": str(g.current_user["_id"]),
+        "user_id": user_id,
         "is_deleted": {"$ne": True},
     })
 
     if employee:
         return employee
 
-    return db.employees.find_one({
-        "user_id": str(g.current_user["_id"]),
+    employee = db.employees.find_one({
+        "user_id": user_id,
         "is_deleted": {"$ne": True},
     })
+
+    if employee:
+        return employee
+
+    if user_email:
+        employee = db.employees.find_one({
+            "tenant_id": tenant_id,
+            "email": {"$regex": f"^{user_email}$", "$options": "i"},
+            "is_deleted": {"$ne": True},
+        })
+
+        if employee:
+            db.employees.update_one(
+                {"_id": employee["_id"]},
+                {"$set": {
+                    "user_id": user_id,
+                    "updated_at": datetime.utcnow(),
+                }},
+            )
+            employee["user_id"] = user_id
+            return employee
+
+    return None
 
 
 def employee_state(employee):

@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
+import AttendanceWidget from '../components/AttendanceWidget';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -630,9 +631,24 @@ export default function AdminDashboard({ setPage }) {
     }
   }
 
-  const stats = data?.stats || {};
-  const employeeSummary = data?.employee_summary || null;
-  const myPendingLeaves = data?.my_pending_leave_approvals || [];
+    const stats = data?.stats || {};
+    const employeeSummary = data?.employee_summary || null;
+
+    const adminDisplayName =
+      employeeSummary?.name ||
+      employeeSummary?.employee_name ||
+      employeeSummary?.email ||
+      'SDS Admin';
+
+    const adminDesignation =
+      employeeSummary?.designation ||
+      'Administrator';
+
+    const adminDepartment =
+      employeeSummary?.department ||
+      'Administration';
+
+    const myPendingLeaves = data?.my_pending_leave_approvals || [];
   const myPendingModeRequests = data?.my_pending_attendance_mode_requests || [];
   const teamScopeCount = data?.team_scope_employee_ids?.length || 0;
   const pendingLeaveRequests = data?.pending?.leave_requests || [];
@@ -1782,18 +1798,22 @@ export default function AdminDashboard({ setPage }) {
         }
       `}</style>
 
-      <section className="hero compact">
-        <div>
-          <span className="kicker">Admin Dashboard</span>
+        <section className="hero compact">
+          <div>
+            <span className="kicker">Admin Dashboard</span>
 
-          <h1>HRMS Control Center</h1>
+            <h1>Welcome, {adminDisplayName}</h1>
 
-          <p>
-            Monitor attendance, WFH/Field requests, holidays, leave approvals,
-            leave balances, employee mappings, comp-off credits, tickets,
-            expenses, projects, department-wise progress and reports from one
-            dashboard.
-          </p>
+            <p>
+              {adminDesignation} • {adminDepartment}
+            </p>
+
+            <p>
+              Monitor attendance, WFH/Field requests, holidays, leave approvals,
+              leave balances, employee mappings, comp-off credits, tickets,
+              expenses, projects, department-wise progress and reports from one
+              dashboard.
+            </p>
 
           <div className="hero-actions">
             <button type="button" className="primary" onClick={() => goTo('attendance')}>
@@ -1840,6 +1860,21 @@ export default function AdminDashboard({ setPage }) {
           <Stat key={label} label={label} value={value} />
         ))}
       </section>
+
+      {employeeSummary && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>My Attendance</h3>
+              <p>
+                Mark your own daily attendance. This will be tracked with other employee attendance records.
+              </p>
+            </div>
+          </div>
+
+          <AttendanceWidget onSuccess={loadDashboard} />
+        </section>
+      )}
 
       {mappedCapabilityStats.length > 0 && (
         <section className="stats-grid">

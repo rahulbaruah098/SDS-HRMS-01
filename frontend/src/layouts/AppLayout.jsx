@@ -587,10 +587,54 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             );
           }
 
-          localStorage.setItem('sds_hrms_user', JSON.stringify(syncedUser));
-          localStorage.setItem('sds_hrms_employee', JSON.stringify(data.employee || {}));
+const compactSyncedUser = {
+  id: syncedUser.id || syncedUser._id || '',
+  _id: syncedUser._id || syncedUser.id || '',
+  name: syncedUser.name || data.employee?.employee_name || '',
+  email: syncedUser.email || '',
+  role: syncedUser.role || '',
+  roles: Array.isArray(syncedUser.roles) ? syncedUser.roles : [],
+  tenant_id: syncedUser.tenant_id || data.employee?.tenant_id || '',
+  employee_id: syncedUser.employee_id || data.employee?.id || data.employee?._id || '',
+  employee_code: syncedUser.employee_code || data.employee?.employee_code || '',
+  department_name: syncedUser.department_name || data.employee?.department_name || '',
+  designation_name: syncedUser.designation_name || data.employee?.designation_name || '',
+  avatar: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+  profile_photo: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+  profile_picture: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+  photo: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
+};
 
-          setUser(syncedUser);
+const compactSyncedEmployee = {
+  id: data.employee?.id || data.employee?._id || '',
+  _id: data.employee?._id || data.employee?.id || '',
+  employee_name: data.employee?.employee_name || data.employee?.name || '',
+  employee_code: data.employee?.employee_code || '',
+  email: data.employee?.email || '',
+  phone: data.employee?.phone || '',
+  tenant_id: data.employee?.tenant_id || '',
+  department_id: data.employee?.department_id || '',
+  department_name: data.employee?.department_name || '',
+  designation_id: data.employee?.designation_id || '',
+  designation_name: data.employee?.designation_name || '',
+  is_team_leader: Boolean(data.employee?.is_team_leader),
+  is_reporting_officer: Boolean(data.employee?.is_reporting_officer),
+  is_it_support_head: Boolean(data.employee?.is_it_support_head),
+  is_it_support_member: Boolean(data.employee?.is_it_support_member),
+  avatar: profilePhotoValue(data.employee),
+  profile_photo: profilePhotoValue(data.employee),
+  profile_picture: profilePhotoValue(data.employee),
+  photo: profilePhotoValue(data.employee),
+};
+
+try {
+  localStorage.setItem('sds_hrms_user', JSON.stringify(compactSyncedUser));
+  localStorage.setItem('sds_hrms_employee', JSON.stringify(compactSyncedEmployee));
+} catch (error) {
+  console.warn('Unable to refresh compact session in localStorage', error);
+}
+
+setUser(syncedUser);
         }
       } catch {
         // Ignore session refresh failure here; api() handles expired sessions globally.

@@ -795,16 +795,93 @@ export function buildProfilePhotoPayload(photoValue, extra = {}) {
   };
 }
 
+function compactSessionUser(user = {}, employee = {}) {
+  const photo =
+    user.profile_photo_url ||
+    user.avatar_url ||
+    user.photo_url ||
+    employee.profile_photo_url ||
+    employee.avatar_url ||
+    employee.photo_url ||
+    '';
+
+  return {
+    id: user.id || user._id || '',
+    _id: user._id || user.id || '',
+    name: user.name || user.full_name || employee.employee_name || '',
+    email: user.email || '',
+    role: user.role || '',
+    roles: Array.isArray(user.roles) ? user.roles : [],
+    tenant_id: user.tenant_id || employee.tenant_id || '',
+    employee_id: user.employee_id || employee.id || employee._id || '',
+    employee_code: user.employee_code || employee.employee_code || '',
+    department_id: user.department_id || employee.department_id || '',
+    department_name: user.department_name || employee.department_name || '',
+    designation_id: user.designation_id || employee.designation_id || '',
+    designation_name: user.designation_name || employee.designation_name || '',
+    avatar: photo,
+    profile_photo: photo,
+    profile_picture: photo,
+    photo,
+  };
+}
+
+function compactSessionEmployee(employee = {}) {
+  const photo =
+    employee.profile_photo_url ||
+    employee.avatar_url ||
+    employee.photo_url ||
+    '';
+
+  return {
+    id: employee.id || employee._id || '',
+    _id: employee._id || employee.id || '',
+    employee_name: employee.employee_name || employee.name || '',
+    employee_code: employee.employee_code || '',
+    email: employee.email || '',
+    phone: employee.phone || '',
+    tenant_id: employee.tenant_id || '',
+    department_id: employee.department_id || '',
+    department_name: employee.department_name || '',
+    designation_id: employee.designation_id || '',
+    designation_name: employee.designation_name || '',
+    is_team_leader: Boolean(employee.is_team_leader),
+    is_reporting_officer: Boolean(employee.is_reporting_officer),
+    is_it_support_head: Boolean(employee.is_it_support_head),
+    is_it_support_member: Boolean(employee.is_it_support_member),
+    avatar: photo,
+    profile_photo: photo,
+    profile_picture: photo,
+    photo,
+  };
+}
+
+function safeSetLocalStorage(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn(`Unable to save ${key} in localStorage`, error);
+    localStorage.removeItem(key);
+  }
+}
+
 export function setSession(data = {}) {
   const user = withProfilePhotoAliases(data.user || {});
   const employee = withProfilePhotoAliases(data.employee || {});
 
   if (data.token) {
-    localStorage.setItem('sds_hrms_token', data.token);
+    safeSetLocalStorage('sds_hrms_token', data.token);
   }
 
-  localStorage.setItem('sds_hrms_user', JSON.stringify(user));
-  localStorage.setItem('sds_hrms_employee', JSON.stringify(employee));
+  safeSetLocalStorage(
+    'sds_hrms_user',
+    JSON.stringify(compactSessionUser(user, employee)),
+  );
+
+  safeSetLocalStorage(
+    'sds_hrms_employee',
+    JSON.stringify(compactSessionEmployee(employee)),
+  );
 }
 
 export function clearSession() {
