@@ -1154,6 +1154,84 @@ export async function downloadPolicy(policyId, filename = '') {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Celebrations APIs                                                          */
+/* -------------------------------------------------------------------------- */
+
+export function normalizeCelebration(item = {}) {
+  if (!item || typeof item !== 'object') {
+    return item;
+  }
+
+  return {
+    ...item,
+    id: item.id || item._id || '',
+    tenant_id: item.tenant_id || '',
+    tenant_name: item.tenant_name || '',
+    event_type: item.event_type || '',
+    date_key: item.date_key || '',
+    scheduled_time: item.scheduled_time || '10:00',
+
+    employee_id: item.employee_id || '',
+    employee_user_id: item.employee_user_id || '',
+    employee_name: item.employee_name || 'Employee',
+    employee_code: item.employee_code || '',
+    department: item.department || '',
+    designation: item.designation || '',
+
+    date_of_birth: item.date_of_birth || '',
+    joining_date: item.joining_date || '',
+    year_count: Number(item.year_count || 0),
+
+    title: item.title || '',
+    message: item.message || '',
+    highlight_name: item.highlight_name || item.tenant_name || '',
+    animation_type: item.animation_type || '',
+
+    status: item.status || 'active',
+    is_active: item.is_active !== false,
+    notification_sent: Boolean(item.notification_sent),
+    notification_sent_at: item.notification_sent_at || '',
+  };
+}
+
+export function normalizeCelebrationList(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeCelebration(item)).filter(Boolean);
+}
+
+export function getTodayCelebrations() {
+  return api('/celebrations/today').then((data = {}) => ({
+    ...data,
+    items: normalizeCelebrationList(data.items || []),
+    released: Boolean(data.released),
+    date_key: data.date_key || '',
+    release_time: data.release_time || '10:00',
+  }));
+}
+
+export function getMyCelebrations() {
+  return api('/celebrations/my').then((data = {}) => ({
+    ...data,
+    items: normalizeCelebrationList(data.items || []),
+    date_key: data.date_key || '',
+  }));
+}
+
+export function runTodayCelebrations(payload = {}) {
+  return api('/celebrations/run-today', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    items: normalizeCelebrationList(data.items || []),
+  }));
+}
+
+
+/* -------------------------------------------------------------------------- */
 /* Dashboard APIs                                                             */
 /* -------------------------------------------------------------------------- */
 

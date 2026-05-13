@@ -273,6 +273,46 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("status", ASCENDING), ("created_at", ASCENDING)],
     )
     
+        # Celebrations
+    create_index_safe(
+        database.celebrations,
+        [
+            ("tenant_id", ASCENDING),
+            ("event_type", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("date_key", ASCENDING),
+        ],
+        unique=True,
+    )
+
+    create_index_safe(
+        database.celebrations,
+        [
+            ("tenant_id", ASCENDING),
+            ("date_key", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.celebrations,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("date_key", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.notifications,
+        [
+            ("user_id", ASCENDING),
+            ("target", ASCENDING),
+            ("meta.celebration_id", ASCENDING),
+        ],
+    )
+    
+    
     # Master data duplicate safety
     create_index_safe(
         database.departments,

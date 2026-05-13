@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { currentUser } from './api/client';
+import { currentUser, getTodayCelebrations } from './api/client';
 import { canAccessModule } from './data/modules';
 
 import AppLayout from './layouts/AppLayout';
@@ -21,6 +21,7 @@ import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
 import Grievance from './pages/Grievance';
 import ITSupport from './pages/ITSupport';
+import CelebrationPopup from './components/CelebrationPopup.jsx';
 
 import './styles.css';
 
@@ -473,6 +474,7 @@ export default function App() {
 
   const [user, setUser] = useState(initialUser);
   const [page, setPage] = useState('dashboard');
+  const [celebrations, setCelebrations] = useState([]);
 
   const normalizedUser = useMemo(() => {
     if (!user) {
@@ -488,6 +490,7 @@ export default function App() {
     if (!nextUser) {
       setUser(null);
       setPage('dashboard');
+      setCelebrations([]);
       return;
     }
 
@@ -527,22 +530,55 @@ export default function App() {
     }
   }, [page, normalizedPage, normalizedUser]);
 
+  useEffect(() => {
+    if (!normalizedUser) {
+      setCelebrations([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCelebrations() {
+      try {
+        const data = await getTodayCelebrations();
+
+        if (!cancelled) {
+          setCelebrations(data.released ? data.items || [] : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setCelebrations([]);
+        }
+      }
+    }
+
+    loadCelebrations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedUser]);
+
   if (!normalizedUser) {
     return <Login onLogin={handleSetUser} />;
   }
 
   return (
-    <AppLayout
-      user={normalizedUser}
-      setUser={handleSetUser}
-      page={normalizedPage}
-      setPage={handleSetPage}
-    >
-      <PageRouter
-        page={normalizedPage}
+    <>
+      <AppLayout
         user={normalizedUser}
+        setUser={handleSetUser}
+        page={normalizedPage}
         setPage={handleSetPage}
-      />
-    </AppLayout>
+      >
+        <PageRouter
+          page={normalizedPage}
+          user={normalizedUser}
+          setPage={handleSetPage}
+        />
+      </AppLayout>
+
+      <CelebrationPopup celebrations={celebrations} />
+    </>
   );
 }
