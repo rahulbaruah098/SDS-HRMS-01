@@ -11,6 +11,7 @@ from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
 from .routes.grievances import grievances_bp
 from .routes.it_support import it_support_bp
+from .routes.policies import policies_bp
 from .routes.crud import crud_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
@@ -134,6 +135,12 @@ def create_app():
     # Keep this before generic CRUD so the dedicated IT Support routes are preferred.
     app.register_blueprint(it_support_bp, url_prefix="/api/v1/it-support")
 
+        # Dedicated Policies APIs:
+    # HR uploads tenant-wise policy documents.
+    # Employees can view/download policies only from their own tenant.
+    #
+    # Keep this before generic CRUD so upload/download routes are preferred.
+    app.register_blueprint(policies_bp, url_prefix="/api/v1")
     # Workflow APIs:
     # leave apply/approval, combined CL + EL leave balance updates,
     # notification bell APIs, performance review, payroll run, expense decisions,

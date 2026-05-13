@@ -261,6 +261,18 @@ def ensure_indexes(database):
         [("created_at", ASCENDING)],
     )
 
+        # Policies
+    create_index_safe(
+        database.policies,
+        [("tenant_id", ASCENDING), ("document_id", ASCENDING)],
+        unique=True,
+    )
+
+    create_index_safe(
+        database.policies,
+        [("tenant_id", ASCENDING), ("status", ASCENDING), ("created_at", ASCENDING)],
+    )
+    
     # Master data duplicate safety
     create_index_safe(
         database.departments,

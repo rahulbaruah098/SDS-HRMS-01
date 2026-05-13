@@ -15,6 +15,7 @@ import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 import Projects from './pages/Projects';
+import Policies from './pages/Policies.jsx';
 import ApplicationStatus from './pages/ApplicationStatus';
 import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
@@ -155,6 +156,23 @@ const PAGE_ALIASES = {
 
   password_request: 'password_requests',
   password_requests: 'password_requests',
+
+  policy: 'policies',
+  policies: 'policies',
+  policy_module: 'policies',
+  hr_policy: 'policies',
+  hr_policies: 'policies',
+  company_policy: 'policies',
+  company_policies: 'policies',
+  employee_policy: 'policies',
+  employee_policies: 'policies',
+  'policy-module': 'policies',
+  'hr-policy': 'policies',
+  'hr-policies': 'policies',
+  'company-policy': 'policies',
+  'company-policies': 'policies',
+  'employee-policy': 'policies',
+  'employee-policies': 'policies',
 
   project: 'projects',
   projects: 'projects',
@@ -400,6 +418,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'projects') {
     return <Projects setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'policies') {
+    return <Policies user={safeUser} setPage={setPage} />;
   }
 
   if (normalizedPage === 'team_approvals') {

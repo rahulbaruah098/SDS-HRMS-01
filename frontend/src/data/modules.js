@@ -473,8 +473,8 @@ export const coreModules = [
     'policies',
     'Policies',
     ShieldCheck,
-    'Policy register.',
-    [...HR_ROLES, BASE_EMPLOYEE_ROLE],
+    'Tenant-wise HR policy documents. HR can upload and employees can download.',
+    EMPLOYEE_PORTAL_ROLES,
   ],
   [
     'departments',

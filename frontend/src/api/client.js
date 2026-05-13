@@ -1004,6 +1004,156 @@ export function deleteCollectionItem(collection, itemId) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Policy APIs                                                                */
+/* -------------------------------------------------------------------------- */
+
+export function normalizePolicy(policy = {}) {
+  if (!policy || typeof policy !== 'object') {
+    return policy;
+  }
+
+  const file = policy.file || {};
+
+  const normalized = {
+    ...policy,
+    id: policy.id || policy._id,
+    document_id: policy.document_id || policy.documentId || '',
+    title: policy.title || policy.policy_title || '',
+    summary: policy.summary || policy.policy_summary || '',
+    status: policy.status || 'active',
+
+    file_original_name:
+      file.original_name ||
+      policy.file_original_name ||
+      policy.original_name ||
+      '',
+
+    file_stored_name:
+      file.stored_name ||
+      policy.file_stored_name ||
+      policy.stored_name ||
+      '',
+
+    file_extension:
+      file.extension ||
+      policy.file_extension ||
+      '',
+
+    file_size_bytes:
+      file.size_bytes ||
+      policy.file_size_bytes ||
+      0,
+
+    file_path:
+      file.relative_path ||
+      policy.file_path ||
+      '',
+  };
+
+  normalized.download_url = normalized.id
+    ? getApiUrl(`/policies/${normalized.id}/download`)
+    : '';
+
+  return normalized;
+}
+
+export function normalizePolicyList(policies = []) {
+  if (!Array.isArray(policies)) {
+    return [];
+  }
+
+  return policies.map((policy) => normalizePolicy(policy)).filter(Boolean);
+}
+
+export function getPolicies(params = {}) {
+  return api(`/policies${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizePolicyList(data.items || data.policies || []),
+    policies: normalizePolicyList(data.policies || data.items || []),
+  }));
+}
+
+export function getPolicy(policyId) {
+  return api(`/policies/${policyId}`).then((data = {}) => ({
+    ...data,
+    item: normalizePolicy(data.item || data.policy || {}),
+    policy: normalizePolicy(data.policy || data.item || {}),
+  }));
+}
+
+export function uploadPolicy(payload = {}) {
+  const formData = new FormData();
+
+  formData.append('document_id', payload.document_id || '');
+  formData.append('title', payload.title || '');
+  formData.append('summary', payload.summary || '');
+
+  if (payload.file) {
+    formData.append('file', payload.file);
+  }
+
+  return api('/policies', {
+    method: 'POST',
+    body: formData,
+  }).then((data = {}) => ({
+    ...data,
+    item: normalizePolicy(data.item || data.policy || {}),
+    policy: normalizePolicy(data.policy || data.item || {}),
+  }));
+}
+
+export async function downloadPolicy(policyId, filename = '') {
+  const token = getToken();
+
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(buildUrl(`/policies/${policyId}/download`), {
+    method: 'GET',
+    headers,
+  });
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error('You do not have permission to download this policy.');
+  }
+
+  if (!response.ok) {
+    let message = 'Unable to download policy file.';
+
+    try {
+      const data = await response.json();
+      message = data.message || message;
+    } catch {
+      // keep default message
+    }
+
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || `policy-${policyId}`;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Dashboard APIs                                                             */
 /* -------------------------------------------------------------------------- */
 
