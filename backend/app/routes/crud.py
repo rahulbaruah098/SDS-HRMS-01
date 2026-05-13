@@ -73,6 +73,8 @@ SEARCH_FIELDS = {
         "emp_code",
         "department",
         "designation",
+        "is_it_support_head",
+        "is_it_support_member",
     ],
     "departments": [
         "name",
@@ -297,6 +299,26 @@ def truthy(value):
     return str(value or "").strip().lower() in {"true", "1", "yes", "on"}
 
 
+def bool_string(value):
+    return "true" if truthy(value) else "false"
+
+
+def normalize_employee_it_support_flags(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    if "is_it_support_head" in payload:
+        payload["is_it_support_head"] = bool_string(payload.get("is_it_support_head"))
+
+    if "is_it_support_member" in payload:
+        payload["is_it_support_member"] = bool_string(payload.get("is_it_support_member"))
+
+    if truthy(payload.get("is_it_support_head")):
+        payload["is_it_support_member"] = "true"
+
+    return payload
+
+
 def normalize_email(value):
     return normalize_text(value).lower()
 
@@ -519,6 +541,10 @@ def build_user_sync_payload(employee_doc, existing_user=None):
         "emp_code": employee_doc.get("emp_code") or employee_doc.get("employee_id") or employee_doc.get("code") or "",
         "department": employee_doc.get("department", ""),
         "designation": employee_doc.get("designation", ""),
+        "is_team_leader": bool_string(employee_doc.get("is_team_leader")),
+        "is_reporting_officer": bool_string(employee_doc.get("is_reporting_officer")),
+        "is_it_support_head": bool_string(employee_doc.get("is_it_support_head")),
+        "is_it_support_member": bool_string(employee_doc.get("is_it_support_member") or employee_doc.get("is_it_support_head")),
         "is_active": is_active,
         "status": "active" if is_active else "inactive",
         "updated_at": now_utc(),
@@ -647,6 +673,8 @@ def deactivate_employee_login_user(db, employee_doc):
             "$set": {
                 "is_active": False,
                 "status": "inactive",
+                "is_it_support_head": "false",
+                "is_it_support_member": "false",
                 "updated_at": now_utc(),
                 "updated_by": current_user_id(),
                 "updated_by_name": current_user_name(),
@@ -1362,6 +1390,8 @@ def project_member_payload(employee, relation="member"):
         "photo": employee_avatar(employee),
         "is_team_leader": truthy(employee.get("is_team_leader")),
         "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
+        "is_it_support_head": truthy(employee.get("is_it_support_head")),
+        "is_it_support_member": truthy(employee.get("is_it_support_member") or employee.get("is_it_support_head")),
         "team_leader_id": employee.get("team_leader_id", ""),
         "team_leader_name": employee.get("team_leader_name", ""),
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
@@ -2295,6 +2325,9 @@ def create_collection_item(collection):
         payload["employee_name"] = payload["name"]
         payload["email"] = employee_email_from_payload(payload)
         payload.setdefault("status", "active")
+        payload.setdefault("is_it_support_head", "false")
+        payload.setdefault("is_it_support_member", "false")
+        normalize_employee_it_support_flags(payload)
 
         joining_date = employee_joining_date(payload)
 
@@ -2349,6 +2382,8 @@ def create_collection_item(collection):
                     "profile_photo": payload.get("profile_photo", ""),
                     "profile_picture": payload.get("profile_picture", ""),
                     "photo": payload.get("photo", ""),
+                    "is_it_support_head": bool_string(payload.get("is_it_support_head")),
+                    "is_it_support_member": bool_string(payload.get("is_it_support_member") or payload.get("is_it_support_head")),
                 }},
             )
             payload["user_id"] = str(user["_id"])
@@ -2447,6 +2482,14 @@ def update_collection_item(collection, item_id):
         merged_employee.update(payload)
         merged_employee["_id"] = existing["_id"]
         merged_employee.setdefault("tenant_id", existing.get("tenant_id") or current_tenant_id())
+
+        if "is_it_support_head" in payload or "is_it_support_member" in payload:
+            normalize_employee_it_support_flags(payload)
+            merged_employee.update({
+                "is_it_support_head": payload.get("is_it_support_head", merged_employee.get("is_it_support_head", "false")),
+                "is_it_support_member": payload.get("is_it_support_member", merged_employee.get("is_it_support_member", "false")),
+            })
+            normalize_employee_it_support_flags(merged_employee)
 
         if payload.get("name") or payload.get("employee_name") or payload.get("full_name"):
             payload["name"] = employee_name_from_payload(merged_employee)
@@ -2585,6 +2628,8 @@ def delete_collection_item(collection, item_id):
                 "$set": {
                     "is_deleted": True,
                     "status": "inactive",
+                    "is_it_support_head": "false" if collection == "employees" else existing.get("is_it_support_head", "false"),
+                    "is_it_support_member": "false" if collection == "employees" else existing.get("is_it_support_member", "false"),
                     "deleted_at": now_utc(),
                     "deleted_by": current_user_id(),
                     "deleted_by_name": current_user_name(),

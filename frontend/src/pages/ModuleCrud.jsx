@@ -134,6 +134,8 @@ const EMPLOYEE_MASTER_TABLE_FIELDS = [
   'joining_date',
   'team_leader_name',
   'reporting_officer_name',
+  'is_it_support_head',
+  'is_it_support_member',
 ];
 
 const EMPLOYEE_READONLY_SNAPSHOT_FIELDS = new Set([
@@ -210,6 +212,16 @@ function statusLabel(value) {
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function boolValue(value) {
+  return ['true', 'yes', '1', 'on', '1.0'].includes(
+    String(value || '').trim().toLowerCase(),
+  );
+}
+
+function boolLabel(value) {
+  return boolValue(value) ? 'Yes' : 'No';
 }
 
 function normalizeRole(value) {
@@ -315,6 +327,21 @@ function normalizeLeavePayload(payload) {
   delete nextPayload.approval_history;
   delete nextPayload.balance_deducted;
   delete nextPayload.leave_days;
+
+  return nextPayload;
+}
+
+function normalizeEmployeeCapabilityPayload(payload = {}) {
+  const nextPayload = { ...payload };
+
+  nextPayload.is_team_leader = String(nextPayload.is_team_leader ?? 'false');
+  nextPayload.is_reporting_officer = String(nextPayload.is_reporting_officer ?? 'false');
+  nextPayload.is_it_support_head = String(nextPayload.is_it_support_head ?? 'false');
+  nextPayload.is_it_support_member = String(nextPayload.is_it_support_member ?? 'false');
+
+  if (boolValue(nextPayload.is_it_support_head)) {
+    nextPayload.is_it_support_member = 'true';
+  }
 
   return nextPayload;
 }
@@ -895,6 +922,7 @@ export default function ModuleCrud({ collection }) {
       if (collection === 'employees') {
         delete payload.password_mode;
         payload.role = 'Employee';
+        payload = normalizeEmployeeCapabilityPayload(payload);
         applyProfilePhotoAliases(payload);
       }
 
@@ -967,6 +995,8 @@ export default function ModuleCrud({ collection }) {
         editData.role = 'Employee';
         editData.is_team_leader = String(row.is_team_leader || 'false');
         editData.is_reporting_officer = String(row.is_reporting_officer || 'false');
+        editData.is_it_support_head = String(row.is_it_support_head || 'false');
+        editData.is_it_support_member = String(row.is_it_support_member || 'false');
         editData.team_leader_id = row.team_leader_id || '';
         editData.team_leader_name = row.team_leader_name || '';
         editData.reporting_officer_id = row.reporting_officer_id || '';
@@ -1002,7 +1032,7 @@ export default function ModuleCrud({ collection }) {
         editData.status = row.status || 'active';
       }
 
-      setEdit(editData);
+      setEdit(collection === 'employees' ? normalizeEmployeeCapabilityPayload(editData) : editData);
 
       setTimeout(() => {
         document.getElementById('edit-section')?.scrollIntoView({
@@ -1036,6 +1066,7 @@ export default function ModuleCrud({ collection }) {
 
       if (collection === 'employees') {
         payload.role = 'Employee';
+        payload = normalizeEmployeeCapabilityPayload(payload);
         applyProfilePhotoAliases(payload);
       }
 
@@ -1448,6 +1479,15 @@ export default function ModuleCrud({ collection }) {
 
     let labelText = titleCase(label);
 
+    const customLabels = {
+      is_it_support_head: 'IT Support Head',
+      is_it_support_member: 'IT Support Member',
+    };
+
+    if (customLabels[key]) {
+      labelText = customLabels[key];
+    }
+
     const leaveBalanceLabels = {
       cl_opening_balance: 'Casual Leave Opening Balance',
       cl_credited: 'Casual Leave Credited',
@@ -1819,24 +1859,45 @@ export default function ModuleCrud({ collection }) {
             <option value="Employee">Employee</option>
           </select>
           <small>
-            Team Leader and Reporting Officer are selected below as employee
-            capabilities, not separate login roles.
+            Team Leader, Reporting Officer and IT Support are selected below as
+            employee capabilities, not separate login roles.
           </small>
         </label>
       );
     }
 
-    if (['is_team_leader', 'is_reporting_officer'].includes(key)) {
+    if (
+      collection === 'employees' &&
+      ['is_team_leader', 'is_reporting_officer', 'is_it_support_head', 'is_it_support_member'].includes(key)
+    ) {
       return (
         <label key={key}>
           {finalLabel}
           <select
             value={String(state[key] ?? 'false')}
-            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+            onChange={(event) => {
+              const value = event.target.value;
+              const nextState = {
+                ...state,
+                [key]: value,
+              };
+
+              if (key === 'is_it_support_head' && boolValue(value)) {
+                nextState.is_it_support_member = 'true';
+              }
+
+              setState(nextState);
+            }}
           >
             <option value="false">No</option>
             <option value="true">Yes</option>
           </select>
+          {key === 'is_it_support_head' && (
+            <small>IT Support Head can assign and reassign IT support tickets.</small>
+          )}
+          {key === 'is_it_support_member' && (
+            <small>IT Support Member can receive assigned tickets and update progress.</small>
+          )}
         </label>
       );
     }
@@ -2069,6 +2130,8 @@ export default function ModuleCrud({ collection }) {
       joining_date: 'Date of Joining',
       team_leader_name: 'Team Leader',
       reporting_officer_name: 'Reporting Officer',
+      is_it_support_head: 'IT Support Head',
+      is_it_support_member: 'IT Support Member',
       employee_name: 'Employee Name',
       cl_opening_balance: 'CL Opening',
       cl_credited: 'CL Credited',
@@ -2116,6 +2179,10 @@ export default function ModuleCrud({ collection }) {
 
     if (key === 'status') {
       return statusLabel(row.status);
+    }
+
+    if (key === 'is_it_support_head' || key === 'is_it_support_member') {
+      return boolLabel(row[key]);
     }
 
     return displayValue(row[key]);
@@ -2371,7 +2438,8 @@ export default function ModuleCrud({ collection }) {
           {collection === 'employees' && (
             <p>
               Create every staff member as an Employee. Add/update profile photo
-              here. Mark Team Leader or Reporting Officer only through capability mapping.
+              here. Mark Team Leader, Reporting Officer, IT Support Head or IT
+              Support Member only through capability mapping.
             </p>
           )}
 
@@ -2513,7 +2581,8 @@ export default function ModuleCrud({ collection }) {
               {collection === 'employees' && (
                 <p>
                   HR/Admin/Super Admin can change employee details, profile photo,
-                  Team Leader mapping, and Reporting Officer mapping from here.
+                  Team Leader mapping, Reporting Officer mapping, and IT Support
+                  capability mapping from here.
                 </p>
               )}
 

@@ -59,6 +59,11 @@ def ensure_indexes(database):
 
     create_index_safe(
         database.users,
+        [("tenant_id", ASCENDING), ("role", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.users,
         [("tenant_id", ASCENDING), ("is_active", ASCENDING)],
     )
 
@@ -105,6 +110,23 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("is_reporting_officer", ASCENDING)],
     )
 
+    # IT Support employee capability indexes:
+    # These will support tenant-wise IT Head / IT Assistant assignment.
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("is_it_support_head", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("is_it_support_member", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("department", ASCENDING), ("is_it_support_member", ASCENDING)],
+    )
+
     # Attendance
     create_index_safe(
         database.attendance_logs,
@@ -117,7 +139,7 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("date", ASCENDING)],
     )
 
-    # Leave / expense / tickets
+    # Leave / expense / existing tickets
     create_index_safe(
         database.leave_requests,
         [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("status", ASCENDING)],
@@ -141,6 +163,91 @@ def ensure_indexes(database):
     create_index_safe(
         database.tickets,
         [("tenant_id", ASCENDING), ("raised_by", ASCENDING), ("status", ASCENDING)],
+    )
+
+    # Grievance module:
+    # Employee grievance submission, anonymous grievance, HR/Admin inbox.
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("employee_user_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("status", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("priority", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("grievance_type", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("ticket_no", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.grievances,
+        [("tenant_id", ASCENDING), ("is_anonymous", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    # IT Support module:
+    # Tenant-wise IT ticket submission, IT Head assignment, IT member status updates,
+    # employee review after resolution.
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("created_by_employee_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("created_by_user_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("assigned_to_employee_id", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("assigned_to_user_id", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("assigned_by_employee_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("status", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("priority", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("issue_category", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.it_support_tickets,
+        [("tenant_id", ASCENDING), ("ticket_no", ASCENDING)],
     )
 
     # Password requests
@@ -192,6 +299,8 @@ def ensure_indexes(database):
         "expenses",
         "assets",
         "tickets",
+        "grievances",
+        "it_support_tickets",
         "notifications",
         "policies",
         "documents",

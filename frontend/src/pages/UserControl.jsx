@@ -70,6 +70,9 @@ const USER_CREATE_TEMPLATE = {
 
   is_team_leader: 'false',
   is_reporting_officer: 'false',
+  is_it_support_head: 'false',
+  is_it_support_member: 'false',
+
   team_leader_id: '',
   team_leader_name: '',
   reporting_officer_id: '',
@@ -130,6 +133,9 @@ const CREATE_FIELD_ORDER = [
 
   'is_team_leader',
   'is_reporting_officer',
+  'is_it_support_head',
+  'is_it_support_member',
+
   'team_leader_id',
   'team_leader_name',
   'reporting_officer_id',
@@ -190,6 +196,9 @@ const EDIT_FIELD_ORDER = [
 
   'is_team_leader',
   'is_reporting_officer',
+  'is_it_support_head',
+  'is_it_support_member',
+
   'team_leader_id',
   'team_leader_name',
   'reporting_officer_id',
@@ -329,10 +338,12 @@ function displayRoles(value) {
   return cleaned.join(', ');
 }
 
+function boolValue(value) {
+  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase());
+}
+
 function boolLabel(value) {
-  return ['true', 'yes', '1', 'on'].includes(String(value || '').toLowerCase())
-    ? 'Yes'
-    : 'No';
+  return boolValue(value) ? 'Yes' : 'No';
 }
 
 function textValue(value) {
@@ -366,6 +377,19 @@ function applyProfilePhotoAliases(payload = {}, photoValue = '') {
   }
 
   return payload;
+}
+
+function normalizeItSupportFlags(payload = {}) {
+  const next = { ...payload };
+
+  next.is_it_support_head = String(next.is_it_support_head ?? 'false');
+  next.is_it_support_member = String(next.is_it_support_member ?? 'false');
+
+  if (boolValue(next.is_it_support_head)) {
+    next.is_it_support_member = 'true';
+  }
+
+  return next;
 }
 
 function userEmployeeProfile(user = {}) {
@@ -429,6 +453,16 @@ function employeeIsTeamLeader(user = {}) {
 function employeeIsReportingOfficer(user = {}) {
   const employee = userEmployeeProfile(user);
   return boolLabel(employee.is_reporting_officer || user.is_reporting_officer);
+}
+
+function employeeIsItSupportHead(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return boolLabel(employee.is_it_support_head || user.is_it_support_head);
+}
+
+function employeeIsItSupportMember(user = {}) {
+  const employee = userEmployeeProfile(user);
+  return boolLabel(employee.is_it_support_member || user.is_it_support_member);
 }
 
 function UserAvatar({ user = {}, size = 'md' }) {
@@ -702,12 +736,12 @@ export default function UserControl() {
   }
 
   function cleanUserPayload(sourcePayload) {
-    const payload = {
+    const payload = normalizeItSupportFlags({
       ...sourcePayload,
       state: normalizeState(sourcePayload.state),
       branch: normalizeState(sourcePayload.branch || sourcePayload.state),
       role: 'Employee',
-    };
+    });
 
     applyProfilePhotoAliases(payload);
 
@@ -827,6 +861,8 @@ export default function UserControl() {
 
         is_team_leader: String(employee.is_team_leader || user.is_team_leader || 'false'),
         is_reporting_officer: String(employee.is_reporting_officer || user.is_reporting_officer || 'false'),
+        is_it_support_head: String(employee.is_it_support_head || user.is_it_support_head || 'false'),
+        is_it_support_member: String(employee.is_it_support_member || user.is_it_support_member || 'false'),
 
         team_leader_id: employee.team_leader_id || user.team_leader_id || '',
         team_leader_name: employee.team_leader_name || user.team_leader_name || '',
@@ -837,7 +873,7 @@ export default function UserControl() {
         is_active: String(user.is_active !== false),
       };
 
-      setEdit(editData);
+      setEdit(normalizeItSupportFlags(editData));
 
       setTimeout(() => {
         document.getElementById('user-edit-section')?.scrollIntoView({
@@ -949,6 +985,15 @@ export default function UserControl() {
   }
 
   function formatLabel(key) {
+    const customLabels = {
+      is_it_support_head: 'IT Support Head',
+      is_it_support_member: 'IT Support Member',
+    };
+
+    if (customLabels[key]) {
+      return customLabels[key];
+    }
+
     const labelText = key
       .replaceAll('_', ' ')
       .split(' ')
@@ -1063,8 +1108,8 @@ export default function UserControl() {
             ))}
           </select>
           <small>
-            Team Leader and Reporting Officer are not login roles. Use the
-            mapping fields below to mark those responsibilities.
+            Team Leader, Reporting Officer and IT Support duties are not login roles.
+            Use the capability fields below to mark those responsibilities.
           </small>
         </label>
       );
@@ -1081,8 +1126,8 @@ export default function UserControl() {
             <option value="Employee">Employee</option>
           </select>
           <small>
-            Every staff profile remains Employee. Leadership responsibility is
-            managed by Team Leader / Reporting Officer mapping.
+            Every staff profile remains Employee. Leadership and IT Support
+            responsibilities are handled by capability mapping.
           </small>
         </label>
       );
@@ -1129,6 +1174,38 @@ export default function UserControl() {
             <option value="false">No</option>
             <option value="true">Yes</option>
           </select>
+        </label>
+      );
+    }
+
+    if (['is_it_support_head', 'is_it_support_member'].includes(key)) {
+      return (
+        <label key={key}>
+          {label}
+          <select
+            value={String(state[key] ?? 'false')}
+            onChange={(e) => {
+              const value = e.target.value;
+              const next = {
+                ...state,
+                [key]: value,
+              };
+
+              if (key === 'is_it_support_head' && boolValue(value)) {
+                next.is_it_support_member = 'true';
+              }
+
+              setState(next);
+            }}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+          <small>
+            {key === 'is_it_support_head'
+              ? 'Head of IT can assign and reassign IT Support tickets.'
+              : 'IT Support Member can receive assigned tickets and update progress.'}
+          </small>
         </label>
       );
     }
@@ -1428,9 +1505,10 @@ export default function UserControl() {
           <h1>User Control</h1>
           <p>
             Super Admin can create users, update employee profile, upload profile
-            photos, assign team leader, assign reporting officer, change login
-            access and reset passwords. Team Leader and Reporting Officer are
-            employee mappings, not separate login roles.
+            photos, assign team leader, assign reporting officer, mark IT Support
+            Head/Member, change login access and reset passwords. Team Leader,
+            Reporting Officer and IT Support are employee capabilities, not
+            separate login roles.
           </p>
         </div>
       </section>
@@ -1493,6 +1571,8 @@ export default function UserControl() {
                 <th>State</th>
                 <th>Team Leader Capability</th>
                 <th>Reporting Officer Capability</th>
+                <th>IT Support Head</th>
+                <th>IT Support Member</th>
                 <th>Mapped Team Leader</th>
                 <th>Mapped Reporting Officer</th>
                 <th>Status</th>
@@ -1521,6 +1601,8 @@ export default function UserControl() {
                   <td>{employeeStateValue(user)}</td>
                   <td>{employeeIsTeamLeader(user)}</td>
                   <td>{employeeIsReportingOfficer(user)}</td>
+                  <td>{employeeIsItSupportHead(user)}</td>
+                  <td>{employeeIsItSupportMember(user)}</td>
                   <td>{employeeTeamLeaderName(user)}</td>
                   <td>{employeeReportingOfficerName(user)}</td>
                   <td>{user.is_active ? 'Active' : 'Inactive'}</td>
@@ -1564,8 +1646,8 @@ export default function UserControl() {
               <h3>Edit Complete User Profile</h3>
               <p>
                 Update login details, employee profile, profile photo, designation,
-                state, Team Leader capability, Reporting Officer capability and
-                employee reporting mapping.
+                state, Team Leader capability, Reporting Officer capability, IT
+                Support capability and employee reporting mapping.
               </p>
             </div>
 

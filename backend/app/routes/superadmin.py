@@ -33,6 +33,9 @@ DEFAULT_DESIGNATIONS = [
     "Manager",
     "Team Leader",
     "Reporting Officer",
+    "Head of Technology",
+    "IT Support Head",
+    "IT Support Assistant",
     "Executive",
     "Associate",
     "Assistant",
@@ -161,6 +164,8 @@ EMPLOYEE_PROFILE_FIELDS = [
     "salary",
     "is_team_leader",
     "is_reporting_officer",
+    "is_it_support_head",
+    "is_it_support_member",
     "team_leader_id",
     "team_leader_name",
     "reporting_officer_id",
@@ -190,6 +195,10 @@ def slugify(value):
 
 def truthy(value):
     return str(value).strip().lower() in ["true", "yes", "1", "on"]
+
+
+def bool_string(value):
+    return "true" if truthy(value) else "false"
 
 
 def normalize_text(value):
@@ -413,6 +422,10 @@ def user_profile_payload_from_employee(employee_doc, existing_user=None):
         "emp_code": employee_code(employee_doc),
         "department": employee_doc.get("department", ""),
         "designation": employee_doc.get("designation", ""),
+        "is_team_leader": bool_string(employee_doc.get("is_team_leader")),
+        "is_reporting_officer": bool_string(employee_doc.get("is_reporting_officer")),
+        "is_it_support_head": bool_string(employee_doc.get("is_it_support_head")),
+        "is_it_support_member": bool_string(employee_doc.get("is_it_support_member")),
         "is_active": is_active,
         "status": "active" if is_active else "inactive",
         "updated_at": now(),
@@ -577,8 +590,13 @@ def build_employee_profile_payload(data):
     apply_profile_photo_aliases(payload)
 
     payload["role"] = "Employee"
-    payload["is_team_leader"] = str(payload.get("is_team_leader", "false")).lower()
-    payload["is_reporting_officer"] = str(payload.get("is_reporting_officer", "false")).lower()
+    payload["is_team_leader"] = bool_string(payload.get("is_team_leader", "false"))
+    payload["is_reporting_officer"] = bool_string(payload.get("is_reporting_officer", "false"))
+    payload["is_it_support_head"] = bool_string(payload.get("is_it_support_head", "false"))
+    payload["is_it_support_member"] = bool_string(payload.get("is_it_support_member", "false"))
+
+    if truthy(payload.get("is_it_support_head")):
+        payload["is_it_support_member"] = "true"
 
     if "salary" in payload:
         payload["salary"] = normalize_float(payload.get("salary"), 0)
@@ -796,6 +814,14 @@ def list_companies():
             "tenant_id": tenant_id,
             "status": "pending",
         })
+        row["pending_grievances"] = db.grievances.count_documents({
+            "tenant_id": tenant_id,
+            "status": {"$in": ["pending", "under_review"]},
+        })
+        row["pending_it_support"] = db.it_support_tickets.count_documents({
+            "tenant_id": tenant_id,
+            "status": {"$in": ["open", "assigned", "in_progress", "waiting_for_user", "reopened"]},
+        })
         row["available_compoff"] = db.compoff_credits.count_documents({
             "tenant_id": tenant_id,
             "status": "available",
@@ -895,6 +921,8 @@ def create_company():
             "salary": 0,
             "is_team_leader": "false",
             "is_reporting_officer": "true",
+            "is_it_support_head": "false",
+            "is_it_support_member": "false",
             "team_leader_id": "",
             "team_leader_name": "",
             "reporting_officer_id": "",
@@ -916,6 +944,8 @@ def create_company():
                 "emp_code": created_emp.get("emp_code", ""),
                 "department": created_emp.get("department", ""),
                 "designation": created_emp.get("designation", ""),
+                "is_it_support_head": created_emp.get("is_it_support_head", "false"),
+                "is_it_support_member": created_emp.get("is_it_support_member", "false"),
                 "updated_at": now(),
             }
             apply_profile_photo_aliases(user_update, profile_photo_value(created_emp))
@@ -1092,6 +1122,8 @@ def list_users():
             user["emp_code"] = employee_code(emp)
             user["department"] = emp.get("department", user.get("department", ""))
             user["designation"] = emp.get("designation", user.get("designation", ""))
+            user["is_it_support_head"] = bool_string(emp.get("is_it_support_head"))
+            user["is_it_support_member"] = bool_string(emp.get("is_it_support_member"))
             user["avatar"] = photo
             user["profile_photo"] = photo
             user["profile_picture"] = photo
@@ -1210,6 +1242,11 @@ def create_user():
     emp.setdefault("status", "Active")
     emp.setdefault("is_team_leader", "false")
     emp.setdefault("is_reporting_officer", "false")
+    emp.setdefault("is_it_support_head", "false")
+    emp.setdefault("is_it_support_member", "false")
+
+    if truthy(emp.get("is_it_support_head")):
+        emp["is_it_support_member"] = "true"
 
     emp_res = db.employees.insert_one(emp)
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
@@ -1221,6 +1258,8 @@ def create_user():
             "emp_code": employee_code(created_emp),
             "department": created_emp.get("department", ""),
             "designation": created_emp.get("designation", ""),
+            "is_it_support_head": bool_string(created_emp.get("is_it_support_head")),
+            "is_it_support_member": bool_string(created_emp.get("is_it_support_member")),
             "updated_at": now(),
         }
         apply_profile_photo_aliases(user_update, profile_photo_value(created_emp))
@@ -1439,6 +1478,12 @@ def update_user(user_id):
             emp_update.setdefault("status", "Active")
             emp_update.setdefault("is_team_leader", "false")
             emp_update.setdefault("is_reporting_officer", "false")
+            emp_update.setdefault("is_it_support_head", "false")
+            emp_update.setdefault("is_it_support_member", "false")
+
+            if truthy(emp_update.get("is_it_support_head")):
+                emp_update["is_it_support_member"] = "true"
+
             emp_update["created_at"] = now()
             emp_update["created_by"] = str(g.current_user["_id"])
             emp_update["is_deleted"] = False
@@ -1500,6 +1545,8 @@ def update_user(user_id):
         refreshed["emp_code"] = employee_code(employee_profile)
         refreshed["department"] = employee_profile.get("department", refreshed.get("department", ""))
         refreshed["designation"] = employee_profile.get("designation", refreshed.get("designation", ""))
+        refreshed["is_it_support_head"] = bool_string(employee_profile.get("is_it_support_head"))
+        refreshed["is_it_support_member"] = bool_string(employee_profile.get("is_it_support_member"))
     else:
         photo = profile_photo_value(refreshed)
         apply_profile_photo_aliases(refreshed, photo)

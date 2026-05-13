@@ -9,6 +9,8 @@ from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
 from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
+from .routes.grievances import grievances_bp
+from .routes.it_support import it_support_bp
 from .routes.crud import crud_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
@@ -117,10 +119,25 @@ def create_app():
     # Keep this before generic CRUD so project-specific routes are preferred.
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
 
+    # Grievance module APIs:
+    # employee grievance submission, anonymous grievance option,
+    # HR/Admin grievance inbox, status update, remarks and notifications.
+    #
+    # Keep this before generic CRUD so the dedicated grievance routes are preferred.
+    app.register_blueprint(grievances_bp, url_prefix="/api/v1/grievances")
+
+    # IT Support module APIs:
+    # employee IT support ticket submission, IT Head ticket assignment/reassignment,
+    # assigned IT member status update, employee review after resolution,
+    # and tenant-wise IT team handling.
+    #
+    # Keep this before generic CRUD so the dedicated IT Support routes are preferred.
+    app.register_blueprint(it_support_bp, url_prefix="/api/v1/it-support")
+
     # Workflow APIs:
     # leave apply/approval, combined CL + EL leave balance updates,
     # notification bell APIs, performance review, payroll run, expense decisions,
-    # and ticket workflow.
+    # and existing ticket workflow.
     #
     # Keep this before generic CRUD so dedicated workflow routes are preferred:
     # /leave_balances
@@ -192,6 +209,8 @@ def create_app():
                 "Leave Balances",
                 "Projects",
                 "Project Progress",
+                "Grievances",
+                "IT Support",
                 "Reports",
                 "Notifications",
                 "Super Admin",
@@ -216,10 +235,17 @@ def create_app():
             "notification_module": True,
             "project_module": True,
             "project_progress_module": True,
+            "grievance_module": True,
+            "it_support_module": True,
             "reports_module": True,
             "employee_capability_mapping": True,
             "team_leader_as_capability": True,
             "reporting_officer_as_capability": True,
+            "it_support_team_mapping": {
+                "it_head": "Stored on employee profile as is_it_support_head",
+                "it_member": "Stored on employee profile as is_it_support_member",
+                "tenant_wise": True,
+            },
             "leave_types": {
                 "casual_leave": "CL",
                 "earned_leave": "EL",
@@ -234,6 +260,8 @@ def create_app():
                 "dashboard",
                 "attendance",
                 "projects",
+                "grievances",
+                "it_support",
                 "workflow",
                 "crud",
                 "reports",

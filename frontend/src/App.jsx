@@ -18,6 +18,8 @@ import Projects from './pages/Projects';
 import ApplicationStatus from './pages/ApplicationStatus';
 import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
+import Grievance from './pages/Grievance';
+import ITSupport from './pages/ITSupport';
 
 import './styles.css';
 
@@ -111,6 +113,42 @@ const PAGE_ALIASES = {
   'request-status': 'application_status',
   'my-requests': 'application_status',
   'my-applications': 'application_status',
+
+  grievance: 'grievances',
+  grievances: 'grievances',
+  employee_grievance: 'grievances',
+  employee_grievances: 'grievances',
+  grievance_module: 'grievances',
+  grievance_form: 'grievances',
+  grievance_requests: 'grievances',
+  anonymous_grievance: 'grievances',
+
+  'grievance': 'grievances',
+  'grievances': 'grievances',
+  'employee-grievance': 'grievances',
+  'employee-grievances': 'grievances',
+  'grievance-module': 'grievances',
+  'grievance-form': 'grievances',
+  'anonymous-grievance': 'grievances',
+
+  it_support: 'it_support',
+  it_supports: 'it_support',
+  it_ticket: 'it_support',
+  it_tickets: 'it_support',
+  support: 'it_support',
+  support_ticket: 'it_support',
+  support_tickets: 'it_support',
+  technology_support: 'it_support',
+  helpdesk: 'it_support',
+  help_desk: 'it_support',
+
+  'it-support': 'it_support',
+  'it-ticket': 'it_support',
+  'it-tickets': 'it_support',
+  'support-ticket': 'it_support',
+  'support-tickets': 'it_support',
+  'technology-support': 'it_support',
+  'help-desk': 'it_support',
 
   notification: 'notifications',
   notifications: 'notifications',
@@ -370,6 +408,14 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'performance_reviews') {
     return <Performance setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'grievances') {
+    return <Grievance setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'it_support') {
+    return <ITSupport setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'profile') {

@@ -33,6 +33,20 @@ import {
       team_leader_id
       reporting_officer_id
 
+  New grievance workflow:
+  - Every login can raise grievance.
+  - HR/Admin can view and update grievance status.
+  - Anonymous grievance hides employee identity from HR/Admin frontend display.
+
+  Correct IT Support workflow:
+  - Every login can raise IT Support ticket.
+  - Admin/HR can raise IT Support tickets only; they do not receive or manage IT tickets.
+  - Normal IT Support request goes to the tenant IT Department.
+  - IT Department Team Leader / IT Support Head can assign/reassign tickets to self or tenant IT Department members.
+  - Assigned IT Department member can update progress/status.
+  - Employee can review after resolution.
+  - Super Admin receives/sees IT Support tickets only when IT Department Head escalates software/server/major issues.
+
   Performance workflow:
   - Performance page is available only for Team Leader and Reporting Officer capability users.
   - Team Leader can give weekly performance rating only to mapped team members.
@@ -135,6 +149,12 @@ export const LEAVE_BALANCE_MANAGER_ROLES = HR_ROLES;
 
 export const APPLICATION_STATUS_ROLES = ALL_COMMON_ROLES;
 
+export const GRIEVANCE_ROLES = ALL_COMMON_ROLES;
+
+export const GRIEVANCE_MANAGER_ROLES = HR_ROLES;
+
+export const IT_SUPPORT_ROLES = ALL_COMMON_ROLES;
+
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
@@ -156,6 +176,73 @@ export const PROJECT_PRIORITY_OPTIONS = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
   { value: 'critical', label: 'Critical' },
+];
+
+export const GRIEVANCE_TYPE_OPTIONS = [
+  { value: 'workplace_issue', label: 'Workplace Issue' },
+  { value: 'salary_payroll', label: 'Salary / Payroll' },
+  { value: 'leave_attendance', label: 'Leave / Attendance' },
+  { value: 'harassment', label: 'Harassment / Misconduct' },
+  { value: 'policy_concern', label: 'Policy Concern' },
+  { value: 'manager_team_issue', label: 'Manager / Team Issue' },
+  { value: 'facilities', label: 'Facilities / Office Infrastructure' },
+  { value: 'other', label: 'Other' },
+];
+
+export const GRIEVANCE_PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'critical', label: 'Critical' },
+];
+
+export const GRIEVANCE_STATUS_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'under_review', label: 'Under Review' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
+export const IT_SUPPORT_CATEGORY_OPTIONS = [
+  { value: 'login_password', label: 'Login / Password Issue' },
+  { value: 'internet_network', label: 'Internet / Network Issue' },
+  { value: 'laptop_desktop', label: 'Laptop / Desktop Issue' },
+  { value: 'printer_scanner', label: 'Printer / Scanner Issue' },
+  { value: 'software_application', label: 'Software / Application Issue' },
+  { value: 'email_workspace', label: 'Email / Workspace Issue' },
+  { value: 'attendance_hrms', label: 'Attendance / HRMS Issue' },
+  { value: 'data_access', label: 'Data / Access Permission Issue' },
+  { value: 'hardware_request', label: 'Hardware Request' },
+  { value: 'server_issue', label: 'Server Issue' },
+  { value: 'database_issue', label: 'Database Issue' },
+  { value: 'security_issue', label: 'Security Issue' },
+  { value: 'other', label: 'Other' },
+];
+
+export const IT_SUPPORT_PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'critical', label: 'Critical' },
+];
+
+export const IT_SUPPORT_STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'assigned', label: 'Assigned' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'waiting_for_user', label: 'Waiting for User' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'reopened', label: 'Reopened' },
+];
+
+export const IT_SUPPORT_ESCALATION_TYPE_OPTIONS = [
+  { value: 'software_application', label: 'Software / Application Problem' },
+  { value: 'server_issue', label: 'Server Issue' },
+  { value: 'database_issue', label: 'Database Issue' },
+  { value: 'network_infrastructure', label: 'Network / Infrastructure Major Issue' },
+  { value: 'security_issue', label: 'Security Issue' },
+  { value: 'major_problem', label: 'Other Major Problem' },
 ];
 
 export const PROJECT_TEAM_TREE_LEVELS = [
@@ -218,7 +305,7 @@ export const coreModules = [
     'employees',
     'Employee Master',
     Users,
-    'Employee database with profile photo, Team Leader and Reporting Officer capability mapping.',
+    'Employee database with profile photo, Team Leader, Reporting Officer and IT Support capability mapping.',
     HR_ROLES,
   ],
   [
@@ -253,8 +340,22 @@ export const coreModules = [
     'application_status',
     'Application Status',
     ClipboardList,
-    'Track live status of leave, WFH/Field, password, ticket and comp-off requests.',
+    'Track live status of leave, WFH/Field, password, grievance, IT support and comp-off requests.',
     APPLICATION_STATUS_ROLES,
+  ],
+  [
+    'grievances',
+    'Grievance',
+    MessageSquare,
+    'Submit employee grievances with anonymous option; HR/Admin can review and update status.',
+    GRIEVANCE_ROLES,
+  ],
+  [
+    'it_support',
+    'IT Support',
+    Laptop,
+    'Raise IT support tickets to tenant IT Department; IT Head assigns/reassigns and escalates major software/server issues to Super Admin.',
+    IT_SUPPORT_ROLES,
   ],
   [
     'leave_balances',
@@ -360,13 +461,6 @@ export const coreModules = [
     Laptop,
     'Inventory and allocation.',
     HR_ROLES,
-  ],
-  [
-    'tickets',
-    'Grievance / Tickets',
-    MessageSquare,
-    'Helpdesk and grievance.',
-    TEAM_ROLES,
   ],
   [
     'notifications',
@@ -562,6 +656,29 @@ export function isFinanceUser(user) {
   return hasAnyRole(roles, FINANCE_ROLES);
 }
 
+export function isItSupportHead(user) {
+  const employee = getEmployeeProfile(user);
+  return truthyValue(employee?.is_it_support_head) || truthyValue(user?.is_it_support_head);
+}
+
+export function isItSupportMember(user) {
+  const employee = getEmployeeProfile(user);
+
+  return (
+    isItSupportHead(user) ||
+    truthyValue(employee?.is_it_support_member) ||
+    truthyValue(user?.is_it_support_member)
+  );
+}
+
+export function canManageItSupport(user) {
+  return isItSupportHead(user);
+}
+
+export function canWorkOnItSupport(user) {
+  return isItSupportHead(user) || isItSupportMember(user);
+}
+
 export function canManageProjects(user) {
   const roles = effectiveRoleList(user);
   const employee = getEmployeeProfile(user);
@@ -645,12 +762,16 @@ export function getEmployeeCapabilities(user) {
     roles.includes('ro');
 
   const isHrAdmin = hasAnyRole(roles, HR_ROLES);
+  const itSupportHead = isItSupportHead(user);
+  const itSupportMember = isItSupportMember(user);
 
   return {
     isEmployee: isEmployeePortalUser(user),
     isTeamLeader,
     isReportingOfficer,
     isHrAdmin,
+    isItSupportHead: itSupportHead,
+    isItSupportMember: itSupportMember,
     canApproveTeamRequests: isHrAdmin || isTeamLeader || isReportingOfficer,
     canManageProjects: isTeamLeader || isReportingOfficer,
     canAssignProjectMembers: isTeamLeader || isReportingOfficer,
@@ -659,6 +780,8 @@ export function getEmployeeCapabilities(user) {
     canViewProjectTeamTree: true,
     canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
     canSubmitPerformanceReview: canSubmitPerformanceReview(user),
+    canManageItSupport: canManageItSupport(user),
+    canWorkOnItSupport: canWorkOnItSupport(user),
     displayRole: 'Employee',
   };
 }
@@ -686,6 +809,12 @@ export function getCapabilityDisplayText(user) {
 
   if (capabilities.isReportingOfficer) {
     labels.push('Reporting Officer');
+  }
+
+  if (capabilities.isItSupportHead) {
+    labels.push('IT Support Head');
+  } else if (capabilities.isItSupportMember) {
+    labels.push('IT Support Member');
   }
 
   if (capabilities.isHrAdmin) {
@@ -783,6 +912,9 @@ export const templates = {
 
     is_team_leader: 'false',
     is_reporting_officer: 'false',
+    is_it_support_head: 'false',
+    is_it_support_member: 'false',
+
     team_leader_id: '',
     team_leader_name: '',
     reporting_officer_id: '',
@@ -902,6 +1034,78 @@ export const templates = {
     hr_notified_at: '',
     hr_notified_status: '',
     hr_record_notification_sent: false,
+  },
+
+  grievances: {
+    ticket_no: '',
+    grievance_type: 'workplace_issue',
+    grievance_type_label: 'Workplace Issue',
+    priority: 'medium',
+    priority_label: 'Medium',
+    subject: '',
+    description: '',
+    is_anonymous: false,
+    status: 'pending',
+    status_label: 'Pending',
+    hr_remarks: '',
+    resolution_note: '',
+    employee_id: '',
+    employee_user_id: '',
+    employee_name: '',
+    employee_code: '',
+    employee_snapshot: {},
+    history: [],
+  },
+
+  it_support: {
+    ticket_no: '',
+    issue_category: 'login_password',
+    issue_category_label: 'Login / Password Issue',
+    priority: 'medium',
+    priority_label: 'Medium',
+    subject: '',
+    description: '',
+    status: 'open',
+    status_label: 'Open',
+    created_by_employee_id: '',
+    created_by_user_id: '',
+    raised_by_employee_id: '',
+    raised_by_user_id: '',
+    raised_by_name: '',
+    raised_by_code: '',
+    employee_snapshot: {},
+    assigned_to_employee_id: '',
+    assigned_to_user_id: '',
+    assigned_to_name: '',
+    assigned_to_code: '',
+    assigned_to_designation: '',
+    assignment_label: 'Not assigned yet',
+    assignment_status: 'empty_slot',
+    assigned_by_employee_id: '',
+    assigned_by_user_id: '',
+    assigned_by_name: '',
+    assigned_at: '',
+    last_status_note: '',
+    resolution_note: '',
+    resolved_at: '',
+    closed_at: '',
+    review: null,
+    review_rating: 0,
+    review_comment: '',
+    reviewed_at: '',
+
+    is_escalated: false,
+    escalated_to: '',
+    escalated_by_employee_id: '',
+    escalated_by_user_id: '',
+    escalated_by_name: '',
+    escalated_at: '',
+    escalation_type: '',
+    escalation_type_label: '',
+    escalation_reason: '',
+    superadmin_status_note: '',
+
+    history: [],
   },
 
   states: {
@@ -1167,14 +1371,6 @@ export const templates = {
     assigned_to: '',
   },
 
-  tickets: {
-    title: '',
-    category: 'HR',
-    description: '',
-    priority: 'medium',
-    status: 'open',
-  },
-
   notifications: {
     user_id: '',
     title: '',
@@ -1249,6 +1445,8 @@ export const emptyUser = {
 
   is_team_leader: 'false',
   is_reporting_officer: 'false',
+  is_it_support_head: 'false',
+  is_it_support_member: 'false',
 
   team_leader_id: '',
   team_leader_name: '',

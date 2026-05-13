@@ -1659,6 +1659,437 @@ export function updateMyEmployeeProfilePhoto(employeeId, photoValue, extra = {})
 }
 
 /* -------------------------------------------------------------------------- */
+/* Grievance APIs                                                             */
+/* -------------------------------------------------------------------------- */
+
+export function normalizeGrievance(grievance = {}) {
+  if (!grievance || typeof grievance !== 'object') {
+    return grievance;
+  }
+
+  const normalized = withProfilePhotoAliases({ ...grievance });
+  const snapshot = normalized.employee_snapshot || {};
+
+  normalized.ticket_no =
+    normalized.ticket_no ||
+    normalized.grievance_no ||
+    normalized.reference_no ||
+    '';
+
+  normalized.grievance_type =
+    normalized.grievance_type ||
+    normalized.type ||
+    '';
+
+  normalized.grievance_type_label =
+    normalized.grievance_type_label ||
+    normalized.type_label ||
+    String(normalized.grievance_type || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.priority = normalized.priority || 'medium';
+
+  normalized.priority_label =
+    normalized.priority_label ||
+    String(normalized.priority || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.status = normalized.status || 'pending';
+
+  normalized.status_label =
+    normalized.status_label ||
+    String(normalized.status || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.employee_name =
+    normalized.employee_name ||
+    snapshot.name ||
+    'Employee';
+
+  normalized.employee_code =
+    normalized.employee_code ||
+    snapshot.emp_code ||
+    snapshot.employee_code ||
+    '';
+
+  normalized.department =
+    normalized.department ||
+    snapshot.department ||
+    normalized.employee_department ||
+    '';
+
+  normalized.designation =
+    normalized.designation ||
+    snapshot.designation ||
+    normalized.employee_designation ||
+    '';
+
+  normalized.is_anonymous = Boolean(
+    normalized.is_anonymous ||
+      normalized.anonymous ||
+      String(normalized.employee_name || '').toLowerCase().includes('anonymous'),
+  );
+
+  normalized.display_employee_name = normalized.is_anonymous
+    ? 'Anonymous Employee'
+    : normalized.employee_name;
+
+  normalized.display_employee_code = normalized.is_anonymous
+    ? ''
+    : normalized.employee_code;
+
+  normalized.can_show_identity = !normalized.is_anonymous;
+
+  return normalized;
+}
+
+export function normalizeGrievanceList(grievances = []) {
+  if (!Array.isArray(grievances)) {
+    return [];
+  }
+
+  return grievances.map((grievance) => normalizeGrievance(grievance)).filter(Boolean);
+}
+
+export function getGrievanceOptions() {
+  return api('/grievances/options');
+}
+
+export function getGrievanceProfile() {
+  return api('/grievances/profile');
+}
+
+export function createGrievance(payload = {}) {
+  return api('/grievances', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    grievance: normalizeGrievance(data.grievance || {}),
+  }));
+}
+
+export function getMyGrievances(params = {}) {
+  return api(`/grievances/my${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    grievances: normalizeGrievanceList(data.grievances || data.items || []),
+  }));
+}
+
+export function getGrievances(params = {}) {
+  return api(`/grievances${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    grievances: normalizeGrievanceList(data.grievances || data.items || []),
+  }));
+}
+
+export function getGrievanceDetail(grievanceId) {
+  return api(`/grievances/${grievanceId}`).then((data = {}) => ({
+    ...data,
+    grievance: normalizeGrievance(data.grievance || {}),
+  }));
+}
+
+export function updateGrievanceStatus(grievanceId, payload = {}) {
+  return api(`/grievances/${grievanceId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    grievance: normalizeGrievance(data.grievance || {}),
+  }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* IT Support APIs                                                            */
+/* -------------------------------------------------------------------------- */
+
+export function normalizeItSupportTicket(ticket = {}) {
+  if (!ticket || typeof ticket !== 'object') {
+    return ticket;
+  }
+
+  const normalized = withProfilePhotoAliases({ ...ticket });
+  const snapshot = normalized.employee_snapshot || {};
+
+  normalized.ticket_no =
+    normalized.ticket_no ||
+    normalized.support_no ||
+    normalized.reference_no ||
+    '';
+
+  normalized.issue_category =
+    normalized.issue_category ||
+    normalized.category ||
+    '';
+
+  normalized.issue_category_label =
+    normalized.issue_category_label ||
+    normalized.category_label ||
+    String(normalized.issue_category || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.priority = normalized.priority || 'medium';
+
+  normalized.priority_label =
+    normalized.priority_label ||
+    String(normalized.priority || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.status = normalized.status || 'open';
+
+  normalized.status_label =
+    normalized.status_label ||
+    String(normalized.status || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.raised_by_name =
+    normalized.raised_by_name ||
+    snapshot.name ||
+    normalized.created_by_name ||
+    'Employee';
+
+  normalized.raised_by_code =
+    normalized.raised_by_code ||
+    snapshot.emp_code ||
+    snapshot.employee_code ||
+    '';
+
+  normalized.assigned_to_name = normalized.assigned_to_name || '';
+
+  normalized.assignment_label =
+    normalized.assignment_label ||
+    normalized.assigned_to_name ||
+    'Not assigned yet';
+
+  normalized.assignment_status =
+    normalized.assignment_status ||
+    (normalized.assigned_to_name ? 'assigned' : 'empty_slot');
+
+  normalized.review_rating = toNumber(
+    normalized.review_rating ?? normalized.review?.rating,
+    0,
+  );
+
+  normalized.review_comment =
+    normalized.review_comment ||
+    normalized.review?.comment ||
+    '';
+
+  normalized.is_escalated = Boolean(
+    normalized.is_escalated ||
+      normalized.escalated ||
+      normalized.escalated_to === 'super_admin',
+  );
+
+  normalized.escalated_to = normalized.escalated_to || '';
+
+  normalized.escalation_type = normalized.escalation_type || '';
+
+  normalized.escalation_type_label =
+    normalized.escalation_type_label ||
+    String(normalized.escalation_type || '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  normalized.escalation_reason = normalized.escalation_reason || '';
+
+  normalized.escalated_by_name = normalized.escalated_by_name || '';
+
+  normalized.escalated_at = normalized.escalated_at || '';
+
+  normalized.superadmin_status_note = normalized.superadmin_status_note || '';
+
+  normalized.escalation_label = normalized.is_escalated
+    ? 'Escalated to Super Admin'
+    : '';
+
+  normalized.can_review = ['resolved', 'closed'].includes(
+    String(normalized.status || '').toLowerCase(),
+  );
+
+  return normalized;
+}
+
+export function normalizeItSupportTicketList(tickets = []) {
+  if (!Array.isArray(tickets)) {
+    return [];
+  }
+
+  return tickets.map((ticket) => normalizeItSupportTicket(ticket)).filter(Boolean);
+}
+
+export function normalizeItSupportTeam(members = []) {
+  return normalizePeopleList(members || []).map((member = {}) => ({
+    ...member,
+    label:
+      member.label ||
+      `${member.employee_name || member.name || 'IT Member'} (${member.designation || member.department || 'IT Department'})`,
+    is_it_department: Boolean(member.is_it_department),
+    is_it_head: Boolean(member.is_it_head || member.is_it_support_head),
+    is_it_member: Boolean(member.is_it_member || member.is_it_support_member),
+  }));
+}
+
+export function normalizeItSupportOptions(data = {}) {
+  return {
+    ...data,
+    categories: data.categories || [],
+    priorities: data.priorities || [],
+    statuses: data.statuses || [],
+    escalation_types: data.escalation_types || [],
+    it_team: normalizeItSupportTeam(data.it_team || []),
+    it_heads: normalizeItSupportTeam(data.it_heads || []),
+
+    can_manage: Boolean(data.can_manage),
+    can_manage_normal: Boolean(data.can_manage_normal ?? data.can_manage),
+    can_view_escalated: Boolean(data.can_view_escalated),
+    can_escalate: Boolean(data.can_escalate),
+    is_super_admin: Boolean(data.is_super_admin),
+    is_it_head: Boolean(data.is_it_head),
+    is_it_member: Boolean(data.is_it_member),
+
+    team_slots: data.team_slots || {
+      expected_total: 4,
+      current_total: 0,
+      heads: 0,
+      members: 0,
+      empty_slots: 4,
+    },
+  };
+}
+
+export function getItSupportOptions() {
+  return api('/it-support/options').then((data = {}) =>
+    normalizeItSupportOptions(data),
+  );
+}
+
+export function getItSupportProfile() {
+  return api('/it-support/profile').then((data = {}) => ({
+    ...data,
+    can_manage: Boolean(data.can_manage),
+    can_manage_normal: Boolean(data.can_manage_normal ?? data.can_manage),
+    can_view_escalated: Boolean(data.can_view_escalated),
+    can_escalate: Boolean(data.can_escalate),
+    is_super_admin: Boolean(data.is_super_admin),
+    is_it_head: Boolean(data.is_it_head),
+    is_it_member: Boolean(data.is_it_member),
+  }));
+}
+
+export function createItSupportTicket(payload = {}) {
+  return api('/it-support', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function getMyItSupportTickets(params = {}) {
+  return api(`/it-support/my${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    tickets: normalizeItSupportTicketList(data.tickets || data.items || []),
+  }));
+}
+
+export function getItSupportTickets(params = {}) {
+  return api(`/it-support${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    tickets: normalizeItSupportTicketList(data.tickets || data.items || []),
+    it_team: normalizeItSupportTeam(data.it_team || []),
+    it_heads: normalizeItSupportTeam(data.it_heads || []),
+
+    can_manage: Boolean(data.can_manage),
+    can_manage_normal: Boolean(data.can_manage_normal ?? data.can_manage),
+    can_view_escalated: Boolean(data.can_view_escalated),
+    can_escalate: Boolean(data.can_escalate),
+    is_super_admin: Boolean(data.is_super_admin),
+    is_it_head: Boolean(data.is_it_head),
+    is_it_member: Boolean(data.is_it_member),
+
+    team_slots: data.team_slots || {
+      expected_total: 4,
+      current_total: 0,
+      heads: 0,
+      members: 0,
+      empty_slots: 4,
+    },
+  }));
+}
+
+export function getItSupportTicketDetail(ticketId) {
+  return api(`/it-support/${ticketId}`).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function assignItSupportTicket(ticketId, payload = {}) {
+  return api(`/it-support/${ticketId}/assign`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function assignItSupportTicketToSelf(ticketId, note = '') {
+  return assignItSupportTicket(ticketId, {
+    assigned_to_employee_id: 'self',
+    note,
+  });
+}
+
+export function updateItSupportTicketStatus(ticketId, payload = {}) {
+  return api(`/it-support/${ticketId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function escalateItSupportTicket(ticketId, payload = {}) {
+  return api(`/it-support/${ticketId}/escalate`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function reviewItSupportTicket(ticketId, payload = {}) {
+  return api(`/it-support/${ticketId}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+
+export function reopenItSupportTicket(ticketId, payload = {}) {
+  return api(`/it-support/${ticketId}/reopen`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    ticket: normalizeItSupportTicket(data.ticket || {}),
+  }));
+}
+/* -------------------------------------------------------------------------- */
 /* Password Request APIs                                                      */
 /* -------------------------------------------------------------------------- */
 
