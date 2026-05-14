@@ -243,6 +243,65 @@ def current_employee(db):
     return None
 
 
+def employee_identifier_values(employee):
+    """
+    Return all possible identifier values that may be stored in mapping fields.
+
+    Older records may store team_leader_id/reporting_officer_id as:
+    - employee Mongo _id string
+    - employee Mongo ObjectId
+    - user_id
+    - employee_id / employee_code / emp_code / code
+    - email
+    """
+
+    employee = employee or {}
+    values = []
+
+    raw_values = [
+        employee.get("_id"),
+        str(employee.get("_id")) if employee.get("_id") else "",
+        employee.get("user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+    ]
+
+    for value in raw_values:
+        if value is None:
+            continue
+
+        text_value = normalize_text(value)
+
+        if not text_value:
+            continue
+
+        if text_value not in values:
+            values.append(text_value)
+
+        try:
+            object_value = ObjectId(text_value)
+            if object_value not in values:
+                values.append(object_value)
+        except Exception:
+            pass
+
+    return values
+
+
+def employee_mapping_query(field_name, employee, tenant_id):
+    identifier_values = employee_identifier_values(employee)
+
+    return {
+        "tenant_id": tenant_id,
+        field_name: {"$in": identifier_values},
+        "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
+    }
+
+
 def employee_state(employee):
     employee = employee or {}
 
@@ -2842,12 +2901,7 @@ def employee_dashboard():
     if is_team_leader_role:
         team_members = list(
             db.employees
-            .find({
-                "tenant_id": tenant_id,
-                "team_leader_id": emp_id,
-                "status": {"$ne": "Inactive"},
-                "is_deleted": {"$ne": True},
-            })
+            .find(employee_mapping_query("team_leader_id", emp, tenant_id))
             .sort("name", 1)
         )
 
@@ -2856,12 +2910,7 @@ def employee_dashboard():
     if is_reporting_officer_role:
         reporting_members = list(
             db.employees
-            .find({
-                "tenant_id": tenant_id,
-                "reporting_officer_id": emp_id,
-                "status": {"$ne": "Inactive"},
-                "is_deleted": {"$ne": True},
-            })
+            .find(employee_mapping_query("reporting_officer_id", emp, tenant_id))
             .sort("name", 1)
         )
 

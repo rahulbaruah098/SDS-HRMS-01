@@ -2625,6 +2625,60 @@ def performance_period_payload(base_value=None):
     }
 
 
+def employee_identifier_values(employee):
+    """
+    Return all possible identifier values for an employee.
+
+    This keeps performance review mapping working even if older records store
+    team_leader_id/reporting_officer_id as ObjectId, string _id, user_id,
+    employee_id, employee_code, emp_code, code, or email.
+    """
+
+    employee = employee or {}
+    values = []
+
+    raw_values = [
+        employee.get("_id"),
+        str(employee.get("_id")) if employee.get("_id") else "",
+        employee.get("user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+    ]
+
+    for value in raw_values:
+        if value is None:
+            continue
+
+        text_value = normalize_text(value)
+
+        if not text_value:
+            continue
+
+        if text_value not in values:
+            values.append(text_value)
+
+        object_value = safe_object_id(text_value)
+
+        if object_value and object_value not in values:
+            values.append(object_value)
+
+    return values
+
+
+def employee_field_matches_employee(employee, field_name, target_employee):
+    field_value = employee.get(field_name)
+    possible_values = employee_identifier_values(target_employee)
+
+    if field_value in possible_values:
+        return True
+
+    return normalize_text(field_value) in [
+        normalize_text(value) for value in possible_values
+    ]
+
 def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
     if not reviewer_emp:
         return None, "", "Reviewer employee profile was not found"
@@ -2638,7 +2692,7 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
 
     if (
         ("team_leader" in reviewer_roles or employee_is_team_leader(reviewer_emp))
-        and employee.get("team_leader_id") == reviewer_emp_id
+        and employee_field_matches_employee(employee, "team_leader_id", reviewer_emp)
     ):
         return {
             "reviewer_role": "team_leader",
@@ -2656,7 +2710,7 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
 
     if (
         ("reporting_officer" in reviewer_roles or "ro" in reviewer_roles or employee_is_reporting_officer(reviewer_emp))
-        and employee.get("reporting_officer_id") == reviewer_emp_id
+        and employee_field_matches_employee(employee, "reporting_officer_id", reviewer_emp)
     ):
         if reviewed_is_team_leader:
             review_target_type = "team_leader"
