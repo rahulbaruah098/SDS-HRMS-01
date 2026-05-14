@@ -495,34 +495,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       : modules.find((module) => module[0] === page)?.[1] ||
         'Access Restricted';
 
-  const attendanceCount = modules.filter(([key]) =>
-    [
-      'attendance',
-      'attendance_logs',
-      'attendance_mode_requests',
-      'holiday_calendar',
-      'compoff_credits',
-    ].includes(key),
-  ).length;
-
-  const leaveCount = modules.filter(([key]) =>
-    [
-      'team_approvals',
-      'leave_requests',
-      'leave_balances',
-      'leave_types',
-      'application_status',
-    ].includes(key),
-  ).length;
-
-  const projectCount = modules.filter(([key]) => key === 'projects').length;
-
-  const reportsCount = modules.filter(([key]) => key === 'reports').length;
-
-  const performanceCount = modules.filter(([key]) =>
-    ['performance_reviews', 'trainings'].includes(key),
-  ).length;
-
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
 
@@ -911,39 +883,6 @@ setUser(syncedUser);
             </div>
           ))}
         </nav>
-
-        <div className="sidebar-summary">
-          <div>
-            <Clock size={16} />
-            <span>{attendanceCount} Attendance Modules</span>
-          </div>
-
-          <div>
-            <CalendarDays size={16} />
-            <span>{leaveCount} Leave Modules</span>
-          </div>
-
-          {projectCount > 0 && (
-            <div>
-              <Briefcase size={16} />
-              <span>{projectCount} Projects Module</span>
-            </div>
-          )}
-
-          {reportsCount > 0 && (
-            <div>
-              <BarChart3 size={16} />
-              <span>{reportsCount} Reports Module</span>
-            </div>
-          )}
-
-          {performanceCount > 0 && (
-            <div>
-              <BarChart3 size={16} />
-              <span>{performanceCount} Performance Modules</span>
-            </div>
-          )}
-        </div>
 
         <button
           type="button"
