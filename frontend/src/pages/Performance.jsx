@@ -245,6 +245,14 @@ function getGraphRows(chart) {
   return [...unique.values()];
 }
 
+function hasGraphData(chart) {
+  return getGraphRows(chart).length > 0;
+}
+
+function pickGraphSource(...sources) {
+  return sources.find((source) => hasGraphData(source)) || [];
+}
+
 function getGraphRating(item = {}) {
   return Number(
     item.average_rating ??
@@ -460,39 +468,40 @@ export default function Performance({ setPage }) {
 
   const selectedGraph = useMemo(() => {
     if (graphMode === 'monthly') {
-      return (
-        dashboard.monthly_performance_chart ||
-        dashboard.performance_3d_graph ||
-        dashboard.my_performance_chart ||
-        dashboard.team_member_weekly_graph ||
-        dashboard.reporting_team_leader_weekly_graph ||
-        reviewHistory ||
-        {}
+      return pickGraphSource(
+        dashboard.monthly_performance_chart,
+        dashboard.reporting_performance_chart?.monthly_3d_graph,
+        dashboard.team_performance_chart?.monthly_3d_graph,
+        dashboard.my_performance_chart?.monthly_3d_graph,
+        dashboard.performance_3d_graph,
+        dashboard.reporting_team_leader_weekly_graph,
+        dashboard.team_member_weekly_graph,
+        reviewHistory,
       );
     }
 
     if (graphMode === 'yearly') {
-      return (
-        dashboard.yearly_performance_chart ||
-        dashboard.performance_3d_graph ||
-        dashboard.my_performance_chart ||
-        dashboard.team_member_weekly_graph ||
-        dashboard.reporting_team_leader_weekly_graph ||
-        reviewHistory ||
-        {}
+      return pickGraphSource(
+        dashboard.yearly_performance_chart,
+        dashboard.reporting_performance_chart?.yearly_3d_graph,
+        dashboard.team_performance_chart?.yearly_3d_graph,
+        dashboard.my_performance_chart?.yearly_3d_graph,
+        dashboard.performance_3d_graph,
+        dashboard.reporting_team_leader_weekly_graph,
+        dashboard.team_member_weekly_graph,
+        reviewHistory,
       );
     }
 
-    return (
-      dashboard.weekly_performance_chart ||
-      dashboard.performance_3d_graph ||
-      dashboard.team_member_weekly_graph ||
-      dashboard.reporting_team_leader_weekly_graph ||
-      dashboard.team_performance_chart ||
-      dashboard.reporting_performance_chart ||
-      dashboard.my_performance_chart ||
-      reviewHistory ||
-      {}
+    return pickGraphSource(
+      dashboard.performance_3d_graph,
+      dashboard.reporting_team_leader_weekly_graph,
+      dashboard.team_member_weekly_graph,
+      dashboard.reporting_performance_chart,
+      dashboard.team_performance_chart,
+      dashboard.my_performance_chart,
+      dashboard.weekly_performance_chart,
+      reviewHistory,
     );
   }, [dashboard, graphMode, reviewHistory]);
 
@@ -953,13 +962,12 @@ export default function Performance({ setPage }) {
         <PerformanceGraph
           title="Team Member Weekly Graph"
           subtitle="Employee-wise weekly performance under Team Leader."
-          chart={
-            dashboard.team_member_weekly_graph ||
-            dashboard.team_performance_chart ||
-            dashboard.weekly_performance_chart ||
-            reviewHistory ||
-            {}
-          }
+          chart={pickGraphSource(
+            dashboard.team_member_weekly_graph,
+            dashboard.team_performance_chart,
+            dashboard.weekly_performance_chart,
+            reviewHistory,
+          )}
         />
       ) : null}
 
@@ -967,13 +975,12 @@ export default function Performance({ setPage }) {
         <PerformanceGraph
           title="Reporting Officer Team Leader Graph"
           subtitle="Team Leader and reporting member performance visible employee-wise."
-          chart={
-            dashboard.reporting_team_leader_weekly_graph ||
-            dashboard.reporting_performance_chart ||
-            dashboard.weekly_performance_chart ||
-            reviewHistory ||
-            {}
-          }
+          chart={pickGraphSource(
+            dashboard.reporting_team_leader_weekly_graph,
+            dashboard.reporting_performance_chart,
+            dashboard.weekly_performance_chart,
+            reviewHistory,
+          )}
         />
       ) : null}
 
