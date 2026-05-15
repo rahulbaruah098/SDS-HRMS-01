@@ -128,10 +128,53 @@ function DepartmentPerformanceBars({ rows = [] }) {
   );
 }
 
+
+function notificationBody(notification = {}) {
+  return notification.body || notification.message || 'No details available.';
+}
+
+function notificationTargetLabel(notification = {}) {
+  const scope = String(
+    notification.target_scope ||
+      notification.target ||
+      notification.audience ||
+      '',
+  ).toLowerCase();
+
+  if (scope === 'all_tenants' || scope === 'global') {
+    return 'All Tenants';
+  }
+
+  if (scope === 'selected_tenant') {
+    return notification.target_tenant_name || notification.target_tenant_id || 'Selected Tenant';
+  }
+
+  if (scope === 'selected_users') {
+    return 'Selected Users';
+  }
+
+  return notification.tenant_name || notification.tenant_id || 'This Tenant';
+}
+
+function notificationStatusLabel(notification = {}) {
+  if (notification.read === true || notification.status === 'read') {
+    return 'Read';
+  }
+
+  return 'Unread';
+}
+
+function notificationPriorityLabel(value = '') {
+  return statusLabel(value || 'normal');
+}
+
 export default function SuperAdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationLoading, setNotificationLoading] = useState(false);
 
   async function loadDashboard() {
     try {
@@ -148,8 +191,26 @@ export default function SuperAdminDashboard({ setPage }) {
     }
   }
 
+  async function loadNotifications() {
+    try {
+      setNotificationLoading(true);
+
+      const data = await api('/notifications?limit=20');
+
+      setNotifications(data.items || []);
+      setNotificationUnreadCount(Number(data.unread_count || 0));
+    } catch (error) {
+      console.error(error);
+      setNotifications([]);
+      setNotificationUnreadCount(0);
+    } finally {
+      setNotificationLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadDashboard();
+    loadNotifications();
   }, []);
 
   function goTo(page) {
@@ -181,6 +242,16 @@ export default function SuperAdminDashboard({ setPage }) {
   const teamLeaderPerformance = projectAnalytics?.team_leader_performance || [];
   const activeProjects = projectAnalytics?.active_projects || [];
   const completedProjects = projectAnalytics?.completed_projects || [];
+  const recentNotifications = notifications.slice(0, 8);
+  const notificationStats = {
+    total: notifications.length,
+    unread: notificationUnreadCount,
+    popupEnabled: notifications.filter((item) => item.show_popup !== false).length,
+    global: notifications.filter((item) => {
+      const scope = String(item.target_scope || item.target || item.audience || '').toLowerCase();
+      return scope === 'all_tenants' || scope === 'global';
+    }).length,
+  };
 
   const dashboardModules = allModules.filter(
     ([key]) => !['profile'].includes(key),
@@ -282,6 +353,18 @@ export default function SuperAdminDashboard({ setPage }) {
     team_leader: project.team_leader_name || '—',
     completed_at: project.completed_at ? formatDateTime(project.completed_at) : '—',
     final_progress: `${percentValue(project.latest_progress)}%`,
+  }));
+
+  const notificationRows = recentNotifications.map((notification) => ({
+    title: notification.title || 'Notification',
+    message: notificationBody(notification),
+    target: notificationTargetLabel(notification),
+    priority: notificationPriorityLabel(notification.priority),
+    type: statusLabel(notification.notification_type || 'general'),
+    status: notificationStatusLabel(notification),
+    popup: notification.show_popup === false ? 'No' : 'Yes',
+    created_by: notification.created_by_name || notification.sender_name || 'System',
+    created_at: formatDateTime(notification.created_at),
   }));
 
   return (
@@ -430,6 +513,54 @@ export default function SuperAdminDashboard({ setPage }) {
           background: linear-gradient(90deg, #4f46e5, #0284c7, #059669);
         }
 
+        .sa-notification-list {
+          display: grid;
+          gap: 12px;
+        }
+
+        .sa-notification-card {
+          border: 1px solid #e2e8f0;
+          border-radius: 18px;
+          padding: 14px;
+          background: #ffffff;
+          box-shadow: 0 10px 26px rgba(15, 23, 42, .06);
+        }
+
+        .sa-notification-card.unread {
+          border-color: #bfdbfe;
+          background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+        }
+
+        .sa-notification-card h4 {
+          margin: 0 0 6px;
+          color: #0f172a;
+          font-size: 15px;
+        }
+
+        .sa-notification-card p {
+          margin: 0;
+          color: #475569;
+          line-height: 1.55;
+          font-size: 13px;
+        }
+
+        .sa-notification-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        .sa-notification-pill {
+          border-radius: 999px;
+          padding: 6px 9px;
+          background: #eef4ff;
+          color: #1d4ed8;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: capitalize;
+        }
+
         @media (max-width: 980px) {
           .sa-project-stats {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -515,6 +646,14 @@ export default function SuperAdminDashboard({ setPage }) {
           <button
             type="button"
             className="secondary"
+            onClick={() => goTo('notifications')}
+          >
+            Notifications
+          </button>
+
+          <button
+            type="button"
+            className="secondary"
             onClick={loadDashboard}
             disabled={loading}
           >
@@ -530,6 +669,10 @@ export default function SuperAdminDashboard({ setPage }) {
           <Stat key={key} label={key} value={value} />
         ))}
 
+        <Stat label="Notifications" value={notificationStats.total} />
+        <Stat label="Unread Notifications" value={notificationStats.unread} />
+        <Stat label="Global Notifications" value={notificationStats.global} />
+
         {loading && (
           <div className="panel">
             <p>Loading dashboard...</p>
@@ -541,6 +684,104 @@ export default function SuperAdminDashboard({ setPage }) {
             <p>No dashboard stats available.</p>
           </div>
         )}
+      </section>
+
+      <section className="two-col">
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Platform Notifications</h3>
+              <p>
+                Recent global and tenant-targeted notifications visible to Super Admin.
+                Use the Notification Center to broadcast to all tenants or a selected tenant.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('notifications')}
+            >
+              Open Notification Center
+            </button>
+          </div>
+
+          {notificationLoading ? (
+            <div className="empty">Loading notifications...</div>
+          ) : recentNotifications.length ? (
+            <div className="sa-notification-list">
+              {recentNotifications.slice(0, 4).map((notification) => (
+                <div
+                  key={notification._id || notification.id || `${notification.title}-${notification.created_at}`}
+                  className={`sa-notification-card ${notification.read ? 'read' : 'unread'}`}
+                >
+                  <h4>{notification.title || 'Notification'}</h4>
+                  <p>{notificationBody(notification)}</p>
+
+                  <div className="sa-notification-meta">
+                    <span className="sa-notification-pill">
+                      {notificationStatusLabel(notification)}
+                    </span>
+                    <span className="sa-notification-pill">
+                      {notificationTargetLabel(notification)}
+                    </span>
+                    <span className="sa-notification-pill">
+                      {notificationPriorityLabel(notification.priority)}
+                    </span>
+                    <span className="sa-notification-pill">
+                      {formatDateTime(notification.created_at)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">No recent notifications found.</div>
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Notification Summary</h3>
+              <p>
+                Super Admin can send platform-wide notifications or target a
+                specific tenant from the Notification Center.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={loadNotifications}
+              disabled={notificationLoading}
+            >
+              {notificationLoading ? 'Refreshing...' : 'Refresh Notifications'}
+            </button>
+          </div>
+
+          <div className="sa-project-stats">
+            <div className="sa-project-stat">
+              <span>Total</span>
+              <strong>{notificationStats.total}</strong>
+            </div>
+
+            <div className="sa-project-stat">
+              <span>Unread</span>
+              <strong>{notificationStats.unread}</strong>
+            </div>
+
+            <div className="sa-project-stat">
+              <span>Popup Enabled</span>
+              <strong>{notificationStats.popupEnabled}</strong>
+            </div>
+
+            <div className="sa-project-stat">
+              <span>Global</span>
+              <strong>{notificationStats.global}</strong>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="sa-project-hero">
@@ -768,6 +1009,25 @@ export default function SuperAdminDashboard({ setPage }) {
         </div>
       </section>
 
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>Notification Records</h3>
+            <p>Latest notification records with target scope, priority, status and popup setting.</p>
+          </div>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => goTo('notifications')}
+          >
+            Manage Notifications
+          </button>
+        </div>
+
+        <Table rows={notificationRows} maxColumns={9} />
+      </section>
+
       <section className="two-col">
         <div className="panel">
           <div className="toolbar">
@@ -907,6 +1167,14 @@ export default function SuperAdminDashboard({ setPage }) {
               onClick={() => goTo('password_requests')}
             >
               Review Password Requests
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('notifications')}
+            >
+              Send Notifications
             </button>
           </div>
         </div>

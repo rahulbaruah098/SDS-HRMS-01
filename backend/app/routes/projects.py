@@ -53,6 +53,9 @@ def safe_object_id(value):
 def normalize_text(value):
     return str(value or "").strip()
 
+def normalize_email(value):
+    return normalize_text(value).lower()
+
 
 def normalize_role(value):
     return (
@@ -132,22 +135,63 @@ def truthy(value):
 
 def get_current_employee(db):
     user_id = current_user_id()
+    current_user = getattr(g, "current_user", {}) or {}
 
     if not user_id:
         return None
 
+    user_email = normalize_email(
+        current_user.get("email")
+        or current_user.get("username")
+        or current_user.get("official_email")
+    )
+
+    user_employee_id = normalize_text(
+        current_user.get("employee_id")
+        or current_user.get("employee_ref_id")
+        or current_user.get("emp_code")
+    )
+
+    identifier_or = [
+        {"user_id": user_id},
+        {"employee_ref_id": user_id},
+    ]
+
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        identifier_or.append({"_id": user_obj_id})
+
+    if user_employee_id:
+        identifier_or.extend([
+            {"employee_id": user_employee_id},
+            {"emp_code": user_employee_id},
+            {"employee_code": user_employee_id},
+        ])
+
+        user_employee_obj_id = safe_object_id(user_employee_id)
+
+        if user_employee_obj_id:
+            identifier_or.append({"_id": user_employee_obj_id})
+
+    if user_email:
+        identifier_or.extend([
+            {"email": user_email},
+            {"official_email": user_email},
+        ])
+
     employee = db.employees.find_one({
         "tenant_id": current_tenant_id(),
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
     if employee:
         return employee
 
     return db.employees.find_one({
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
 
@@ -180,6 +224,30 @@ def employee_code(employee):
         or employee.get("code")
         or ""
     )
+
+
+def employee_identifier_values(employee):
+    employee = employee or {}
+    values = []
+
+    for value in [
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("user_id"),
+        employee.get("email"),
+        employee.get("official_email"),
+    ]:
+        value = normalize_text(value)
+
+        if value and value not in values:
+            values.append(value)
+
+    return values
 
 
 def employee_avatar(employee):
@@ -219,22 +287,34 @@ def employee_roles(employee):
 
 
 def employee_is_team_leader(employee):
+    roles = employee_roles(employee)
+
     return bool(
         employee
         and (
             truthy(employee.get("is_team_leader"))
-            or "team_leader" in employee_roles(employee)
+            or truthy(employee.get("team_leader_capability"))
+            or truthy(employee.get("tl_capability"))
+            or "team_leader" in roles
+            or "team_leader_capability" in roles
+            or "tl" in roles
         )
     )
 
 
 def employee_is_reporting_officer(employee):
+    roles = employee_roles(employee)
+
     return bool(
         employee
         and (
             truthy(employee.get("is_reporting_officer"))
-            or "reporting_officer" in employee_roles(employee)
-            or "ro" in employee_roles(employee)
+            or truthy(employee.get("reporting_officer_capability"))
+            or truthy(employee.get("ro_capability"))
+            or "reporting_officer" in roles
+            or "reporting_officer_capability" in roles
+            or "ro" in roles
+            or "manager" in roles
         )
     )
 
@@ -302,7 +382,13 @@ def can_view_project(db, project):
     if not employee:
         return False
 
-    return str(employee["_id"]) in project_member_ids(project)
+    employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
+    return bool(project_member_ids(project).intersection(set(identifier_values)))
 
 
 def can_update_project_status_or_progress(db, project):
@@ -312,10 +398,16 @@ def can_update_project_status_or_progress(db, project):
     """
     employee = get_current_employee(db)
 
-    if employee and str(employee["_id"]) in project_member_ids(project):
-        return True
+    if not employee:
+        return False
 
-    return False
+    employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
+    return bool(project_member_ids(project).intersection(set(identifier_values)))
 
 
 def project_scope_query(db):
@@ -336,17 +428,21 @@ def project_scope_query(db):
         return q
 
     employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
 
     q["$or"] = [
-        {"created_by_employee_id": employee_id},
-        {"team_leader_id": employee_id},
-        {"reporting_officer_id": employee_id},
-        {"assigned_to_id": employee_id},
-        {"assigned_employee_ids": employee_id},
-        {"assigned_members.employee_id": employee_id},
-        {"collaborator_ids": employee_id},
-        {"collaborators.employee_id": employee_id},
-        {"latest_progress_by": employee_id},
+        {"created_by_employee_id": {"$in": identifier_values}},
+        {"team_leader_id": {"$in": identifier_values}},
+        {"reporting_officer_id": {"$in": identifier_values}},
+        {"assigned_to_id": {"$in": identifier_values}},
+        {"assigned_employee_ids": {"$in": identifier_values}},
+        {"assigned_members.employee_id": {"$in": identifier_values}},
+        {"collaborator_ids": {"$in": identifier_values}},
+        {"collaborators.employee_id": {"$in": identifier_values}},
+        {"latest_progress_by": {"$in": identifier_values}},
     ]
 
     return q
@@ -383,23 +479,41 @@ def get_project_or_404(db, project_id):
 # -----------------------------------------------------------------------------
 
 def resolve_employee(db, employee_id, tenant_id=None):
-    employee_obj_id = safe_object_id(employee_id)
+    raw_id = normalize_text(employee_id)
 
-    if not employee_obj_id:
+    if not raw_id:
         return None
 
-    q = {
-        "_id": employee_obj_id,
+    base = {
         "is_deleted": {"$ne": True},
         "status": {"$ne": "Inactive"},
     }
 
     if tenant_id:
-        q["tenant_id"] = tenant_id
+        base["tenant_id"] = tenant_id
     else:
-        q["tenant_id"] = current_tenant_id()
+        base["tenant_id"] = current_tenant_id()
 
-    return db.employees.find_one(q)
+    identifier_or = [
+        {"user_id": raw_id},
+        {"employee_id": raw_id},
+        {"employee_ref_id": raw_id},
+        {"employee_code": raw_id},
+        {"emp_code": raw_id},
+        {"code": raw_id},
+        {"email": normalize_email(raw_id)},
+        {"official_email": normalize_email(raw_id)},
+    ]
+
+    employee_obj_id = safe_object_id(raw_id)
+
+    if employee_obj_id:
+        identifier_or.insert(0, {"_id": employee_obj_id})
+
+    return db.employees.find_one({
+        **base,
+        "$or": identifier_or,
+    })
 
 
 def resolve_employee_by_user_id(db, user_id, tenant_id=None):
@@ -1151,14 +1265,19 @@ def project_assignable_employee_query(current_emp):
         return {**base, "_id": {"$exists": False}}
 
     current_emp_id = str(current_emp["_id"])
+    identifier_values = employee_identifier_values(current_emp)
+
+    if current_emp_id not in identifier_values:
+        identifier_values.append(current_emp_id)
+
     scope = [{"_id": current_emp["_id"]}]
 
     if employee_is_team_leader(current_emp):
-        scope.append({"team_leader_id": current_emp_id})
+        scope.append({"team_leader_id": {"$in": identifier_values}})
 
     if employee_is_reporting_officer(current_emp):
         scope.extend([
-            {"reporting_officer_id": current_emp_id},
+            {"reporting_officer_id": {"$in": identifier_values}},
             {"_id": current_emp["_id"]},
         ])
 
@@ -1173,15 +1292,30 @@ def capability_query_or(capability):
         return [
             {"is_team_leader": True},
             {"is_team_leader": "true"},
+            {"is_team_leader": "1"},
+            {"team_leader_capability": True},
+            {"team_leader_capability": "true"},
+            {"tl_capability": True},
+            {"tl_capability": "true"},
             {"roles": "team_leader"},
-            {"roles": {"$in": ["team_leader"]}},
+            {"roles": "team_leader_capability"},
+            {"roles": "tl"},
+            {"roles": {"$in": ["team_leader", "team_leader_capability", "tl"]}},
         ]
 
     return [
         {"is_reporting_officer": True},
         {"is_reporting_officer": "true"},
+        {"is_reporting_officer": "1"},
+        {"reporting_officer_capability": True},
+        {"reporting_officer_capability": "true"},
+        {"ro_capability": True},
+        {"ro_capability": "true"},
         {"roles": "reporting_officer"},
-        {"roles": {"$in": ["reporting_officer", "ro"]}},
+        {"roles": "reporting_officer_capability"},
+        {"roles": "ro"},
+        {"roles": "manager"},
+        {"roles": {"$in": ["reporting_officer", "reporting_officer_capability", "ro", "manager"]}},
     ]
 
 
@@ -1201,6 +1335,10 @@ def project_team_leader_query(current_emp):
         return {**base, "_id": {"$exists": False}}
 
     current_emp_id = str(current_emp["_id"])
+    identifier_values = employee_identifier_values(current_emp)
+
+    if current_emp_id not in identifier_values:
+        identifier_values.append(current_emp_id)
 
     if employee_is_reporting_officer(current_emp):
         return {
@@ -1208,7 +1346,7 @@ def project_team_leader_query(current_emp):
             "$and": [
                 {"$or": capability_or},
                 {"$or": [
-                    {"reporting_officer_id": current_emp_id},
+                    {"reporting_officer_id": {"$in": identifier_values}},
                     {"_id": current_emp["_id"]},
                 ]},
             ],
@@ -1251,14 +1389,14 @@ def project_reporting_officer_query(current_emp):
         }
 
     mapped_ro_id = normalize_text(current_emp.get("reporting_officer_id"))
-    mapped_ro_obj_id = safe_object_id(mapped_ro_id)
+    mapped_ro = resolve_employee(db=get_db(), employee_id=mapped_ro_id, tenant_id=tenant_id)
 
-    if mapped_ro_obj_id:
+    if mapped_ro:
         return {
             **base,
             "$and": [
                 {"$or": capability_or},
-                {"_id": mapped_ro_obj_id},
+                {"_id": mapped_ro["_id"]},
             ],
         }
 
@@ -1903,12 +2041,16 @@ def my_project_progress():
 
     tenant_id = employee.get("tenant_id") or current_tenant_id()
     employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
 
     rows = list(
         db.project_progress
         .find({
             "tenant_id": tenant_id,
-            "employee_id": employee_id,
+            "employee_id": {"$in": identifier_values},
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)

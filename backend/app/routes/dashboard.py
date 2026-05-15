@@ -49,15 +49,33 @@ PRESENT_ATTENDANCE_STATUSES = [
 ]
 
 
+def normalize_role_value(value):
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
 def normalize_roles(value):
     if not value:
         return []
 
     if isinstance(value, list):
-        return [str(role).strip() for role in value if str(role).strip()]
+        return [
+            normalize_role_value(role)
+            for role in value
+            if normalize_role_value(role)
+        ]
 
     if isinstance(value, str):
-        return [role.strip() for role in value.split(",") if role.strip()]
+        return [
+            normalize_role_value(role)
+            for role in value.split(",")
+            if normalize_role_value(role)
+        ]
 
     return []
 
@@ -182,21 +200,30 @@ def is_admin_dashboard_role_set(roles):
 
 def is_team_leader_capability(employee, roles=None):
     employee = employee or {}
-    roles = set(roles or [])
+    roles = set(normalize_roles(list(roles or [])))
 
     return bool(
         truthy(employee.get("is_team_leader"))
+        or truthy(employee.get("team_leader_capability"))
+        or truthy(employee.get("tl_capability"))
         or "team_leader" in roles
+        or "team_leader_capability" in roles
+        or "tl" in roles
     )
 
 
 def is_reporting_officer_capability(employee, roles=None):
     employee = employee or {}
-    roles = set(roles or [])
+    roles = set(normalize_roles(list(roles or [])))
 
     return bool(
         truthy(employee.get("is_reporting_officer"))
+        or truthy(employee.get("reporting_officer_capability"))
+        or truthy(employee.get("ro_capability"))
         or "reporting_officer" in roles
+        or "reporting_officer_capability" in roles
+        or "ro" in roles
+        or "manager" in roles
     )
 
 
@@ -719,11 +746,16 @@ def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None)
     scope_or = []
     employee = employee or {}
 
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
+
     if is_team_leader_capability(employee, roles):
-        scope_or.append({"team_leader_id": emp_id})
+        scope_or.append({"team_leader_id": {"$in": identifier_values}})
 
     if is_reporting_officer_capability(employee, roles):
-        scope_or.append({"reporting_officer_id": emp_id})
+        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
 
     if not scope_or:
         return []
@@ -742,16 +774,20 @@ def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None)
 
 def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
     stage_or = []
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
 
     if is_team_leader_capability(employee, roles):
         stage_or.append({
-            "team_leader_id": emp_id,
+            "team_leader_id": {"$in": identifier_values},
             "approval_stage": "team_leader",
         })
 
     if is_reporting_officer_capability(employee, roles):
         stage_or.append({
-            "reporting_officer_id": emp_id,
+            "reporting_officer_id": {"$in": identifier_values},
             "approval_stage": "reporting_officer",
         })
 
@@ -768,16 +804,20 @@ def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, rol
 
 def pending_attendance_mode_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
     stage_or = []
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
 
     if is_team_leader_capability(employee, roles):
         stage_or.append({
-            "team_leader_id": emp_id,
+            "team_leader_id": {"$in": identifier_values},
             "approval_stage": "team_leader",
         })
 
     if is_reporting_officer_capability(employee, roles):
         stage_or.append({
-            "reporting_officer_id": emp_id,
+            "reporting_officer_id": {"$in": identifier_values},
             "approval_stage": "reporting_officer",
         })
 
@@ -2486,6 +2526,11 @@ def admin_dashboard():
     tenant_id = current_tenant_id()
     today = date.today().isoformat()
 
+    current_emp = current_employee(db)
+
+    if current_emp and current_emp.get("tenant_id"):
+        tenant_id = current_emp.get("tenant_id")
+
     total_employees = count_collection(
         db,
         "employees",
@@ -2751,7 +2796,6 @@ def admin_dashboard():
         .limit(8)
     )
 
-    current_emp = current_employee(db)
     team_scope_ids = []
     my_pending_leave_approvals = []
     my_pending_attendance_mode_requests = []

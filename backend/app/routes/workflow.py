@@ -60,6 +60,25 @@ LEAVE_BALANCE_MANAGER_ROLES = {
 
 LEAVE_TYPES_WITH_BALANCE = {"CL", "EL"}
 
+TENANT_NOTIFICATION_CREATOR_ROLES = {
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+}
+
+NOTIFICATION_CREATOR_ROLES = {
+    "super_admin",
+    *TENANT_NOTIFICATION_CREATOR_ROLES,
+}
+
+NOTIFICATION_ALLOWED_TARGETS = {
+    "tenant",
+    "all_tenants",
+    "selected_tenant",
+    "selected_users",
+}
+
 
 # -----------------------------------------------------------------------------
 # Common helpers
@@ -75,6 +94,8 @@ def safe_object_id(value):
 def normalize_text(value):
     return str(value or "").strip()
 
+def normalize_email(value):
+    return normalize_text(value).lower()
 
 def normalize_role(value):
     return (
@@ -229,19 +250,63 @@ def current_user_roles():
 
 def current_employee(db):
     tenant_id = current_tenant_id()
+    user_id = str(g.current_user.get("_id") or "")
+
+    if not user_id:
+        return None
+
+    user_email = normalize_email(
+        g.current_user.get("email")
+        or g.current_user.get("username")
+        or g.current_user.get("official_email")
+    )
+
+    user_employee_id = normalize_text(
+        g.current_user.get("employee_id")
+        or g.current_user.get("employee_ref_id")
+        or g.current_user.get("emp_code")
+    )
+
+    identifier_or = [
+        {"user_id": user_id},
+        {"employee_ref_id": user_id},
+    ]
+
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        identifier_or.append({"_id": user_obj_id})
+
+    if user_employee_id:
+        identifier_or.extend([
+            {"employee_id": user_employee_id},
+            {"employee_code": user_employee_id},
+            {"emp_code": user_employee_id},
+            {"code": user_employee_id},
+        ])
+
+        employee_obj_id = safe_object_id(user_employee_id)
+        if employee_obj_id:
+            identifier_or.append({"_id": employee_obj_id})
+
+    if user_email:
+        identifier_or.extend([
+            {"email": user_email},
+            {"official_email": user_email},
+        ])
 
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
-        "user_id": str(g.current_user["_id"]),
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
     if employee:
         return employee
 
     return db.employees.find_one({
-        "user_id": str(g.current_user["_id"]),
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
 
@@ -277,9 +342,15 @@ def employee_is_team_leader(employee):
     if not employee:
         return False
 
+    roles = employee_roles(employee)
+
     return (
         truthy(employee.get("is_team_leader"))
-        or "team_leader" in employee_roles(employee)
+        or truthy(employee.get("team_leader_capability"))
+        or truthy(employee.get("tl_capability"))
+        or "team_leader" in roles
+        or "team_leader_capability" in roles
+        or "tl" in roles
     )
 
 
@@ -287,10 +358,16 @@ def employee_is_reporting_officer(employee):
     if not employee:
         return False
 
+    roles = employee_roles(employee)
+
     return (
         truthy(employee.get("is_reporting_officer"))
-        or "reporting_officer" in employee_roles(employee)
-        or "ro" in employee_roles(employee)
+        or truthy(employee.get("reporting_officer_capability"))
+        or truthy(employee.get("ro_capability"))
+        or "reporting_officer" in roles
+        or "reporting_officer_capability" in roles
+        or "ro" in roles
+        or "manager" in roles
     )
 
 
@@ -313,13 +390,12 @@ def employee_code(employee):
 
 
 def employee_user_id(db, employee_id, tenant_id=None):
-    employee_obj_id = safe_object_id(employee_id)
+    raw_id = normalize_text(employee_id)
 
-    if not employee_obj_id:
+    if not raw_id:
         return ""
 
     q = {
-        "_id": employee_obj_id,
         "is_deleted": {"$ne": True},
     }
 
@@ -328,7 +404,26 @@ def employee_user_id(db, employee_id, tenant_id=None):
     else:
         q["tenant_id"] = current_tenant_id()
 
-    row = db.employees.find_one(q)
+    identifier_or = [
+        {"user_id": raw_id},
+        {"employee_id": raw_id},
+        {"employee_ref_id": raw_id},
+        {"employee_code": raw_id},
+        {"emp_code": raw_id},
+        {"code": raw_id},
+        {"email": normalize_email(raw_id)},
+        {"official_email": normalize_email(raw_id)},
+    ]
+
+    employee_obj_id = safe_object_id(raw_id)
+
+    if employee_obj_id:
+        identifier_or.insert(0, {"_id": employee_obj_id})
+
+    row = db.employees.find_one({
+        **q,
+        "$or": identifier_or,
+    })
 
     if not row:
         return ""
@@ -355,23 +450,242 @@ def users_for_roles(db, role_names, tenant_id=None):
 def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
     now = datetime.utcnow()
     tenant_id = tenant_id or current_tenant_id()
+    meta = meta or {}
     docs = []
 
     for user_id in set([uid for uid in user_ids if uid]):
         docs.append({
             "tenant_id": tenant_id,
+            "target_tenant_id": meta.get("target_tenant_id") or tenant_id,
             "user_id": str(user_id),
+            "user_ids": [str(user_id)],
             "title": title,
             "body": body,
-            "meta": meta or {},
+            "message": body,
+            "notification_type": meta.get("notification_type") or meta.get("type") or "system",
+            "priority": meta.get("priority") or "normal",
+            "target": meta.get("target") or meta.get("page") or "notifications",
+            "target_scope": meta.get("target_scope") or "selected_users",
+            "audience": meta.get("audience") or "selected_users",
+            "show_popup": meta.get("show_popup", True),
+            "popup_seen": False,
+            "popup_seen_at": "",
             "read": False,
             "status": "unread",
+            "meta": meta,
             "created_at": now,
             "updated_at": now,
+            "created_by": meta.get("created_by") or str(g.current_user.get("_id", "")),
+            "created_by_name": meta.get("created_by_name") or g.current_user.get("name") or g.current_user.get("email") or "System",
+            "is_deleted": False,
         })
 
     if docs:
         db.notifications.insert_many(docs)
+
+
+def current_user_id():
+    return str(g.current_user.get("_id") or "")
+
+
+def current_user_name():
+    return g.current_user.get("name") or g.current_user.get("full_name") or g.current_user.get("email") or "User"
+
+
+def can_create_notification():
+    return bool(current_user_roles().intersection(NOTIFICATION_CREATOR_ROLES))
+
+
+def is_super_admin_user():
+    return "super_admin" in current_user_roles()
+
+
+def tenant_name_from_id(db, tenant_id):
+    tenant_id = normalize_text(tenant_id)
+
+    if not tenant_id:
+        return ""
+
+    company = db.companies.find_one({
+        "$or": [
+            {"tenant_id": tenant_id},
+            {"_id": safe_object_id(tenant_id) or "__invalid__"},
+        ],
+        "is_deleted": {"$ne": True},
+    })
+
+    if not company:
+        return tenant_id
+
+    return company.get("name") or company.get("company_name") or company.get("tenant_name") or tenant_id
+
+
+def active_user_query(tenant_id=None):
+    q = {
+        "is_deleted": {"$ne": True},
+        "is_active": {"$ne": False},
+        "status": {"$ne": "inactive"},
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    return q
+
+
+def selected_user_ids_from_payload(data):
+    user_ids = data.get("user_ids") or data.get("selected_user_ids") or []
+
+    if isinstance(user_ids, str):
+        user_ids = [item.strip() for item in user_ids.split(",") if item.strip()]
+
+    if not isinstance(user_ids, list):
+        return []
+
+    return [normalize_text(user_id) for user_id in user_ids if normalize_text(user_id)]
+
+
+def notification_user_projection():
+    return {
+        "_id": 1,
+        "tenant_id": 1,
+        "name": 1,
+        "full_name": 1,
+        "email": 1,
+        "role": 1,
+        "roles": 1,
+        "department": 1,
+        "designation": 1,
+    }
+
+
+def resolve_notification_recipients(db, data):
+    roles = current_user_roles()
+    is_super_admin = "super_admin" in roles
+    target_scope = normalize_text(
+        data.get("target_scope")
+        or data.get("target")
+        or data.get("audience")
+        or "tenant"
+    ).lower()
+
+    if target_scope not in NOTIFICATION_ALLOWED_TARGETS:
+        target_scope = "tenant"
+
+    current_tenant = current_tenant_id()
+    requested_tenant = normalize_text(
+        data.get("target_tenant_id")
+        or data.get("tenant_id")
+        or data.get("selected_tenant_id")
+    )
+
+    if not is_super_admin:
+        target_scope = "tenant"
+        requested_tenant = current_tenant
+
+    q = active_user_query()
+
+    if target_scope == "all_tenants" and is_super_admin:
+        pass
+    elif target_scope == "selected_tenant" and is_super_admin:
+        if not requested_tenant:
+            raise ValueError("Please select a tenant")
+        q["tenant_id"] = requested_tenant
+    elif target_scope == "selected_users":
+        selected_ids = selected_user_ids_from_payload(data)
+        if not selected_ids:
+            raise ValueError("Please select at least one user")
+
+        object_ids = [safe_object_id(item) for item in selected_ids if safe_object_id(item)]
+        q["$or"] = [
+            {"_id": {"$in": object_ids}},
+            {"id": {"$in": selected_ids}},
+        ]
+
+        if not is_super_admin:
+            q["tenant_id"] = current_tenant
+    else:
+        target_scope = "tenant"
+        q["tenant_id"] = requested_tenant or current_tenant
+
+    users = list(db.users.find(q, notification_user_projection()).limit(5000))
+
+    if not users:
+        raise ValueError("No active users found for the selected notification target")
+
+    return target_scope, users
+
+
+def create_notification_documents(db, users, title, body, data, target_scope):
+    now = datetime.utcnow()
+    creator_id = current_user_id()
+    creator_name = current_user_name()
+    priority = normalize_text(data.get("priority") or "normal").lower()
+    notification_type = normalize_text(data.get("notification_type") or data.get("type") or "general")
+    page_target = normalize_text(data.get("page") or data.get("target_page") or "notifications")
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    docs = []
+
+    for user in users:
+        tenant_id = user.get("tenant_id") or current_tenant_id()
+        user_id = str(user["_id"])
+        tenant_name = tenant_name_from_id(db, tenant_id)
+
+        docs.append({
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "target_tenant_id": tenant_id,
+            "target_tenant_name": tenant_name,
+            "user_id": user_id,
+            "user_ids": [user_id],
+            "title": title,
+            "body": body,
+            "message": body,
+            "notification_type": notification_type,
+            "priority": priority,
+            "target": page_target,
+            "target_scope": target_scope,
+            "audience": target_scope,
+            "show_popup": data.get("show_popup", True),
+            "popup_seen": False,
+            "popup_seen_at": "",
+            "read": False,
+            "status": "unread",
+            "created_at": now,
+            "updated_at": now,
+            "created_by": creator_id,
+            "created_by_name": creator_name,
+            "created_by_role": sorted(list(current_user_roles())),
+            "is_deleted": False,
+            "meta": {
+                **meta,
+                "target_scope": target_scope,
+                "target": page_target,
+                "recipient_user_id": user_id,
+                "recipient_email": user.get("email", ""),
+                "recipient_name": user.get("name") or user.get("full_name") or user.get("email") or "User",
+            },
+        })
+
+    if docs:
+        db.notifications.insert_many(docs)
+
+    return docs
+
+
+def notification_scope_for_current_user(extra=None):
+    q = {
+        "user_id": current_user_id(),
+        "is_deleted": {"$ne": True},
+    }
+
+    if not is_super_admin_user():
+        q["tenant_id"] = current_tenant_id()
+
+    if extra:
+        q.update(extra)
+
+    return q
 
 
 def can_manage_employee_record(db, employee_id):
@@ -386,6 +700,10 @@ def can_manage_employee_record(db, employee_id):
         return False
 
     reviewer_emp_id = str(reviewer_emp["_id"])
+    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
+
+    if reviewer_emp_id not in reviewer_identifier_values:
+        reviewer_identifier_values.append(reviewer_emp_id)
 
     employee_obj_id = safe_object_id(employee_id)
 
@@ -403,18 +721,17 @@ def can_manage_employee_record(db, employee_id):
 
     if (
         ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
-        and employee.get("team_leader_id") == reviewer_emp_id
+        and employee.get("team_leader_id") in reviewer_identifier_values
     ):
         return True
 
     if (
         ("reporting_officer" in roles or employee_is_reporting_officer(reviewer_emp))
-        and employee.get("reporting_officer_id") == reviewer_emp_id
+        and employee.get("reporting_officer_id") in reviewer_identifier_values
     ):
         return True
 
     return False
-
 
 # -----------------------------------------------------------------------------
 # Live status helpers
@@ -678,10 +995,14 @@ def reviewer_can_decide_leave(db, leave_doc):
         return False
 
     reviewer_emp_id = str(reviewer_emp["_id"])
+    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
+
+    if reviewer_emp_id not in reviewer_identifier_values:
+        reviewer_identifier_values.append(reviewer_emp_id)
 
     if stage == "team_leader":
         return (
-            leave_doc.get("team_leader_id") == reviewer_emp_id
+            leave_doc.get("team_leader_id") in reviewer_identifier_values
             and (
                 "team_leader" in roles
                 or employee_is_team_leader(reviewer_emp)
@@ -690,7 +1011,7 @@ def reviewer_can_decide_leave(db, leave_doc):
 
     if stage == "reporting_officer":
         return (
-            leave_doc.get("reporting_officer_id") == reviewer_emp_id
+            leave_doc.get("reporting_officer_id") in reviewer_identifier_values
             and (
                 "reporting_officer" in roles
                 or "ro" in roles
@@ -722,23 +1043,27 @@ def scoped_leave_query(db, leave_obj_id):
         return q
 
     reviewer_emp_id = str(reviewer_emp["_id"])
-    scope_or = [{"employee_id": reviewer_emp_id}]
+    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
+
+    if reviewer_emp_id not in reviewer_identifier_values:
+        reviewer_identifier_values.append(reviewer_emp_id)
+
+    scope_or = [{"employee_id": {"$in": reviewer_identifier_values}}]
 
     if "team_leader" in roles or employee_is_team_leader(reviewer_emp):
         scope_or.append({
-            "team_leader_id": reviewer_emp_id,
+            "team_leader_id": {"$in": reviewer_identifier_values},
             "approval_stage": "team_leader",
         })
 
     if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp):
         scope_or.append({
-            "reporting_officer_id": reviewer_emp_id,
+            "reporting_officer_id": {"$in": reviewer_identifier_values},
             "approval_stage": "reporting_officer",
         })
 
     q["$or"] = scope_or
     return q
-
 
 def get_leave_balance(db, employee, leave_type):
     leave_type = normalize_leave_type(leave_type)
@@ -1320,33 +1645,88 @@ def leave_list_scope_query(db):
         return q
 
     emp_id = str(employee["_id"])
-    scope_or = [{"employee_id": emp_id}]
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id not in identifier_values:
+        identifier_values.append(emp_id)
+
+    scope_or = [{"employee_id": {"$in": identifier_values}}]
 
     if "team_leader" in roles or employee_is_team_leader(employee):
         scope_or.append({
-            "team_leader_id": emp_id,
+            "team_leader_id": {"$in": identifier_values},
             "approval_stage": "team_leader",
         })
 
     if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
         scope_or.append({
-            "reporting_officer_id": emp_id,
+            "reporting_officer_id": {"$in": identifier_values},
             "approval_stage": "reporting_officer",
         })
 
     q["$or"] = scope_or
     return q
 
-
 # -----------------------------------------------------------------------------
 # Notification APIs
 # -----------------------------------------------------------------------------
+
+@workflow_bp.get("/notifications/options")
+@current_user_required
+def notification_options():
+    db = get_db()
+    roles = current_user_roles()
+
+    if not can_create_notification():
+        return jsonify({
+            "can_create": False,
+            "can_create_global": False,
+            "tenants": [],
+            "users": [],
+        })
+
+    can_global = "super_admin" in roles
+    tenant_id = current_tenant_id()
+
+    if can_global:
+        tenants = list(
+            db.companies
+            .find({"is_deleted": {"$ne": True}}, {"tenant_id": 1, "name": 1, "company_name": 1, "tenant_name": 1, "status": 1})
+            .sort("name", 1)
+            .limit(1000)
+        )
+        users = list(db.users.find(active_user_query(), notification_user_projection()).sort("name", 1).limit(5000))
+    else:
+        tenants = [{
+            "tenant_id": tenant_id,
+            "name": tenant_name_from_id(db, tenant_id),
+            "status": "active",
+        }]
+        users = list(db.users.find(active_user_query(tenant_id), notification_user_projection()).sort("name", 1).limit(1000))
+
+    return jsonify({
+        "can_create": True,
+        "can_create_global": can_global,
+        "current_tenant_id": tenant_id,
+        "tenants": clean_doc(tenants),
+        "users": clean_doc(users),
+        "target_options": [
+            {"value": "tenant", "label": "This Tenant"},
+            *([
+                {"value": "all_tenants", "label": "All Tenants"},
+                {"value": "selected_tenant", "label": "Selected Tenant"},
+            ] if can_global else []),
+            {"value": "selected_users", "label": "Selected Users"},
+        ],
+    })
+
 
 @workflow_bp.get("/notifications")
 @current_user_required
 def list_notifications():
     db = get_db()
     only_unread = truthy(request.args.get("unread"))
+    popup_only = truthy(request.args.get("popup")) or truthy(request.args.get("popup_only"))
     limit_raw = request.args.get("limit", 50)
 
     try:
@@ -1354,14 +1734,14 @@ def list_notifications():
     except Exception:
         limit = 50
 
-    q = {
-        "tenant_id": current_tenant_id(),
-        "user_id": str(g.current_user["_id"]),
-        "is_deleted": {"$ne": True},
-    }
+    q = notification_scope_for_current_user()
 
     if only_unread:
         q["read"] = {"$ne": True}
+
+    if popup_only:
+        q["show_popup"] = {"$ne": False}
+        q["popup_seen"] = {"$ne": True}
 
     items = list(
         db.notifications
@@ -1370,17 +1750,60 @@ def list_notifications():
         .limit(limit)
     )
 
-    unread_count = db.notifications.count_documents({
-        "tenant_id": current_tenant_id(),
-        "user_id": str(g.current_user["_id"]),
+    unread_count = db.notifications.count_documents(notification_scope_for_current_user({
         "read": {"$ne": True},
-        "is_deleted": {"$ne": True},
-    })
+    }))
+
+    popup_count = db.notifications.count_documents(notification_scope_for_current_user({
+        "read": {"$ne": True},
+        "show_popup": {"$ne": False},
+        "popup_seen": {"$ne": True},
+    }))
 
     return jsonify({
         "items": clean_doc(items),
+        "notifications": clean_doc(items),
         "unread_count": unread_count,
+        "popup_count": popup_count,
     })
+
+
+@workflow_bp.post("/notifications")
+@current_user_required
+def create_notification():
+    if not can_create_notification():
+        return jsonify({"message": "You do not have permission to create notifications"}), 403
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    title = normalize_text(data.get("title"))
+    body = normalize_text(data.get("body") or data.get("message") or data.get("description"))
+
+    if not title:
+        return jsonify({"message": "Notification title is required"}), 400
+
+    if not body:
+        return jsonify({"message": "Notification message is required"}), 400
+
+    try:
+        target_scope, users = resolve_notification_recipients(db, data)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    docs = create_notification_documents(db, users, title, body, data, target_scope)
+
+    audit("create_notification", "notifications", "bulk", {
+        "title": title,
+        "target_scope": target_scope,
+        "recipient_count": len(docs),
+    })
+
+    return jsonify({
+        "message": "Notification sent successfully",
+        "target_scope": target_scope,
+        "recipient_count": len(docs),
+        "items": clean_doc(docs[:100]),
+    }), 201
 
 
 @workflow_bp.patch("/notifications/<notification_id>/read")
@@ -1393,13 +1816,10 @@ def mark_notification_read(notification_id):
 
     db = get_db()
 
-    db.notifications.update_one(
-        {
+    result = db.notifications.update_one(
+        notification_scope_for_current_user({
             "_id": notification_obj_id,
-            "tenant_id": current_tenant_id(),
-            "user_id": str(g.current_user["_id"]),
-            "is_deleted": {"$ne": True},
-        },
+        }),
         {
             "$set": {
                 "read": True,
@@ -1410,7 +1830,39 @@ def mark_notification_read(notification_id):
         },
     )
 
+    if not result.matched_count:
+        return jsonify({"message": "Notification not found"}), 404
+
     return jsonify({"message": "Notification marked as read"})
+
+
+@workflow_bp.patch("/notifications/<notification_id>/popup_seen")
+@current_user_required
+def mark_notification_popup_seen(notification_id):
+    notification_obj_id = safe_object_id(notification_id)
+
+    if not notification_obj_id:
+        return jsonify({"message": "Invalid notification id"}), 400
+
+    db = get_db()
+
+    result = db.notifications.update_one(
+        notification_scope_for_current_user({
+            "_id": notification_obj_id,
+        }),
+        {
+            "$set": {
+                "popup_seen": True,
+                "popup_seen_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    if not result.matched_count:
+        return jsonify({"message": "Notification not found"}), 404
+
+    return jsonify({"message": "Notification popup marked as seen"})
 
 
 @workflow_bp.patch("/notifications/read_all")
@@ -1419,12 +1871,9 @@ def mark_all_notifications_read():
     db = get_db()
 
     db.notifications.update_many(
-        {
-            "tenant_id": current_tenant_id(),
-            "user_id": str(g.current_user["_id"]),
+        notification_scope_for_current_user({
             "read": {"$ne": True},
-            "is_deleted": {"$ne": True},
-        },
+        }),
         {
             "$set": {
                 "read": True,
@@ -1436,6 +1885,28 @@ def mark_all_notifications_read():
     )
 
     return jsonify({"message": "All notifications marked as read"})
+
+
+@workflow_bp.patch("/notifications/popup_seen_all")
+@current_user_required
+def mark_all_notification_popups_seen():
+    db = get_db()
+
+    db.notifications.update_many(
+        notification_scope_for_current_user({
+            "show_popup": {"$ne": False},
+            "popup_seen": {"$ne": True},
+        }),
+        {
+            "$set": {
+                "popup_seen": True,
+                "popup_seen_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    return jsonify({"message": "All notification popups marked as seen"})
 
 
 # -----------------------------------------------------------------------------
@@ -1461,6 +1932,11 @@ def team_approvals():
 
     tenant_id = current_tenant_id()
     emp_id = str(employee["_id"]) if employee else ""
+    identifier_values = employee_identifier_values(employee) if employee else []
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
+
     approval_or = []
 
     def add_team_leader_scope():
@@ -1468,44 +1944,44 @@ def team_approvals():
             return
         if status_filter in ["", "pending"]:
             approval_or.append({
-                "team_leader_id": emp_id,
+                "team_leader_id": {"$in": identifier_values},
                 "approval_stage": "team_leader",
                 "status": {"$in": ["pending", "in_review"]},
             })
         elif status_filter == "approved":
             approval_or.append({
-                "team_leader_id": emp_id,
+                "team_leader_id": {"$in": identifier_values},
                 "team_leader_status": "approved",
             })
         elif status_filter == "rejected":
             approval_or.append({
-                "team_leader_id": emp_id,
+                "team_leader_id": {"$in": identifier_values},
                 "team_leader_status": "rejected",
             })
         elif status_filter == "all":
-            approval_or.append({"team_leader_id": emp_id})
+            approval_or.append({"team_leader_id": {"$in": identifier_values}})
 
     def add_reporting_officer_scope():
         if not emp_id:
             return
         if status_filter in ["", "pending"]:
             approval_or.append({
-                "reporting_officer_id": emp_id,
+                "reporting_officer_id": {"$in": identifier_values},
                 "approval_stage": "reporting_officer",
                 "status": {"$in": ["pending", "in_review"]},
             })
         elif status_filter == "approved":
             approval_or.append({
-                "reporting_officer_id": emp_id,
+                "reporting_officer_id": {"$in": identifier_values},
                 "reporting_officer_status": "approved",
             })
         elif status_filter == "rejected":
             approval_or.append({
-                "reporting_officer_id": emp_id,
+                "reporting_officer_id": {"$in": identifier_values},
                 "reporting_officer_status": "rejected",
             })
         elif status_filter == "all":
-            approval_or.append({"reporting_officer_id": emp_id})
+            approval_or.append({"reporting_officer_id": {"$in": identifier_values}})
 
     def add_hr_scope():
         if status_filter in ["", "pending"]:
@@ -1578,7 +2054,6 @@ def team_approvals():
         "items": clean_doc(enriched_items),
     })
 
-
 @workflow_bp.patch("/team_approvals/leave_requests/<req_id>/decision")
 @current_user_required
 def team_leave_decision(req_id):
@@ -1615,12 +2090,16 @@ def application_status():
         })
 
     emp_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id not in identifier_values:
+        identifier_values.append(emp_id)
 
     leave_requests = list(
         db.leave_requests
         .find({
             "tenant_id": tenant_id,
-            "employee_id": emp_id,
+            "employee_id": {"$in": identifier_values},
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
@@ -1631,7 +2110,7 @@ def application_status():
         db.attendance_mode_requests
         .find({
             "tenant_id": tenant_id,
-            "employee_id": emp_id,
+            "employee_id": {"$in": identifier_values},
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
@@ -1644,7 +2123,7 @@ def application_status():
             "tenant_id": tenant_id,
             "$or": [
                 {"user_id": user_id},
-                {"employee_id": emp_id},
+                {"employee_id": {"$in": identifier_values}},
                 {"requested_by": user_id},
             ],
             "is_deleted": {"$ne": True},
@@ -1658,7 +2137,7 @@ def application_status():
         .find({
             "tenant_id": tenant_id,
             "$or": [
-                {"raised_by": emp_id},
+                {"raised_by": {"$in": identifier_values}},
                 {"user_id": user_id},
                 {"created_by": user_id},
             ],
@@ -1672,7 +2151,7 @@ def application_status():
         db.compoff_credits
         .find({
             "tenant_id": tenant_id,
-            "employee_id": emp_id,
+            "employee_id": {"$in": identifier_values},
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
@@ -1781,7 +2260,6 @@ def application_status():
         "compoff_claims": clean_doc(compoff_claims),
         "notifications": clean_doc(notifications),
     })
-
 
 # -----------------------------------------------------------------------------
 # Leave management APIs
@@ -2629,9 +3107,9 @@ def employee_identifier_values(employee):
     """
     Return all possible identifier values for an employee.
 
-    This keeps performance review mapping working even if older records store
-    team_leader_id/reporting_officer_id as ObjectId, string _id, user_id,
-    employee_id, employee_code, emp_code, code, or email.
+    This keeps mapping working even if records store employee links as
+    ObjectId, string _id, user_id, employee_id, employee_code, emp_code,
+    code, employee_ref_id, email, or official_email.
     """
 
     employee = employee or {}
@@ -2640,12 +3118,15 @@ def employee_identifier_values(employee):
     raw_values = [
         employee.get("_id"),
         str(employee.get("_id")) if employee.get("_id") else "",
+        employee.get("id"),
         employee.get("user_id"),
         employee.get("employee_id"),
+        employee.get("employee_ref_id"),
         employee.get("employee_code"),
         employee.get("emp_code"),
         employee.get("code"),
         employee.get("email"),
+        employee.get("official_email"),
     ]
 
     for value in raw_values:
@@ -2684,6 +3165,10 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
         return None, "", "Reviewer employee profile was not found"
 
     reviewer_emp_id = str(reviewer_emp["_id"])
+    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
+
+    if reviewer_emp_id not in reviewer_identifier_values:
+        reviewer_identifier_values.append(reviewer_emp_id)
     reviewed_is_team_leader = employee_is_team_leader(employee)
     reviewed_is_reporting_officer = employee_is_reporting_officer(employee)
 

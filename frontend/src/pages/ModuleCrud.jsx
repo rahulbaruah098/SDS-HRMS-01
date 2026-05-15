@@ -669,9 +669,19 @@ function emptyLeaveBalanceForm(template = {}) {
   };
 }
 
-export default function ModuleCrud({ collection }) {
+export default function ModuleCrud({
+  collection,
+  title = '',
+  subtitle = '',
+  fieldLabels = {},
+  hiddenFields = [],
+  requiredFields = [],
+  defaultValues = null,
+}) {
   const moduleInfo = allModules.find((m) => m[0] === collection);
-  const template = templates[collection] || { title: '', status: 'active' };
+  const template = defaultValues ? { ...(templates[collection] || {}), ...defaultValues } : (templates[collection] || { title: '', status: 'active' });
+  const hiddenFieldSet = useMemo(() => new Set(hiddenFields || []), [hiddenFields]);
+  const requiredFieldSet = useMemo(() => new Set(requiredFields || []), [requiredFields]);
 
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(
@@ -714,8 +724,8 @@ export default function ModuleCrud({ collection }) {
       return LEAVE_BALANCE_CREATE_FIELDS;
     }
 
-    return Object.keys(template);
-  }, [collection, template]);
+    return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
+  }, [collection, template, hiddenFieldSet]);
 
   const editFields = useMemo(() => {
     if (collection === 'employees') {
@@ -732,8 +742,8 @@ export default function ModuleCrud({ collection }) {
       return LEAVE_BALANCE_CREATE_FIELDS;
     }
 
-    return Object.keys(template);
-  }, [collection, template]);
+    return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
+  }, [collection, template, hiddenFieldSet]);
 
   function buildParams(nextQ = q, nextTenant = tenant) {
     const params = {};
@@ -919,6 +929,10 @@ export default function ModuleCrud({ collection }) {
 
       let payload = { ...form };
 
+      hiddenFieldSet.forEach((key) => {
+        delete payload[key];
+      });
+
       if (collection === 'employees') {
         delete payload.password_mode;
         payload.role = 'Employee';
@@ -1053,6 +1067,10 @@ export default function ModuleCrud({ collection }) {
       setSaving(true);
 
       let payload = { ...edit };
+
+      hiddenFieldSet.forEach((key) => {
+        delete payload[key];
+      });
 
       delete payload._id;
       delete payload.password_hash;
@@ -1488,6 +1506,10 @@ export default function ModuleCrud({ collection }) {
       labelText = customLabels[key];
     }
 
+    if (fieldLabels && fieldLabels[key]) {
+      labelText = fieldLabels[key];
+    }
+
     const leaveBalanceLabels = {
       cl_opening_balance: 'Casual Leave Opening Balance',
       cl_credited: 'Casual Leave Credited',
@@ -1515,7 +1537,8 @@ export default function ModuleCrud({ collection }) {
       labelText = 'Project Handover';
     }
 
-    const finalLabel =
+    const isRequiredField =
+      requiredFieldSet.has(key) ||
       (
         collection === 'employees' ||
         collection === 'holiday_calendar' ||
@@ -1523,9 +1546,9 @@ export default function ModuleCrud({ collection }) {
         collection === 'attendance_mode_requests' ||
         collection === 'leave_requests'
       ) &&
-      requiredFields.includes(key)
-        ? `${labelText} *`
-        : labelText;
+      requiredFields.includes(key);
+
+    const finalLabel = isRequiredField ? `${labelText} *` : labelText;
 
     if (
       collection === 'employees' &&
@@ -1711,6 +1734,24 @@ export default function ModuleCrud({ collection }) {
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
             <option value="in_review">In Review</option>
+          </select>
+        </label>
+      );
+    }
+
+    if (
+      ['states', 'departments', 'designations'].includes(collection) &&
+      key === 'status'
+    ) {
+      return (
+        <label key={key}>
+          {finalLabel}
+          <select
+            value={state[key] ?? 'active'}
+            onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
           </select>
         </label>
       );
@@ -2076,7 +2117,37 @@ export default function ModuleCrud({ collection }) {
                   : 'text'
           }
           value={state[key] ?? ''}
-          onChange={(event) => setState({ ...state, [key]: event.target.value })}
+          onChange={(event) => {
+            const value = event.target.value;
+            const nextState = { ...state, [key]: value };
+
+            if (collection === 'states') {
+              if (key === 'name') nextState.state_name = value;
+              if (key === 'state_name') nextState.name = value;
+            }
+
+            if (collection === 'departments') {
+              if (key === 'name') nextState.department_name = value;
+              if (key === 'department_name') nextState.name = value;
+            }
+
+            if (collection === 'designations') {
+              if (key === 'name') {
+                nextState.title = value;
+                nextState.designation_name = value;
+              }
+              if (key === 'title') {
+                nextState.name = value;
+                nextState.designation_name = value;
+              }
+              if (key === 'designation_name') {
+                nextState.name = value;
+                nextState.title = value;
+              }
+            }
+
+            setState(nextState);
+          }}
         />
       </label>
     );
@@ -2116,7 +2187,7 @@ export default function ModuleCrud({ collection }) {
     }
 
     return Object.keys(row || {})
-      .filter((key) => !HIDDEN_TABLE_KEYS.has(key))
+      .filter((key) => !HIDDEN_TABLE_KEYS.has(key) && !hiddenFieldSet.has(key))
       .slice(0, 8);
   }
 
@@ -2432,8 +2503,8 @@ export default function ModuleCrud({ collection }) {
       <section className="hero compact">
         <div>
           <span className="kicker">Module</span>
-          <h1>{moduleInfo?.[1] || collection}</h1>
-          <p>{moduleInfo?.[3]}</p>
+          <h1>{title || moduleInfo?.[1] || collection}</h1>
+          <p>{subtitle || moduleInfo?.[3]}</p>
 
           {collection === 'employees' && (
             <p>
@@ -2576,7 +2647,7 @@ export default function ModuleCrud({ collection }) {
         <section className="panel" id="edit-section">
           <div className="toolbar">
             <div>
-              <h3>Edit {moduleInfo?.[1] || collection}</h3>
+              <h3>Edit {title || moduleInfo?.[1] || collection}</h3>
 
               {collection === 'employees' && (
                 <p>

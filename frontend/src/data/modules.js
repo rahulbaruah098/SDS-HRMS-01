@@ -33,6 +33,29 @@ import {
       team_leader_id
       reporting_officer_id
 
+  Employee Management workflow:
+  - HR/Admin can manage Employee Master, Create Employee and Alumni from one page.
+  - Employee Master shows active employees only.
+  - Create Employee creates active employee records and login users.
+  - Alumni shows resigned/left/past employees separately.
+  - HR/Admin can mark an active employee as resigned.
+  - Resigned employees are separated from active Employee Master and moved to Alumni.
+  - HR/Admin can manually add past employees to Alumni without creating login accounts.
+  - Active employee and Alumni employee data can be downloaded as CSV.
+  - Employee form uses Department, Designation and State masters where available.
+  - Project is not selected while creating employee; projects are assigned later by TL/RO.
+
+  Reporting Officer rule:
+  - Reporting Officer dropdown should only show employees whose designation matches:
+      Manager / Managing Director / Director / CEO / Chief Executive Officer.
+
+  Notification workflow:
+  - Tenant HR/Admin can create tenant-scoped notifications.
+  - Tenant notifications are visible only to users of that tenant.
+  - Super Admin can create global notifications for all tenants.
+  - Super Admin can also target one selected tenant.
+  - Notifications should appear in notification bell, notification center and dashboard popup.
+
   New grievance workflow:
   - Every login can raise grievance.
   - HR/Admin can view and update grievance status.
@@ -76,6 +99,30 @@ export const HR_ROLES = [
   'hr_admin',
   'hr_manager',
   'hr',
+];
+
+export const TENANT_ADMIN_NOTIFICATION_ROLES = [
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+];
+
+export const NOTIFICATION_CREATE_ROLES = [
+  'super_admin',
+  ...TENANT_ADMIN_NOTIFICATION_ROLES,
+];
+
+export const NOTIFICATION_VIEW_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  ...CAPABILITY_ROLES,
+  BASE_EMPLOYEE_ROLE,
 ];
 
 export const TEAM_APPROVAL_ROLES = [
@@ -176,6 +223,130 @@ export const PROJECT_PRIORITY_OPTIONS = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
   { value: 'critical', label: 'Critical' },
+];
+
+export const EMPLOYEE_STATUS_OPTIONS = [
+  { value: 'active', label: 'Active' },
+  { value: 'probation', label: 'Probation' },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'inactive', label: 'Inactive' },
+  { value: 'Resigned', label: 'Resigned' },
+  { value: 'Left', label: 'Left' },
+  { value: 'Terminated', label: 'Terminated' },
+  { value: 'Retired', label: 'Retired' },
+];
+
+export const EMPLOYEE_EXIT_TYPE_OPTIONS = [
+  { value: 'Resigned', label: 'Resigned' },
+  { value: 'Terminated', label: 'Terminated' },
+  { value: 'Retired', label: 'Retired' },
+  { value: 'Absconded', label: 'Absconded' },
+  { value: 'Other', label: 'Other' },
+];
+
+export const EMPLOYEE_TYPE_OPTIONS = [
+  { value: 'Full Time', label: 'Full Time' },
+  { value: 'Part Time', label: 'Part Time' },
+  { value: 'Contract', label: 'Contract' },
+  { value: 'Intern', label: 'Intern' },
+];
+
+export const EMPLOYEE_JOB_TYPE_OPTIONS = [
+  { value: 'Permanent', label: 'Permanent' },
+  { value: 'Probation', label: 'Probation' },
+  { value: 'Temporary', label: 'Temporary' },
+  { value: 'Consultant', label: 'Consultant' },
+  { value: 'Regular', label: 'Regular' },
+];
+
+export const EMPLOYEE_GENDER_OPTIONS = [
+  { value: '', label: 'Choose One' },
+  { value: 'Male', label: 'Male' },
+  { value: 'Female', label: 'Female' },
+  { value: 'Other', label: 'Other' },
+];
+
+export const EMPLOYEE_BLOOD_GROUP_OPTIONS = [
+  { value: '', label: 'Choose One' },
+  { value: 'A+', label: 'A+' },
+  { value: 'A-', label: 'A-' },
+  { value: 'B+', label: 'B+' },
+  { value: 'B-', label: 'B-' },
+  { value: 'AB+', label: 'AB+' },
+  { value: 'AB-', label: 'AB-' },
+  { value: 'O+', label: 'O+' },
+  { value: 'O-', label: 'O-' },
+];
+
+export const EMPLOYEE_RELIGION_OPTIONS = [
+  { value: '', label: 'Choose One' },
+  { value: 'Hindu', label: 'Hindu' },
+  { value: 'Muslim', label: 'Muslim' },
+  { value: 'Christian', label: 'Christian' },
+  { value: 'Sikh', label: 'Sikh' },
+  { value: 'Buddhist', label: 'Buddhist' },
+  { value: 'Jain', label: 'Jain' },
+  { value: 'Other', label: 'Other' },
+  { value: 'Prefer Not To Say', label: 'Prefer Not To Say' },
+];
+
+export const EMPLOYEE_MARITAL_STATUS_OPTIONS = [
+  { value: '', label: 'Choose One' },
+  { value: 'Single', label: 'Single' },
+  { value: 'Married', label: 'Married' },
+  { value: 'Divorced', label: 'Divorced' },
+  { value: 'Widowed', label: 'Widowed' },
+  { value: 'Separated', label: 'Separated' },
+];
+
+export const EMPLOYEE_SKILL_LEVEL_OPTIONS = [
+  { value: '', label: 'Choose One' },
+  { value: 'Unskilled', label: 'Unskilled' },
+  { value: 'Semi Skilled', label: 'Semi Skilled' },
+  { value: 'Skilled', label: 'Skilled' },
+  { value: 'Highly Skilled', label: 'Highly Skilled' },
+  { value: 'Professional', label: 'Professional' },
+];
+
+export const EMPLOYEE_DISABILITY_LEVEL_OPTIONS = [
+  { value: 'No Disability', label: 'No Disability' },
+  { value: 'Mild Disability', label: 'Mild Disability' },
+  { value: 'Moderate Disability', label: 'Moderate Disability' },
+  { value: 'Severe Disability', label: 'Severe Disability' },
+];
+
+export const EMPLOYEE_DEPENDENT_DISABILITY_LEVEL_OPTIONS = [
+  { value: 'No Disability', label: 'No Disability' },
+  { value: 'Mild Disability', label: 'Mild Disability' },
+  { value: 'Moderate Disability', label: 'Moderate Disability' },
+  { value: 'Severe Disability', label: 'Severe Disability' },
+];
+
+export const EMPLOYEE_PAYMENT_MODE_OPTIONS = [
+  { value: 'Cash', label: 'Cash' },
+  { value: 'Bank Transfer', label: 'Bank Transfer' },
+  { value: 'Cheque', label: 'Cheque' },
+  { value: 'UPI', label: 'UPI' },
+];
+
+export const EMPLOYEE_YES_NO_OPTIONS = [
+  { value: 'false', label: 'No' },
+  { value: 'true', label: 'Yes' },
+];
+
+export const REPORTING_OFFICER_DESIGNATION_KEYWORDS = [
+  'manager',
+  'managing director',
+  'director',
+  'ceo',
+  'chief executive officer',
+];
+
+export const NOTIFICATION_TARGET_OPTIONS = [
+  { value: 'tenant', label: 'This Tenant' },
+  { value: 'all_tenants', label: 'All Tenants' },
+  { value: 'selected_tenant', label: 'Selected Tenant' },
+  { value: 'selected_users', label: 'Selected Users' },
 ];
 
 export const GRIEVANCE_TYPE_OPTIONS = [
@@ -303,9 +474,9 @@ export const superModules = [
 export const coreModules = [
   [
     'employees',
-    'Employee Master',
+    'Employee Management',
     Users,
-    'Employee database with profile photo, Team Leader, Reporting Officer and IT Support capability mapping.',
+    'Employee Master, Create Employee and Alumni records with DB dropdowns, TL/RO mapping, resignation movement and CSV downloads.',
     HR_ROLES,
   ],
   [
@@ -368,7 +539,7 @@ export const coreModules = [
     'holiday_calendar',
     'Holiday Calendar',
     CalendarDays,
-    'State-wise holiday calendar for Assam(HO), Manipur, Mizoram and Arunachal Pradesh.',
+    'State-wise holiday calendar for operating state master records.',
     ATTENDANCE_ROLES,
   ],
   [
@@ -466,8 +637,8 @@ export const coreModules = [
     'notifications',
     'Notifications',
     Bell,
-    'Alerts and notification center.',
-    ALL_COMMON_ROLES,
+    'Tenant-wise notification center. HR/Admin can notify their tenant; Super Admin can notify all tenants or a selected tenant.',
+    NOTIFICATION_VIEW_ROLES,
   ],
   [
     'policies',
@@ -480,21 +651,21 @@ export const coreModules = [
     'departments',
     'Departments',
     Settings,
-    'Department master.',
+    'Department master used in Employee form dropdowns.',
     HR_ROLES,
   ],
   [
     'designations',
     'Designations',
     Settings,
-    'Designation master used in Employee Master and User Control dropdowns.',
+    'Designation master used in Employee form, User Control and Reporting Officer filtering.',
     HR_ROLES,
   ],
   [
     'states',
     'States',
     Settings,
-    'Operating states.',
+    'Operating state master used in Employee form and holiday calendar.',
     HR_ROLES,
   ],
   [
@@ -607,6 +778,10 @@ export function isPerformanceReviewerRole(role) {
   return PERFORMANCE_REVIEW_ROLES.includes(normalizeRoleValue(role));
 }
 
+export function isNotificationCreatorRole(role) {
+  return NOTIFICATION_CREATE_ROLES.includes(normalizeRoleValue(role));
+}
+
 export function getEmployeeProfile(user = {}) {
   return user.employee_summary || user.employee || user.employee_profile || user.profile || {};
 }
@@ -654,6 +829,21 @@ export function isAdminHrUser(user) {
 export function isFinanceUser(user) {
   const roles = effectiveRoleList(user);
   return hasAnyRole(roles, FINANCE_ROLES);
+}
+
+export function canCreateNotifications(user) {
+  const roles = effectiveRoleList(user);
+  return hasAnyRole(roles, NOTIFICATION_CREATE_ROLES);
+}
+
+export function canCreateGlobalNotifications(user) {
+  const roles = effectiveRoleList(user);
+  return roles.includes('super_admin');
+}
+
+export function canCreateTenantNotifications(user) {
+  const roles = effectiveRoleList(user);
+  return hasAnyRole(roles, NOTIFICATION_CREATE_ROLES);
 }
 
 export function isItSupportHead(user) {
@@ -780,6 +970,9 @@ export function getEmployeeCapabilities(user) {
     canViewProjectTeamTree: true,
     canManageLeaveBalances: hasAnyRole(roles, LEAVE_BALANCE_MANAGER_ROLES),
     canSubmitPerformanceReview: canSubmitPerformanceReview(user),
+    canCreateNotifications: canCreateNotifications(user),
+    canCreateGlobalNotifications: canCreateGlobalNotifications(user),
+    canCreateTenantNotifications: canCreateTenantNotifications(user),
     canManageItSupport: canManageItSupport(user),
     canWorkOnItSupport: canWorkOnItSupport(user),
     displayRole: 'Employee',
@@ -857,7 +1050,9 @@ export function canAccessModule(user, moduleKey) {
 export const templates = {
   employees: {
     name: '',
+    employee_name: '',
     email: '',
+    official_email: '',
 
     avatar: '',
     profile_photo: '',
@@ -865,29 +1060,32 @@ export const templates = {
     photo: '',
 
     phone: '',
+    mobile: '',
     country: 'India',
     joining_date: '',
+    date_of_joining: '',
     date_of_birth: '',
+    dob: '',
     blood_group: '',
     gross_salary: '',
-    branch: 'Assam(HO)',
-    state: 'Assam(HO)',
+    branch: 'Assam/Guwahati (HO)',
+    state: '',
     aadhar_no: '',
     employee_uan_no: '',
-    employee_type: '',
+    employee_type: 'Full Time',
     skill_level: '',
     are_parents_senior_citizen: 'false',
     number_of_children: '',
-    payment_mode: 'Bank Transfer',
+    payment_mode: 'Cash',
     previous_designation: '',
     previous_employment_tenure_end_date: '',
     password: '12345678',
     password_mode: 'default',
 
-    role: 'Employee',
+    role: 'employee',
 
-    designation: 'Employee',
-    department: 'HR & Admin',
+    designation: '',
+    department: '',
     shift: 'General',
     gender: 'Male',
     address: '',
@@ -897,7 +1095,7 @@ export const templates = {
     pan_no: '',
     disability_level: 'No Disability',
     employee_esic_ip: '',
-    employment_status: 'Active',
+    employment_status: 'active',
     father_name: '',
     dependent_disability_level: 'No Disability',
     children_in_hostel: '',
@@ -905,10 +1103,17 @@ export const templates = {
     previous_employment_tenure_from_date: '',
     employee_id: '',
     emp_code: '',
-    job_type: 'Regular',
-    project: '',
+    employee_code: '',
+    job_type: 'Permanent',
     salary: 0,
-    status: 'Active',
+    status: 'active',
+
+    is_alumni: false,
+    skip_login: false,
+    last_working_date: '',
+    resignation_date: '',
+    resignation_reason: '',
+    exit_type: '',
 
     is_team_leader: 'false',
     is_reporting_officer: 'false',
@@ -923,11 +1128,16 @@ export const templates = {
 
   departments: {
     name: '',
+    department_name: '',
+    code: '',
     status: 'active',
   },
 
   designations: {
+    name: '',
     title: '',
+    designation_name: '',
+    department: '',
     status: 'active',
   },
 
@@ -1111,6 +1321,8 @@ export const templates = {
   states: {
     tenant_id: 'sds',
     name: '',
+    state_name: '',
+    code: '',
     status: 'active',
   },
 
@@ -1186,7 +1398,7 @@ export const templates = {
   },
 
   holiday_calendar: {
-    state: 'Assam(HO)',
+    state: '',
     date: '',
     title: '',
     message: '',
@@ -1198,7 +1410,7 @@ export const templates = {
     employee_name: '',
     department: '',
     designation: '',
-    state: 'Assam(HO)',
+    state: '',
     date: '',
     mode: 'office',
     status: '',
@@ -1372,12 +1584,25 @@ export const templates = {
   },
 
   notifications: {
+    tenant_id: 'sds',
+    tenant_name: '',
+    target_tenant_id: '',
+    target_tenant_name: '',
     user_id: '',
+    user_ids: [],
     title: '',
     body: '',
+    message: '',
     read: false,
     status: 'unread',
-    target: '',
+    target: 'tenant',
+    target_scope: 'tenant',
+    audience: 'tenant',
+    notification_type: 'general',
+    priority: 'normal',
+    show_popup: true,
+    popup_seen_by: [],
+    read_by: [],
     meta: {},
   },
 
@@ -1433,15 +1658,22 @@ export const emptyUser = {
   roles: BASE_EMPLOYEE_ROLE,
 
   emp_code: '',
-  department: 'HR & Admin',
-  designation: 'Employee',
+  department: '',
+  designation: '',
   job_type: 'Regular',
-  project: '',
-  state: 'Assam(HO)',
-  branch: 'Assam(HO)',
+  state: '',
+  branch: 'Assam/Guwahati (HO)',
   status: 'Active',
   salary: 0,
   is_active: true,
+
+  is_alumni: false,
+  skip_login: false,
+  employment_status: 'active',
+  last_working_date: '',
+  resignation_date: '',
+  resignation_reason: '',
+  exit_type: '',
 
   is_team_leader: 'false',
   is_reporting_officer: 'false',

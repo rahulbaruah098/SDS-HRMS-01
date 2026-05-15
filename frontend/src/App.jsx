@@ -11,6 +11,10 @@ import Attendance from './pages/Attendance';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
+import Employees from './pages/Employees';
+import Departments from './pages/Departments';
+import Designations from './pages/Designations';
+import States from './pages/States';
 import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
@@ -52,6 +56,16 @@ const PAGE_ALIASES = {
   employee_management: 'employees',
   staff_master: 'employees',
   staff_management: 'employees',
+
+  department: 'departments',
+  departments: 'departments',
+  department_master: 'departments',
+  designation: 'designations',
+  designations: 'designations',
+  designation_master: 'designations',
+  state: 'states',
+  states: 'states',
+  state_master: 'states',
 
   user: 'users',
   users: 'users',
@@ -415,6 +429,22 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'users') {
     return <UserControl setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'employees') {
+    return <Employees setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'departments') {
+    return <Departments setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'designations') {
+    return <Designations setPage={setPage} />;
+  }
+
+  if (normalizedPage === 'states') {
+    return <States setPage={setPage} />;
   }
 
   if (normalizedPage === 'projects') {

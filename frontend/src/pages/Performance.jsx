@@ -29,19 +29,61 @@ function isMongoObjectId(value = '') {
   return /^[a-f\d]{24}$/i.test(String(value || '').trim());
 }
 
-function getRoles(user = {}, employee = {}) {
+function getRoles(user = {}, employee = {}, capabilities = {}) {
   const rawRoles = [];
 
   if (Array.isArray(user.roles)) rawRoles.push(...user.roles);
   if (user.role) rawRoles.push(user.role);
   if (Array.isArray(employee.roles)) rawRoles.push(...employee.roles);
   if (employee.role) rawRoles.push(employee.role);
+  if (Array.isArray(capabilities.roles)) rawRoles.push(...capabilities.roles);
+  if (capabilities.role) rawRoles.push(capabilities.role);
 
-  if (isTruthy(employee.is_team_leader) || employee.is_team_leader === true) {
+  const hasTeamLeaderCapability =
+    isTruthy(user.is_team_leader) ||
+    user.is_team_leader === true ||
+    isTruthy(user.team_leader_capability) ||
+    user.team_leader_capability === true ||
+    isTruthy(user.tl_capability) ||
+    user.tl_capability === true ||
+    isTruthy(employee.is_team_leader) ||
+    employee.is_team_leader === true ||
+    isTruthy(employee.team_leader_capability) ||
+    employee.team_leader_capability === true ||
+    isTruthy(employee.tl_capability) ||
+    employee.tl_capability === true ||
+    isTruthy(capabilities.is_team_leader) ||
+    capabilities.is_team_leader === true ||
+    isTruthy(capabilities.team_leader_capability) ||
+    capabilities.team_leader_capability === true ||
+    isTruthy(capabilities.tl_capability) ||
+    capabilities.tl_capability === true;
+
+  const hasReportingOfficerCapability =
+    isTruthy(user.is_reporting_officer) ||
+    user.is_reporting_officer === true ||
+    isTruthy(user.reporting_officer_capability) ||
+    user.reporting_officer_capability === true ||
+    isTruthy(user.ro_capability) ||
+    user.ro_capability === true ||
+    isTruthy(employee.is_reporting_officer) ||
+    employee.is_reporting_officer === true ||
+    isTruthy(employee.reporting_officer_capability) ||
+    employee.reporting_officer_capability === true ||
+    isTruthy(employee.ro_capability) ||
+    employee.ro_capability === true ||
+    isTruthy(capabilities.is_reporting_officer) ||
+    capabilities.is_reporting_officer === true ||
+    isTruthy(capabilities.reporting_officer_capability) ||
+    capabilities.reporting_officer_capability === true ||
+    isTruthy(capabilities.ro_capability) ||
+    capabilities.ro_capability === true;
+
+  if (hasTeamLeaderCapability) {
     rawRoles.push('team_leader');
   }
 
-  if (isTruthy(employee.is_reporting_officer) || employee.is_reporting_officer === true) {
+  if (hasReportingOfficerCapability) {
     rawRoles.push('reporting_officer');
     rawRoles.push('ro');
   }
@@ -182,6 +224,38 @@ function buildUniqueReviewableEmployees(teamMembers = [], reportingMembers = [],
   return [...map.values()].sort((a, b) =>
     getEmployeeName(a).localeCompare(getEmployeeName(b)),
   );
+}
+
+function arrayFromDashboard(...values) {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      return value.filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function mergeDashboardEmployees(...lists) {
+  const map = new Map();
+
+  lists.flat().filter(Boolean).forEach((item, index) => {
+    const id =
+      getEmployeeDbId(item) ||
+      item.employee_id ||
+      item.employee_code ||
+      item.emp_code ||
+      item.email ||
+      `employee-${index}`;
+
+    if (!id) return;
+
+    if (!map.has(String(id))) {
+      map.set(String(id), item);
+    }
+  });
+
+  return [...map.values()];
 }
 
 function StatCard({ label, value, meta }) {
@@ -419,25 +493,76 @@ export default function Performance({ setPage }) {
 
   const user = currentUser();
   const employee = currentEmployee();
-  const roles = useMemo(() => getRoles(user, employee), [user, employee]);
+
+  const sessionRoles = useMemo(() => getRoles(user, employee), [user, employee]);
+
+  const dashboardEmployee = dashboard.employee || dashboard.employee_summary || {};
+  const dashboardCapabilities = dashboard.capabilities || {};
+
+  const dashboardRoles = useMemo(
+    () =>
+      getRoles(
+        {
+          ...(dashboard.user || dashboard.current_user || {}),
+          roles: Array.isArray(dashboard.roles) ? dashboard.roles : [],
+          role: dashboard.role || '',
+        },
+        dashboardEmployee,
+        dashboardCapabilities,
+      ),
+    [dashboard.user, dashboard.current_user, dashboard.roles, dashboard.role, dashboardEmployee, dashboardCapabilities],
+  );
+
+  const roles = useMemo(
+    () => [...new Set([...sessionRoles, ...dashboardRoles].map(normalizeRole).filter(Boolean))],
+    [sessionRoles, dashboardRoles],
+  );
 
   const isTeamLeader =
     roles.includes('team_leader') ||
     isTruthy(employee?.is_team_leader) ||
-    employee?.is_team_leader === true;
+    employee?.is_team_leader === true ||
+    isTruthy(dashboardEmployee?.is_team_leader) ||
+    dashboardEmployee?.is_team_leader === true ||
+    isTruthy(dashboardCapabilities?.is_team_leader) ||
+    dashboardCapabilities?.is_team_leader === true;
 
   const isReportingOfficer =
     roles.includes('reporting_officer') ||
     roles.includes('ro') ||
+    roles.includes('manager') ||
     isTruthy(employee?.is_reporting_officer) ||
-    employee?.is_reporting_officer === true;
+    employee?.is_reporting_officer === true ||
+    isTruthy(dashboardEmployee?.is_reporting_officer) ||
+    dashboardEmployee?.is_reporting_officer === true ||
+    isTruthy(dashboardCapabilities?.is_reporting_officer) ||
+    dashboardCapabilities?.is_reporting_officer === true;
 
   const canAccess = isTeamLeader || isReportingOfficer;
 
-  const teamMembers = Array.isArray(dashboard.team_members) ? dashboard.team_members : [];
-  const reportingMembers = Array.isArray(dashboard.reporting_members)
-    ? dashboard.reporting_members
-    : [];
+  const teamMembers = useMemo(
+    () =>
+      mergeDashboardEmployees(
+        arrayFromDashboard(dashboard.team_members),
+        arrayFromDashboard(dashboard.team_member_employees),
+        arrayFromDashboard(dashboard.team_scope_members),
+        arrayFromDashboard(dashboard.mapped_team_members),
+        arrayFromDashboard(dashboard.performance_dashboard?.team_members),
+      ),
+    [dashboard],
+  );
+
+  const reportingMembers = useMemo(
+    () =>
+      mergeDashboardEmployees(
+        arrayFromDashboard(dashboard.reporting_members),
+        arrayFromDashboard(dashboard.reporting_scope_members),
+        arrayFromDashboard(dashboard.reporting_employees),
+        arrayFromDashboard(dashboard.mapped_reporting_members),
+        arrayFromDashboard(dashboard.performance_dashboard?.reporting_members),
+      ),
+    [dashboard],
+  );
 
   const reviewableEmployees = useMemo(
     () =>
@@ -450,7 +575,7 @@ export default function Performance({ setPage }) {
   );
 
   const selectedEmployee = useMemo(
-    () => reviewableEmployees.find((item) => item.employee_id === form.employee_id),
+    () => reviewableEmployees.find((item) => String(item.employee_id) === String(form.employee_id)),
     [reviewableEmployees, form.employee_id],
   );
 
@@ -551,9 +676,41 @@ export default function Performance({ setPage }) {
       setDashboard(dashboardData || {});
       setReviewHistory(Array.isArray(historyData?.items) ? historyData.items : []);
 
+      const dashboardDataEmployee =
+        dashboardData?.employee || dashboardData?.employee_summary || {};
+      const dashboardDataCapabilities = dashboardData?.capabilities || {};
+
+      const dashboardDataRoles = getRoles(
+        {
+          ...(dashboardData?.user || dashboardData?.current_user || {}),
+          roles: Array.isArray(dashboardData?.roles) ? dashboardData.roles : [],
+          role: dashboardData?.role || '',
+        },
+        dashboardDataEmployee,
+        dashboardDataCapabilities,
+      );
+
+      const dataIsTeamLeader =
+        dashboardDataRoles.includes('team_leader') ||
+        isTruthy(dashboardDataEmployee?.is_team_leader) ||
+        dashboardDataEmployee?.is_team_leader === true ||
+        isTruthy(dashboardDataCapabilities?.is_team_leader) ||
+        dashboardDataCapabilities?.is_team_leader === true ||
+        isTeamLeader;
+
+      const dataIsReportingOfficer =
+        dashboardDataRoles.includes('reporting_officer') ||
+        dashboardDataRoles.includes('ro') ||
+        dashboardDataRoles.includes('manager') ||
+        isTruthy(dashboardDataEmployee?.is_reporting_officer) ||
+        dashboardDataEmployee?.is_reporting_officer === true ||
+        isTruthy(dashboardDataCapabilities?.is_reporting_officer) ||
+        dashboardDataCapabilities?.is_reporting_officer === true ||
+        isReportingOfficer;
+
       const availableModes = [];
-      if (isTeamLeader) availableModes.push('team_leader');
-      if (isReportingOfficer) availableModes.push('reporting_officer');
+      if (dataIsTeamLeader) availableModes.push('team_leader');
+      if (dataIsReportingOfficer) availableModes.push('reporting_officer');
 
       const defaultMode = availableModes.includes(activeMode)
         ? activeMode
@@ -562,14 +719,26 @@ export default function Performance({ setPage }) {
       setActiveMode(defaultMode);
 
       const defaultReviewable = buildUniqueReviewableEmployees(
-        dashboardData?.team_members || [],
-        dashboardData?.reporting_members || [],
+        mergeDashboardEmployees(
+          arrayFromDashboard(dashboardData?.team_members),
+          arrayFromDashboard(dashboardData?.team_member_employees),
+          arrayFromDashboard(dashboardData?.team_scope_members),
+          arrayFromDashboard(dashboardData?.mapped_team_members),
+          arrayFromDashboard(dashboardData?.performance_dashboard?.team_members),
+        ),
+        mergeDashboardEmployees(
+          arrayFromDashboard(dashboardData?.reporting_members),
+          arrayFromDashboard(dashboardData?.reporting_scope_members),
+          arrayFromDashboard(dashboardData?.reporting_employees),
+          arrayFromDashboard(dashboardData?.mapped_reporting_members),
+          arrayFromDashboard(dashboardData?.performance_dashboard?.reporting_members),
+        ),
         defaultMode,
       );
 
       setForm((prev) => {
         const existingStillValid = defaultReviewable.some(
-          (item) => item.employee_id === prev.employee_id,
+          (item) => String(item.employee_id) === String(prev.employee_id),
         );
 
         return {
@@ -597,7 +766,7 @@ export default function Performance({ setPage }) {
       return;
     }
 
-    const stillExists = reviewableEmployees.some((item) => item.employee_id === form.employee_id);
+    const stillExists = reviewableEmployees.some((item) => String(item.employee_id) === String(form.employee_id));
 
     if (!stillExists) {
       setForm((prev) => ({
@@ -685,7 +854,7 @@ export default function Performance({ setPage }) {
     }
   }
 
-  if (!canAccess) {
+  if (!loading && !canAccess) {
     return (
       <main className="performance-page">
         <section className="performance-hero">

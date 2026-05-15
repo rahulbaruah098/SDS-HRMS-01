@@ -1,14 +1,9 @@
 import {
-  BarChart3,
   Bell,
-  Briefcase,
-  CalendarDays,
   CheckCheck,
-  Clock,
   LayoutDashboard,
   LogOut,
   Menu,
-  User,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -52,6 +47,20 @@ function normalizeRoles(user) {
   const singleRole = normalizeRoleValue(user?.role);
 
   return singleRole ? [singleRole] : [];
+}
+
+function truthyValue(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+
+  return ['true', '1', 'yes', 'on'].includes(
+    String(value || '').trim().toLowerCase(),
+  );
 }
 
 function profilePhotoValue(record = {}) {
@@ -241,6 +250,8 @@ function moduleGroup(key) {
     [
       'assets',
       'tickets',
+      'grievances',
+      'it_support',
       'notifications',
       'policies',
       'documents',
@@ -289,6 +300,12 @@ function buildCapabilityText(user) {
     items.push('HR Records');
   }
 
+  if (capabilities.isItSupportHead) {
+    items.push('IT Support Head');
+  } else if (capabilities.isItSupportMember) {
+    items.push('IT Support Member');
+  }
+
   return items.length ? items.join(' + ') : '';
 }
 
@@ -299,10 +316,25 @@ function formatNotificationTime(value) {
 
   try {
     const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+
     return date.toLocaleString();
   } catch {
     return '';
   }
+}
+
+function normalizeNotificationMeta(notification = {}) {
+  return {
+    ...(notification.meta || {}),
+    target: notification.target || notification.meta?.target || notification.target_scope,
+    page: notification.page || notification.meta?.page,
+    type: notification.type || notification.notification_type || notification.meta?.type,
+    notification_type: notification.notification_type || notification.meta?.notification_type,
+  };
 }
 
 function notificationTarget(meta = {}) {
@@ -417,6 +449,18 @@ function notificationTarget(meta = {}) {
     return 'projects';
   }
 
+  if (
+    [
+      'notifications',
+      'notification',
+      'notification_center',
+      'notification-centre',
+      'notification-center',
+    ].includes(target)
+  ) {
+    return 'notifications';
+  }
+
   if (meta.performance_review_id || meta.review_target_type) {
     return 'performance_reviews';
   }
@@ -446,7 +490,23 @@ function notificationTarget(meta = {}) {
     return 'projects';
   }
 
-  return '';
+  return 'notifications';
+}
+
+function notificationBody(notification = {}) {
+  return notification.body || notification.message || 'No details available.';
+}
+
+function notificationIsUnread(notification = {}) {
+  return notification.read !== true && notification.status !== 'read';
+}
+
+function notificationIsPopupPending(notification = {}) {
+  return (
+    notification.show_popup !== false &&
+    notification.popup_seen !== true &&
+    notificationIsUnread(notification)
+  );
 }
 
 export default function AppLayout({ user, setUser, page, setPage, children }) {
@@ -456,6 +516,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [notificationCount, setNotificationCount] = useState(0);
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
+  const [popupNotification, setPopupNotification] = useState(null);
   const notificationRef = useRef(null);
 
   const safeUser = {
@@ -498,7 +559,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
 
-  async function loadNotifications({ silent = false } = {}) {
+  async function loadNotifications({ silent = false, showPopup = true } = {}) {
     if (!safeUser?._id && !safeUser?.email) {
       return;
     }
@@ -510,9 +571,18 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
       const data = await api('/notifications?limit=20');
 
-      setNotifications(data.items || []);
+      const nextItems = data.items || [];
+      setNotifications(nextItems);
       setNotificationCount(Number(data.unread_count || 0));
       setNotificationMessage('');
+
+      if (showPopup) {
+        const nextPopup = nextItems.find(notificationIsPopupPending);
+
+        if (nextPopup) {
+          setPopupNotification(nextPopup);
+        }
+      }
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to load notifications');
     } finally {
@@ -559,54 +629,74 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             );
           }
 
-const compactSyncedUser = {
-  id: syncedUser.id || syncedUser._id || '',
-  _id: syncedUser._id || syncedUser.id || '',
-  name: syncedUser.name || data.employee?.employee_name || '',
-  email: syncedUser.email || '',
-  role: syncedUser.role || '',
-  roles: Array.isArray(syncedUser.roles) ? syncedUser.roles : [],
-  tenant_id: syncedUser.tenant_id || data.employee?.tenant_id || '',
-  employee_id: syncedUser.employee_id || data.employee?.id || data.employee?._id || '',
-  employee_code: syncedUser.employee_code || data.employee?.employee_code || '',
-  department_name: syncedUser.department_name || data.employee?.department_name || '',
-  designation_name: syncedUser.designation_name || data.employee?.designation_name || '',
-  avatar: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
-  profile_photo: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
-  profile_picture: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
-  photo: profilePhotoValue(data.employee) || profilePhotoValue(data.user),
-};
+          const photo = profilePhotoValue(data.employee) || profilePhotoValue(data.user);
 
-const compactSyncedEmployee = {
-  id: data.employee?.id || data.employee?._id || '',
-  _id: data.employee?._id || data.employee?.id || '',
-  employee_name: data.employee?.employee_name || data.employee?.name || '',
-  employee_code: data.employee?.employee_code || '',
-  email: data.employee?.email || '',
-  phone: data.employee?.phone || '',
-  tenant_id: data.employee?.tenant_id || '',
-  department_id: data.employee?.department_id || '',
-  department_name: data.employee?.department_name || '',
-  designation_id: data.employee?.designation_id || '',
-  designation_name: data.employee?.designation_name || '',
-  is_team_leader: Boolean(data.employee?.is_team_leader),
-  is_reporting_officer: Boolean(data.employee?.is_reporting_officer),
-  is_it_support_head: Boolean(data.employee?.is_it_support_head),
-  is_it_support_member: Boolean(data.employee?.is_it_support_member),
-  avatar: profilePhotoValue(data.employee),
-  profile_photo: profilePhotoValue(data.employee),
-  profile_picture: profilePhotoValue(data.employee),
-  photo: profilePhotoValue(data.employee),
-};
+          const compactSyncedUser = {
+            id: syncedUser.id || syncedUser._id || '',
+            _id: syncedUser._id || syncedUser.id || '',
+            name: syncedUser.name || data.employee?.employee_name || '',
+            email: syncedUser.email || '',
+            role: syncedUser.role || '',
+            roles: Array.isArray(syncedUser.roles) ? syncedUser.roles : [],
+            tenant_id: syncedUser.tenant_id || data.employee?.tenant_id || '',
+            employee_id: syncedUser.employee_id || data.employee?.id || data.employee?._id || '',
+            employee_code: syncedUser.employee_code || data.employee?.employee_code || '',
+            department_id: syncedUser.department_id || data.employee?.department_id || '',
+            department_name: syncedUser.department_name || data.employee?.department_name || data.employee?.department || '',
+            designation_id: syncedUser.designation_id || data.employee?.designation_id || '',
+            designation_name: syncedUser.designation_name || data.employee?.designation_name || data.employee?.designation || '',
+            team_leader_id: data.employee?.team_leader_id || '',
+            team_leader_name: data.employee?.team_leader_name || '',
+            reporting_officer_id: data.employee?.reporting_officer_id || '',
+            reporting_officer_name: data.employee?.reporting_officer_name || '',
+            is_team_leader: truthyValue(data.employee?.is_team_leader),
+            is_reporting_officer: truthyValue(data.employee?.is_reporting_officer),
+            is_it_support_head: truthyValue(data.employee?.is_it_support_head),
+            is_it_support_member: truthyValue(data.employee?.is_it_support_member),
+            avatar: photo,
+            profile_photo: photo,
+            profile_picture: photo,
+            photo,
+          };
 
-try {
-  localStorage.setItem('sds_hrms_user', JSON.stringify(compactSyncedUser));
-  localStorage.setItem('sds_hrms_employee', JSON.stringify(compactSyncedEmployee));
-} catch (error) {
-  console.warn('Unable to refresh compact session in localStorage', error);
-}
+          const employeePhoto = profilePhotoValue(data.employee);
 
-setUser(syncedUser);
+          const compactSyncedEmployee = {
+            id: data.employee?.id || data.employee?._id || '',
+            _id: data.employee?._id || data.employee?.id || '',
+            employee_name: data.employee?.employee_name || data.employee?.name || '',
+            employee_code: data.employee?.employee_code || '',
+            email: data.employee?.email || '',
+            phone: data.employee?.phone || '',
+            tenant_id: data.employee?.tenant_id || '',
+            department_id: data.employee?.department_id || '',
+            department_name: data.employee?.department_name || data.employee?.department || '',
+            department: data.employee?.department || data.employee?.department_name || '',
+            designation_id: data.employee?.designation_id || '',
+            designation_name: data.employee?.designation_name || data.employee?.designation || '',
+            designation: data.employee?.designation || data.employee?.designation_name || '',
+            team_leader_id: data.employee?.team_leader_id || '',
+            team_leader_name: data.employee?.team_leader_name || '',
+            reporting_officer_id: data.employee?.reporting_officer_id || '',
+            reporting_officer_name: data.employee?.reporting_officer_name || '',
+            is_team_leader: truthyValue(data.employee?.is_team_leader),
+            is_reporting_officer: truthyValue(data.employee?.is_reporting_officer),
+            is_it_support_head: truthyValue(data.employee?.is_it_support_head),
+            is_it_support_member: truthyValue(data.employee?.is_it_support_member),
+            avatar: employeePhoto,
+            profile_photo: employeePhoto,
+            profile_picture: employeePhoto,
+            photo: employeePhoto,
+          };
+
+          try {
+            localStorage.setItem('sds_hrms_user', JSON.stringify(compactSyncedUser));
+            localStorage.setItem('sds_hrms_employee', JSON.stringify(compactSyncedEmployee));
+          } catch (error) {
+            console.warn('Unable to refresh compact session in localStorage', error);
+          }
+
+          setUser(syncedUser);
         }
       } catch {
         // Ignore session refresh failure here; api() handles expired sessions globally.
@@ -618,10 +708,10 @@ setUser(syncedUser);
   }, []);
 
   useEffect(() => {
-    loadNotifications({ silent: true });
+    loadNotifications({ silent: true, showPopup: true });
 
     const interval = window.setInterval(() => {
-      loadNotifications({ silent: true });
+      loadNotifications({ silent: true, showPopup: true });
     }, 30000);
 
     return () => window.clearInterval(interval);
@@ -674,11 +764,11 @@ setUser(syncedUser);
     setNotificationOpen(nextOpen);
 
     if (nextOpen) {
-      await loadNotifications();
+      await loadNotifications({ showPopup: false });
     }
   }
 
-  async function markNotificationRead(notification) {
+  async function markNotificationRead(notification, shouldNavigate = true) {
     if (!notification?._id) {
       return;
     }
@@ -688,20 +778,35 @@ setUser(syncedUser);
         method: 'PATCH',
       });
 
-      const target = notificationTarget({
-        ...(notification.meta || {}),
-        target: notification.target || notification.meta?.target,
-        page: notification.page || notification.meta?.page,
-        type: notification.type || notification.meta?.type,
-      });
+      if (shouldNavigate) {
+        const target = notificationTarget(normalizeNotificationMeta(notification));
 
-      if (target) {
-        goTo(target);
+        if (target) {
+          goTo(target);
+        }
       }
 
-      await loadNotifications({ silent: true });
+      await loadNotifications({ silent: true, showPopup: false });
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to update notification');
+    }
+  }
+
+  async function markNotificationPopupSeen(notification) {
+    if (!notification?._id) {
+      setPopupNotification(null);
+      return;
+    }
+
+    try {
+      await api(`/notifications/${notification._id}/popup_seen`, {
+        method: 'PATCH',
+      });
+
+      setPopupNotification(null);
+      await loadNotifications({ silent: true, showPopup: false });
+    } catch {
+      setPopupNotification(null);
     }
   }
 
@@ -711,9 +816,20 @@ setUser(syncedUser);
         method: 'PATCH',
       });
 
-      await loadNotifications({ silent: true });
+      await loadNotifications({ silent: true, showPopup: false });
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to mark all as read');
+    }
+  }
+
+  async function openPopupNotification(notification) {
+    const target = notificationTarget(normalizeNotificationMeta(notification));
+
+    await markNotificationRead(notification, false);
+    await markNotificationPopupSeen(notification);
+
+    if (target) {
+      goTo(target);
     }
   }
 
@@ -809,9 +925,337 @@ setUser(syncedUser);
           text-align: left;
         }
 
+        .notification-wrap {
+          position: relative;
+        }
+
+        .notification-btn {
+          position: relative;
+        }
+
+        .notification-badge {
+          position: absolute;
+          top: -7px;
+          right: -7px;
+          min-width: 18px;
+          height: 18px;
+          border-radius: 999px;
+          padding: 0 5px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: #ef4444;
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 900;
+          border: 2px solid #ffffff;
+        }
+
+        .notification-panel {
+          position: absolute;
+          top: calc(100% + 12px);
+          right: 0;
+          width: min(380px, calc(100vw - 24px));
+          max-height: 520px;
+          background: #ffffff;
+          border: 1px solid #e5e7eb;
+          border-radius: 20px;
+          box-shadow: 0 24px 70px rgba(15, 23, 42, .22);
+          z-index: 80;
+          overflow: hidden;
+        }
+
+        .notification-head {
+          padding: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-bottom: 1px solid #edf2f7;
+          background: #f8fafc;
+        }
+
+        .notification-head b {
+          display: block;
+          color: #0f172a;
+          font-size: 15px;
+        }
+
+        .notification-head small {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          margin-top: 3px;
+        }
+
+        .notification-mark-all {
+          border: 0;
+          border-radius: 12px;
+          padding: 8px 10px;
+          background: #eef4ff;
+          color: #1d4ed8;
+          font-weight: 900;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+        }
+
+        .notification-mark-all:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+        }
+
+        .notification-message {
+          margin: 10px;
+          border-radius: 12px;
+          padding: 10px;
+          background: #fff1f2;
+          color: #be123c;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .notification-list {
+          max-height: 430px;
+          overflow-y: auto;
+          padding: 8px;
+        }
+
+        .notification-empty {
+          padding: 22px 12px;
+          text-align: center;
+          color: #64748b;
+          font-weight: 800;
+        }
+
+        .notification-item {
+          width: 100%;
+          border: 0;
+          border-radius: 14px;
+          padding: 11px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 10px;
+          background: transparent;
+          cursor: pointer;
+          transition: background .18s ease, transform .18s ease;
+        }
+
+        .notification-item:hover {
+          background: #f8fafc;
+          transform: translateY(-1px);
+        }
+
+        .notification-item.unread {
+          background: #eff6ff;
+        }
+
+        .notification-item.read {
+          opacity: .78;
+        }
+
+        .notification-dot {
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          margin-top: 6px;
+          background: #cbd5e1;
+        }
+
+        .notification-item.unread .notification-dot {
+          background: #2563eb;
+          box-shadow: 0 0 0 4px rgba(37, 99, 235, .13);
+        }
+
+        .notification-item b {
+          display: block;
+          color: #0f172a;
+          font-size: 13px;
+          margin-bottom: 4px;
+        }
+
+        .notification-item small {
+          display: -webkit-box;
+          color: #475569;
+          font-size: 12px;
+          line-height: 1.4;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .notification-item em {
+          display: block;
+          margin-top: 5px;
+          color: #94a3b8;
+          font-size: 11px;
+          font-style: normal;
+        }
+
+        .layout-popup-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 120;
+          display: flex;
+          align-items: flex-start;
+          justify-content: center;
+          padding: 84px 18px 18px;
+          background: rgba(15, 23, 42, .24);
+          backdrop-filter: blur(3px);
+          animation: layoutFadeIn .2s ease both;
+        }
+
+        .layout-popup-card {
+          width: min(520px, 100%);
+          border-radius: 24px;
+          background: #ffffff;
+          border: 1px solid #dbeafe;
+          box-shadow: 0 28px 85px rgba(15, 23, 42, .28);
+          overflow: hidden;
+          animation: layoutPopupIn .28s cubic-bezier(.2,.85,.2,1.1) both;
+        }
+
+        .layout-popup-top {
+          padding: 18px;
+          background:
+            radial-gradient(circle at top left, rgba(250,204,21,.28), transparent 32%),
+            linear-gradient(135deg, #1e293b, #2563eb);
+          color: #ffffff;
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 14px;
+        }
+
+        .layout-popup-top span {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.14);
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .04em;
+          text-transform: uppercase;
+        }
+
+        .layout-popup-close {
+          border: 0;
+          width: 34px;
+          height: 34px;
+          border-radius: 12px;
+          color: #ffffff;
+          background: rgba(255,255,255,.14);
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .layout-popup-body {
+          padding: 18px;
+        }
+
+        .layout-popup-body h3 {
+          margin: 0 0 8px;
+          color: #0f172a;
+          font-size: 22px;
+        }
+
+        .layout-popup-body p {
+          margin: 0;
+          color: #475569;
+          line-height: 1.6;
+          white-space: pre-wrap;
+        }
+
+        .layout-popup-meta {
+          margin-top: 12px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .layout-popup-pill {
+          border-radius: 999px;
+          padding: 7px 10px;
+          color: #1d4ed8;
+          background: #dbeafe;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: capitalize;
+        }
+
+        .layout-popup-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 0 18px 18px;
+        }
+
+        .layout-popup-soft,
+        .layout-popup-primary {
+          border: 0;
+          border-radius: 14px;
+          padding: 11px 14px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .layout-popup-soft {
+          color: #475569;
+          background: #f1f5f9;
+        }
+
+        .layout-popup-primary {
+          color: #ffffff;
+          background: #2563eb;
+          box-shadow: 0 12px 24px rgba(37, 99, 235, .22);
+        }
+
+        @keyframes layoutFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes layoutPopupIn {
+          from {
+            opacity: 0;
+            transform: translateY(-18px) scale(.96);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
         @media (max-width: 720px) {
           .layout-photo-aware .user-chip span:last-child {
             max-width: 110px;
+          }
+
+          .notification-panel {
+            position: fixed;
+            top: 72px;
+            right: 12px;
+            left: 12px;
+            width: auto;
+          }
+
+          .layout-popup-backdrop {
+            align-items: flex-start;
+            padding-top: 76px;
+          }
+
+          .layout-popup-actions {
+            flex-direction: column;
+          }
+
+          .layout-popup-soft,
+          .layout-popup-primary {
+            width: 100%;
           }
         }
       `}</style>
@@ -972,14 +1416,16 @@ setUser(syncedUser);
                         <button
                           type="button"
                           key={notification._id}
-                          className={`notification-item ${notification.read ? 'read' : 'unread'}`}
+                          className={`notification-item ${
+                            notificationIsUnread(notification) ? 'unread' : 'read'
+                          }`}
                           onClick={() => markNotificationRead(notification)}
                         >
                           <span className="notification-dot" />
 
                           <span>
                             <b>{notification.title || 'Notification'}</b>
-                            <small>{notification.body || 'No details available.'}</small>
+                            <small>{notificationBody(notification)}</small>
                             <em>{formatNotificationTime(notification.created_at)}</em>
                           </span>
                         </button>
@@ -998,6 +1444,64 @@ setUser(syncedUser);
 
         {children}
       </main>
+
+      {popupNotification ? (
+        <div className="layout-popup-backdrop">
+          <div className="layout-popup-card">
+            <div className="layout-popup-top">
+              <span>
+                <Bell size={15} />
+                New Notification
+              </span>
+
+              <button
+                type="button"
+                className="layout-popup-close"
+                onClick={() => markNotificationPopupSeen(popupNotification)}
+                aria-label="Close notification popup"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="layout-popup-body">
+              <h3>{popupNotification.title || 'Notification'}</h3>
+              <p>{notificationBody(popupNotification)}</p>
+
+              <div className="layout-popup-meta">
+                <span className="layout-popup-pill">
+                  {popupNotification.priority || 'normal'}
+                </span>
+                <span className="layout-popup-pill">
+                  {popupNotification.notification_type || 'general'}
+                </span>
+                {popupNotification.created_by_name ? (
+                  <span className="layout-popup-pill">
+                    From: {popupNotification.created_by_name}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="layout-popup-actions">
+              <button
+                type="button"
+                className="layout-popup-soft"
+                onClick={() => markNotificationPopupSeen(popupNotification)}
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                className="layout-popup-primary"
+                onClick={() => openPopupNotification(popupNotification)}
+              >
+                Open Notification
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

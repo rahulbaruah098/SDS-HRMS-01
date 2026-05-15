@@ -162,7 +162,6 @@ export function normalizePeopleList(people = []) {
   return people.map((person) => normalizePerson(person)).filter(Boolean);
 }
 
-
 export function toNumber(value, fallback = 0) {
   const number = Number(value);
 
@@ -171,6 +170,18 @@ export function toNumber(value, fallback = 0) {
   }
 
   return fallback;
+}
+
+export function toBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+
+  return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 export function clampNumber(value, min = 0, max = 100) {
@@ -1081,6 +1092,528 @@ export function deleteCollectionItem(collection, itemId) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Master Dropdown APIs                                                       */
+/* -------------------------------------------------------------------------- */
+
+export function normalizeMasterOption(item = {}, fallbackLabelKeys = []) {
+  if (!item || typeof item !== 'object') {
+    return item;
+  }
+
+  const id = item.id || item._id || '';
+  const labelKeys = [
+    ...fallbackLabelKeys,
+    'name',
+    'title',
+    'label',
+    'department_name',
+    'designation_name',
+    'state_name',
+    'code',
+  ];
+
+  let label = '';
+
+  for (const key of labelKeys) {
+    const value = String(item[key] || '').trim();
+
+    if (value) {
+      label = value;
+      break;
+    }
+  }
+
+  return {
+    ...item,
+    id,
+    _id: item._id || id,
+    value: item.value || id || label,
+    label: item.label || label || 'Option',
+    name: item.name || label || item.label || '',
+  };
+}
+
+export function normalizeMasterOptionList(items = [], fallbackLabelKeys = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items
+    .map((item) => normalizeMasterOption(item, fallbackLabelKeys))
+    .filter(Boolean);
+}
+
+export function getDepartments(params = {}) {
+  return listCollection('departments', {
+    limit: 500,
+    ...params,
+  }).then((data = {}) => ({
+    ...data,
+    items: normalizeMasterOptionList(data.items || [], ['department_name']),
+  }));
+}
+
+export function getDesignations(params = {}) {
+  return listCollection('designations', {
+    limit: 500,
+    ...params,
+  }).then((data = {}) => ({
+    ...data,
+    items: normalizeMasterOptionList(data.items || [], ['designation_name', 'title']),
+  }));
+}
+
+export function getStates(params = {}) {
+  return listCollection('states', {
+    limit: 500,
+    ...params,
+  }).then((data = {}) => ({
+    ...data,
+    items: normalizeMasterOptionList(data.items || [], ['state_name']),
+  }));
+}
+
+export async function getEmployeeFormOptions(params = {}) {
+  const [departments, designations, states] = await Promise.all([
+    getDepartments(params.departments || {}),
+    getDesignations(params.designations || {}),
+    getStates(params.states || {}),
+  ]);
+
+  return {
+    departments: departments.items || [],
+    designations: designations.items || [],
+    states: states.items || [],
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Employee / Alumni APIs                                                     */
+/* -------------------------------------------------------------------------- */
+
+export const EMPLOYEE_CSV_COLUMNS = [
+  ['employee_id', 'Employee ID'],
+  ['emp_code', 'Employee Code'],
+  ['name', 'Name'],
+  ['employee_name', 'Employee Name'],
+  ['email', 'Email'],
+  ['official_email', 'Official Email'],
+  ['phone', 'Phone'],
+  ['mobile', 'Mobile'],
+  ['department', 'Department'],
+  ['designation', 'Designation'],
+  ['branch', 'Branch'],
+  ['state', 'State'],
+  ['role', 'Role'],
+  ['employee_type', 'Employee Type'],
+  ['job_type', 'Job Type'],
+  ['joining_date', 'Joining Date'],
+  ['date_of_joining', 'Date Of Joining'],
+  ['status', 'Status'],
+  ['employment_status', 'Employment Status'],
+];
+
+export const ALUMNI_CSV_COLUMNS = [
+  ['employee_id', 'Employee ID'],
+  ['emp_code', 'Employee Code'],
+  ['name', 'Name'],
+  ['employee_name', 'Employee Name'],
+  ['email', 'Email'],
+  ['official_email', 'Official Email'],
+  ['phone', 'Phone'],
+  ['mobile', 'Mobile'],
+  ['department', 'Department'],
+  ['designation', 'Designation'],
+  ['branch', 'Branch'],
+  ['state', 'State'],
+  ['joining_date', 'Joining Date'],
+  ['date_of_joining', 'Date Of Joining'],
+  ['last_working_date', 'Last Working Date'],
+  ['resignation_date', 'Resignation Date'],
+  ['resignation_reason', 'Resignation Reason'],
+  ['exit_type', 'Exit Type'],
+  ['status', 'Status'],
+  ['employment_status', 'Employment Status'],
+];
+
+export function normalizeEmployee(employee = {}) {
+  if (!employee || typeof employee !== 'object') {
+    return employee;
+  }
+
+  const normalized = normalizePerson(withProfilePhotoAliases({ ...employee }));
+
+  normalized.id = normalized.id || normalized._id || '';
+  normalized._id = normalized._id || normalized.id || '';
+
+  normalized.name =
+    normalized.name ||
+    normalized.employee_name ||
+    normalized.full_name ||
+    normalized.email ||
+    'Employee';
+
+  normalized.employee_name = normalized.employee_name || normalized.name;
+
+  normalized.employee_id =
+    normalized.employee_id ||
+    normalized.employee_code ||
+    normalized.emp_code ||
+    normalized.code ||
+    '';
+
+  normalized.emp_code =
+    normalized.emp_code ||
+    normalized.employee_code ||
+    normalized.employee_id ||
+    normalized.code ||
+    '';
+
+  normalized.email = normalized.email || normalized.official_email || '';
+  normalized.official_email = normalized.official_email || normalized.email || '';
+
+  normalized.phone = normalized.phone || normalized.mobile || '';
+  normalized.mobile = normalized.mobile || normalized.phone || '';
+
+  normalized.department = normalized.department || normalized.department_name || '';
+  normalized.designation = normalized.designation || normalized.designation_name || '';
+  normalized.branch = normalized.branch || normalized.location || '';
+
+  normalized.is_team_leader = toBoolean(normalized.is_team_leader);
+  normalized.is_reporting_officer = toBoolean(normalized.is_reporting_officer);
+  normalized.is_it_support_head = toBoolean(normalized.is_it_support_head);
+  normalized.is_it_support_member = toBoolean(normalized.is_it_support_member);
+
+  normalized.team_leader_id = normalized.team_leader_id || '';
+  normalized.team_leader_name = normalized.team_leader_name || '';
+  normalized.reporting_officer_id = normalized.reporting_officer_id || '';
+  normalized.reporting_officer_name = normalized.reporting_officer_name || '';
+
+  normalized.status = normalized.status || 'active';
+  normalized.employment_status = normalized.employment_status || normalized.status || 'active';
+
+  normalized.is_alumni = Boolean(
+    normalized.is_alumni ||
+      ['inactive', 'resigned', 'left', 'terminated', 'alumni', 'ex-employee', 'ex_employee'].includes(
+        String(normalized.status || '').trim().toLowerCase(),
+      ) ||
+      ['inactive', 'resigned', 'left', 'terminated', 'alumni', 'ex-employee', 'ex_employee'].includes(
+        String(normalized.employment_status || '').trim().toLowerCase(),
+      ) ||
+      Boolean(normalized.last_working_date),
+  );
+
+  normalized.status_label = normalized.is_alumni
+    ? normalized.employment_status || normalized.status || 'Resigned'
+    : normalized.employment_status || normalized.status || 'Active';
+
+  return normalized;
+}
+
+export function normalizeEmployeeList(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeEmployee(item)).filter(Boolean);
+}
+
+export function normalizeEmployeePayload(payload = {}) {
+  const normalizedPayload = { ...payload };
+
+  const name = firstNonEmpty(
+    normalizedPayload.name,
+    normalizedPayload.employee_name,
+    normalizedPayload.full_name,
+  );
+
+  const email = firstNonEmpty(
+    normalizedPayload.email,
+    normalizedPayload.official_email,
+  );
+
+  if (name) {
+    normalizedPayload.name = name;
+    normalizedPayload.employee_name = name;
+  }
+
+  if (email) {
+    normalizedPayload.email = email;
+    normalizedPayload.official_email = normalizedPayload.official_email || email;
+  }
+
+  if (normalizedPayload.phone && !normalizedPayload.mobile) {
+    normalizedPayload.mobile = normalizedPayload.phone;
+  }
+
+  if (normalizedPayload.mobile && !normalizedPayload.phone) {
+    normalizedPayload.phone = normalizedPayload.mobile;
+  }
+
+  if (normalizedPayload.date_of_joining && !normalizedPayload.joining_date) {
+    normalizedPayload.joining_date = normalizedPayload.date_of_joining;
+  }
+
+  if (normalizedPayload.joining_date && !normalizedPayload.date_of_joining) {
+    normalizedPayload.date_of_joining = normalizedPayload.joining_date;
+  }
+
+  if (normalizedPayload.date_of_birth && !normalizedPayload.dob) {
+    normalizedPayload.dob = normalizedPayload.date_of_birth;
+  }
+
+  if (normalizedPayload.dob && !normalizedPayload.date_of_birth) {
+    normalizedPayload.date_of_birth = normalizedPayload.dob;
+  }
+
+  if ('is_team_leader' in normalizedPayload) {
+    normalizedPayload.is_team_leader = toBoolean(normalizedPayload.is_team_leader) ? 'true' : 'false';
+  }
+
+  if ('is_reporting_officer' in normalizedPayload) {
+    normalizedPayload.is_reporting_officer = toBoolean(normalizedPayload.is_reporting_officer) ? 'true' : 'false';
+  }
+
+  if ('team_leader_id' in normalizedPayload && !normalizedPayload.team_leader_id) {
+    normalizedPayload.team_leader_name = '';
+  }
+
+  if ('reporting_officer_id' in normalizedPayload && !normalizedPayload.reporting_officer_id) {
+    normalizedPayload.reporting_officer_name = '';
+  }
+
+  return normalizedPayload;
+}
+
+export function getEmployees(params = {}) {
+  return listCollection('employees', params).then((data = {}) => ({
+    ...data,
+    items: normalizeEmployeeList(data.items || []),
+  }));
+}
+
+export function getActiveEmployees(params = {}) {
+  return getEmployees({
+    ...params,
+    employee_scope: params.employee_scope || 'active',
+  });
+}
+
+export function getAlumniEmployees(params = {}) {
+  return getEmployees({
+    ...params,
+    employee_scope: 'alumni',
+  });
+}
+
+export function getAllEmployees(params = {}) {
+  return getEmployees({
+    ...params,
+    employee_scope: 'all',
+  });
+}
+
+export function getTeamLeaderOptions(params = {}) {
+  return getEmployees({
+    limit: 500,
+    ...params,
+    employee_scope: params.employee_scope || 'active',
+    employee_picker: 'team_leader',
+  });
+}
+
+export function getReportingOfficerOptions(params = {}) {
+  return getEmployees({
+    limit: 500,
+    ...params,
+    employee_scope: params.employee_scope || 'active',
+    employee_picker: 'reporting_officer',
+  });
+}
+
+export function createEmployee(payload = {}) {
+  return createCollectionItem('employees', normalizeEmployeePayload(payload)).then((data = {}) => ({
+    ...data,
+    item: normalizeEmployee(data.item || {}),
+  }));
+}
+
+export function createPastEmployee(payload = {}) {
+  const normalizedPayload = normalizeEmployeePayload({
+    ...payload,
+    is_alumni: true,
+    skip_login: true,
+    status: payload.status || 'Resigned',
+    employment_status: payload.employment_status || payload.status || 'Resigned',
+  });
+
+  return createEmployee(normalizedPayload);
+}
+
+export function updateEmployee(employeeId, payload = {}) {
+  return updateCollectionItem('employees', employeeId, normalizeEmployeePayload(payload)).then((data = {}) => ({
+    ...data,
+    item: normalizeEmployee(data.item || {}),
+  }));
+}
+
+export function markEmployeeAsResigned(employeeId, payload = {}) {
+  const normalizedPayload = normalizeEmployeePayload({
+    ...payload,
+    is_alumni: true,
+    status: payload.status || 'Resigned',
+    employment_status: payload.employment_status || payload.status || 'Resigned',
+    last_working_date:
+      payload.last_working_date ||
+      payload.resignation_date ||
+      new Date().toISOString().slice(0, 10),
+  });
+
+  return updateEmployee(employeeId, normalizedPayload);
+}
+
+export function restoreEmployeeFromAlumni(employeeId, payload = {}) {
+  const normalizedPayload = normalizeEmployeePayload({
+    ...payload,
+    is_alumni: false,
+    status: payload.status || 'active',
+    employment_status: payload.employment_status || payload.status || 'active',
+    last_working_date: '',
+    resignation_date: '',
+    resignation_reason: '',
+    exit_type: '',
+  });
+
+  return updateEmployee(employeeId, normalizedPayload);
+}
+
+export function employeeMatchesSearch(employee = {}, searchText = '') {
+  const query = String(searchText || '').trim().toLowerCase();
+
+  if (!query) {
+    return true;
+  }
+
+  const searchableValues = [
+    employee.name,
+    employee.employee_name,
+    employee.full_name,
+    employee.email,
+    employee.official_email,
+    employee.phone,
+    employee.mobile,
+    employee.employee_id,
+    employee.emp_code,
+    employee.employee_code,
+    employee.department,
+    employee.department_name,
+    employee.designation,
+    employee.designation_name,
+    employee.branch,
+    employee.state,
+    employee.role,
+    employee.employee_type,
+    employee.job_type,
+    employee.status,
+    employee.employment_status,
+    employee.resignation_reason,
+    employee.exit_type,
+    employee.last_working_date,
+  ];
+
+  return searchableValues
+    .map((value) => String(value || '').toLowerCase())
+    .some((value) => value.includes(query));
+}
+
+export function filterEmployees(items = [], filters = {}) {
+  const searchText = filters.q || filters.search || '';
+  const department = String(filters.department || '').trim().toLowerCase();
+  const designation = String(filters.designation || '').trim().toLowerCase();
+  const branch = String(filters.branch || '').trim().toLowerCase();
+  const employmentStatus = String(filters.employment_status || filters.status || '').trim().toLowerCase();
+
+  return normalizeEmployeeList(items).filter((employee) => {
+    if (!employeeMatchesSearch(employee, searchText)) {
+      return false;
+    }
+
+    if (department && String(employee.department || '').trim().toLowerCase() !== department) {
+      return false;
+    }
+
+    if (designation && String(employee.designation || '').trim().toLowerCase() !== designation) {
+      return false;
+    }
+
+    if (branch && String(employee.branch || '').trim().toLowerCase() !== branch) {
+      return false;
+    }
+
+    if (
+      employmentStatus &&
+      String(employee.employment_status || employee.status || '').trim().toLowerCase() !== employmentStatus
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+export function downloadCsv(filename = 'data.csv', rows = [], columns = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeColumns = Array.isArray(columns) && columns.length
+    ? columns
+    : Object.keys(safeRows[0] || {}).map((key) => [key, key]);
+
+  const header = safeColumns.map(([, label]) => csvEscape(label)).join(',');
+  const body = safeRows
+    .map((row) =>
+      safeColumns
+        .map(([key]) => csvEscape(row?.[key] ?? ''))
+        .join(','),
+    )
+    .join('\n');
+
+  const csv = [header, body].filter(Boolean).join('\n');
+  const blob = new Blob([csv], {
+    type: 'text/csv;charset=utf-8;',
+  });
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return true;
+}
+
+export function downloadEmployeeCsv(rows = [], filename = 'active-employees.csv') {
+  return downloadCsv(filename, normalizeEmployeeList(rows), EMPLOYEE_CSV_COLUMNS);
+}
+
+export function downloadAlumniCsv(rows = [], filename = 'alumni-employees.csv') {
+  return downloadCsv(filename, normalizeEmployeeList(rows), ALUMNI_CSV_COLUMNS);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Policy APIs                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -1306,7 +1839,6 @@ export function runTodayCelebrations(payload = {}) {
     items: normalizeCelebrationList(data.items || []),
   }));
 }
-
 
 /* -------------------------------------------------------------------------- */
 /* Dashboard APIs                                                             */
@@ -2394,6 +2926,7 @@ export function reopenItSupportTicket(ticketId, payload = {}) {
     ticket: normalizeItSupportTicket(data.ticket || {}),
   }));
 }
+
 /* -------------------------------------------------------------------------- */
 /* Password Request APIs                                                      */
 /* -------------------------------------------------------------------------- */

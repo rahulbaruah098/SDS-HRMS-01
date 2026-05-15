@@ -70,6 +70,20 @@ def normalize_text(value):
     return str(value or "").strip()
 
 
+def normalize_email(value):
+    return normalize_text(value).lower()
+
+
+def normalize_role(value):
+    return (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
 def normalize_mode(value):
     return normalize_text(value).lower()
 
@@ -132,12 +146,22 @@ def current_user_roles():
     roles = g.current_user.get("roles", [])
 
     if isinstance(roles, list):
-        return set([str(role).strip() for role in roles if str(role).strip()])
+        return {
+            normalize_role(role)
+            for role in roles
+            if normalize_role(role)
+        }
 
     if isinstance(roles, str):
-        return set([role.strip() for role in roles.split(",") if role.strip()])
+        return {
+            normalize_role(role)
+            for role in roles.split(",")
+            if normalize_role(role)
+        }
 
-    return set()
+    role = normalize_role(g.current_user.get("role"))
+
+    return {role} if role else set()
 
 
 def has_role(*allowed_roles):
@@ -147,45 +171,65 @@ def has_role(*allowed_roles):
 
 def emp(db):
     tenant_id = current_tenant_id()
-    user_id = str(g.current_user["_id"])
-    user_email = normalize_text(g.current_user.get("email")).lower()
+    user_id = str(g.current_user.get("_id") or "")
+
+    if not user_id:
+        return None
+
+    user_email = normalize_email(
+        g.current_user.get("email")
+        or g.current_user.get("username")
+        or g.current_user.get("official_email")
+    )
+
+    user_employee_id = normalize_text(
+        g.current_user.get("employee_id")
+        or g.current_user.get("employee_ref_id")
+        or g.current_user.get("emp_code")
+    )
+
+    identifier_or = [
+        {"user_id": user_id},
+        {"employee_ref_id": user_id},
+    ]
+
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        identifier_or.append({"_id": user_obj_id})
+
+    if user_employee_id:
+        identifier_or.extend([
+            {"employee_id": user_employee_id},
+            {"employee_code": user_employee_id},
+            {"emp_code": user_employee_id},
+            {"code": user_employee_id},
+        ])
+
+        employee_obj_id = safe_object_id(user_employee_id)
+
+        if employee_obj_id:
+            identifier_or.append({"_id": employee_obj_id})
+
+    if user_email:
+        identifier_or.extend([
+            {"email": user_email},
+            {"official_email": user_email},
+        ])
 
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
     if employee:
         return employee
 
-    employee = db.employees.find_one({
-        "user_id": user_id,
+    return db.employees.find_one({
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
-
-    if employee:
-        return employee
-
-    if user_email:
-        employee = db.employees.find_one({
-            "tenant_id": tenant_id,
-            "email": {"$regex": f"^{user_email}$", "$options": "i"},
-            "is_deleted": {"$ne": True},
-        })
-
-        if employee:
-            db.employees.update_one(
-                {"_id": employee["_id"]},
-                {"$set": {
-                    "user_id": user_id,
-                    "updated_at": datetime.utcnow(),
-                }},
-            )
-            employee["user_id"] = user_id
-            return employee
-
-    return None
 
 
 def employee_state(employee):
@@ -212,6 +256,94 @@ def employee_code(employee):
         or employee.get("emp_code")
         or employee.get("code")
         or ""
+    )
+
+
+def employee_identifier_values(employee):
+    employee = employee or {}
+    values = []
+
+    raw_values = [
+        employee.get("_id"),
+        str(employee.get("_id")) if employee.get("_id") else "",
+        employee.get("id"),
+        employee.get("user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+        employee.get("official_email"),
+    ]
+
+    for value in raw_values:
+        text_value = normalize_text(value)
+
+        if not text_value:
+            continue
+
+        if text_value not in values:
+            values.append(text_value)
+
+        object_value = safe_object_id(text_value)
+
+        if object_value and object_value not in values:
+            values.append(object_value)
+
+    return values
+
+
+def employee_is_team_leader(employee):
+    employee = employee or {}
+    roles = set()
+
+    raw_roles = employee.get("roles", [])
+
+    if isinstance(raw_roles, list):
+        roles.update(normalize_role(role) for role in raw_roles if normalize_role(role))
+    elif isinstance(raw_roles, str):
+        roles.update(normalize_role(role) for role in raw_roles.split(",") if normalize_role(role))
+
+    role = normalize_role(employee.get("role"))
+
+    if role:
+        roles.add(role)
+
+    return bool(
+        truthy(employee.get("is_team_leader"))
+        or truthy(employee.get("team_leader_capability"))
+        or truthy(employee.get("tl_capability"))
+        or "team_leader" in roles
+        or "team_leader_capability" in roles
+        or "tl" in roles
+    )
+
+
+def employee_is_reporting_officer(employee):
+    employee = employee or {}
+    roles = set()
+
+    raw_roles = employee.get("roles", [])
+
+    if isinstance(raw_roles, list):
+        roles.update(normalize_role(role) for role in raw_roles if normalize_role(role))
+    elif isinstance(raw_roles, str):
+        roles.update(normalize_role(role) for role in raw_roles.split(",") if normalize_role(role))
+
+    role = normalize_role(employee.get("role"))
+
+    if role:
+        roles.add(role)
+
+    return bool(
+        truthy(employee.get("is_reporting_officer"))
+        or truthy(employee.get("reporting_officer_capability"))
+        or truthy(employee.get("ro_capability"))
+        or "reporting_officer" in roles
+        or "reporting_officer_capability" in roles
+        or "ro" in roles
+        or "manager" in roles
     )
 
 
@@ -250,20 +382,25 @@ def scoped_employee_ids_for_manager(db):
         return []
 
     current_emp_id = str(current_emp["_id"])
+    identifier_values = employee_identifier_values(current_emp)
+
+    if current_emp_id not in identifier_values:
+        identifier_values.append(current_emp_id)
+
     scope_or = []
 
-    if roles.intersection(TEAM_SCOPE_ROLES) or truthy(current_emp.get("is_team_leader")):
-        scope_or.append({"team_leader_id": current_emp_id})
+    if roles.intersection(TEAM_SCOPE_ROLES) or employee_is_team_leader(current_emp):
+        scope_or.append({"team_leader_id": {"$in": identifier_values}})
 
-    if roles.intersection(REPORTING_SCOPE_ROLES) or truthy(current_emp.get("is_reporting_officer")):
-        scope_or.append({"reporting_officer_id": current_emp_id})
+    if roles.intersection(REPORTING_SCOPE_ROLES) or employee_is_reporting_officer(current_emp):
+        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
 
     if not scope_or:
         return []
 
     rows = list(
         db.employees.find({
-            "tenant_id": current_tenant_id(),
+            "tenant_id": current_emp.get("tenant_id") or current_tenant_id(),
             "status": {"$ne": "Inactive"},
             "is_deleted": {"$ne": True},
             "$or": scope_or,
@@ -472,13 +609,12 @@ def users_for_roles(db, role_names, tenant_id=None):
 
 
 def employee_user_id(db, employee_id, tenant_id=None):
-    emp_obj_id = safe_object_id(employee_id)
+    raw_id = normalize_text(employee_id)
 
-    if not emp_obj_id:
+    if not raw_id:
         return ""
 
     q = {
-        "_id": emp_obj_id,
         "is_deleted": {"$ne": True},
     }
 
@@ -487,7 +623,26 @@ def employee_user_id(db, employee_id, tenant_id=None):
     else:
         q["tenant_id"] = current_tenant_id()
 
-    row = db.employees.find_one(q)
+    identifier_or = [
+        {"user_id": raw_id},
+        {"employee_id": raw_id},
+        {"employee_ref_id": raw_id},
+        {"employee_code": raw_id},
+        {"emp_code": raw_id},
+        {"code": raw_id},
+        {"email": normalize_email(raw_id)},
+        {"official_email": normalize_email(raw_id)},
+    ]
+
+    employee_obj_id = safe_object_id(raw_id)
+
+    if employee_obj_id:
+        identifier_or.insert(0, {"_id": employee_obj_id})
+
+    row = db.employees.find_one({
+        **q,
+        "$or": identifier_or,
+    })
 
     return str(row.get("user_id", "")) if row else ""
 
@@ -638,22 +793,27 @@ def can_decide_mode_request(db, request_doc):
         return False
 
     reviewer_id = str(reviewer["_id"])
+    reviewer_identifier_values = employee_identifier_values(reviewer)
+
+    if reviewer_id not in reviewer_identifier_values:
+        reviewer_identifier_values.append(reviewer_id)
 
     if request_doc.get("approval_stage") == "team_leader":
         return (
-            request_doc.get("team_leader_id") == reviewer_id
+            request_doc.get("team_leader_id") in reviewer_identifier_values
             and (
                 "team_leader" in roles
-                or truthy(reviewer.get("is_team_leader"))
+                or employee_is_team_leader(reviewer)
             )
         )
 
     if request_doc.get("approval_stage") == "reporting_officer":
         return (
-            request_doc.get("reporting_officer_id") == reviewer_id
+            request_doc.get("reporting_officer_id") in reviewer_identifier_values
             and (
                 "reporting_officer" in roles
-                or truthy(reviewer.get("is_reporting_officer"))
+                or "ro" in roles
+                or employee_is_reporting_officer(reviewer)
             )
         )
 
@@ -1451,19 +1611,23 @@ def list_mode_requests():
 
         if reviewer:
             reviewer_id = str(reviewer["_id"])
+            reviewer_identifier_values = employee_identifier_values(reviewer)
 
-            if "team_leader" in roles or truthy(reviewer.get("is_team_leader")):
+            if reviewer_id not in reviewer_identifier_values:
+                reviewer_identifier_values.append(reviewer_id)
+
+            if "team_leader" in roles or employee_is_team_leader(reviewer):
                 q.setdefault("$or", [])
                 q["$or"].append({
                     "approval_stage": "team_leader",
-                    "team_leader_id": reviewer_id,
+                    "team_leader_id": {"$in": reviewer_identifier_values},
                 })
 
-            if "reporting_officer" in roles or truthy(reviewer.get("is_reporting_officer")):
+            if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer):
                 q.setdefault("$or", [])
                 q["$or"].append({
                     "approval_stage": "reporting_officer",
-                    "reporting_officer_id": reviewer_id,
+                    "reporting_officer_id": {"$in": reviewer_identifier_values},
                 })
 
     items = list(
@@ -1485,11 +1649,17 @@ def my_mode_requests():
     if not e:
         return jsonify({"items": []})
 
+    employee_id = str(e["_id"])
+    identifier_values = employee_identifier_values(e)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
     items = list(
         db.attendance_mode_requests
         .find({
             "tenant_id": e.get("tenant_id") or current_tenant_id(),
-            "employee_id": str(e["_id"]),
+            "employee_id": {"$in": identifier_values},
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)

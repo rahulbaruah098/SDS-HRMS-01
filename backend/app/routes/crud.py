@@ -28,6 +28,7 @@ READ_ALLOWED_COLLECTIONS = {
     "employees",
     "departments",
     "designations",
+    "states",
     "projects",
     "leave_balances",
     "leave_requests",
@@ -45,6 +46,7 @@ WRITE_ALLOWED_COLLECTIONS = {
     "employees",
     "departments",
     "designations",
+    "states",
     "projects",
     "leave_balances",
     "holiday_calendar",
@@ -55,6 +57,7 @@ SOFT_DELETE_COLLECTIONS = {
     "employees",
     "departments",
     "designations",
+    "states",
     "projects",
     "holiday_calendar",
     "attendance_logs",
@@ -68,11 +71,23 @@ SEARCH_FIELDS = {
         "name",
         "employee_name",
         "email",
+        "official_email",
         "phone",
+        "mobile",
         "employee_id",
         "emp_code",
         "department",
         "designation",
+        "branch",
+        "state",
+        "role",
+        "employee_type",
+        "job_type",
+        "status",
+        "employment_status",
+        "resignation_reason",
+        "exit_type",
+        "last_working_date",
         "is_it_support_head",
         "is_it_support_member",
     ],
@@ -86,6 +101,12 @@ SEARCH_FIELDS = {
         "designation_name",
         "department",
         "title",
+    ],
+    "states": [
+        "name",
+        "state_name",
+        "code",
+        "status",
     ],
     "projects": [
         "name",
@@ -210,6 +231,11 @@ PROFILE_PHOTO_FIELDS = {
     "photo",
 }
 
+REPORTING_OFFICER_DESIGNATION_REGEX = re.compile(
+    r"(manager|managing director|director|ceo|chief executive officer)",
+    re.IGNORECASE,
+)
+
 
 def safe_object_id(value):
     try:
@@ -315,6 +341,54 @@ def normalize_employee_it_support_flags(payload):
 
     if truthy(payload.get("is_it_support_head")):
         payload["is_it_support_member"] = "true"
+
+    return payload
+
+
+def normalize_employee_capability_flags(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    if "is_team_leader" in payload:
+        payload["is_team_leader"] = bool_string(payload.get("is_team_leader"))
+
+    if "is_reporting_officer" in payload:
+        payload["is_reporting_officer"] = bool_string(payload.get("is_reporting_officer"))
+
+    normalize_employee_it_support_flags(payload)
+
+    return payload
+
+
+def normalize_master_payload(collection, payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    if collection == "states":
+        name = normalize_text(payload.get("name") or payload.get("state_name"))
+        if name:
+            payload["name"] = name
+            payload["state_name"] = name
+        payload["status"] = normalize_text(payload.get("status") or "active")
+
+    if collection == "departments":
+        name = normalize_text(payload.get("name") or payload.get("department_name"))
+        if name:
+            payload["name"] = name
+            payload["department_name"] = name
+        payload["status"] = normalize_text(payload.get("status") or "active")
+
+    if collection == "designations":
+        name = normalize_text(
+            payload.get("name")
+            or payload.get("title")
+            or payload.get("designation_name")
+        )
+        if name:
+            payload["name"] = name
+            payload["title"] = name
+            payload["designation_name"] = name
+        payload["status"] = normalize_text(payload.get("status") or "active")
 
     return payload
 
@@ -477,6 +551,13 @@ def employee_joining_date(payload):
     )
 
 
+def employee_date_of_birth(payload):
+    return (
+        normalize_text(payload.get("date_of_birth"))
+        or normalize_text(payload.get("dob"))
+    )
+
+
 def remove_employee_auth_fields(payload):
     for key in [
         "password",
@@ -543,8 +624,14 @@ def build_user_sync_payload(employee_doc, existing_user=None):
         "designation": employee_doc.get("designation", ""),
         "is_team_leader": bool_string(employee_doc.get("is_team_leader")),
         "is_reporting_officer": bool_string(employee_doc.get("is_reporting_officer")),
+        "team_leader_id": employee_doc.get("team_leader_id", ""),
+        "team_leader_name": employee_doc.get("team_leader_name", ""),
+        "reporting_officer_id": employee_doc.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee_doc.get("reporting_officer_name", ""),
         "is_it_support_head": bool_string(employee_doc.get("is_it_support_head")),
         "is_it_support_member": bool_string(employee_doc.get("is_it_support_member") or employee_doc.get("is_it_support_head")),
+        "date_of_birth": employee_doc.get("date_of_birth", "") or employee_doc.get("dob", ""),
+        "dob": employee_doc.get("dob", "") or employee_doc.get("date_of_birth", ""),
         "is_active": is_active,
         "status": "active" if is_active else "inactive",
         "updated_at": now_utc(),
@@ -735,6 +822,29 @@ def employee_code(employee):
         or ""
     )
 
+def employee_identifier_values(employee):
+    employee = employee or {}
+    values = []
+
+    for value in [
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("user_id"),
+        employee.get("email"),
+        employee.get("official_email"),
+    ]:
+        value = normalize_text(value)
+
+        if value and value not in values:
+            values.append(value)
+
+    return values
+
 
 def employee_avatar(employee):
     if not employee:
@@ -745,22 +855,63 @@ def employee_avatar(employee):
 
 def get_current_employee(db):
     user_id = current_user_id()
+    current_user = getattr(g, "current_user", {}) or {}
 
     if not user_id:
         return None
 
+    user_email = normalize_email(
+        current_user.get("email")
+        or current_user.get("username")
+        or current_user.get("official_email")
+    )
+
+    user_employee_id = normalize_text(
+        current_user.get("employee_id")
+        or current_user.get("employee_ref_id")
+        or current_user.get("emp_code")
+    )
+
+    identifier_or = [
+        {"user_id": user_id},
+        {"employee_ref_id": user_id},
+    ]
+
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        identifier_or.append({"_id": user_obj_id})
+
+    if user_employee_id:
+        identifier_or.extend([
+            {"employee_id": user_employee_id},
+            {"emp_code": user_employee_id},
+            {"employee_code": user_employee_id},
+        ])
+
+        user_employee_obj_id = safe_object_id(user_employee_id)
+
+        if user_employee_obj_id:
+            identifier_or.append({"_id": user_employee_obj_id})
+
+    if user_email:
+        identifier_or.extend([
+            {"email": user_email},
+            {"official_email": user_email},
+        ])
+
     employee = db.employees.find_one({
         "tenant_id": current_tenant_id(),
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
     if employee:
         return employee
 
     return db.employees.find_one({
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
 
@@ -783,6 +934,138 @@ def employee_is_reporting_officer(employee):
         or "reporting_officer" in employee_role_set(employee)
         or "ro" in employee_role_set(employee)
     )
+
+
+def reporting_officer_designation_allowed(employee):
+    if not employee:
+        return False
+
+    values = [
+        employee.get("designation"),
+        employee.get("designation_name"),
+        employee.get("title"),
+        employee.get("position"),
+    ]
+
+    return any(
+        REPORTING_OFFICER_DESIGNATION_REGEX.search(normalize_text(value))
+        for value in values
+        if normalize_text(value)
+    )
+
+
+def employee_reporting_officer_designation_query():
+    return {
+        "$or": [
+            {"designation": REPORTING_OFFICER_DESIGNATION_REGEX},
+            {"designation_name": REPORTING_OFFICER_DESIGNATION_REGEX},
+            {"title": REPORTING_OFFICER_DESIGNATION_REGEX},
+            {"position": REPORTING_OFFICER_DESIGNATION_REGEX},
+        ]
+    }
+
+
+def employee_team_leader_query():
+    return {
+        "$or": [
+            {"is_team_leader": True},
+            {"is_team_leader": "true"},
+            {"role": re.compile(r"team[_ -]?leader", re.IGNORECASE)},
+            {"roles": re.compile(r"team[_ -]?leader", re.IGNORECASE)},
+        ]
+    }
+
+
+def resolve_active_employee_by_id(db, employee_id, tenant_id):
+    employee_obj_id = safe_object_id(employee_id)
+
+    if not employee_obj_id:
+        return None
+
+    return db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$and": [
+            {
+                "$or": [
+                    {"is_alumni": {"$ne": True}},
+                    {"is_alumni": {"$exists": False}},
+                ],
+            },
+            {
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": {"$not": ALUMNI_STATUS_REGEX}},
+                ],
+            },
+            {
+                "$or": [
+                    {"employment_status": {"$exists": False}},
+                    {"employment_status": {"$not": ALUMNI_STATUS_REGEX}},
+                ],
+            },
+        ],
+    })
+
+
+def normalize_employee_reporting_mapping(db, payload, tenant_id, existing=None):
+    existing = existing or {}
+    current_employee_id = normalize_text(existing.get("_id"))
+
+    team_leader_id = normalize_text(payload.get("team_leader_id"))
+    reporting_officer_id = normalize_text(payload.get("reporting_officer_id"))
+
+    if "team_leader_id" in payload:
+        if team_leader_id:
+            if current_employee_id and team_leader_id == current_employee_id:
+                return "Employee cannot be mapped as their own Team Leader"
+
+            team_leader = resolve_active_employee_by_id(db, team_leader_id, tenant_id)
+
+            if not team_leader:
+                return "Selected Team Leader was not found"
+
+            if not employee_is_team_leader(team_leader):
+                return "Selected Team Leader must be marked as Team Leader"
+
+            payload["team_leader_id"] = str(team_leader["_id"])
+            payload["team_leader_name"] = employee_display_name(team_leader)
+        else:
+            payload["team_leader_id"] = ""
+            payload["team_leader_name"] = ""
+
+    if "reporting_officer_id" in payload:
+        if reporting_officer_id:
+            if current_employee_id and reporting_officer_id == current_employee_id:
+                return "Employee cannot be mapped as their own Reporting Officer"
+
+            reporting_officer = resolve_active_employee_by_id(db, reporting_officer_id, tenant_id)
+
+            if not reporting_officer:
+                return "Selected Reporting Officer was not found"
+
+            if not reporting_officer_designation_allowed(reporting_officer):
+                return "Reporting Officer must have Manager, Managing Director, Director, CEO, or Chief Executive Officer designation"
+
+            payload["reporting_officer_id"] = str(reporting_officer["_id"])
+            payload["reporting_officer_name"] = employee_display_name(reporting_officer)
+        else:
+            payload["reporting_officer_id"] = ""
+            payload["reporting_officer_name"] = ""
+
+    if truthy(payload.get("is_reporting_officer")):
+        employee_designation = {
+            "designation": payload.get("designation") or existing.get("designation"),
+            "designation_name": payload.get("designation_name") or existing.get("designation_name"),
+            "title": payload.get("title") or existing.get("title"),
+            "position": payload.get("position") or existing.get("position"),
+        }
+
+        if not reporting_officer_designation_allowed(employee_designation):
+            return "Only Manager, Managing Director, Director, CEO, or Chief Executive Officer designation employees can be marked as Reporting Officer"
+
+    return ""
 
 
 def can_create_assign_or_collaborate_projects():
@@ -835,7 +1118,13 @@ def can_update_project_status(project):
     if not employee:
         return False
 
-    return str(employee["_id"]) in project_member_ids(project)
+    employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
+    return bool(project_member_ids(project).intersection(set(identifier_values)))
 
 
 def can_write_collection(collection):
@@ -932,6 +1221,93 @@ def clean_payload(data):
     return payload
 
 
+
+ALUMNI_STATUS_REGEX = re.compile(
+    r"^(inactive|resigned|left|terminated|alumni|ex-employee|ex_employee)$",
+    re.IGNORECASE,
+)
+
+
+def and_query(base_query, extra_query):
+    if not extra_query:
+        return base_query
+
+    if not base_query:
+        return extra_query
+
+    return {
+        "$and": [
+            base_query,
+            extra_query,
+        ]
+    }
+
+
+def employee_alumni_query():
+    return {
+        "$or": [
+            {"is_alumni": True},
+            {"status": ALUMNI_STATUS_REGEX},
+            {"employment_status": ALUMNI_STATUS_REGEX},
+            {"last_working_date": {"$exists": True, "$nin": [None, ""]}},
+        ]
+    }
+
+
+def employee_active_query():
+    return {
+        "$and": [
+            {"is_alumni": {"$ne": True}},
+            {
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": {"$not": ALUMNI_STATUS_REGEX}},
+                ]
+            },
+            {
+                "$or": [
+                    {"employment_status": {"$exists": False}},
+                    {"employment_status": {"$not": ALUMNI_STATUS_REGEX}},
+                ]
+            },
+            {
+                "$or": [
+                    {"last_working_date": {"$exists": False}},
+                    {"last_working_date": {"$in": [None, ""]}},
+                ]
+            },
+        ]
+    }
+
+
+def employee_is_alumni_payload(payload):
+    if not payload:
+        return False
+
+    if truthy(payload.get("is_alumni")):
+        return True
+
+    status = normalize_text(payload.get("status")).lower()
+    employment_status = normalize_text(payload.get("employment_status")).lower()
+
+    alumni_statuses = {
+        "inactive",
+        "resigned",
+        "left",
+        "terminated",
+        "alumni",
+        "ex-employee",
+        "ex_employee",
+    }
+
+    if status in alumni_statuses:
+        return True
+
+    if employment_status in alumni_statuses:
+        return True
+
+    return bool(normalize_text(payload.get("last_working_date")))
+
 def build_search_query(collection, search_text):
     search_text = normalize_text(search_text)
 
@@ -968,6 +1344,18 @@ def apply_common_filters(collection, q):
     status = normalize_text(request.args.get("status"))
     department = normalize_text(request.args.get("department"))
     employee_id = normalize_text(request.args.get("employee_id"))
+    employee_scope = normalize_text(
+        request.args.get("employee_scope")
+        or request.args.get("scope")
+    ).lower()
+    designation = normalize_text(request.args.get("designation"))
+    branch = normalize_text(request.args.get("branch"))
+    employment_status = normalize_text(request.args.get("employment_status"))
+    employee_picker = normalize_text(
+        request.args.get("employee_picker")
+        or request.args.get("picker")
+        or request.args.get("lookup")
+    ).lower()
     leave_type = normalize_leave_type(request.args.get("leave_type"))
     approval_stage = normalize_text(request.args.get("approval_stage"))
     mode = normalize_text(request.args.get("mode"))
@@ -988,10 +1376,39 @@ def apply_common_filters(collection, q):
             q["status"] = status
 
     if department:
-        q["department"] = department
+        if collection == "employees":
+            q["department"] = re.compile(re.escape(department), re.IGNORECASE)
+        else:
+            q["department"] = department
 
     if employee_id:
         q["employee_id"] = employee_id
+
+    if collection == "employees":
+        if designation:
+            q["designation"] = re.compile(re.escape(designation), re.IGNORECASE)
+
+        if branch:
+            q["branch"] = re.compile(re.escape(branch), re.IGNORECASE)
+
+        if employment_status:
+            q["employment_status"] = re.compile(
+                f"^{re.escape(employment_status)}$",
+                re.IGNORECASE,
+            )
+
+        if employee_picker in {"team_leader", "team-leader", "tl"}:
+            q = and_query(q, employee_team_leader_query())
+
+        if employee_picker in {"reporting_officer", "reporting-officer", "ro"}:
+            q = and_query(q, employee_reporting_officer_designation_query())
+
+        if employee_scope in {"alumni", "past", "resigned", "inactive", "left"}:
+            q = and_query(q, employee_alumni_query())
+        elif employee_scope in {"all", "everyone"}:
+            pass
+        else:
+            q = and_query(q, employee_active_query())
 
     if collection == "performance_reviews":
         if reviewer_employee_id:
@@ -1048,15 +1465,7 @@ def apply_common_filters(collection, q):
     search_query = build_search_query(collection, q_text)
 
     if search_query:
-        if "$or" in q:
-            q = {
-                "$and": [
-                    q,
-                    search_query,
-                ]
-            }
-        else:
-            q.update(search_query)
+        q = and_query(q, search_query)
 
     return q
 
@@ -1074,17 +1483,22 @@ def project_scope_query(db, q):
         return q
 
     employee_id = str(employee["_id"])
+    
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
 
     q["$or"] = [
-        {"created_by_employee_id": employee_id},
-        {"team_leader_id": employee_id},
-        {"reporting_officer_id": employee_id},
-        {"assigned_to_id": employee_id},
-        {"assigned_employee_ids": employee_id},
-        {"assigned_members.employee_id": employee_id},
-        {"collaborator_ids": employee_id},
-        {"collaborators.employee_id": employee_id},
-        {"latest_progress_by": employee_id},
+        {"created_by_employee_id": {"$in": identifier_values}},
+        {"team_leader_id": {"$in": identifier_values}},
+        {"reporting_officer_id": {"$in": identifier_values}},
+        {"assigned_to_id": {"$in": identifier_values}},
+        {"assigned_employee_ids": {"$in": identifier_values}},
+        {"assigned_members.employee_id": {"$in": identifier_values}},
+        {"collaborator_ids": {"$in": identifier_values}},
+        {"collaborators.employee_id": {"$in": identifier_values}},
+        {"latest_progress_by": {"$in": identifier_values}},
     ]
 
     return q
@@ -1102,13 +1516,18 @@ def employee_scoped_ids_for_current_user(db):
         return []
 
     employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
     scope_or = []
 
     if "team_leader" in roles or employee_is_team_leader(employee):
-        scope_or.append({"team_leader_id": employee_id})
+        scope_or.append({"team_leader_id": {"$in": identifier_values}})
 
     if "reporting_officer" in roles or employee_is_reporting_officer(employee):
-        scope_or.append({"reporting_officer_id": employee_id})
+        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
 
     if not scope_or:
         return [employee_id]
@@ -1178,6 +1597,11 @@ def performance_review_scope_query(db, q):
         return q
 
     employee_id = str(employee["_id"])
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+    
     scope_or = [
         {"employee_id": employee_id},
         {"reviewer_employee_id": employee_id},
@@ -1187,7 +1611,7 @@ def performance_review_scope_query(db, q):
     if employee_is_team_leader(employee):
         team_members = list(db.employees.find({
             "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-            "team_leader_id": employee_id,
+            "team_leader_id": {"$in": identifier_values},
             "status": {"$ne": "Inactive"},
             "is_deleted": {"$ne": True},
         }, {"_id": 1}))
@@ -1203,7 +1627,7 @@ def performance_review_scope_query(db, q):
     if employee_is_reporting_officer(employee):
         reporting_members = list(db.employees.find({
             "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-            "reporting_officer_id": employee_id,
+            "reporting_officer_id": {"$in": identifier_values},
             "status": {"$ne": "Inactive"},
             "is_deleted": {"$ne": True},
         }, {"_id": 1}))
@@ -1241,17 +1665,22 @@ def leave_request_scope_query(db, q):
         return q
 
     employee_id = str(employee["_id"])
-    scope_or = [{"employee_id": employee_id}]
+    identifier_values = employee_identifier_values(employee)
+
+    if employee_id not in identifier_values:
+        identifier_values.append(employee_id)
+
+    scope_or = [{"employee_id": {"$in": identifier_values}}]
 
     if "team_leader" in roles or employee_is_team_leader(employee):
         scope_or.append({
-            "team_leader_id": employee_id,
+            "team_leader_id": {"$in": identifier_values},
             "approval_stage": "team_leader",
         })
 
     if "reporting_officer" in roles or employee_is_reporting_officer(employee):
         scope_or.append({
-            "reporting_officer_id": employee_id,
+            "reporting_officer_id": {"$in": identifier_values},
             "approval_stage": "reporting_officer",
         })
 
@@ -1773,8 +2202,8 @@ def validate_required_fields(collection, payload):
         if not normalize_text(payload.get("name") or payload.get("employee_name")):
             return "Employee name is required"
 
-    if collection in {"departments", "designations"}:
-        if not normalize_text(payload.get("name") or payload.get("title")):
+    if collection in {"departments", "designations", "states"}:
+        if not normalize_text(payload.get("name") or payload.get("title") or payload.get("state_name")):
             return "Name is required"
 
     return ""
@@ -2309,6 +2738,9 @@ def create_collection_item(collection):
     if collection == "projects":
         payload = normalize_project_payload(payload)
 
+    if collection in {"departments", "designations", "states"}:
+        payload = normalize_master_payload(collection, payload)
+
     validation_error = validate_required_fields(collection, payload)
 
     if validation_error:
@@ -2325,9 +2757,31 @@ def create_collection_item(collection):
         payload["employee_name"] = payload["name"]
         payload["email"] = employee_email_from_payload(payload)
         payload.setdefault("status", "active")
+        payload.setdefault("employment_status", payload.get("status") or "active")
+        payload.setdefault("is_team_leader", "false")
+        payload.setdefault("is_reporting_officer", "false")
         payload.setdefault("is_it_support_head", "false")
         payload.setdefault("is_it_support_member", "false")
-        normalize_employee_it_support_flags(payload)
+        normalize_employee_capability_flags(payload)
+
+        hierarchy_error = normalize_employee_reporting_mapping(
+            db,
+            payload,
+            payload.get("tenant_id") or current_tenant_id(),
+        )
+
+        if hierarchy_error:
+            return jsonify({"message": hierarchy_error}), 400
+
+        is_alumni_employee = employee_is_alumni_payload(payload)
+        skip_login = truthy(payload.get("skip_login")) or is_alumni_employee
+
+        if is_alumni_employee:
+            payload["is_alumni"] = True
+            payload.setdefault("status", "Resigned")
+            payload.setdefault("employment_status", "Resigned")
+        else:
+            payload["is_alumni"] = False
 
         joining_date = employee_joining_date(payload)
 
@@ -2335,16 +2789,23 @@ def create_collection_item(collection):
             payload["joining_date"] = joining_date
             payload.setdefault("date_of_joining", joining_date)
 
+        date_of_birth = employee_date_of_birth(payload)
+
+        if date_of_birth:
+            payload["date_of_birth"] = date_of_birth
+            payload.setdefault("dob", date_of_birth)
+
         apply_avatar_aliases(payload)
         remove_employee_auth_fields(payload)
 
-        user, user_error = ensure_employee_login_user(db, payload, raw_password)
+        if not skip_login:
+            user, user_error = ensure_employee_login_user(db, payload, raw_password)
 
-        if user_error:
-            return jsonify({"message": user_error}), 400
+            if user_error:
+                return jsonify({"message": user_error}), 400
 
-        if user:
-            payload["user_id"] = str(user["_id"])
+            if user:
+                payload["user_id"] = str(user["_id"])
 
     payload.update({
         "created_at": now,
@@ -2367,29 +2828,36 @@ def create_collection_item(collection):
     payload["_id"] = result.inserted_id
 
     if collection == "employees":
-        user, user_error = sync_employee_login_user(db, payload, raw_password)
+        if not employee_is_alumni_payload(payload):
+            user, user_error = sync_employee_login_user(db, payload, raw_password)
 
-        if user_error:
-            mongo_collection.delete_one({"_id": result.inserted_id})
-            return jsonify({"message": user_error}), 400
+            if user_error:
+                mongo_collection.delete_one({"_id": result.inserted_id})
+                return jsonify({"message": user_error}), 400
 
-        if user:
-            mongo_collection.update_one(
-                {"_id": result.inserted_id},
-                {"$set": {
-                    "user_id": str(user["_id"]),
-                    "avatar": payload.get("avatar", ""),
-                    "profile_photo": payload.get("profile_photo", ""),
-                    "profile_picture": payload.get("profile_picture", ""),
-                    "photo": payload.get("photo", ""),
-                    "is_it_support_head": bool_string(payload.get("is_it_support_head")),
-                    "is_it_support_member": bool_string(payload.get("is_it_support_member") or payload.get("is_it_support_head")),
-                }},
-            )
-            payload["user_id"] = str(user["_id"])
+            if user:
+                mongo_collection.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {
+                        "user_id": str(user["_id"]),
+                        "avatar": payload.get("avatar", ""),
+                        "profile_photo": payload.get("profile_photo", ""),
+                        "profile_picture": payload.get("profile_picture", ""),
+                        "photo": payload.get("photo", ""),
+                        "is_team_leader": bool_string(payload.get("is_team_leader")),
+                        "is_reporting_officer": bool_string(payload.get("is_reporting_officer")),
+                        "team_leader_id": payload.get("team_leader_id", ""),
+                        "team_leader_name": payload.get("team_leader_name", ""),
+                        "reporting_officer_id": payload.get("reporting_officer_id", ""),
+                        "reporting_officer_name": payload.get("reporting_officer_name", ""),
+                        "is_it_support_head": bool_string(payload.get("is_it_support_head")),
+                        "is_it_support_member": bool_string(payload.get("is_it_support_member") or payload.get("is_it_support_head")),
+                    }},
+                )
+                payload["user_id"] = str(user["_id"])
 
-        for leave_type in BALANCE_LEAVE_TYPES:
-            ensure_leave_balance(db, payload, leave_type)
+            for leave_type in BALANCE_LEAVE_TYPES:
+                ensure_leave_balance(db, payload, leave_type)
 
     if collection == "projects":
         updated_project = mongo_collection.find_one({"_id": result.inserted_id})
@@ -2477,19 +2945,56 @@ def update_collection_item(collection, item_id):
     if collection == "projects":
         payload = normalize_project_payload(payload, existing)
 
+    if collection in {"departments", "designations", "states"}:
+        payload = normalize_master_payload(collection, payload)
+
     if collection == "employees":
         merged_employee = dict(existing)
         merged_employee.update(payload)
         merged_employee["_id"] = existing["_id"]
         merged_employee.setdefault("tenant_id", existing.get("tenant_id") or current_tenant_id())
 
-        if "is_it_support_head" in payload or "is_it_support_member" in payload:
-            normalize_employee_it_support_flags(payload)
+        is_alumni_employee = employee_is_alumni_payload(merged_employee)
+
+        if is_alumni_employee:
+            payload["is_alumni"] = True
+            payload.setdefault("status", "Resigned")
+            payload.setdefault("employment_status", "Resigned")
+            merged_employee["is_alumni"] = True
+            merged_employee["status"] = payload.get("status", "Resigned")
+            merged_employee["employment_status"] = payload.get("employment_status", "Resigned")
+
+        if (
+            "is_team_leader" in payload
+            or "is_reporting_officer" in payload
+            or "is_it_support_head" in payload
+            or "is_it_support_member" in payload
+        ):
+            normalize_employee_capability_flags(payload)
             merged_employee.update({
+                "is_team_leader": payload.get("is_team_leader", merged_employee.get("is_team_leader", "false")),
+                "is_reporting_officer": payload.get("is_reporting_officer", merged_employee.get("is_reporting_officer", "false")),
                 "is_it_support_head": payload.get("is_it_support_head", merged_employee.get("is_it_support_head", "false")),
                 "is_it_support_member": payload.get("is_it_support_member", merged_employee.get("is_it_support_member", "false")),
             })
-            normalize_employee_it_support_flags(merged_employee)
+            normalize_employee_capability_flags(merged_employee)
+
+        hierarchy_error = normalize_employee_reporting_mapping(
+            db,
+            payload,
+            merged_employee.get("tenant_id") or current_tenant_id(),
+            existing,
+        )
+
+        if hierarchy_error:
+            return jsonify({"message": hierarchy_error}), 400
+
+        merged_employee.update({
+            "team_leader_id": payload.get("team_leader_id", merged_employee.get("team_leader_id", "")),
+            "team_leader_name": payload.get("team_leader_name", merged_employee.get("team_leader_name", "")),
+            "reporting_officer_id": payload.get("reporting_officer_id", merged_employee.get("reporting_officer_id", "")),
+            "reporting_officer_name": payload.get("reporting_officer_name", merged_employee.get("reporting_officer_name", "")),
+        })
 
         if payload.get("name") or payload.get("employee_name") or payload.get("full_name"):
             payload["name"] = employee_name_from_payload(merged_employee)
@@ -2518,15 +3023,30 @@ def update_collection_item(collection, item_id):
             merged_employee["joining_date"] = joining_date
             merged_employee["date_of_joining"] = joining_date
 
+        date_of_birth = employee_date_of_birth(merged_employee)
+
+        if date_of_birth and (
+            payload.get("date_of_birth")
+            or payload.get("dob")
+        ):
+            payload["date_of_birth"] = date_of_birth
+            payload["dob"] = date_of_birth
+            merged_employee["date_of_birth"] = date_of_birth
+            merged_employee["dob"] = date_of_birth
+
         remove_employee_auth_fields(payload)
 
-        user, user_error = sync_employee_login_user(db, merged_employee, raw_password)
+        if employee_is_alumni_payload(merged_employee):
+            deactivate_employee_login_user(db, merged_employee)
+            remove_employee_auth_fields(payload)
+        else:
+            user, user_error = sync_employee_login_user(db, merged_employee, raw_password)
 
-        if user_error:
-            return jsonify({"message": user_error}), 400
+            if user_error:
+                return jsonify({"message": user_error}), 400
 
-        if user:
-            payload["user_id"] = str(user["_id"])
+            if user:
+                payload["user_id"] = str(user["_id"])
 
     validation_error = "" if self_photo_update else validate_required_fields(collection, payload)
 
@@ -2547,10 +3067,13 @@ def update_collection_item(collection, item_id):
     updated = mongo_collection.find_one({"_id": item_obj_id})
 
     if collection == "employees":
-        sync_employee_login_user(db, updated)
+        if employee_is_alumni_payload(updated):
+            deactivate_employee_login_user(db, updated)
+        else:
+            sync_employee_login_user(db, updated)
 
-        for leave_type in BALANCE_LEAVE_TYPES:
-            ensure_leave_balance(db, updated, leave_type)
+            for leave_type in BALANCE_LEAVE_TYPES:
+                ensure_leave_balance(db, updated, leave_type)
 
         updated = mongo_collection.find_one({"_id": item_obj_id})
 
