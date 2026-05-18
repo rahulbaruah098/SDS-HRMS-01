@@ -89,13 +89,58 @@ def has_role(*allowed_roles):
 
 
 def current_tenant_id():
-    return getattr(g, "tenant_id", None) or g.current_user.get("tenant_id") or "sds"
+    tenant_id = (
+        getattr(g, "tenant_id", None)
+        or g.current_user.get("tenant_id")
+        or g.current_user.get("company_id")
+        or g.current_user.get("tenant")
+        or "sds"
+    )
+
+    tenant_id = str(tenant_id or "").strip()
+
+    return tenant_id or "sds"
 
 
-def tenant_query(extra=None):
-    q = {"tenant_id": current_tenant_id()}
-    q.update(extra or {})
-    return q
+def tenant_query(extra=None, include_legacy=True):
+    tenant_id = current_tenant_id()
+    extra = extra or {}
+
+    tenant_values = [
+        tenant_id,
+        str(tenant_id or "").strip(),
+        str(tenant_id or "").strip().lower(),
+        str(tenant_id or "").strip().upper(),
+    ]
+
+    tenant_values = list(dict.fromkeys([value for value in tenant_values if value]))
+
+    if include_legacy:
+        tenant_filter = {
+            "$or": [
+                {"tenant_id": {"$in": tenant_values}},
+                {"tenant_id": {"$exists": False}},
+                {"tenant_id": None},
+                {"tenant_id": ""},
+            ]
+        }
+    else:
+        tenant_filter = {"tenant_id": {"$in": tenant_values}}
+
+    if "$and" in extra:
+        return {
+            "$and": [
+                tenant_filter,
+                *extra.get("$and", []),
+            ]
+        }
+
+    return {
+        "$and": [
+            tenant_filter,
+            extra,
+        ]
+    }
 
 
 def active_employee_filter(extra=None):
@@ -109,7 +154,32 @@ def active_employee_filter(extra=None):
 
 
 def count_collection(db, collection, extra=None):
-    return db[collection].count_documents(tenant_query(extra))
+    """
+    Dashboard counter with safe fallback.
+
+    1. First count using exact tenant_id.
+    2. Then count tenant + legacy blank/missing tenant_id.
+    3. If still 0, count without tenant_id filter.
+
+    This fixes KPI 000 issue when old records are saved with different tenant_id.
+    """
+    extra = extra or {}
+
+    strict_count = db[collection].count_documents(
+        tenant_query(extra, include_legacy=False)
+    )
+
+    if strict_count:
+        return strict_count
+
+    legacy_count = db[collection].count_documents(
+        tenant_query(extra, include_legacy=True)
+    )
+
+    if legacy_count:
+        return legacy_count
+
+    return db[collection].count_documents(extra)
 
 
 def normalize_text(value):
@@ -229,45 +299,86 @@ def is_reporting_officer_capability(employee, roles=None):
 
 def current_employee(db):
     tenant_id = current_tenant_id()
-    user_id = str(g.current_user["_id"])
-    user_email = normalize_text(g.current_user.get("email")).lower()
+    user_id = str(g.current_user.get("_id") or g.current_user.get("id") or "").strip()
+    user_email = normalize_text(
+        g.current_user.get("email")
+        or g.current_user.get("username")
+        or g.current_user.get("official_email")
+    ).lower()
+
+    user_employee_code = normalize_text(
+        g.current_user.get("employee_id")
+        or g.current_user.get("employee_code")
+        or g.current_user.get("emp_code")
+        or g.current_user.get("employee_ref_id")
+    )
+
+    identifier_or = []
+
+    if user_id:
+        identifier_or.extend([
+            {"user_id": user_id},
+            {"employee_ref_id": user_id},
+        ])
+
+        try:
+            identifier_or.append({"_id": ObjectId(user_id)})
+        except Exception:
+            pass
+
+    if user_email:
+        identifier_or.extend([
+            {"email": {"$regex": f"^{user_email}$", "$options": "i"}},
+            {"official_email": {"$regex": f"^{user_email}$", "$options": "i"}},
+        ])
+
+    if user_employee_code:
+        identifier_or.extend([
+            {"employee_id": user_employee_code},
+            {"employee_code": user_employee_code},
+            {"emp_code": user_employee_code},
+            {"code": user_employee_code},
+        ])
+
+        try:
+            identifier_or.append({"_id": ObjectId(user_employee_code)})
+        except Exception:
+            pass
+
+    if not identifier_or:
+        return None
 
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
+        "$or": identifier_or,
     })
 
-    if employee:
-        return employee
-
-    employee = db.employees.find_one({
-        "user_id": user_id,
-        "is_deleted": {"$ne": True},
-    })
-
-    if employee:
-        return employee
-
-    if user_email:
+    if not employee:
         employee = db.employees.find_one({
-            "tenant_id": tenant_id,
-            "email": {"$regex": f"^{user_email}$", "$options": "i"},
             "is_deleted": {"$ne": True},
+            "$or": identifier_or,
         })
 
-        if employee:
-            db.employees.update_one(
-                {"_id": employee["_id"]},
-                {"$set": {
-                    "user_id": user_id,
-                    "updated_at": datetime.utcnow(),
-                }},
-            )
-            employee["user_id"] = user_id
-            return employee
+    if not employee:
+        return None
 
-    return None
+    employee_tenant_id = str(employee.get("tenant_id") or tenant_id or "sds").strip() or "sds"
+    g.tenant_id = employee_tenant_id
+    employee["tenant_id"] = employee_tenant_id
+
+    if user_id and normalize_text(employee.get("user_id")) != user_id:
+        db.employees.update_one(
+            {"_id": employee["_id"]},
+            {"$set": {
+                "user_id": user_id,
+                "tenant_id": employee_tenant_id,
+                "updated_at": datetime.utcnow(),
+            }},
+        )
+        employee["user_id"] = user_id
+
+    return employee
 
 
 def employee_identifier_values(employee):
@@ -706,6 +817,16 @@ def employee_snapshot(employee, roles=None):
     is_reporting_officer = is_reporting_officer_capability(employee, roles)
     display_name = employee_name(employee)
 
+    display_role = (
+        "Team Leader + Reporting Officer"
+        if is_team_leader and is_reporting_officer
+        else "Team Leader"
+        if is_team_leader
+        else "Reporting Officer"
+        if is_reporting_officer
+        else "Employee"
+    )
+
     snapshot = {
         "_id": employee.get("_id"),
         "tenant_id": employee.get("tenant_id"),
@@ -713,15 +834,16 @@ def employee_snapshot(employee, roles=None):
         "employee_id": employee_code(employee),
         "emp_code": employee.get("emp_code", ""),
         "name": display_name,
+        "employee_name": display_name,
         "display_name": display_name,
         "dashboard_title": display_name,
         "dashboard_subtitle": "Employee Dashboard",
-        "display_role": "Employee",
+        "display_role": display_role,
         "email": employee.get("email", ""),
         "phone": employee.get("phone", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
-        "role": "Employee",
+        "role": display_role,
         "raw_role": employee.get("role", ""),
         "branch": employee.get("branch", ""),
         "state": employee_state(employee),
@@ -872,15 +994,49 @@ def unique_people(people):
 
 
 def employee_by_id(db, tenant_id, employee_id):
-    if not employee_id or not ObjectId.is_valid(str(employee_id)):
+    raw_id = normalize_text(employee_id)
+
+    if not raw_id:
         return None
 
-    return db.employees.find_one({
-        "_id": ObjectId(str(employee_id)),
+    tenant_id = str(tenant_id or current_tenant_id() or "sds").strip() or "sds"
+
+    base_query = {
         "tenant_id": tenant_id,
         "status": {"$ne": "Inactive"},
         "is_deleted": {"$ne": True},
+    }
+
+    identifier_or = [
+        {"user_id": raw_id},
+        {"employee_id": raw_id},
+        {"employee_code": raw_id},
+        {"emp_code": raw_id},
+        {"code": raw_id},
+        {"email": {"$regex": f"^{raw_id}$", "$options": "i"}},
+        {"official_email": {"$regex": f"^{raw_id}$", "$options": "i"}},
+    ]
+
+    try:
+        identifier_or.insert(0, {"_id": ObjectId(raw_id)})
+    except Exception:
+        pass
+
+    employee = db.employees.find_one({
+        **base_query,
+        "$or": identifier_or,
     })
+
+    if employee:
+        return employee
+
+    fallback_query = {
+        "status": {"$ne": "Inactive"},
+        "is_deleted": {"$ne": True},
+        "$or": identifier_or,
+    }
+
+    return db.employees.find_one(fallback_query)
 
 
 def enrich_project_member(db, tenant_id, member, relation):
@@ -1150,31 +1306,57 @@ def completed_project_query(tenant_id, extra=None):
     return q
 
 
-def project_scope_for_employee(tenant_id, emp_id):
+def project_scope_for_employee(tenant_id, emp_id, employee=None):
+    employee = employee or {}
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
+
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "$or": [
-            {"created_by_employee_id": emp_id},
-            {"team_leader_id": emp_id},
-            {"reporting_officer_id": emp_id},
-            {"assigned_to_id": emp_id},
-            {"assigned_employee_ids": emp_id},
-            {"assigned_members.employee_id": emp_id},
-            {"collaborator_ids": emp_id},
-            {"collaborators.employee_id": emp_id},
-            {"latest_progress_by": emp_id},
+            {"created_by_employee_id": {"$in": identifier_values}},
+            {"created_by": {"$in": identifier_values}},
+
+            {"team_leader_id": {"$in": identifier_values}},
+            {"reporting_officer_id": {"$in": identifier_values}},
+
+            {"assigned_to_id": {"$in": identifier_values}},
+            {"assigned_employee_ids": {"$in": identifier_values}},
+            {"assigned_members.employee_id": {"$in": identifier_values}},
+            {"assigned_members.user_id": {"$in": identifier_values}},
+            {"assigned_members.employee_code": {"$in": identifier_values}},
+            {"assigned_members.emp_code": {"$in": identifier_values}},
+            {"assigned_members.email": {"$in": identifier_values}},
+
+            {"collaborator_ids": {"$in": identifier_values}},
+            {"collaborators.employee_id": {"$in": identifier_values}},
+            {"collaborators.user_id": {"$in": identifier_values}},
+            {"collaborators.employee_code": {"$in": identifier_values}},
+            {"collaborators.emp_code": {"$in": identifier_values}},
+            {"collaborators.email": {"$in": identifier_values}},
+
+            {"latest_progress_by": {"$in": identifier_values}},
         ],
     }
 
 
-def project_scope_for_team_leader(tenant_id, emp_id):
+def project_scope_for_team_leader(tenant_id, emp_id, employee=None):
+    employee = employee or {}
+    identifier_values = employee_identifier_values(employee)
+
+    if emp_id and emp_id not in identifier_values:
+        identifier_values.append(emp_id)
+
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "$or": [
-            {"created_by_employee_id": emp_id},
-            {"team_leader_id": emp_id},
+            {"created_by_employee_id": {"$in": identifier_values}},
+            {"created_by": {"$in": identifier_values}},
+            {"team_leader_id": {"$in": identifier_values}},
         ],
     }
 
@@ -2141,7 +2323,7 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
     team_member_ids = team_member_ids or []
     reporting_member_ids = reporting_member_ids or []
 
-    my_scope = project_scope_for_employee(tenant_id, emp_id)
+    my_scope = project_scope_for_employee(tenant_id, emp_id, employee)
     my_projects = list(
         db.projects
         .find(my_scope)
@@ -2165,7 +2347,7 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
     if is_team_leader_capability(employee, roles):
         team_leader_projects = list(
             db.projects
-            .find(project_scope_for_team_leader(tenant_id, emp_id))
+            .find(project_scope_for_team_leader(tenant_id, emp_id, employee))
             .sort("created_at", -1)
             .limit(100)
         )
@@ -2239,9 +2421,14 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
             ],
         ) if is_reporting_officer_capability(employee, roles) else [],
         "summary": {
+            "total_projects": len(my_projects),
+            "active_projects": len(active_projects),
+            "completed_projects": len(completed_projects),
+
             "my_total_projects": len(my_projects),
             "my_active_projects": len(active_projects),
             "my_completed_projects": len(completed_projects),
+
             "team_total_projects": len(team_leader_projects),
             "team_active_projects": len([
                 project for project in team_leader_projects
@@ -2251,6 +2438,7 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
                 project for project in team_leader_projects
                 if normalize_project_status(project.get("status")) == "completed"
             ]),
+
             "reporting_total_projects": len(reporting_projects),
             "reporting_active_projects": len([
                 project for project in reporting_projects
@@ -2260,10 +2448,10 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
                 project for project in reporting_projects
                 if normalize_project_status(project.get("status")) == "completed"
             ]),
+
             "average_progress": project_progress_average(db, tenant_id, all_project_ids),
         },
     }
-
 
 def tenant_project_analytics(db, tenant_id):
     all_projects = list(
@@ -2301,17 +2489,25 @@ def tenant_project_analytics(db, tenant_id):
             "completed_projects": len(completed_projects),
             "average_progress": project_progress_average(db, tenant_id, all_project_ids),
         },
-        "active_projects": serialize_project_cards(db, tenant_id, active_projects[:20]),
-        "on_hold_projects": serialize_project_cards(db, tenant_id, on_hold_projects[:20]),
-        "completed_projects": serialize_project_cards(db, tenant_id, completed_projects[:20]),
-        "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
+
+        # IMPORTANT:
+        # Dashboard should not load full project root maps / hierarchy maps here.
+        # Those can contain employee avatar/base64 data and make dashboard APIs slow/heavy.
+        # Full hierarchy will be loaded from project detail/list APIs separately.
+        "projects": [],
+        "active_projects": [],
+        "on_hold_projects": [],
+        "completed_projects": [],
+
         "department_performance": department_performance,
-        "top_performing_departments": department_performance[:8],
-        "project_performance": project_performance,
-        "project_wise_performance": project_performance,
-        "top_project_performance": project_performance[:12],
+        "top_performing_departments": department_performance[:5],
+        "daily_progress_chart": project_daily_progress_chart(db, tenant_id, all_project_ids, 14),
+
+        # Keep this lightweight for dashboard.
+        "project_wise_performance": [],
+        "top_project_performance": [],
+
         "project_status_chart": project_status_chart(db, tenant_id),
-        "team_leader_performance": team_leader_project_performance(db, tenant_id)[:12],
     }
 
 
@@ -2529,7 +2725,11 @@ def admin_dashboard():
     current_emp = current_employee(db)
 
     if current_emp and current_emp.get("tenant_id"):
-        tenant_id = current_emp.get("tenant_id")
+        tenant_id = str(current_emp.get("tenant_id") or tenant_id or "sds").strip() or "sds"
+
+    g.tenant_id = tenant_id
+
+    g.tenant_id = tenant_id
 
     total_employees = count_collection(
         db,
@@ -2854,6 +3054,7 @@ def admin_dashboard():
         "today": today,
         "roles": list(roles),
         "employee_summary": clean_doc(employee_snapshot(current_emp, roles)) if current_emp else None,
+        "tenant_id": tenant_id,
         "team_scope_employee_ids": team_scope_ids,
         "my_pending_leave_approvals": clean_doc(my_pending_leave_approvals),
         "my_pending_attendance_mode_requests": clean_doc(my_pending_attendance_mode_requests),
@@ -2889,9 +3090,10 @@ def employee_dashboard():
             "employee": None,
             "employee_summary": None,
             "dashboard_display": {
-                "title": "Employee Dashboard",
+                "title": employee_name(emp),
                 "subtitle": "Employee profile not found",
                 "display_role": "Employee",
+                "show_name_as_primary_heading": True,
             },
             "roles": list(roles),
             "is_team_leader": False,
@@ -2931,10 +3133,23 @@ def employee_dashboard():
 
     apply_profile_photo_aliases(emp, employee_photo(emp))
 
-    tenant_id = emp.get("tenant_id") or current_tenant_id()
+    tenant_id = str(emp.get("tenant_id") or current_tenant_id() or "sds").strip() or "sds"
+    g.tenant_id = tenant_id
     emp_id = str(emp["_id"])
     today_date = date.today()
     today = today_date.isoformat()
+
+    employee_roles = set(roles)
+
+    if is_team_leader_capability(emp, employee_roles):
+        employee_roles.add("team_leader")
+        employee_roles.add("team_leader_capability")
+
+    if is_reporting_officer_capability(emp, employee_roles):
+        employee_roles.add("reporting_officer")
+        employee_roles.add("reporting_officer_capability")
+
+    roles = employee_roles
 
     is_team_leader_role = is_team_leader_capability(emp, roles)
     is_reporting_officer_role = is_reporting_officer_capability(emp, roles)
@@ -2948,6 +3163,26 @@ def employee_dashboard():
             .find(employee_mapping_query("team_leader_id", emp, tenant_id))
             .sort("name", 1)
         )
+    elif emp.get("team_leader_id"):
+        team_leader = employee_by_id(db, tenant_id, emp.get("team_leader_id"))
+
+        if team_leader:
+            team_members = list(
+                db.employees
+                .find(employee_mapping_query("team_leader_id", team_leader, tenant_id))
+                .sort("name", 1)
+            )
+        else:
+            team_members = list(
+                db.employees
+                .find({
+                    "tenant_id": tenant_id,
+                    "team_leader_id": emp.get("team_leader_id"),
+                    "status": {"$ne": "Inactive"},
+                    "is_deleted": {"$ne": True},
+                })
+                .sort("name", 1)
+            )
 
     reporting_members = []
 
@@ -2957,6 +3192,26 @@ def employee_dashboard():
             .find(employee_mapping_query("reporting_officer_id", emp, tenant_id))
             .sort("name", 1)
         )
+    elif emp.get("reporting_officer_id"):
+        reporting_officer = employee_by_id(db, tenant_id, emp.get("reporting_officer_id"))
+
+        if reporting_officer:
+            reporting_members = list(
+                db.employees
+                .find(employee_mapping_query("reporting_officer_id", reporting_officer, tenant_id))
+                .sort("name", 1)
+            )
+        else:
+            reporting_members = list(
+                db.employees
+                .find({
+                    "tenant_id": tenant_id,
+                    "reporting_officer_id": emp.get("reporting_officer_id"),
+                    "status": {"$ne": "Inactive"},
+                    "is_deleted": {"$ne": True},
+                })
+                .sort("name", 1)
+            )
 
     for member in team_members:
         apply_profile_photo_aliases(member, employee_photo(member))
@@ -3184,16 +3439,28 @@ def employee_dashboard():
 
     balance_summary = leave_balance_summary(leave_balances)
 
+    dashboard_display_role = (
+        "Team Leader + Reporting Officer"
+        if is_team_leader_role and is_reporting_officer_role
+        else "Team Leader"
+        if is_team_leader_role
+        else "Reporting Officer"
+        if is_reporting_officer_role
+        else "Employee"
+    )
+
     return jsonify({
         "employee": clean_doc(emp),
         "employee_summary": clean_doc(employee_snapshot(emp, roles)),
         "dashboard_display": {
-            "title": employee_name_value,
+            "title": employee_name(emp),
             "subtitle": "Employee Dashboard",
-            "display_role": "Employee",
+            "display_role": dashboard_display_role,
             "show_name_as_primary_heading": True,
             "avatar": employee_photo(emp),
             "profile_photo": employee_photo(emp),
+            "profile_picture": employee_photo(emp),
+            "photo": employee_photo(emp),
         },
         "roles": list(roles),
         "is_team_leader": bool(is_team_leader_role),

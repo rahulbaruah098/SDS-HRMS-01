@@ -139,18 +139,203 @@ function displayValue(value) {
   return String(value);
 }
 
-function capabilityLabel(data, employee) {
-  const labels = [];
+function getRoleList(data = {}, employee = {}, employeeSummary = {}) {
+  const roles = [
+    ...(Array.isArray(data?.roles) ? data.roles : []),
+    ...(Array.isArray(employee?.roles) ? employee.roles : []),
+    ...(Array.isArray(employeeSummary?.roles) ? employeeSummary.roles : []),
+    employee?.role,
+    employeeSummary?.role,
+    data?.dashboard_display?.display_role,
+    employee?.display_role,
+    employeeSummary?.display_role,
+  ];
 
-  if (data?.is_team_leader || isTruthy(employee?.is_team_leader)) {
+  return roles
+    .map((role) => String(role || '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'))
+    .filter(Boolean);
+}
+
+function hasRoleSignal(roleList = [], signals = []) {
+  return roleList.some((role) => signals.includes(role));
+}
+
+function capabilityLabel(data, employee, employeeSummary = {}) {
+  const labels = [];
+  const roles = getRoleList(data, employee, employeeSummary);
+
+  const teamLeader =
+    data?.is_team_leader ||
+    isTruthy(employee?.is_team_leader) ||
+    isTruthy(employeeSummary?.is_team_leader) ||
+    hasRoleSignal(roles, ['team_leader', 'team_leader_capability', 'tl']);
+
+  const reportingOfficer =
+    data?.is_reporting_officer ||
+    isTruthy(employee?.is_reporting_officer) ||
+    isTruthy(employeeSummary?.is_reporting_officer) ||
+    hasRoleSignal(roles, ['reporting_officer', 'reporting_officer_capability', 'ro', 'manager']);
+
+  if (teamLeader) {
     labels.push('Team Leader');
   }
 
-  if (data?.is_reporting_officer || isTruthy(employee?.is_reporting_officer)) {
+  if (reportingOfficer) {
     labels.push('Reporting Officer');
   }
 
   return labels.length ? labels.join(' + ') : 'No additional capability mapped';
+}
+
+function dashboardRoleLabel(data = {}, employee = {}, employeeSummary = {}) {
+  const roles = getRoleList(data, employee, employeeSummary);
+
+  const teamLeader =
+    data?.is_team_leader ||
+    isTruthy(employee?.is_team_leader) ||
+    isTruthy(employeeSummary?.is_team_leader) ||
+    hasRoleSignal(roles, ['team_leader', 'team_leader_capability', 'tl']);
+
+  const reportingOfficer =
+    data?.is_reporting_officer ||
+    isTruthy(employee?.is_reporting_officer) ||
+    isTruthy(employeeSummary?.is_reporting_officer) ||
+    hasRoleSignal(roles, ['reporting_officer', 'reporting_officer_capability', 'ro', 'manager']);
+
+  if (teamLeader && reportingOfficer) return 'Team Leader + Reporting Officer';
+  if (teamLeader) return 'Team Leader';
+  if (reportingOfficer) return 'Reporting Officer';
+
+  return (
+    data?.dashboard_display?.display_role ||
+    employeeSummary?.display_role ||
+    employee?.display_role ||
+    'Employee'
+  );
+}
+
+function firstFilledArray(...arrays) {
+  return arrays.find((items) => Array.isArray(items) && items.length) || [];
+}
+
+function firstFilledObject(...objects) {
+  return objects.find(
+    (item) => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).length,
+  ) || {};
+}
+
+function mergeEmployeeData(...records) {
+  const merged = {};
+
+  records.forEach((record) => {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      return;
+    }
+
+    Object.entries(record).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        merged[key] = value;
+      }
+    });
+  });
+
+  merged.name =
+    merged.name ||
+    merged.employee_name ||
+    merged.full_name ||
+    merged.email ||
+    'Employee';
+
+  merged.employee_name = merged.employee_name || merged.name;
+
+  merged.department =
+    merged.department ||
+    merged.department_name ||
+    merged.employee_department ||
+    '';
+
+  merged.designation =
+    merged.designation ||
+    merged.designation_name ||
+    merged.employee_designation ||
+    '';
+
+  return merged;
+}
+
+function dashboardDataWithAuth(dashboardData = {}, authData = {}) {
+  const authUser = authData?.user || authData?.current_user || authData || {};
+  const authEmployee = authData?.employee || authData?.employee_summary || {};
+
+  const mergedEmployee = mergeEmployeeData(
+    authUser,
+    authEmployee,
+    dashboardData?.employee,
+    dashboardData?.employee_summary,
+  );
+
+  const authRoles = [
+    ...(Array.isArray(authUser?.roles) ? authUser.roles : []),
+    ...(Array.isArray(authEmployee?.roles) ? authEmployee.roles : []),
+    ...(Array.isArray(dashboardData?.roles) ? dashboardData.roles : []),
+    authUser?.role,
+    authEmployee?.role,
+    mergedEmployee?.role,
+    mergedEmployee?.display_role,
+    dashboardData?.dashboard_display?.display_role,
+  ].filter(Boolean);
+
+  const normalizedRoles = authRoles
+    .map((role) => String(role || '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'))
+    .filter(Boolean);
+
+  const hasTeamLeaderRole = normalizedRoles.some((role) =>
+    ['team_leader', 'team_leader_capability', 'tl'].includes(role),
+  );
+
+  const hasReportingOfficerRole = normalizedRoles.some((role) =>
+    ['reporting_officer', 'reporting_officer_capability', 'ro', 'manager'].includes(role),
+  );
+
+  const isTeamLeader =
+    Boolean(dashboardData?.is_team_leader) ||
+    isTruthy(mergedEmployee?.is_team_leader) ||
+    hasTeamLeaderRole;
+
+  const isReportingOfficer =
+    Boolean(dashboardData?.is_reporting_officer) ||
+    isTruthy(mergedEmployee?.is_reporting_officer) ||
+    hasReportingOfficerRole;
+
+  const displayRole =
+    isTeamLeader && isReportingOfficer
+      ? 'Team Leader + Reporting Officer'
+      : isTeamLeader
+        ? 'Team Leader'
+        : isReportingOfficer
+          ? 'Reporting Officer'
+          : dashboardData?.dashboard_display?.display_role ||
+            mergedEmployee?.display_role ||
+            'Employee';
+
+  return {
+    ...dashboardData,
+    employee: mergedEmployee,
+    employee_summary: mergeEmployeeData(dashboardData?.employee_summary, mergedEmployee),
+    roles: Array.from(new Set(normalizedRoles)),
+    is_team_leader: isTeamLeader,
+    is_reporting_officer: isReportingOfficer,
+    dashboard_display: {
+      ...(dashboardData?.dashboard_display || {}),
+      title:
+        dashboardData?.dashboard_display?.title ||
+        mergedEmployee?.employee_name ||
+        mergedEmployee?.name ||
+        'Employee',
+      display_role: displayRole,
+      subtitle: dashboardData?.dashboard_display?.subtitle || 'Employee Dashboard',
+    },
+  };
 }
 
 function normalizeProjectStatus(value) {
@@ -200,6 +385,18 @@ function averageProjectProgress(projects = []) {
   );
 
   return Math.round(total / projects.length);
+}
+
+function countValue(...values) {
+  for (const value of values) {
+    const parsed = Number(value);
+
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return 0;
 }
 
 function ratingPercent(value) {
@@ -400,6 +597,26 @@ function AvatarStack({ people = [], limit = 5 }) {
   );
 }
 
+function samePerson(a = {}, b = {}) {
+  const aIds = [
+    a._id,
+    a.id,
+    a.employee_id,
+    a.user_id,
+    a.email,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  const bIds = [
+    b._id,
+    b.id,
+    b.employee_id,
+    b.user_id,
+    b.email,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  return aIds.some((value) => bIds.includes(value));
+}
+
 function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
   const normalized = normalizeTeamHierarchyTree(tree || {});
   const reportingOfficer = normalized.reporting_officer || {};
@@ -408,6 +625,25 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
   const teamMembers = normalized.team_members || [];
   const reportingMembers = normalized.reporting_members || [];
   const teamLeadersUnderReporting = normalized.team_leaders_under_reporting || [];
+
+  const hasSelf = Boolean(self?.employee_name || self?.name);
+  const hasTeamLeader = Boolean(teamLeader?.employee_name || teamLeader?.name);
+  const selfIsTeamLeader = hasSelf && hasTeamLeader && samePerson(self, teamLeader);
+  const selfAlreadyInTeamMembers = teamMembers.some((person) => samePerson(person, self));
+
+  const visibleTeamMembers =
+    hasSelf && hasTeamLeader && !selfIsTeamLeader && !selfAlreadyInTeamMembers
+      ? [...teamMembers, self]
+      : teamMembers;
+
+  const visibleAllPeople = normalizePeopleList([
+    reportingOfficer,
+    teamLeader,
+    ...visibleTeamMembers,
+    ...reportingMembers,
+  ]).filter((person, index, list) => (
+    list.findIndex((item) => samePerson(item, person)) === index
+  ));
 
   return (
     <section className="emp-root-map-panel">
@@ -441,20 +677,20 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
           <div className="emp-root-branch">
             <div className="emp-root-branch-title">
               <span>Team Members</span>
-              <strong>{teamMembers.length}</strong>
+              <strong>{visibleTeamMembers.length}</strong>
             </div>
 
             <div className="emp-root-people-list">
-              {teamMembers.map((person, index) => (
+              {visibleTeamMembers.map((person, index) => (
                 <PersonChip
                   compact
-                  key={`${person.employee_id || person._id || index}-team`}
+                  key={`${person.employee_id || person._id || person.email || index}-team`}
                   person={person}
                   label="Team Member"
                 />
               ))}
 
-              {!teamMembers.length && <div className="emp-root-empty">No team members mapped</div>}
+              {!visibleTeamMembers.length && <div className="emp-root-empty">No team members mapped</div>}
             </div>
           </div>
 
@@ -468,7 +704,7 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
               {(teamLeadersUnderReporting.length ? teamLeadersUnderReporting : reportingMembers).map((person, index) => (
                 <PersonChip
                   compact
-                  key={`${person.employee_id || person._id || index}-reporting`}
+                  key={`${person.employee_id || person._id || person.email || index}-reporting`}
                   person={person}
                   label={isTruthy(person.is_team_leader) ? 'Team Leader' : 'Reporting Member'}
                 />
@@ -482,8 +718,8 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
 
       <div className="emp-root-map-foot">
         <span>Connected People</span>
-        <strong>{normalized.all_people?.length || 0}</strong>
-        <AvatarStack people={normalized.all_people || []} limit={8} />
+        <strong>{visibleAllPeople.length}</strong>
+        <AvatarStack people={visibleAllPeople} limit={8} />
       </div>
     </section>
   );
@@ -946,6 +1182,7 @@ export default function EmployeeDashboard({ setPage }) {
 
       const [
         dashboardData,
+        authData,
         attendanceData,
         requestData,
         compOffData,
@@ -953,7 +1190,8 @@ export default function EmployeeDashboard({ setPage }) {
         leaveRequestData,
         teamApprovalData,
       ] = await Promise.all([
-        api('/dashboard/employee'),
+        api('/dashboard/employee').catch(() => ({})),
+        api('/auth/me').catch(() => ({})),
         getAttendanceStatus().catch(() => null),
         getMyAttendanceModeRequests().catch(() => ({ items: [] })),
         getMyCompOffs().catch(() => ({ items: [] })),
@@ -961,8 +1199,7 @@ export default function EmployeeDashboard({ setPage }) {
         api('/leave_requests').catch(() => ({ items: [] })),
         getTeamApprovals({ status: 'pending' }).catch(() => ({ items: [] })),
       ]);
-
-      setData(dashboardData);
+      setData(dashboardDataWithAuth(dashboardData, authData));
       setAttendanceStatus(attendanceData);
       setModeRequests(requestData?.items || []);
       setCompOffs(compOffData?.items || []);
@@ -1057,30 +1294,46 @@ export default function EmployeeDashboard({ setPage }) {
     }
   }
 
-  const employee = data?.employee || {};
-  const employeeSummary = data?.employee_summary || employee;
+const employee = mergeEmployeeData(data?.employee_summary, data?.employee);
+const employeeSummary = mergeEmployeeData(data?.employee_summary, employee);
 
-  const displayName =
-    data?.dashboard_display?.title ||
-    employee?.name ||
-    employeeSummary?.name ||
-    'Employee';
+const displayName =
+  data?.dashboard_display?.title ||
+  employeeSummary?.employee_name ||
+  employeeSummary?.name ||
+  employee?.employee_name ||
+  employee?.name ||
+  employee?.email ||
+  'Employee';
 
-  const employeeId = String(employee?._id || employeeSummary?._id || '');
+const dashboardRole = dashboardRoleLabel(data, employee, employeeSummary);
+const employeeId = String(employee?._id || employee?.id || employeeSummary?._id || employeeSummary?.id || '');
 
-  const mappedCapabilityLabel = capabilityLabel(data, employee);
+const mappedCapabilityLabel = capabilityLabel(data, employee, employeeSummary);
 
-  const isMappedApprover = Boolean(
-    data?.is_team_leader ||
-      data?.is_reporting_officer ||
-      isTruthy(employee?.is_team_leader) ||
-      isTruthy(employee?.is_reporting_officer),
-  );
+const roleSignals = getRoleList(data, employee, employeeSummary);
 
-  const isTeamLeader = Boolean(data?.is_team_leader || isTruthy(employee?.is_team_leader));
-  const isReportingOfficer = Boolean(
-    data?.is_reporting_officer || isTruthy(employee?.is_reporting_officer),
-  );
+const isTeamLeader = Boolean(
+  data?.is_team_leader ||
+    isTruthy(employee?.is_team_leader) ||
+    isTruthy(employeeSummary?.is_team_leader) ||
+    hasRoleSignal(roleSignals, ['team_leader', 'team_leader_capability', 'tl']) ||
+    String(data?.dashboard_display?.display_role || '').toLowerCase().includes('team leader') ||
+    String(employee?.display_role || '').toLowerCase().includes('team leader') ||
+    String(employeeSummary?.display_role || '').toLowerCase().includes('team leader'),
+);
+
+const isReportingOfficer = Boolean(
+  data?.is_reporting_officer ||
+    isTruthy(employee?.is_reporting_officer) ||
+    isTruthy(employeeSummary?.is_reporting_officer) ||
+    hasRoleSignal(roleSignals, ['reporting_officer', 'reporting_officer_capability', 'ro', 'manager']) ||
+    String(data?.dashboard_display?.display_role || '').toLowerCase().includes('reporting officer') ||
+    String(employee?.display_role || '').toLowerCase().includes('reporting officer') ||
+    String(employeeSummary?.display_role || '').toLowerCase().includes('reporting officer'),
+);
+
+const isMappedApprover = isTeamLeader || isReportingOfficer;
 
   const canCreateOrAssignProjects = isTeamLeader || isReportingOfficer;
 
@@ -1093,15 +1346,39 @@ export default function EmployeeDashboard({ setPage }) {
     data?.available_attendance_modes ||
     ['office'];
 
-  const projectDashboard = data?.project_dashboard || {};
-  const projectSummary = projectDashboard?.summary || {};
-  const activeProjects = data?.active_projects || projectDashboard?.active_projects || [];
-  const completedProjects = data?.completed_projects || projectDashboard?.completed_projects || [];
-  const myProjects = data?.projects || projectDashboard?.my_projects || [];
-  const teamLeaderProjects =
-    data?.team_leader_projects || projectDashboard?.team_leader_projects || [];
-  const reportingProjects =
-    data?.reporting_projects || projectDashboard?.reporting_projects || [];
+const projectDashboard = data?.project_dashboard || {};
+const projectSummary = projectDashboard?.summary || {};
+
+const activeProjects = firstFilledArray(
+  projectDashboard?.active_projects,
+  data?.active_projects,
+);
+
+const completedProjects = firstFilledArray(
+  projectDashboard?.completed_projects,
+  data?.completed_projects,
+);
+
+const myProjects = firstFilledArray(
+  projectDashboard?.my_projects,
+  data?.projects,
+  activeProjects,
+  completedProjects,
+);
+
+const teamLeaderProjects = firstFilledArray(
+  projectDashboard?.team_leader_projects,
+  data?.team_leader_projects,
+  projectDashboard?.my_projects,
+  data?.projects,
+);
+
+  const reportingProjects = firstFilledArray(
+    projectDashboard?.reporting_projects,
+    data?.reporting_projects,
+    projectDashboard?.team_leader_projects,
+    data?.team_leader_projects,
+  );
 
   const projectDailyChart =
     data?.project_daily_progress_chart ||
@@ -1118,9 +1395,58 @@ export default function EmployeeDashboard({ setPage }) {
     projectDashboard?.reporting_daily_progress_chart ||
     [];
 
-  const myProjectAverage = projectSummary.average_progress || averageProjectProgress(myProjects);
-  const teamProjectAverage = projectSummary.team_average_progress || averageProjectProgress(teamLeaderProjects);
-  const reportingProjectAverage = projectSummary.reporting_average_progress || averageProjectProgress(reportingProjects);
+const myProjectCount = countValue(
+  projectSummary.my_total_projects,
+  projectSummary.total_projects,
+  myProjects.length,
+  activeProjects.length + completedProjects.length,
+);
+
+const myActiveProjectCount = countValue(
+  projectSummary.my_active_projects,
+  projectSummary.active_projects,
+  activeProjects.length,
+);
+
+const myCompletedProjectCount = countValue(
+  projectSummary.my_completed_projects,
+  projectSummary.completed_projects,
+  completedProjects.length,
+);
+
+const teamProjectCount = countValue(
+  projectSummary.team_total_projects,
+  teamLeaderProjects.length,
+);
+
+const teamActiveProjectCount = countValue(
+  projectSummary.team_active_projects,
+  teamLeaderProjects.filter((project) => normalizeProjectStatus(project.status) === 'active').length,
+);
+
+const teamCompletedProjectCount = countValue(
+  projectSummary.team_completed_projects,
+  teamLeaderProjects.filter((project) => normalizeProjectStatus(project.status) === 'completed').length,
+);
+
+const reportingProjectCount = countValue(
+  projectSummary.reporting_total_projects,
+  reportingProjects.length,
+);
+
+const reportingActiveProjectCount = countValue(
+  projectSummary.reporting_active_projects,
+  reportingProjects.filter((project) => normalizeProjectStatus(project.status) === 'active').length,
+);
+
+const reportingCompletedProjectCount = countValue(
+  projectSummary.reporting_completed_projects,
+  reportingProjects.filter((project) => normalizeProjectStatus(project.status) === 'completed').length,
+);
+
+const myProjectAverage = projectSummary.average_progress || averageProjectProgress(myProjects);
+const teamProjectAverage = projectSummary.team_average_progress || averageProjectProgress(teamLeaderProjects);
+const reportingProjectAverage = projectSummary.reporting_average_progress || averageProjectProgress(reportingProjects);
 
   const performanceSummary = data?.performance_summary || {};
 
@@ -1292,7 +1618,7 @@ export default function EmployeeDashboard({ setPage }) {
     },
     {
       field: 'Dashboard Role',
-      value: 'Employee',
+      value: dashboardRole,
     },
     {
       field: 'Employee Capability',
@@ -1534,7 +1860,19 @@ export default function EmployeeDashboard({ setPage }) {
     date: row.date || '—',
   }));
 
-  const teamHierarchyTree = data?.team_hierarchy_tree || {};
+  const teamHierarchyTree = data?.team_hierarchy_tree || {
+  self: employeeSummary,
+  team_leader: isTeamLeader ? employeeSummary : {},
+  reporting_officer: isReportingOfficer ? employeeSummary : {},
+  team_members: data?.team_members || [],
+  reporting_members: data?.reporting_members || [],
+  all_people: [
+    employeeSummary,
+    ...(data?.team_members || []),
+    ...(data?.reporting_members || []),
+  ],
+  connection_label: 'Reporting Officer → Team Leader → Team Members',
+};
   const profilePhotoPerson = {
     ...employeeSummary,
     ...employee,
@@ -2565,7 +2903,7 @@ export default function EmployeeDashboard({ setPage }) {
 
           <div className="employee-badges">
             <span className="employee-badge primary-cap">
-              Dashboard: Employee
+              Dashboard: {dashboardRole}
             </span>
 
             <span className="employee-badge success-cap">
@@ -2625,7 +2963,7 @@ export default function EmployeeDashboard({ setPage }) {
       {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
-        <Stat label="Dashboard" value="Employee" />
+        <Stat label="Dashboard" value={dashboardRole} />
         <Stat label="Today Status" value={todayStatus} />
         <Stat label="Attendance Mode" value={modeLabel(todayAttendance?.mode || 'office')} />
         <Stat label="Available Modes" value={availableModes.map(modeLabel).join(', ')} />
@@ -2633,8 +2971,8 @@ export default function EmployeeDashboard({ setPage }) {
         <Stat label="Used / Deducted Leave" value={totalUsedLeave} />
         <Stat label="Available Comp-Off" value={availableCompOffs.length} />
         <Stat label="Pending WFH/Field" value={pendingModeRequests.length} />
-        <Stat label="Active Projects" value={projectSummary.my_active_projects || activeProjects.length || 0} />
-        <Stat label="Completed Projects" value={projectSummary.my_completed_projects || completedProjects.length || 0} />
+        <Stat label="Active Projects" value={myActiveProjectCount} />
+        <Stat label="Completed Projects" value={myCompletedProjectCount} />
         <Stat label="Team Members" value={data?.team_members?.length || 0} />
         <Stat label="Reporting Members" value={data?.reporting_members?.length || 0} />
         <Stat label="Pending Leave Approvals" value={pendingApprovalLeaves.length || approvalCounts.leave_requests || 0} />
@@ -2876,25 +3214,25 @@ export default function EmployeeDashboard({ setPage }) {
           />
 
           <div className="emp-project-modern-stat-grid">
-            <ProjectMetricCard
-              label="My Total Projects"
-              value={projectSummary.my_total_projects || myProjects.length || 0}
-              meta="Assigned or collaborated"
-            />
+                <ProjectMetricCard
+                  label="My Projects"
+                  value={myProjectCount}
+                  meta="Assigned or collaborated"
+                />
 
-            <ProjectMetricCard
-              label="My Active"
-              value={projectSummary.my_active_projects || activeProjects.length || 0}
-              meta="Open for progress"
-              variant="green"
-            />
+                <ProjectMetricCard
+                  label="My Active"
+                  value={myActiveProjectCount}
+                  meta="Open for progress"
+                  variant="green"
+                />
 
-            <ProjectMetricCard
-              label="My Completed"
-              value={projectSummary.my_completed_projects || completedProjects.length || 0}
-              meta="Closed projects"
-              variant="sky"
-            />
+                <ProjectMetricCard
+                  label="My Completed"
+                  value={myCompletedProjectCount}
+                  meta="Closed projects"
+                  variant="sky"
+                />
 
             <ProjectMetricCard
               label="Average Progress"
@@ -2946,9 +3284,9 @@ export default function EmployeeDashboard({ setPage }) {
               </div>
 
               <div className="emp-project-modern-stat-grid">
-                <ProjectMetricCard label="Team Projects" value={projectSummary.team_total_projects || teamLeaderProjects.length || 0} meta="Created/managed by you" />
-                <ProjectMetricCard label="Team Active" value={projectSummary.team_active_projects || 0} meta="Currently running" variant="green" />
-                <ProjectMetricCard label="Team Completed" value={projectSummary.team_completed_projects || 0} meta="Closed projects" variant="sky" />
+                <ProjectMetricCard label="Team Projects" value={teamProjectCount} meta="Created/managed by you" />
+                <ProjectMetricCard label="Team Active" value={teamActiveProjectCount} meta="Currently running" variant="green" />
+                <ProjectMetricCard label="Team Completed" value={teamCompletedProjectCount} meta="Closed projects" variant="sky" />
                 <ProjectMetricCard label="Team Avg Progress" value={`${teamProjectAverage || 0}%`} meta="Team project average" variant="amber" />
               </div>
 
@@ -2980,9 +3318,9 @@ export default function EmployeeDashboard({ setPage }) {
               </div>
 
               <div className="emp-project-modern-stat-grid">
-                <ProjectMetricCard label="Reporting Projects" value={projectSummary.reporting_total_projects || reportingProjects.length || 0} meta="Reporting scope" />
-                <ProjectMetricCard label="Reporting Active" value={projectSummary.reporting_active_projects || 0} meta="Currently running" variant="green" />
-                <ProjectMetricCard label="Reporting Completed" value={projectSummary.reporting_completed_projects || 0} meta="Closed projects" variant="sky" />
+                <ProjectMetricCard label="Reporting Projects" value={reportingProjectCount} meta="Reporting scope" />
+                <ProjectMetricCard label="Reporting Active" value={reportingActiveProjectCount} meta="Currently running" variant="green" />
+                <ProjectMetricCard label="Reporting Completed" value={reportingCompletedProjectCount} meta="Closed projects" variant="sky" />
                 <ProjectMetricCard label="Reporting Avg Progress" value={`${reportingProjectAverage || 0}%`} meta="Reporting project average" variant="amber" />
               </div>
 

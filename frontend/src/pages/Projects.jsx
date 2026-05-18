@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   addProjectProgress,
   assignProject,
+  updateProjectCollaborators,
   createProject,
   currentEmployee,
   currentUser,
@@ -306,7 +307,77 @@ function normalizePeople(value = []) {
 }
 
 function getProjectTree(project = {}) {
-  return normalizeProjectTeamTree(project.project_team_tree || {});
+  const existingTree = normalizeProjectTeamTree(project.project_team_tree || {});
+
+  const directReportingOfficer = project.reporting_officer || existingTree.reporting_officer || {};
+  const directTeamLeader = project.team_leader || existingTree.team_leader || {};
+  const directAssignedMembers = normalizePeople(
+    project.assigned_members?.length
+      ? project.assigned_members
+      : existingTree.assigned_members || [],
+  );
+  const directCollaborators = normalizePeople(
+    project.collaborators?.length
+      ? project.collaborators
+      : existingTree.collaborators || [],
+  );
+  const directDoingPeople = normalizePeople(
+    project.doing_people?.length
+      ? project.doing_people
+      : existingTree.doing_people?.length
+        ? existingTree.doing_people
+        : directAssignedMembers,
+  );
+
+  const allPeople = normalizePeople([
+    directReportingOfficer,
+    directTeamLeader,
+    ...directAssignedMembers,
+    ...directCollaborators,
+    ...(project.latest_progress_person ? [project.latest_progress_person] : []),
+  ].filter((person) => person && (getId(person) || getName(person) !== 'Unnamed')));
+
+  return normalizeProjectTeamTree({
+    ...existingTree,
+    reporting_officer: directReportingOfficer,
+    team_leader: directTeamLeader,
+    assigned_members: directAssignedMembers,
+    collaborators: directCollaborators,
+    doing_people: directDoingPeople,
+    latest_progress_person: project.latest_progress_person || existingTree.latest_progress_person || {},
+    all_people: existingTree.all_people?.length ? existingTree.all_people : allPeople,
+    tree_levels: existingTree.tree_levels?.length
+      ? existingTree.tree_levels
+      : [
+          {
+            level: 1,
+            label: 'Reporting Officer',
+            people: directReportingOfficer?.employee_name || directReportingOfficer?.name
+              ? [directReportingOfficer]
+              : [],
+          },
+          {
+            level: 2,
+            label: 'Team Leader',
+            people: directTeamLeader?.employee_name || directTeamLeader?.name
+              ? [directTeamLeader]
+              : [],
+          },
+          {
+            level: 3,
+            label: 'Team Members Doing Project',
+            people: directAssignedMembers,
+          },
+          {
+            level: 4,
+            label: 'Collaborators',
+            people: directCollaborators,
+          },
+        ],
+    connection_label:
+      existingTree.connection_label ||
+      'Reporting Officer → Team Leader → Team Members → Collaborators',
+  });
 }
 
 function getProjectDoingPeople(project = {}) {
@@ -466,19 +537,58 @@ function ProjectTeamSummary({ project }) {
 
 function ProjectSpiderTree({ project }) {
   const tree = getProjectTree(project);
-  const reportingOfficer = tree.reporting_officer || {};
-  const teamLeader = tree.team_leader || {};
-  const assignedMembers = tree.assigned_members || [];
-  const collaborators = tree.collaborators || [];
-  const allPeople = tree.all_people || [];
+
+  const reportingOfficer =
+    tree.reporting_officer ||
+    project.reporting_officer ||
+    {};
+
+  const teamLeader =
+    tree.team_leader ||
+    project.team_leader ||
+    {};
+
+  const assignedMembers = normalizePeople(
+    tree.assigned_members?.length
+      ? tree.assigned_members
+      : project.assigned_members || [],
+  );
+
+  const collaborators = normalizePeople(
+    tree.collaborators?.length
+      ? tree.collaborators
+      : project.collaborators || [],
+  );
+
+  const doingPeople = normalizePeople(
+    tree.doing_people?.length
+      ? tree.doing_people
+      : project.doing_people?.length
+        ? project.doing_people
+        : assignedMembers,
+  );
+
+  const allPeople = normalizePeople(
+    tree.all_people?.length
+      ? tree.all_people
+      : [
+          reportingOfficer,
+          teamLeader,
+          ...assignedMembers,
+          ...collaborators,
+          ...(project.latest_progress_person ? [project.latest_progress_person] : []),
+        ].filter((person) => person && (getId(person) || getName(person) !== 'Unnamed')),
+  );
 
   return (
     <div className="project-spider-map">
       <div className="project-spider-bg" />
 
       <div className="project-spider-header">
-        <span>Team Root Map</span>
-        <strong>{tree.connection_label || 'Reporting Officer → Team Leader → Team Members'}</strong>
+        <span>Project Hierarchy Map</span>
+        <strong>
+          {tree.connection_label || 'Reporting Officer → Team Leader → Team Members → Collaborators'}
+        </strong>
       </div>
 
       <div className="project-root-node project-root-ro">
@@ -499,6 +609,8 @@ function ProjectSpiderTree({ project }) {
         )}
       </div>
 
+      <div className="project-root-line vertical" />
+
       <div className="project-root-branches">
         <div className="project-root-branch">
           <div className="project-root-branch-label">
@@ -509,7 +621,7 @@ function ProjectSpiderTree({ project }) {
           <div className="project-root-people">
             {assignedMembers.map((person, index) => (
               <PersonMiniCard
-                key={`${getId(person)}-${index}`}
+                key={`${getId(person) || getName(person)}-${index}-assigned`}
                 person={person}
                 relation="Doing Project"
                 compact
@@ -531,7 +643,7 @@ function ProjectSpiderTree({ project }) {
           <div className="project-root-people">
             {collaborators.map((person, index) => (
               <PersonMiniCard
-                key={`${getId(person)}-${index}`}
+                key={`${getId(person) || getName(person)}-${index}-collaborator`}
                 person={person}
                 relation="Collaborator"
                 compact
@@ -549,6 +661,12 @@ function ProjectSpiderTree({ project }) {
         <span>Total connected people</span>
         <strong>{allPeople.length}</strong>
         <PeopleStack people={allPeople} limit={8} />
+      </div>
+
+      <div className="project-root-footer project-root-footer-secondary">
+        <span>Doing Project</span>
+        <strong>{doingPeople.length}</strong>
+        <PeopleStack people={doingPeople} limit={8} />
       </div>
     </div>
   );
@@ -1309,26 +1427,38 @@ export default function Projects() {
     }
   }
 
-  async function handleAssign(projectId, payload) {
-    if (!canManageProjectSetup) {
-      setError('Only Team Leaders and Reporting Officers can assign members or collaborators.');
-      return;
-    }
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      await assignProject(projectId, payload);
-      setMessage('Project assignment updated successfully.');
-      await loadData();
-    } catch (err) {
-      setError(err.message || 'Unable to update project assignment.');
-    } finally {
-      setSaving(false);
-    }
+async function handleAssign(projectId, payload) {
+  if (!canManageProjectSetup) {
+    setError('Only Team Leaders and Reporting Officers can assign members or collaborators.');
+    return;
   }
+
+  setSaving(true);
+  setError('');
+  setMessage('');
+
+  try {
+    const assignedPayload = {
+      assigned_employee_ids: payload.assigned_employee_ids || [],
+      assigned_members: payload.assigned_employee_ids || [],
+    };
+
+    const collaboratorPayload = {
+      collaborator_ids: payload.collaborator_ids || [],
+      collaborators: payload.collaborator_ids || [],
+    };
+
+    await assignProject(projectId, assignedPayload);
+    await updateProjectCollaborators(projectId, collaboratorPayload);
+
+    setMessage('Project assignment and collaborators updated successfully.');
+    await loadData();
+  } catch (err) {
+    setError(err.message || 'Unable to update project assignment.');
+  } finally {
+    setSaving(false);
+  }
+}
 
   async function handleProgressSubmit(projectId, payload) {
     const progress = Number(payload.progress_percent);
@@ -2473,6 +2603,15 @@ export default function Projects() {
           padding-top: 14px;
         }
 
+        .project-root-footer-secondary {
+          margin-top: -8px;
+          border-top: 0;
+          padding-top: 0;
+          background: rgba(248, 250, 252, 0.76);
+          border-radius: 16px;
+          padding: 10px 12px;
+        }
+
         .project-root-footer span {
           color: #64748b;
           font-size: 12px;
@@ -2567,6 +2706,7 @@ export default function Projects() {
           .project-root-footer {
             grid-template-columns: 1fr;
             justify-items: start;
+            gap: 8px;
           }
 
           .project-self-actions > div:last-child {

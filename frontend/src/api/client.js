@@ -49,6 +49,23 @@ export function firstNonEmpty(...values) {
   return '';
 }
 
+
+export function safeSessionPhotoValue(value = '') {
+  const raw = String(value || '').trim();
+
+  if (!raw) {
+    return '';
+  }
+
+  // Do not save large base64 image data in localStorage.
+  // It causes dashboard/session break after profile image upload.
+  if (raw.startsWith('data:image') && raw.length > 5000) {
+    return '';
+  }
+
+  return raw;
+}
+
 export function getProfilePhotoValue(record = {}) {
   return firstNonEmpty(
     record.avatar,
@@ -807,16 +824,17 @@ export function buildProfilePhotoPayload(photoValue, extra = {}) {
 }
 
 function compactSessionUser(user = {}, employee = {}) {
-  const photo =
+  const photo = safeSessionPhotoValue(
     getProfilePhotoValue(user) ||
-    getProfilePhotoValue(employee) ||
-    user.profile_photo_url ||
-    user.avatar_url ||
-    user.photo_url ||
-    employee.profile_photo_url ||
-    employee.avatar_url ||
-    employee.photo_url ||
-    '';
+      getProfilePhotoValue(employee) ||
+      user.profile_photo_url ||
+      user.avatar_url ||
+      user.photo_url ||
+      employee.profile_photo_url ||
+      employee.avatar_url ||
+      employee.photo_url ||
+      '',
+  );
 
   return {
     id: user.id || user._id || '',
@@ -840,12 +858,13 @@ function compactSessionUser(user = {}, employee = {}) {
 }
 
 function compactSessionEmployee(employee = {}) {
-  const photo =
+  const photo = safeSessionPhotoValue(
     getProfilePhotoValue(employee) ||
-    employee.profile_photo_url ||
-    employee.avatar_url ||
-    employee.photo_url ||
-    '';
+      employee.profile_photo_url ||
+      employee.avatar_url ||
+      employee.photo_url ||
+      '',
+  );
 
   return {
     id: employee.id || employee._id || '',

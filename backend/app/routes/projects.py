@@ -230,9 +230,10 @@ def employee_identifier_values(employee):
     employee = employee or {}
     values = []
 
-    for value in [
+    raw_values = [
         employee.get("_id"),
         employee.get("id"),
+        str(employee.get("_id")) if employee.get("_id") else "",
         employee.get("employee_id"),
         employee.get("employee_ref_id"),
         employee.get("employee_code"),
@@ -241,11 +242,21 @@ def employee_identifier_values(employee):
         employee.get("user_id"),
         employee.get("email"),
         employee.get("official_email"),
-    ]:
-        value = normalize_text(value)
+    ]
 
-        if value and value not in values:
-            values.append(value)
+    for value in raw_values:
+        text_value = normalize_text(value)
+
+        if not text_value:
+            continue
+
+        if text_value not in values:
+            values.append(text_value)
+
+        object_value = safe_object_id(text_value)
+
+        if object_value and object_value not in values:
+            values.append(object_value)
 
     return values
 
@@ -264,6 +275,27 @@ def employee_avatar(employee):
         or ""
     )
 
+def safe_employee_avatar(employee):
+    """
+    Never store base64/profile image blobs inside project documents.
+    MongoDB has a 16MB document limit, and copying profile_photo/base64 into
+    assigned_members/collaborators/project_team_tree can make project creation fail.
+    Only keep normal URLs or small relative paths.
+    """
+    avatar = employee_avatar(employee)
+
+    if not avatar:
+        return ""
+
+    avatar = str(avatar).strip()
+
+    if avatar.startswith("data:image"):
+        return ""
+
+    if len(avatar) > 500:
+        return ""
+
+    return avatar
 
 def employee_roles(employee):
     if not employee:
@@ -413,9 +445,21 @@ def can_update_project_status_or_progress(db, project):
 def project_scope_query(db):
     tenant_id = current_tenant_id()
 
+    tenant_filter = {
+        "$or": [
+            {"tenant_id": tenant_id},
+            {"tenant_id": str(tenant_id or "").strip()},
+            {"tenant_id": {"$exists": False}},
+            {"tenant_id": None},
+            {"tenant_id": ""},
+        ]
+    }
+
     q = {
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
+        "$and": [
+            tenant_filter,
+            {"is_deleted": {"$ne": True}},
+        ]
     }
 
     if is_admin_view_user():
@@ -424,7 +468,7 @@ def project_scope_query(db):
     employee = get_current_employee(db)
 
     if not employee:
-        q["_id"] = {"$exists": False}
+        q["$and"].append({"_id": {"$exists": False}})
         return q
 
     employee_id = str(employee["_id"])
@@ -433,17 +477,30 @@ def project_scope_query(db):
     if employee_id not in identifier_values:
         identifier_values.append(employee_id)
 
-    q["$or"] = [
-        {"created_by_employee_id": {"$in": identifier_values}},
-        {"team_leader_id": {"$in": identifier_values}},
-        {"reporting_officer_id": {"$in": identifier_values}},
-        {"assigned_to_id": {"$in": identifier_values}},
-        {"assigned_employee_ids": {"$in": identifier_values}},
-        {"assigned_members.employee_id": {"$in": identifier_values}},
-        {"collaborator_ids": {"$in": identifier_values}},
-        {"collaborators.employee_id": {"$in": identifier_values}},
-        {"latest_progress_by": {"$in": identifier_values}},
-    ]
+    q["$and"].append({
+        "$or": [
+            {"created_by_employee_id": {"$in": identifier_values}},
+            {"created_by": {"$in": identifier_values}},
+
+            {"team_leader_id": {"$in": identifier_values}},
+            {"reporting_officer_id": {"$in": identifier_values}},
+
+            {"assigned_to_id": {"$in": identifier_values}},
+            {"assigned_employee_ids": {"$in": identifier_values}},
+            {"assigned_members.employee_id": {"$in": identifier_values}},
+            {"assigned_members.user_id": {"$in": identifier_values}},
+            {"assigned_members.employee_code": {"$in": identifier_values}},
+            {"assigned_members.email": {"$in": identifier_values}},
+
+            {"collaborator_ids": {"$in": identifier_values}},
+            {"collaborators.employee_id": {"$in": identifier_values}},
+            {"collaborators.user_id": {"$in": identifier_values}},
+            {"collaborators.employee_code": {"$in": identifier_values}},
+            {"collaborators.email": {"$in": identifier_values}},
+
+            {"latest_progress_by": {"$in": identifier_values}},
+        ]
+    })
 
     return q
 
@@ -534,22 +591,27 @@ def resolve_employee_by_user_id(db, user_id, tenant_id=None):
     return db.employees.find_one(q)
 
 
-def employee_member_payload(employee, relation="member"):
+def employee_member_payload(employee, relation="member", include_avatar=True):
     if not employee:
         return {}
+
+    avatar_value = employee_avatar(employee) if include_avatar else safe_employee_avatar(employee)
 
     return {
         "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
         "employee_name": employee_display_name(employee),
         "name": employee_display_name(employee),
+        "display_name": employee_display_name(employee),
         "email": employee.get("email", ""),
         "phone": employee.get("phone", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "user_id": employee.get("user_id", ""),
-        "avatar": employee_avatar(employee),
-        "profile_photo": employee_avatar(employee),
+        "avatar": avatar_value,
+        "profile_photo": avatar_value,
+        "profile_picture": avatar_value,
+        "photo": avatar_value,
         "is_team_leader": truthy(employee.get("is_team_leader")),
         "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
         "team_leader_id": employee.get("team_leader_id", ""),
@@ -603,7 +665,7 @@ def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member",
             raise ValueError("One or more selected employees were not found")
 
         resolved_ids.append(str(employee["_id"]))
-        members.append(employee_member_payload(employee, relation))
+        members.append(employee_member_payload(employee, relation, include_avatar=False))
 
     return resolved_ids, members
 
@@ -689,13 +751,21 @@ def enrich_member_from_db(db, tenant_id, member, relation):
         or "Employee"
     )
     fallback["name"] = fallback.get("employee_name")
-    fallback["avatar"] = (
+    fallback_avatar = (
         fallback.get("avatar")
         or fallback.get("profile_photo")
         or fallback.get("profile_picture")
         or ""
     )
-    fallback["profile_photo"] = fallback.get("avatar")
+
+    fallback_avatar = str(fallback_avatar or "").strip()
+
+    if fallback_avatar.startswith("data:image") or len(fallback_avatar) > 500:
+        fallback_avatar = ""
+
+    fallback["avatar"] = fallback_avatar
+    fallback["profile_photo"] = fallback_avatar
+
     return fallback
 
 
@@ -1514,6 +1584,25 @@ def list_projects():
         .limit(1000)
     )
 
+    project_ids_with_saved_tree = [
+        project["_id"]
+        for project in projects
+        if project.get("project_team_tree")
+    ]
+
+    if project_ids_with_saved_tree:
+        db.projects.update_many(
+            {"_id": {"$in": project_ids_with_saved_tree}},
+            {"$unset": {"project_team_tree": ""}},
+        )
+
+        projects = list(
+            db.projects
+            .find(q)
+            .sort("created_at", -1)
+            .limit(1000)
+        )
+
     project_ids = [str(project["_id"]) for project in projects]
     latest_map = latest_project_progress_map(db, tenant_id, project_ids)
     can_manage = can_create_assign_or_collaborate_projects(db)
@@ -1645,9 +1734,17 @@ def create_project():
         "is_deleted": False,
     }
 
-    doc["project_team_tree"] = build_project_team_tree(db, doc)
 
-    result = db.projects.insert_one(doc)
+
+    try:
+        result = db.projects.insert_one(doc)
+    except Exception as exc:
+        if exc.__class__.__name__ == "DocumentTooLarge":
+            return jsonify({
+                "message": "Project could not be created because selected employee profile images made the project data too large. Please try again after removing large base64 profile images from employee records."
+            }), 400
+
+        raise
     doc["_id"] = result.inserted_id
 
     audit("create_project", "projects", result.inserted_id, {
@@ -1737,13 +1834,6 @@ def update_project(project_id):
 
     updated = db.projects.find_one({"_id": project["_id"]})
 
-    db.projects.update_one(
-        {"_id": project["_id"]},
-        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
-    )
-
-    updated = db.projects.find_one({"_id": project["_id"]})
-
     audit("update_project", "projects", project_id, update)
 
     return jsonify({
@@ -1803,13 +1893,6 @@ def assign_project(project_id):
 
     updated = db.projects.find_one({"_id": project["_id"]})
 
-    db.projects.update_one(
-        {"_id": project["_id"]},
-        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
-    )
-
-    updated = db.projects.find_one({"_id": project["_id"]})
-
     audit("assign_project", "projects", project_id, update)
 
     return jsonify({
@@ -1858,13 +1941,6 @@ def update_project_collaborators(project_id):
     db.projects.update_one(
         {"_id": project["_id"]},
         {"$set": update},
-    )
-
-    updated = db.projects.find_one({"_id": project["_id"]})
-
-    db.projects.update_one(
-        {"_id": project["_id"]},
-        {"$set": {"project_team_tree": build_project_team_tree(db, updated)}},
     )
 
     updated = db.projects.find_one({"_id": project["_id"]})
@@ -2159,8 +2235,8 @@ def add_project_progress(project_id):
         "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
         "employee_name": employee_display_name(employee),
-        "employee_avatar": employee_avatar(employee),
-        "employee_profile_photo": employee_avatar(employee),
+        "employee_avatar": safe_employee_avatar(employee),
+        "employee_profile_photo": safe_employee_avatar(employee),
         "employee_department": employee.get("department", ""),
         "employee_designation": employee.get("designation", ""),
         "progress_percent": progress,
@@ -2188,19 +2264,12 @@ def add_project_progress(project_id):
                 "latest_progress_date": progress_date,
                 "latest_progress_by": str(employee["_id"]),
                 "latest_progress_by_name": employee_display_name(employee),
-                "latest_progress_by_avatar": employee_avatar(employee),
+                "latest_progress_by_avatar": safe_employee_avatar(employee),
                 "updated_at": now,
                 "updated_by": current_user_id(),
                 "updated_by_name": current_user_name(),
             }
         },
-    )
-
-    updated_project = db.projects.find_one({"_id": project["_id"]})
-
-    db.projects.update_one(
-        {"_id": project["_id"]},
-        {"$set": {"project_team_tree": build_project_team_tree(db, updated_project, doc)}},
     )
 
     updated_project = db.projects.find_one({"_id": project["_id"]})
@@ -2228,6 +2297,14 @@ def get_project_detail(project_id):
 
     tenant_id = project.get("tenant_id") or current_tenant_id()
     project_id_str = str(project["_id"])
+
+    if project.get("project_team_tree"):
+        db.projects.update_one(
+            {"_id": project["_id"]},
+            {"$unset": {"project_team_tree": ""}},
+        )
+
+        project = db.projects.find_one({"_id": project["_id"]})
 
     latest = db.project_progress.find_one({
         "tenant_id": tenant_id,
