@@ -1,9 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Plus, Save, Search, KeyRound, X, ImagePlus } from 'lucide-react';
+import {
+  Plus,
+  Save,
+  Search,
+  KeyRound,
+  X,
+  ImagePlus,
+  Trash2,
+  ShieldCheck,
+  ShieldOff,
+  RefreshCw,
+} from 'lucide-react';
 import {
   api,
   getInitials,
   getProfilePhotoUrl,
+  getSuperAdminTenants,
+  getSuperAdminTenantUsers,
+  createSuperAdminTenantEmployee,
+  changeSuperAdminTenantUserPassword,
+  updateSuperAdminTenantUserStatus,
+  deleteSuperAdminTenantUser,
 } from '../api/client';
 import { emptyUser } from '../data/modules';
 
@@ -84,6 +101,7 @@ const CREATE_FIELD_ORDER = [
   'name',
   'email',
   'password',
+  'confirm_password',
   'roles',
 
   'avatar',
@@ -210,6 +228,7 @@ const REQUIRED_FIELDS = [
   'name',
   'email',
   'password',
+  'confirm_password',
   'roles',
   'phone',
   'country',
@@ -393,7 +412,7 @@ function normalizeItSupportFlags(payload = {}) {
 }
 
 function userEmployeeProfile(user = {}) {
-  return user.employee_profile || {};
+  return user.employee_profile || user.employee || {};
 }
 
 function userPhotoValue(user = {}) {
@@ -577,9 +596,11 @@ function ProfilePhotoInput({ state, setState, mode = 'create' }) {
 
 export default function UserControl() {
   const [rows, setRows] = useState([]);
+  const [tenants, setTenants] = useState([]);
   const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
+  const [designationFilter, setDesignationFilter] = useState('');
   const [edit, setEdit] = useState(null);
   const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
@@ -593,38 +614,52 @@ export default function UserControl() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  function buildQueryParams() {
-    const params = [];
+  async function loadTenants() {
+    const data = await getSuperAdminTenants();
+    const items = data.items || [];
 
-    if (q.trim()) {
-      params.push(`q=${encodeURIComponent(q.trim())}`);
+    setTenants(items);
+
+    if (!tenant && items.length) {
+      const firstTenant = items[0].tenant_id || items[0].value || '';
+
+      setTenant(firstTenant);
+      setForm((prev) => ({
+        ...prev,
+        tenant_id: firstTenant,
+      }));
+
+      return firstTenant;
     }
 
-    if (tenant.trim()) {
-      params.push(`tenant_id=${encodeURIComponent(tenant.trim())}`);
-    }
-
-    return params;
+    return tenant;
   }
 
-  async function load() {
-    const params = buildQueryParams();
+  async function load(nextTenant = tenant) {
+    const cleanTenant = String(nextTenant || '').trim();
 
-    const data = await api(
-      `/superadmin/users${params.length ? `?${params.join('&')}` : ''}`,
-    );
+    if (!cleanTenant) {
+      setRows([]);
+      return [];
+    }
 
-    setRows(data.items || []);
-    return data.items || [];
+    const data = await getSuperAdminTenantUsers({
+      tenant_id: cleanTenant,
+      search: q.trim(),
+      q: q.trim(),
+      designation: designationFilter.trim(),
+    });
+
+    const items = data.items || [];
+    setRows(items);
+    return items;
   }
 
   async function loadEmployeeOptions(tenantId = '') {
-    const cleanTenant = (tenantId || tenant || '').trim();
-
+    const cleanTenant = String(tenantId || tenant || '').trim();
     const url = cleanTenant
-      ? `/employees?tenant_id=${encodeURIComponent(cleanTenant)}`
-      : '/employees';
-
+      ? `/employees?tenant_id=${encodeURIComponent(cleanTenant)}&limit=500`
+      : '/employees?limit=500';
     const data = await api(url);
     const items = data.items || [];
 
@@ -633,12 +668,10 @@ export default function UserControl() {
   }
 
   async function loadDesignationOptions(tenantId = '') {
-    const cleanTenant = (tenantId || tenant || '').trim();
-
+    const cleanTenant = String(tenantId || tenant || '').trim();
     const url = cleanTenant
-      ? `/designations?tenant_id=${encodeURIComponent(cleanTenant)}`
-      : '/designations';
-
+      ? `/designations?tenant_id=${encodeURIComponent(cleanTenant)}&limit=500`
+      : '/designations?limit=500';
     const data = await api(url);
     const items = data.items || [];
 
@@ -647,12 +680,10 @@ export default function UserControl() {
   }
 
   async function loadDepartmentOptions(tenantId = '') {
-    const cleanTenant = (tenantId || tenant || '').trim();
-
+    const cleanTenant = String(tenantId || tenant || '').trim();
     const url = cleanTenant
-      ? `/departments?tenant_id=${encodeURIComponent(cleanTenant)}`
-      : '/departments';
-
+      ? `/departments?tenant_id=${encodeURIComponent(cleanTenant)}&limit=500`
+      : '/departments?limit=500';
     const data = await api(url);
     const items = data.items || [];
 
@@ -661,35 +692,60 @@ export default function UserControl() {
   }
 
   async function loadHelperOptions(tenantId = '') {
-    await loadEmployeeOptions(tenantId);
-    await loadDesignationOptions(tenantId);
-    await loadDepartmentOptions(tenantId);
+    await Promise.all([
+      loadEmployeeOptions(tenantId),
+      loadDesignationOptions(tenantId),
+      loadDepartmentOptions(tenantId),
+    ]);
   }
 
-  function resetCreateForm() {
-    setForm({ ...USER_CREATE_TEMPLATE });
+  function resetCreateForm(nextTenant = tenant) {
+    setForm({
+      ...USER_CREATE_TEMPLATE,
+      tenant_id: nextTenant || '',
+    });
   }
 
   useEffect(() => {
-    setLoading(true);
+    async function boot() {
+      try {
+        setLoading(true);
+        setMessage('');
 
-    load()
-      .catch((error) => {
+        const selectedTenant = await loadTenants();
+        await loadHelperOptions(selectedTenant);
+        await load(selectedTenant);
+      } catch (error) {
         console.error(error);
         setMessage(error.message || 'Unable to load users');
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    }
 
-    loadHelperOptions().catch(console.error);
+    boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!tenant) {
+      return;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      tenant_id: prev.tenant_id || tenant,
+    }));
+
+    loadHelperOptions(tenant).catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenant]);
 
   async function searchUsers() {
     try {
       setMessage('');
       setLoading(true);
-
-      await load();
+      await load(tenant);
       await loadHelperOptions(tenant);
     } catch (error) {
       setMessage(error.message || 'Unable to search users');
@@ -700,18 +756,42 @@ export default function UserControl() {
 
   async function clearSearch() {
     setQ('');
-    setTenant('');
+    setDesignationFilter('');
     setMessage('');
 
     try {
       setLoading(true);
-
-      const data = await api('/superadmin/users');
+      const data = await getSuperAdminTenantUsers({ tenant_id: tenant });
       setRows(data.items || []);
-
-      await loadHelperOptions('');
+      await loadHelperOptions(tenant);
     } catch (error) {
       setMessage(error.message || 'Unable to clear search');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleTenantChange(nextTenant) {
+    const cleanTenant = String(nextTenant || '').trim();
+
+    setTenant(cleanTenant);
+    setQ('');
+    setDesignationFilter('');
+    setMessage('');
+    setForm((prev) => ({
+      ...prev,
+      tenant_id: cleanTenant,
+    }));
+    setEdit(null);
+    setResetTarget(null);
+
+    try {
+      setLoading(true);
+      await loadHelperOptions(cleanTenant);
+      const data = await getSuperAdminTenantUsers({ tenant_id: cleanTenant });
+      setRows(data.items || []);
+    } catch (error) {
+      setMessage(error.message || 'Unable to load selected tenant users');
     } finally {
       setLoading(false);
     }
@@ -720,7 +800,7 @@ export default function UserControl() {
   function validateUserPayload(payload, mode = 'create') {
     const required = mode === 'create'
       ? REQUIRED_FIELDS
-      : REQUIRED_FIELDS.filter((field) => field !== 'password');
+      : REQUIRED_FIELDS.filter((field) => !['password', 'confirm_password'].includes(field));
 
     for (const field of required) {
       if (
@@ -732,6 +812,10 @@ export default function UserControl() {
       }
     }
 
+    if (mode === 'create' && payload.password !== payload.confirm_password) {
+      return 'Password and confirm password do not match';
+    }
+
     return '';
   }
 
@@ -740,6 +824,7 @@ export default function UserControl() {
       ...sourcePayload,
       state: normalizeState(sourcePayload.state),
       branch: normalizeState(sourcePayload.branch || sourcePayload.state),
+      tenant_id: String(sourcePayload.tenant_id || tenant || '').trim(),
       role: 'Employee',
     });
 
@@ -771,17 +856,14 @@ export default function UserControl() {
       setMessage('');
       setSaving(true);
 
-      const data = await api('/superadmin/users', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      const data = await createSuperAdminTenantEmployee(payload);
 
-      setMessage(data.message || 'User created successfully');
-      resetCreateForm();
-      await load();
-      await loadHelperOptions(form.tenant_id);
+      setMessage(data.message || 'Employee created successfully');
+      resetCreateForm(payload.tenant_id);
+      await load(payload.tenant_id);
+      await loadHelperOptions(payload.tenant_id);
     } catch (error) {
-      setMessage(error.message || 'Unable to create user');
+      setMessage(error.message || 'Unable to create employee');
     } finally {
       setSaving(false);
     }
@@ -791,10 +873,10 @@ export default function UserControl() {
     try {
       setMessage('');
 
-      const employee = user.employee_profile || {};
+      const employee = user.employee_profile || user.employee || {};
       const photo = profilePhotoValue(employee) || profilePhotoValue(user);
 
-      await loadHelperOptions(user.tenant_id);
+      await loadHelperOptions(user.tenant_id || tenant);
 
       const editData = {
         ...USER_CREATE_TEMPLATE,
@@ -802,7 +884,7 @@ export default function UserControl() {
         ...user,
 
         user_id_for_edit: user._id,
-        employee_id_for_edit: employee._id || user.employee_ref_id || '',
+        employee_id_for_edit: employee._id || user.employee_ref_id || user.employee_id || '',
 
         roles: normalizeRolesInput(user.roles),
 
@@ -811,7 +893,7 @@ export default function UserControl() {
         profile_picture: photo,
         photo,
 
-        phone: employee.phone || '',
+        phone: employee.phone || user.phone || '',
         country: employee.country || 'India',
         joining_date: employee.joining_date || '',
         date_of_birth: employee.date_of_birth || '',
@@ -822,17 +904,14 @@ export default function UserControl() {
         employee_uan_no: employee.employee_uan_no || '',
         employee_type: employee.employee_type || '',
         skill_level: employee.skill_level || '',
-        are_parents_senior_citizen: String(
-          employee.are_parents_senior_citizen || 'false',
-        ),
+        are_parents_senior_citizen: String(employee.are_parents_senior_citizen || 'false'),
         number_of_children: employee.number_of_children || '',
         payment_mode: employee.payment_mode || 'Bank Transfer',
         previous_designation: employee.previous_designation || '',
-        previous_employment_tenure_end_date:
-          employee.previous_employment_tenure_end_date || '',
+        previous_employment_tenure_end_date: employee.previous_employment_tenure_end_date || '',
         role: 'Employee',
-        designation: employee.designation || user.designation || '',
-        department: employee.department || user.department || '',
+        designation: employee.designation || user.designation || user.designation_name || '',
+        department: employee.department || user.department || user.department_name || '',
         shift: employee.shift || 'General',
         gender: employee.gender || 'Male',
         address: employee.address || '',
@@ -844,15 +923,13 @@ export default function UserControl() {
         employee_esic_ip: employee.employee_esic_ip || '',
         employment_status: employee.employment_status || 'Active',
         father_name: employee.father_name || '',
-        dependent_disability_level:
-          employee.dependent_disability_level || 'No Disability',
+        dependent_disability_level: employee.dependent_disability_level || 'No Disability',
         children_in_hostel: employee.children_in_hostel || '',
         previous_employer_name: employee.previous_employer_name || '',
-        previous_employment_tenure_from_date:
-          employee.previous_employment_tenure_from_date || '',
-        employee_id: employee.employee_id || user.emp_code || '',
+        previous_employment_tenure_from_date: employee.previous_employment_tenure_from_date || '',
+        employee_id: employee.employee_id || user.emp_code || user.employee_code || '',
 
-        emp_code: employee.emp_code || user.emp_code || '',
+        emp_code: employee.emp_code || user.emp_code || user.employee_code || '',
         job_type: employee.job_type || 'Regular',
         project: employee.project || '',
         state: normalizeState(employee.state || employee.branch || user.state || user.branch || 'Assam(HO)'),
@@ -870,7 +947,8 @@ export default function UserControl() {
         reporting_officer_name: employee.reporting_officer_name || user.reporting_officer_name || '',
 
         password: '',
-        is_active: String(user.is_active !== false),
+        confirm_password: '',
+        is_active: String(user.is_active !== false && user.is_disabled !== true),
       };
 
       setEdit(normalizeItSupportFlags(editData));
@@ -897,6 +975,11 @@ export default function UserControl() {
       return;
     }
 
+    if (payload.password && payload.password !== payload.confirm_password && payload.confirm_password) {
+      setMessage('Password and confirm password do not match');
+      return;
+    }
+
     try {
       setMessage('');
       setSaving(true);
@@ -904,10 +987,11 @@ export default function UserControl() {
       delete payload.user_id_for_edit;
       delete payload.employee_id_for_edit;
       delete payload.employee_profile;
+      delete payload.employee;
       delete payload.password_hash;
+      delete payload.confirm_password;
 
-      payload.is_active =
-        payload.is_active === true || payload.is_active === 'true';
+      payload.is_active = payload.is_active === true || payload.is_active === 'true';
 
       if (!payload.password) {
         delete payload.password;
@@ -920,7 +1004,7 @@ export default function UserControl() {
 
       setMessage(data.message || 'User/profile updated successfully');
       setEdit(null);
-      await load();
+      await load(payload.tenant_id);
       await loadHelperOptions(payload.tenant_id);
     } catch (error) {
       setMessage(error.message || 'Unable to save user');
@@ -966,10 +1050,7 @@ export default function UserControl() {
       setMessage('');
       setSaving(true);
 
-      const data = await api(`/superadmin/users/${resetTarget._id}/reset-password`, {
-        method: 'POST',
-        body: JSON.stringify({ password: resetForm.password }),
-      });
+      const data = await changeSuperAdminTenantUserPassword(resetTarget._id, resetForm);
 
       setMessage(data.message || 'Password updated successfully');
       setResetTarget(null);
@@ -984,14 +1065,75 @@ export default function UserControl() {
     }
   }
 
+  async function toggleUserStatus(user) {
+    if (!user?._id) {
+      return;
+    }
+
+    const isActive = user.is_active !== false && user.is_disabled !== true;
+    const action = isActive ? 'disable' : 'enable';
+    const ok = window.confirm(`Are you sure you want to ${action} ${user.name || user.email || 'this user'}?`);
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSaving(true);
+
+      const data = await updateSuperAdminTenantUserStatus(user._id, {
+        is_active: !isActive,
+      });
+
+      setMessage(data.message || (isActive ? 'User disabled successfully' : 'User enabled successfully'));
+      await load(tenant);
+    } catch (error) {
+      setMessage(error.message || 'Unable to update user status');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteUser(user) {
+    if (!user?._id) {
+      return;
+    }
+
+    const ok = window.confirm(
+      `Delete ${user.name || user.email || 'this user'} from the active database list?`,
+    );
+
+    if (!ok) {
+      return;
+    }
+
+    try {
+      setMessage('');
+      setSaving(true);
+
+      const data = await deleteSuperAdminTenantUser(user._id);
+
+      setMessage(data.message || 'User deleted successfully');
+      await load(tenant);
+      await loadHelperOptions(tenant);
+    } catch (error) {
+      setMessage(error.message || 'Unable to delete user');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function formatLabel(key) {
     const customLabels = {
       is_it_support_head: 'IT Support Head',
       is_it_support_member: 'IT Support Member',
+      confirm_password: 'Confirm Password',
+      tenant_id: 'Tenant / Company',
     };
 
     if (customLabels[key]) {
-      return customLabels[key];
+      return REQUIRED_FIELDS.includes(key) ? `${customLabels[key]} *` : customLabels[key];
     }
 
     const labelText = key
@@ -1026,15 +1168,38 @@ export default function UserControl() {
   function renderCommonField(state, setState, key, mode = 'create') {
     const label = formatLabel(key);
 
-    if (key === 'avatar') {
+    if (key === 'tenant_id') {
       return (
-        <ProfilePhotoInput
-          key={key}
-          state={state}
-          setState={setState}
-          mode={mode}
-        />
+        <label key={key}>
+          {label}
+          <select
+            value={state[key] || ''}
+            disabled={mode === 'edit'}
+            onChange={(e) => {
+              const nextTenant = e.target.value;
+              setState({ ...state, [key]: nextTenant });
+
+              if (mode === 'create') {
+                handleTenantChange(nextTenant);
+              }
+            }}
+          >
+            <option value="">Select tenant</option>
+            {tenants.map((item) => (
+              <option key={item.tenant_id || item.value} value={item.tenant_id || item.value}>
+                {item.name || item.company_name || item.label || item.tenant_id} ({item.tenant_id || item.value})
+              </option>
+            ))}
+          </select>
+          <small>
+            Super Admin must select the tenant first. Employee and login user will be created inside this tenant only.
+          </small>
+        </label>
       );
+    }
+
+    if (key === 'avatar') {
+      return <ProfilePhotoInput key={key} state={state} setState={setState} mode={mode} />;
     }
 
     if (key === 'department') {
@@ -1046,19 +1211,10 @@ export default function UserControl() {
             onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             <option value="">Select department</option>
-
             {departmentOptions.map((dept) => {
-              const value = dept.name || dept.title || '';
-
-              if (!value) {
-                return null;
-              }
-
-              return (
-                <option key={dept._id || value} value={value}>
-                  {value}
-                </option>
-              );
+              const value = dept.name || dept.title || dept.department_name || '';
+              if (!value) return null;
+              return <option key={dept._id || value} value={value}>{value}</option>;
             })}
           </select>
         </label>
@@ -1074,19 +1230,10 @@ export default function UserControl() {
             onChange={(e) => setState({ ...state, designation: e.target.value })}
           >
             <option value="">Select designation</option>
-
             {designationOptions.map((desig) => {
-              const value = desig.title || desig.name || '';
-
-              if (!value) {
-                return null;
-              }
-
-              return (
-                <option key={desig._id || value} value={value}>
-                  {value}
-                </option>
-              );
+              const value = desig.title || desig.name || desig.designation_name || '';
+              if (!value) return null;
+              return <option key={desig._id || value} value={value}>{value}</option>;
             })}
           </select>
         </label>
@@ -1102,14 +1249,11 @@ export default function UserControl() {
             onChange={(e) => setState({ ...state, [key]: e.target.value })}
           >
             {LOGIN_ROLE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
+              <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
           <small>
-            Team Leader, Reporting Officer and IT Support duties are not login roles.
-            Use the capability fields below to mark those responsibilities.
+            Team Leader, Reporting Officer and IT Support duties are employee capabilities, not separate login roles.
           </small>
         </label>
       );
@@ -1119,16 +1263,9 @@ export default function UserControl() {
       return (
         <label key={key}>
           Employee Profile Role *
-          <select
-            value="Employee"
-            onChange={() => setState({ ...state, role: 'Employee' })}
-          >
+          <select value="Employee" onChange={() => setState({ ...state, role: 'Employee' })}>
             <option value="Employee">Employee</option>
           </select>
-          <small>
-            Every staff profile remains Employee. Leadership and IT Support
-            responsibilities are handled by capability mapping.
-          </small>
         </label>
       );
     }
@@ -1186,10 +1323,7 @@ export default function UserControl() {
             value={String(state[key] ?? 'false')}
             onChange={(e) => {
               const value = e.target.value;
-              const next = {
-                ...state,
-                [key]: value,
-              };
+              const next = { ...state, [key]: value };
 
               if (key === 'is_it_support_head' && boolValue(value)) {
                 next.is_it_support_member = 'true';
@@ -1201,19 +1335,12 @@ export default function UserControl() {
             <option value="false">No</option>
             <option value="true">Yes</option>
           </select>
-          <small>
-            {key === 'is_it_support_head'
-              ? 'Head of IT can assign and reassign IT Support tickets.'
-              : 'IT Support Member can receive assigned tickets and update progress.'}
-          </small>
         </label>
       );
     }
 
     if (['team_leader_id', 'reporting_officer_id'].includes(key)) {
-      const filteredEmployees = employeeOptions.filter(
-        (emp) => emp._id !== state.employee_id_for_edit,
-      );
+      const filteredEmployees = employeeOptions.filter((emp) => emp._id !== state.employee_id_for_edit);
 
       return (
         <label key={key}>
@@ -1225,12 +1352,10 @@ export default function UserControl() {
                 applyTeamLeaderChange(state, setState, e.target.value);
                 return;
               }
-
               applyReportingOfficerChange(state, setState, e.target.value);
             }}
           >
             <option value="">Select {key.replaceAll('_', ' ')}</option>
-
             {filteredEmployees.map((emp) => (
               <option key={emp._id} value={emp._id}>
                 {emp.name || emp.employee_name} — {emp.employee_id || emp.emp_code || emp.designation || emp.department || emp.email}
@@ -1245,16 +1370,7 @@ export default function UserControl() {
       return (
         <label key={key}>
           {label}
-          <input
-            type="text"
-            value={state[key] ?? ''}
-            readOnly
-            placeholder={
-              key === 'team_leader_name'
-                ? 'Team leader name'
-                : 'Reporting officer name'
-            }
-          />
+          <input type="text" value={state[key] ?? ''} readOnly />
         </label>
       );
     }
@@ -1269,14 +1385,11 @@ export default function UserControl() {
               const value = ['state', 'branch'].includes(key)
                 ? normalizeState(e.target.value)
                 : e.target.value;
-
               setState({ ...state, [key]: value });
             }}
           >
             {SELECT_OPTIONS[key].map((option) => (
-              <option key={option || 'empty'} value={option}>
-                {option || 'Choose One'}
-              </option>
+              <option key={option || 'empty'} value={option}>{option || 'Choose One'}</option>
             ))}
           </select>
         </label>
@@ -1287,11 +1400,7 @@ export default function UserControl() {
       return (
         <label key={key}>
           {label}
-          <input
-            type="date"
-            value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
-          />
+          <input type="date" value={state[key] ?? ''} onChange={(e) => setState({ ...state, [key]: e.target.value })} />
         </label>
       );
     }
@@ -1300,11 +1409,7 @@ export default function UserControl() {
       return (
         <label key={key}>
           {label}
-          <input
-            type="number"
-            value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
-          />
+          <input type="number" value={state[key] ?? ''} onChange={(e) => setState({ ...state, [key]: e.target.value })} />
         </label>
       );
     }
@@ -1313,12 +1418,7 @@ export default function UserControl() {
       return (
         <label key={key}>
           {label}
-          <textarea
-            value={state[key] ?? ''}
-            onChange={(e) => setState({ ...state, [key]: e.target.value })}
-            rows={3}
-            placeholder="Address"
-          />
+          <textarea value={state[key] ?? ''} onChange={(e) => setState({ ...state, [key]: e.target.value })} rows={3} />
         </label>
       );
     }
@@ -1327,21 +1427,9 @@ export default function UserControl() {
       <label key={key}>
         {label}
         <input
-          type={
-            key === 'password'
-              ? 'password'
-              : key === 'email'
-                ? 'email'
-                : key === 'phone'
-                  ? 'tel'
-                  : 'text'
-          }
+          type={key === 'password' || key === 'confirm_password' ? 'password' : key === 'email' ? 'email' : key === 'phone' ? 'tel' : 'text'}
           value={state[key] ?? ''}
-          placeholder={
-            mode === 'edit' && key === 'password'
-              ? 'Leave blank if password should not change'
-              : ''
-          }
+          placeholder={mode === 'edit' && key === 'password' ? 'Leave blank if password should not change' : ''}
           onChange={(e) => setState({ ...state, [key]: e.target.value })}
         />
       </label>
@@ -1357,16 +1445,10 @@ export default function UserControl() {
   }
 
   return (
-    <div className="page-grid user-control-page">
+    <div className="page-grid user-control-page superadmin-user-control">
       <style>{`
-        .user-control-page .dynamic-form {
-          align-items: start;
-        }
-
-        .uc-photo-field {
-          grid-column: 1 / -1;
-        }
-
+        .user-control-page .dynamic-form { align-items: start; }
+        .uc-photo-field { grid-column: 1 / -1; }
         .uc-photo-box {
           display: grid;
           grid-template-columns: 96px minmax(0, 1fr);
@@ -1374,13 +1456,10 @@ export default function UserControl() {
           align-items: center;
           border: 1px solid #e2e8f0;
           border-radius: 20px;
-          background:
-            radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 34%),
-            #f8fafc;
+          background: radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 34%), #f8fafc;
           padding: 14px;
           margin-top: 8px;
         }
-
         .uc-photo-preview {
           width: 88px;
           height: 88px;
@@ -1395,27 +1474,9 @@ export default function UserControl() {
           font-size: 24px;
           font-weight: 900;
         }
-
-        .uc-photo-preview img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
-
-        .uc-photo-controls {
-          display: grid;
-          gap: 10px;
-          min-width: 0;
-        }
-
-        .uc-photo-actions {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-
+        .uc-photo-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .uc-photo-controls { display: grid; gap: 10px; min-width: 0; }
+        .uc-photo-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .uc-file-btn {
           width: auto !important;
           display: inline-flex !important;
@@ -1431,11 +1492,7 @@ export default function UserControl() {
           cursor: pointer;
           margin: 0 !important;
         }
-
-        .uc-file-btn input {
-          display: none;
-        }
-
+        .uc-file-btn input { display: none; }
         .uc-avatar {
           overflow: hidden;
           border-radius: 999px;
@@ -1449,109 +1506,108 @@ export default function UserControl() {
           font-weight: 900;
           flex: 0 0 auto;
         }
-
-        .uc-avatar img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
+        .uc-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .uc-avatar-sm { width: 38px; height: 38px; font-size: 12px; }
+        .uc-avatar-md { width: 52px; height: 52px; font-size: 15px; }
+        .uc-user-cell { display: flex; align-items: center; gap: 10px; min-width: 190px; }
+        .uc-user-cell strong { display: block; color: #0f172a; }
+        .uc-user-cell small { display: block; color: #64748b; margin-top: 2px; }
+        .uc-tenant-grid {
+          display: grid;
+          grid-template-columns: minmax(220px, 1.1fr) minmax(180px, 1fr) minmax(180px, 1fr) auto auto;
+          gap: 12px;
+          align-items: end;
+          margin-bottom: 16px;
         }
-
-        .uc-avatar-sm {
-          width: 38px;
-          height: 38px;
-          font-size: 12px;
-        }
-
-        .uc-avatar-md {
-          width: 52px;
-          height: 52px;
-          font-size: 15px;
-        }
-
-        .uc-user-cell {
-          display: flex;
+        .uc-tenant-grid label { margin: 0; }
+        .uc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .uc-actions button { white-space: nowrap; }
+        .uc-danger-soft { background: #fef2f2 !important; color: #b91c1c !important; }
+        .uc-warning-soft { background: #fff7ed !important; color: #c2410c !important; }
+        .uc-success-soft { background: #ecfdf5 !important; color: #047857 !important; }
+        .uc-status-pill {
+          display: inline-flex;
           align-items: center;
-          gap: 10px;
-          min-width: 190px;
+          border-radius: 999px;
+          padding: 6px 10px;
+          font-size: 12px;
+          font-weight: 900;
         }
-
-        .uc-user-cell strong {
-          display: block;
-          color: #0f172a;
-        }
-
-        .uc-user-cell small {
-          display: block;
-          color: #64748b;
-          margin-top: 2px;
-        }
-
+        .uc-status-pill.active { background: #ecfdf5; color: #047857; }
+        .uc-status-pill.disabled { background: #fef2f2; color: #b91c1c; }
+        @media (max-width: 980px) { .uc-tenant-grid { grid-template-columns: 1fr 1fr; } }
         @media (max-width: 720px) {
-          .uc-photo-box {
-            grid-template-columns: 1fr;
-          }
-
-          .uc-photo-preview {
-            width: 78px;
-            height: 78px;
-          }
+          .uc-photo-box { grid-template-columns: 1fr; }
+          .uc-photo-preview { width: 78px; height: 78px; }
+          .uc-tenant-grid { grid-template-columns: 1fr; }
         }
       `}</style>
 
       <section className="hero compact">
         <div>
-          <span className="kicker">User + Profile + Password Control</span>
+          <span className="kicker">Super Admin Tenant User Control</span>
           <h1>User Control</h1>
           <p>
-            Super Admin can create users, update employee profile, upload profile
-            photos, assign team leader, assign reporting officer, mark IT Support
-            Head/Member, change login access and reset passwords. Team Leader,
-            Reporting Officer and IT Support are employee capabilities, not
-            separate login roles.
+            Super Admin can select any tenant, create employees like HR/Admin,
+            view tenant-wise users, filter by name/email/designation, reset
+            passwords, disable/enable users and delete users from the active
+            database list.
           </p>
         </div>
       </section>
 
       <section className="panel">
         <div className="toolbar">
-          <div className="search">
-            <Search size={16} />
-
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search users..."
-            />
-
-            <input
-              value={tenant}
-              onChange={(e) => setTenant(e.target.value)}
-              placeholder="tenant_id filter"
-            />
-
-            <button type="button" onClick={searchUsers} disabled={loading}>
-              {loading ? 'Searching...' : 'Search'}
-            </button>
-
-            {(q || tenant) && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={clearSearch}
-                disabled={loading}
-              >
-                Clear
-              </button>
-            )}
+          <div>
+            <h3>Tenant-wise User List</h3>
+            <p>Select a tenant first. The table below will show users from only that tenant.</p>
           </div>
         </div>
 
+        <div className="uc-tenant-grid">
+          <label>
+            Tenant / Company
+            <select value={tenant} onChange={(e) => handleTenantChange(e.target.value)}>
+              <option value="">Select tenant</option>
+              {tenants.map((item) => (
+                <option key={item.tenant_id || item.value} value={item.tenant_id || item.value}>
+                  {item.name || item.company_name || item.label || item.tenant_id} ({item.tenant_id || item.value})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Search Name / Email
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or email" />
+          </label>
+
+          <label>
+            Designation Filter
+            <input value={designationFilter} onChange={(e) => setDesignationFilter(e.target.value)} placeholder="Search by designation" />
+          </label>
+
+          <button type="button" onClick={searchUsers} disabled={loading || !tenant}>
+            <Search size={16} /> {loading ? 'Searching...' : 'Search'}
+          </button>
+
+          <button type="button" className="secondary" onClick={clearSearch} disabled={loading || !tenant}>
+            <RefreshCw size={16} /> Clear
+          </button>
+        </div>
+
         <form className="dynamic-form" onSubmit={create}>
+          <div className="toolbar" style={{ gridColumn: '1 / -1', padding: 0 }}>
+            <div>
+              <h3>Create Employee</h3>
+              <p>Create employee and login user under the selected tenant.</p>
+            </div>
+          </div>
+
           {CREATE_FIELD_ORDER.map((key) => renderCreateField(key))}
 
-          <button type="submit" className="primary" disabled={saving}>
-            <Plus size={16} /> {saving ? 'Creating...' : 'Create User'}
+          <button type="submit" className="primary" disabled={saving || !form.tenant_id}>
+            <Plus size={16} /> {saving ? 'Creating...' : 'Create Employee'}
           </button>
         </form>
 
@@ -1581,59 +1637,69 @@ export default function UserControl() {
             </thead>
 
             <tbody>
-              {rows.map((user) => (
-                <tr key={user._id}>
-                  <td>
-                    <div className="uc-user-cell">
-                      <UserAvatar user={user} size="sm" />
-                      <div>
-                        <strong>{textValue(user.name)}</strong>
-                        <small>{employeeIdValue(user)}</small>
+              {rows.map((user) => {
+                const isActive = user.is_active !== false && user.is_disabled !== true;
+
+                return (
+                  <tr key={user._id}>
+                    <td>
+                      <div className="uc-user-cell">
+                        <UserAvatar user={user} size="sm" />
+                        <div>
+                          <strong>{textValue(user.name || user.employee_name)}</strong>
+                          <small>{employeeIdValue(user)}</small>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>{textValue(user.email)}</td>
-                  <td>{textValue(user.tenant_id)}</td>
-                  <td>{employeeIdValue(user)}</td>
-                  <td>{displayRoles(user.roles)}</td>
-                  <td>{employeeDepartmentValue(user)}</td>
-                  <td>{employeeDesignationValue(user)}</td>
-                  <td>{employeeStateValue(user)}</td>
-                  <td>{employeeIsTeamLeader(user)}</td>
-                  <td>{employeeIsReportingOfficer(user)}</td>
-                  <td>{employeeIsItSupportHead(user)}</td>
-                  <td>{employeeIsItSupportMember(user)}</td>
-                  <td>{employeeTeamLeaderName(user)}</td>
-                  <td>{employeeReportingOfficerName(user)}</td>
-                  <td>{user.is_active ? 'Active' : 'Inactive'}</td>
-
-                  <td>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => openEdit(user)}
-                      disabled={saving}
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => openReset(user)}
-                      disabled={saving}
-                    >
-                      Reset Password
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td>{textValue(user.email)}</td>
+                    <td>{textValue(user.tenant_id)}</td>
+                    <td>{employeeIdValue(user)}</td>
+                    <td>{displayRoles(user.roles)}</td>
+                    <td>{employeeDepartmentValue(user)}</td>
+                    <td>{employeeDesignationValue(user)}</td>
+                    <td>{employeeStateValue(user)}</td>
+                    <td>{employeeIsTeamLeader(user)}</td>
+                    <td>{employeeIsReportingOfficer(user)}</td>
+                    <td>{employeeIsItSupportHead(user)}</td>
+                    <td>{employeeIsItSupportMember(user)}</td>
+                    <td>{employeeTeamLeaderName(user)}</td>
+                    <td>{employeeReportingOfficerName(user)}</td>
+                    <td>
+                      <span className={`uc-status-pill ${isActive ? 'active' : 'disabled'}`}>
+                        {isActive ? 'Active' : 'Disabled'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="uc-actions">
+                        <button type="button" className="secondary" onClick={() => openEdit(user)} disabled={saving}>
+                          Edit
+                        </button>
+                        <button type="button" className="secondary" onClick={() => openReset(user)} disabled={saving}>
+                          <KeyRound size={15} /> Password
+                        </button>
+                        <button
+                          type="button"
+                          className={isActive ? 'secondary uc-warning-soft' : 'secondary uc-success-soft'}
+                          onClick={() => toggleUserStatus(user)}
+                          disabled={saving}
+                        >
+                          {isActive ? <ShieldOff size={15} /> : <ShieldCheck size={15} />}
+                          {isActive ? 'Disable' : 'Enable'}
+                        </button>
+                        <button type="button" className="danger uc-danger-soft" onClick={() => deleteUser(user)} disabled={saving}>
+                          <Trash2 size={15} /> Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
           {!rows.length && (
             <div className="empty">
-              {loading ? 'Loading users...' : 'No users found'}
+              {loading ? 'Loading users...' : tenant ? 'No users found for this tenant' : 'Please select a tenant'}
             </div>
           )}
         </div>
@@ -1651,12 +1717,7 @@ export default function UserControl() {
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setEdit(null)}
-              disabled={saving}
-            >
+            <button type="button" className="secondary" onClick={() => setEdit(null)} disabled={saving}>
               <X size={16} /> Close
             </button>
           </div>
@@ -1675,18 +1736,11 @@ export default function UserControl() {
         <section className="panel" id="password-reset-section">
           <div className="toolbar">
             <div>
-              <h3>Reset Password</h3>
-              <p>
-                Reset password for <b>{resetTarget.name}</b> — {resetTarget.email}
-              </p>
+              <h3>Change Password</h3>
+              <p>Change password for <b>{resetTarget.name}</b> — {resetTarget.email}</p>
             </div>
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setResetTarget(null)}
-              disabled={saving}
-            >
+            <button type="button" className="secondary" onClick={() => setResetTarget(null)} disabled={saving}>
               <X size={16} /> Close
             </button>
           </div>
@@ -1697,9 +1751,7 @@ export default function UserControl() {
               <input
                 type="password"
                 value={resetForm.password}
-                onChange={(e) =>
-                  setResetForm({ ...resetForm, password: e.target.value })
-                }
+                onChange={(e) => setResetForm({ ...resetForm, password: e.target.value })}
               />
             </label>
 
@@ -1708,12 +1760,7 @@ export default function UserControl() {
               <input
                 type="password"
                 value={resetForm.confirm_password}
-                onChange={(e) =>
-                  setResetForm({
-                    ...resetForm,
-                    confirm_password: e.target.value,
-                  })
-                }
+                onChange={(e) => setResetForm({ ...resetForm, confirm_password: e.target.value })}
               />
             </label>
 

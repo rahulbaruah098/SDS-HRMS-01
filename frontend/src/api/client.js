@@ -808,6 +808,8 @@ export function buildProfilePhotoPayload(photoValue, extra = {}) {
 
 function compactSessionUser(user = {}, employee = {}) {
   const photo =
+    getProfilePhotoValue(user) ||
+    getProfilePhotoValue(employee) ||
     user.profile_photo_url ||
     user.avatar_url ||
     user.photo_url ||
@@ -839,6 +841,7 @@ function compactSessionUser(user = {}, employee = {}) {
 
 function compactSessionEmployee(employee = {}) {
   const photo =
+    getProfilePhotoValue(employee) ||
     employee.profile_photo_url ||
     employee.avatar_url ||
     employee.photo_url ||
@@ -2432,6 +2435,157 @@ export function getAuditReports(params = {}) {
 /* Super Admin APIs                                                           */
 /* -------------------------------------------------------------------------- */
 
+export function normalizeSuperAdminTenant(tenant = {}) {
+  if (!tenant || typeof tenant !== 'object') {
+    return tenant;
+  }
+
+  const tenantId =
+    tenant.tenant_id ||
+    tenant.code ||
+    tenant.slug ||
+    tenant.value ||
+    '';
+
+  const name =
+    tenant.name ||
+    tenant.company_name ||
+    tenant.title ||
+    tenant.label ||
+    tenantId ||
+    'Tenant';
+
+  return {
+    ...tenant,
+    id: tenant.id || tenant._id || tenantId,
+    _id: tenant._id || tenant.id || '',
+    tenant_id: tenantId,
+    value: tenant.value || tenantId,
+    label: tenant.label || `${name}${tenantId ? ` (${tenantId})` : ''}`,
+    name,
+    company_name: tenant.company_name || name,
+    status: tenant.status || 'active',
+    is_active: tenant.is_active !== false,
+  };
+}
+
+export function normalizeSuperAdminTenantList(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeSuperAdminTenant(item)).filter(Boolean);
+}
+
+export function normalizeSuperAdminTenantUser(user = {}) {
+  if (!user || typeof user !== 'object') {
+    return user;
+  }
+
+  const employee = user.employee || user.employee_profile || {};
+
+  const normalized = withProfilePhotoAliases({
+    ...user,
+    employee: withProfilePhotoAliases(employee),
+  });
+
+  normalized.id = normalized.id || normalized._id || '';
+  normalized._id = normalized._id || normalized.id || '';
+
+  normalized.name =
+    normalized.employee_name ||
+    normalized.name ||
+    normalized.full_name ||
+    normalized.employee?.employee_name ||
+    normalized.employee?.name ||
+    normalized.email ||
+    'User';
+
+  normalized.employee_name =
+    normalized.employee_name ||
+    normalized.employee?.employee_name ||
+    normalized.employee?.name ||
+    normalized.name;
+
+  normalized.email =
+    normalized.email ||
+    normalized.username ||
+    normalized.employee?.email ||
+    normalized.employee?.official_email ||
+    '';
+
+  normalized.username = normalized.username || normalized.email;
+
+  normalized.employee_code =
+    normalized.employee_code ||
+    normalized.emp_code ||
+    normalized.employee?.employee_code ||
+    normalized.employee?.emp_code ||
+    '';
+
+  normalized.emp_code = normalized.emp_code || normalized.employee_code;
+
+  normalized.department =
+    normalized.department ||
+    normalized.department_name ||
+    normalized.employee?.department ||
+    normalized.employee?.department_name ||
+    '';
+
+  normalized.department_name =
+    normalized.department_name ||
+    normalized.department ||
+    normalized.employee?.department_name ||
+    normalized.employee?.department ||
+    '';
+
+  normalized.designation =
+    normalized.designation ||
+    normalized.designation_name ||
+    normalized.employee?.designation ||
+    normalized.employee?.designation_name ||
+    '';
+
+  normalized.designation_name =
+    normalized.designation_name ||
+    normalized.designation ||
+    normalized.employee?.designation_name ||
+    normalized.employee?.designation ||
+    '';
+
+  normalized.role =
+    normalized.role ||
+    (Array.isArray(normalized.roles) && normalized.roles.length
+      ? normalized.roles[0]
+      : 'employee');
+
+  normalized.roles = Array.isArray(normalized.roles)
+    ? normalized.roles
+    : normalized.role
+      ? [normalized.role]
+      : ['employee'];
+
+  normalized.is_active =
+    normalized.is_active !== false &&
+    normalized.is_disabled !== true &&
+    String(normalized.status || '').toLowerCase() !== 'disabled' &&
+    String(normalized.status || '').toLowerCase() !== 'inactive';
+
+  normalized.is_disabled = !normalized.is_active;
+
+  normalized.status_label = normalized.is_active ? 'Active' : 'Disabled';
+
+  return normalized;
+}
+
+export function normalizeSuperAdminTenantUserList(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeSuperAdminTenantUser(item)).filter(Boolean);
+}
+
 export function getCompanies(params = {}) {
   return api(`/superadmin/companies${buildQuery(params)}`);
 }
@@ -2472,6 +2626,54 @@ export function resetUserPassword(userId, payload = {}) {
   return api(`/superadmin/users/${userId}/reset-password`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function getSuperAdminTenants(params = {}) {
+  return api(`/superadmin/tenants${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeSuperAdminTenantList(data.items || data.tenants || []),
+    tenants: normalizeSuperAdminTenantList(data.tenants || data.items || []),
+  }));
+}
+
+export function getSuperAdminTenantUsers(params = {}) {
+  return api(`/superadmin/tenant-users${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeSuperAdminTenantUserList(data.items || data.users || []),
+    users: normalizeSuperAdminTenantUserList(data.users || data.items || []),
+  }));
+}
+
+export function createSuperAdminTenantEmployee(payload = {}) {
+  return api('/superadmin/tenant-employees', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    item: normalizeSuperAdminTenantUser(data.item || data.user || {}),
+    user: normalizeSuperAdminTenantUser(data.user || data.item || {}),
+    employee: normalizeEmployee(data.employee || {}),
+  }));
+}
+
+export function changeSuperAdminTenantUserPassword(userId, payload = {}) {
+  return api(`/superadmin/tenant-users/${userId}/password`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateSuperAdminTenantUserStatus(userId, payload = {}) {
+  return api(`/superadmin/tenant-users/${userId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteSuperAdminTenantUser(userId) {
+  return api(`/superadmin/tenant-users/${userId}`, {
+    method: 'DELETE',
   });
 }
 

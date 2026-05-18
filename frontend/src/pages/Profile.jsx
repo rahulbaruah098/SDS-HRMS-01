@@ -345,6 +345,8 @@ export default function Profile() {
 
       await refreshProfileSession();
 
+      window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
+
       setPhotoMessage('Profile photo updated successfully.');
     } catch (error) {
       setPhotoMessage(error.message || 'Unable to update profile photo.');

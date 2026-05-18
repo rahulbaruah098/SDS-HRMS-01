@@ -2898,7 +2898,6 @@ def update_collection_item(collection, item_id):
 
     self_photo_update = (
         collection == "employees"
-        and not has_any_role(ADMIN_ROLES)
         and can_update_own_employee_photo(db, item_id, data)
     )
 
@@ -2941,7 +2940,67 @@ def update_collection_item(collection, item_id):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+    if self_photo_update:
+        apply_avatar_aliases(payload)
 
+        payload.update({
+            "updated_at": now_utc(),
+            "updated_by": current_user_id(),
+            "updated_by_name": current_user_name(),
+        })
+
+        mongo_collection.update_one(
+            {"_id": item_obj_id},
+            {"$set": payload},
+        )
+
+        updated = mongo_collection.find_one({"_id": item_obj_id})
+
+        user_id = updated.get("user_id") if updated else ""
+        user_obj_id = safe_object_id(user_id)
+
+        user_avatar_payload = {
+            "updated_at": now_utc(),
+            "updated_by": current_user_id(),
+            "updated_by_name": current_user_name(),
+        }
+
+        avatar = employee_avatar_from_payload(payload)
+
+        if avatar:
+            apply_avatar_aliases(user_avatar_payload, avatar)
+
+        if user_obj_id:
+            db.users.update_one(
+                {"_id": user_obj_id},
+                {"$set": user_avatar_payload},
+            )
+        else:
+            current_user = getattr(g, "current_user", {}) or {}
+            user_email = normalize_email(
+                current_user.get("email")
+                or current_user.get("username")
+                or updated.get("email")
+                or updated.get("official_email")
+            )
+
+            if user_email:
+                db.users.update_one(
+                    {
+                        "email": user_email,
+                        "tenant_id": updated.get("tenant_id") or current_tenant_id(),
+                        "is_deleted": {"$ne": True},
+                    },
+                    {"$set": user_avatar_payload},
+                )
+
+        audit("update", collection, item_id, payload)
+
+        return jsonify({
+            "message": "Profile photo updated successfully",
+            "item": serialize_item(updated),
+        })
+    
     if collection == "projects":
         payload = normalize_project_payload(payload, existing)
 

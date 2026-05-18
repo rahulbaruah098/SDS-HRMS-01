@@ -45,6 +45,15 @@ import {
   - Employee form uses Department, Designation and State masters where available.
   - Project is not selected while creating employee; projects are assigned later by TL/RO.
 
+  Super Admin User Control workflow:
+  - Super Admin can manage tenant-wise users from User Control.
+  - Super Admin can select tenant/company from dropdown.
+  - After selecting tenant, tenant users are shown.
+  - Super Admin can create employee/login user under selected tenant.
+  - Super Admin can filter tenant users by name, email and designation.
+  - Super Admin can reset/change password, enable/disable and delete users.
+  - Team Leader, Reporting Officer and IT Support duties are still employee capabilities, not separate login identities.
+
   Reporting Officer rule:
   - Reporting Officer dropdown should only show employees whose designation matches:
       Manager / Managing Director / Director / CEO / Chief Executive Officer.
@@ -459,7 +468,7 @@ export const superModules = [
     'users',
     'User Control',
     KeyRound,
-    'Create users, reset passwords, update roles, profile photos and full employee profiles.',
+    'Super Admin tenant-wise user control. Select tenant, create employee/login user, filter users, reset password, enable/disable and delete users.',
     ['super_admin'],
   ],
   [

@@ -707,6 +707,57 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+    useEffect(() => {
+    async function handleProfileUpdated() {
+      try {
+        const data = await refreshCurrentSession();
+
+        if (data?.user && typeof setUser === 'function') {
+          const photo =
+            profilePhotoValue(data.employee) ||
+            profilePhotoValue(data.user);
+
+          const syncedUser = {
+            ...data.user,
+            employee: data.employee || {},
+            employee_summary: data.employee || {},
+            employee_profile: data.employee || {},
+          };
+
+          applyProfilePhotoAliases(syncedUser, photo);
+
+          if (syncedUser.employee && typeof syncedUser.employee === 'object') {
+            applyProfilePhotoAliases(syncedUser.employee, photo);
+          }
+
+          if (
+            syncedUser.employee_summary &&
+            typeof syncedUser.employee_summary === 'object'
+          ) {
+            applyProfilePhotoAliases(syncedUser.employee_summary, photo);
+          }
+
+          if (
+            syncedUser.employee_profile &&
+            typeof syncedUser.employee_profile === 'object'
+          ) {
+            applyProfilePhotoAliases(syncedUser.employee_profile, photo);
+          }
+
+          setUser(syncedUser);
+        }
+      } catch {
+        // Ignore profile refresh error here.
+      }
+    }
+
+    window.addEventListener('sds_hrms_profile_photo_updated', handleProfileUpdated);
+
+    return () => {
+      window.removeEventListener('sds_hrms_profile_photo_updated', handleProfileUpdated);
+    };
+  }, [setUser]);
+
   useEffect(() => {
     loadNotifications({ silent: true, showPopup: true });
 
@@ -879,6 +930,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         }
 
         .layout-sidebar-profile {
+          width: 100%;
           margin: 14px 0 10px;
           border: 1px solid rgba(255,255,255,.14);
           border-radius: 18px;
@@ -888,6 +940,14 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           gap: 10px;
           align-items: center;
           background: rgba(255,255,255,.06);
+          cursor: pointer;
+          text-align: left;
+          transition: background .18s ease, transform .18s ease;
+        }
+
+        .layout-sidebar-profile:hover {
+          background: rgba(255,255,255,.1);
+          transform: translateY(-1px);
         }
 
         .layout-sidebar-profile strong {
@@ -908,10 +968,23 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         }
 
         .layout-photo-aware .user-chip {
+          border: 0;
           display: inline-flex;
           align-items: center;
           gap: 9px;
           min-width: 0;
+          cursor: pointer;
+          background: rgba(255,255,255,.86);
+          color: var(--ink);
+          border-radius: 999px;
+          padding: 8px 14px 8px 8px;
+          box-shadow: 0 12px 28px rgba(15, 23, 42, .08);
+          transition: transform .18s ease, box-shadow .18s ease;
+        }
+
+        .layout-photo-aware .user-chip:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 16px 36px rgba(15, 23, 42, .12);
         }
 
         .layout-photo-aware .user-chip span:last-child {
@@ -1288,7 +1361,12 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         </div>
 
-        <div className="layout-sidebar-profile">
+        <button
+          type="button"
+          className="layout-sidebar-profile"
+          onClick={() => goTo('profile')}
+          aria-label="Open my profile"
+        >
           <UserAvatar user={safeUser} size="md" />
 
           <div>
@@ -1298,7 +1376,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
               {capabilityText ? ` • ${capabilityText}` : ''}
             </small>
           </div>
-        </div>
+        </button>
 
         <nav>
           <button
@@ -1360,17 +1438,17 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <div className="notification-wrap" ref={notificationRef}>
               <button
                 type="button"
-                className={`notification-btn ${notificationOpen ? 'active' : ''}`}
+                className="icon-button notification-btn"
                 onClick={toggleNotifications}
-                aria-label="Notifications"
+                aria-label="Open notifications"
               >
-                <Bell size={17} />
+                <Bell size={18} />
 
-                {notificationCount > 0 && (
+                {notificationCount > 0 ? (
                   <span className="notification-badge">
                     {notificationCount > 99 ? '99+' : notificationCount}
                   </span>
-                )}
+                ) : null}
               </button>
 
               {notificationOpen && (
@@ -1435,10 +1513,15 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
               )}
             </div>
 
-            <div className="user-chip">
+            <button
+              type="button"
+              className="user-chip"
+              onClick={() => goTo('profile')}
+              aria-label="Open my profile"
+            >
               <UserAvatar user={safeUser} size="sm" />
               <span>{safeUser?.name || safeUser?.email || 'User'}</span>
-            </div>
+            </button>
           </div>
         </header>
 

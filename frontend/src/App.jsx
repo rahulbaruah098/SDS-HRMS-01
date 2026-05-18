@@ -73,6 +73,10 @@ const PAGE_ALIASES = {
   user_management: 'users',
   superadmin_user_control: 'users',
   super_admin_user_control: 'users',
+  tenant_user_control: 'users',
+  tenant_users: 'users',
+  tenant_employee_control: 'users',
+  tenant_employees: 'users',
 
   leave: 'leave_requests',
   leave_request: 'leave_requests',
@@ -139,8 +143,6 @@ const PAGE_ALIASES = {
   grievance_requests: 'grievances',
   anonymous_grievance: 'grievances',
 
-  'grievance': 'grievances',
-  'grievances': 'grievances',
   'employee-grievance': 'grievances',
   'employee-grievances': 'grievances',
   'grievance-module': 'grievances',
@@ -420,15 +422,15 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'attendance') {
-    return <Attendance setPage={setPage} />;
+    return <Attendance setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'companies') {
-    return <Companies setPage={setPage} />;
+    return <Companies setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'users') {
-    return <UserControl setPage={setPage} />;
+    return <UserControl setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'employees') {
@@ -436,19 +438,19 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'departments') {
-    return <Departments setPage={setPage} />;
+    return <Departments setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'designations') {
-    return <Designations setPage={setPage} />;
+    return <Designations setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'states') {
-    return <States setPage={setPage} />;
+    return <States setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'projects') {
-    return <Projects setPage={setPage} />;
+    return <Projects setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'policies') {
@@ -456,7 +458,7 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'team_approvals') {
-    return <TeamApprovals setPage={setPage} />;
+    return <TeamApprovals setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'performance_reviews') {
@@ -472,22 +474,22 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'profile') {
-    return <Profile setPage={setPage} />;
+    return <Profile setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'password_requests') {
-    return <PasswordRequests setPage={setPage} />;
+    return <PasswordRequests setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'reports') {
-    return <Reports setPage={setPage} />;
+    return <Reports setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'application_status') {
-    return <ApplicationStatus setPage={setPage} />;
+    return <ApplicationStatus setPage={setPage} user={safeUser} />;
   }
 
-  return <ModuleCrud collection={normalizedPage} setPage={setPage} />;
+  return <ModuleCrud collection={normalizedPage} setPage={setPage} user={safeUser} />;
 }
 
 export default function App() {

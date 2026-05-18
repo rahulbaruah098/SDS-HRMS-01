@@ -1591,3 +1591,548 @@ def reset_password(user_id):
     audit("reset_password", "users", user_id)
 
     return jsonify({"message": "Password reset successful"})
+
+
+# -----------------------------------------------------------------------------
+# Super Admin Tenant-wise User / Employee Control
+# -----------------------------------------------------------------------------
+# These routes are intentionally added as separate Super Admin-only endpoints so
+# the existing HR/Admin user creation and existing /superadmin/users workflow
+# remain untouched. Frontend UserControl.jsx can call these endpoints for the
+# new tenant dropdown, tenant-wise user table, create employee, reset password,
+# disable/enable, and soft-delete actions.
+
+
+@superadmin_bp.get("/tenants")
+@roles_required("super_admin")
+def list_tenants_for_user_control():
+    db = get_db()
+    q = {"is_deleted": {"$ne": True}}
+
+    search = normalize_text(request.args.get("q") or request.args.get("search"))
+
+    if search:
+        q["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"tenant_id": {"$regex": search, "$options": "i"}},
+            {"domain": {"$regex": search, "$options": "i"}},
+            {"contact_email": {"$regex": search, "$options": "i"}},
+        ]
+
+    tenants = list(db.tenants.find(q).sort([("name", 1), ("tenant_id", 1)]).limit(1000))
+
+    items = []
+
+    for tenant in tenants:
+        tenant_id = normalize_text(tenant.get("tenant_id"))
+
+        if not tenant_id:
+            continue
+
+        items.append({
+            "_id": str(tenant.get("_id")),
+            "id": str(tenant.get("_id")),
+            "tenant_id": tenant_id,
+            "name": tenant.get("name") or tenant_id,
+            "domain": tenant.get("domain", ""),
+            "contact_email": tenant.get("contact_email", ""),
+            "status": tenant.get("status", "active"),
+            "is_active": tenant.get("status", "active") != "inactive",
+            "employee_count": db.employees.count_documents({
+                "tenant_id": tenant_id,
+                "status": {"$ne": "Inactive"},
+                "is_deleted": {"$ne": True},
+            }),
+            "user_count": db.users.count_documents({
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            }),
+        })
+
+    return jsonify({"items": clean_doc(items)})
+
+
+@superadmin_bp.get("/tenant-users")
+@roles_required("super_admin")
+def list_tenant_users_for_user_control():
+    db = get_db()
+
+    tenant_id = normalize_text(request.args.get("tenant_id")).lower()
+    search = normalize_text(request.args.get("q") or request.args.get("search"))
+    designation = normalize_text(request.args.get("designation"))
+    include_deleted = truthy(request.args.get("include_deleted"))
+
+    if not tenant_id:
+        return jsonify({"items": []})
+
+    if not db.tenants.find_one({"tenant_id": tenant_id}):
+        return jsonify({"message": "Invalid tenant_id / company"}), 400
+
+    q = {"tenant_id": tenant_id}
+
+    if not include_deleted:
+        q["is_deleted"] = {"$ne": True}
+
+    and_filters = []
+
+    if search:
+        and_filters.append({
+            "$or": [
+                {"name": {"$regex": search, "$options": "i"}},
+                {"full_name": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+                {"username": {"$regex": search, "$options": "i"}},
+                {"emp_code": {"$regex": search, "$options": "i"}},
+                {"employee_id": {"$regex": search, "$options": "i"}},
+                {"department": {"$regex": search, "$options": "i"}},
+                {"designation": {"$regex": search, "$options": "i"}},
+            ]
+        })
+
+    if designation:
+        and_filters.append({
+            "$or": [
+                {"designation": {"$regex": designation, "$options": "i"}},
+                {"designation_name": {"$regex": designation, "$options": "i"}},
+            ]
+        })
+
+    if and_filters:
+        q["$and"] = and_filters
+
+    users = list(
+        db.users.find(
+            q,
+            {
+                "password": 0,
+                "password_hash": 0,
+                "hashed_password": 0,
+            },
+        ).sort([("created_at", -1), ("name", 1)]).limit(2000)
+    )
+
+    items = []
+
+    for user in users:
+        user_id = str(user.get("_id"))
+        email = normalize_email(user.get("email"))
+
+        emp_query = {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"user_id": user_id},
+                {"user_id": user.get("_id")},
+            ],
+        }
+
+        if email:
+            emp_query["$or"].extend([
+                {"email": email},
+                {"official_email": email},
+            ])
+
+        emp = db.employees.find_one(emp_query)
+
+        if emp:
+            photo = merge_profile_photo_from_sources(emp, user)
+
+            if normalize_text(emp.get("user_id")) != user_id:
+                emp_update = {
+                    "user_id": user_id,
+                    "updated_at": now(),
+                }
+                apply_profile_photo_aliases(emp_update, photo)
+                db.employees.update_one({"_id": emp["_id"]}, {"$set": emp_update})
+                emp["user_id"] = user_id
+
+            if photo:
+                apply_profile_photo_aliases(emp, photo)
+                apply_profile_photo_aliases(user, photo)
+
+            user["employee_profile"] = emp
+            user["employee_ref_id"] = str(emp["_id"])
+            user["employee_id"] = str(emp["_id"])
+            user["employee_name"] = employee_display_name(emp)
+            user["emp_code"] = employee_code(emp)
+            user["department"] = emp.get("department", user.get("department", ""))
+            user["designation"] = emp.get("designation", user.get("designation", ""))
+            user["phone"] = emp.get("phone", "")
+            user["is_team_leader"] = bool_string(emp.get("is_team_leader"))
+            user["is_reporting_officer"] = bool_string(emp.get("is_reporting_officer"))
+            user["is_it_support_head"] = bool_string(emp.get("is_it_support_head"))
+            user["is_it_support_member"] = bool_string(emp.get("is_it_support_member"))
+        else:
+            photo = profile_photo_value(user)
+            apply_profile_photo_aliases(user, photo)
+            user["employee_name"] = user.get("name") or user.get("full_name") or user.get("email")
+            user["employee_profile"] = None
+
+        if designation:
+            combined_designation = normalize_text(user.get("designation")).lower()
+            employee_designation = normalize_text((emp or {}).get("designation")).lower()
+
+            if (
+                designation.lower() not in combined_designation
+                and designation.lower() not in employee_designation
+            ):
+                continue
+
+        user["is_disabled"] = user.get("is_disabled", user.get("is_active") is False)
+        user["is_active"] = user.get("is_active", not truthy(user.get("is_disabled")))
+
+        items.append(user)
+
+    return jsonify({"items": clean_doc(items)})
+
+
+@superadmin_bp.post("/tenant-employees")
+@roles_required("super_admin")
+def create_tenant_employee_for_user_control():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    tenant_id = normalize_text(data.get("tenant_id") or "sds").lower()
+
+    if not db.tenants.find_one({"tenant_id": tenant_id}):
+        return jsonify({"message": "Invalid tenant_id / company"}), 400
+
+    seed_company_masters(db, tenant_id)
+
+    name = normalize_text(
+        data.get("name")
+        or data.get("employee_name")
+        or data.get("full_name")
+    )
+    email = normalize_email(data.get("email") or data.get("official_email"))
+    password = data.get("password") or "User@123"
+    confirm_password = data.get("confirm_password") or data.get("password_confirm") or password
+    photo = profile_photo_value(data)
+
+    if not name:
+        return jsonify({"message": "Employee name is required"}), 400
+
+    if not email:
+        return jsonify({"message": "Email is required"}), 400
+
+    if len(password) < 6:
+        return jsonify({"message": "Password must be at least 6 characters"}), 400
+
+    if password != confirm_password:
+        return jsonify({"message": "Password and confirm password do not match"}), 400
+
+    if db.users.find_one({
+        "email": email,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }):
+        return jsonify({"message": "Email already exists in this tenant"}), 409
+
+    employee_id = normalize_text(data.get("employee_id"))
+    emp_code = normalize_text(data.get("emp_code") or data.get("employee_code"))
+
+    if employee_id:
+        if db.employees.find_one({
+            "tenant_id": tenant_id,
+            "employee_id": employee_id,
+            "is_deleted": {"$ne": True},
+        }):
+            return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+
+    if emp_code:
+        if db.employees.find_one({
+            "tenant_id": tenant_id,
+            "emp_code": emp_code,
+            "is_deleted": {"$ne": True},
+        }):
+            return jsonify({"message": "Employee code already exists in this tenant"}), 409
+
+    roles = normalize_roles(data.get("roles") or data.get("role") or ["employee"])
+    is_active = truthy(data.get("is_active", True))
+
+    user_payload = {
+        "tenant_id": tenant_id,
+        "name": name,
+        "full_name": name,
+        "email": email,
+        "username": email,
+        "password_hash": generate_password_hash(password),
+        "role": "employee",
+        "roles": roles,
+        "is_active": is_active,
+        "is_disabled": not is_active,
+        "status": "active" if is_active else "inactive",
+        "is_deleted": False,
+        "created_at": now(),
+        "updated_at": now(),
+        "created_by": str(g.current_user["_id"]),
+        "created_by_name": "Super Admin",
+    }
+    apply_profile_photo_aliases(user_payload, photo)
+
+    user_res = db.users.insert_one(user_payload)
+
+    emp = build_employee_profile_payload(data)
+
+    department = normalize_text(data.get("department") or data.get("department_name"))
+    designation = normalize_text(data.get("designation") or data.get("designation_name"))
+    phone = normalize_text(data.get("phone") or data.get("mobile"))
+    team_leader_id = normalize_text(data.get("team_leader_id"))
+    reporting_officer_id = normalize_text(data.get("reporting_officer_id"))
+
+    emp.update({
+        "tenant_id": tenant_id,
+        "user_id": str(user_res.inserted_id),
+        "name": name,
+        "employee_name": name,
+        "email": email,
+        "official_email": email,
+        "phone": phone,
+        "employee_id": employee_id,
+        "emp_code": emp_code,
+        "department": department,
+        "designation": designation,
+        "team_leader_id": team_leader_id,
+        "team_leader_name": resolve_employee_name(db, tenant_id, team_leader_id),
+        "reporting_officer_id": reporting_officer_id,
+        "reporting_officer_name": resolve_employee_name(db, tenant_id, reporting_officer_id),
+        "created_at": now(),
+        "updated_at": now(),
+        "created_by": str(g.current_user["_id"]),
+        "created_by_name": "Super Admin",
+        "is_deleted": False,
+    })
+    apply_profile_photo_aliases(emp, photo)
+
+    emp.setdefault("country", "India")
+    emp.setdefault("branch", "Assam(HO)")
+    emp.setdefault("state", normalize_state(emp.get("state") or emp.get("branch")))
+    emp.setdefault("role", "Employee")
+    emp.setdefault("shift", "General")
+    emp.setdefault("status", "Active" if is_active else "Inactive")
+    emp.setdefault("is_team_leader", bool_string(data.get("is_team_leader", "false")))
+    emp.setdefault("is_reporting_officer", bool_string(data.get("is_reporting_officer", "false")))
+    emp.setdefault("is_it_support_head", bool_string(data.get("is_it_support_head", "false")))
+    emp.setdefault("is_it_support_member", bool_string(data.get("is_it_support_member", "false")))
+
+    if truthy(emp.get("is_it_support_head")):
+        emp["is_it_support_member"] = "true"
+
+    emp_res = db.employees.insert_one(emp)
+    created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
+
+    if created_emp:
+        user_update = {
+            "employee_id": str(created_emp["_id"]),
+            "employee_ref_id": str(created_emp["_id"]),
+            "emp_code": employee_code(created_emp),
+            "department": created_emp.get("department", ""),
+            "designation": created_emp.get("designation", ""),
+            "is_team_leader": bool_string(created_emp.get("is_team_leader")),
+            "is_reporting_officer": bool_string(created_emp.get("is_reporting_officer")),
+            "is_it_support_head": bool_string(created_emp.get("is_it_support_head")),
+            "is_it_support_member": bool_string(created_emp.get("is_it_support_member")),
+            "updated_at": now(),
+        }
+        apply_profile_photo_aliases(user_update, profile_photo_value(created_emp))
+
+        db.users.update_one(
+            {"_id": user_res.inserted_id},
+            {"$set": user_update},
+        )
+        sync_employee_roles(db, created_emp)
+        seed_default_leave_balances_for_employee(db, tenant_id, created_emp)
+
+    audit("create_tenant_employee", "users", user_res.inserted_id, {
+        "email": email,
+        "roles": roles,
+        "tenant_id": tenant_id,
+    })
+
+    created_user = db.users.find_one({"_id": user_res.inserted_id})
+    created_user["employee_profile"] = created_emp
+    photo = merge_profile_photo_from_sources(created_emp, created_user)
+    apply_profile_photo_aliases(created_user, photo)
+
+    return jsonify({
+        "message": "Employee created successfully",
+        "item": clean_doc(created_user),
+        "user": clean_doc(created_user),
+        "employee": clean_doc(created_emp),
+    }), 201
+
+
+@superadmin_bp.patch("/tenant-users/<user_id>/password")
+@roles_required("super_admin")
+def change_tenant_user_password(user_id):
+    user_obj_id = safe_object_id(user_id)
+
+    if not user_obj_id:
+        return jsonify({"message": "Invalid user id"}), 400
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or data.get("new_password") or ""
+    confirm_password = data.get("confirm_password") or data.get("password_confirm") or password
+
+    if not password:
+        return jsonify({"message": "New password is required"}), 400
+
+    if len(password) < 6:
+        return jsonify({"message": "Password must be at least 6 characters"}), 400
+
+    if password != confirm_password:
+        return jsonify({"message": "Password and confirm password do not match"}), 400
+
+    existing = db.users.find_one({
+        "_id": user_obj_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not existing:
+        return jsonify({"message": "User not found"}), 404
+
+    db.users.update_one(
+        {"_id": user_obj_id},
+        {
+            "$set": {
+                "password_hash": generate_password_hash(password),
+                "updated_at": now(),
+                "updated_by": str(g.current_user["_id"]),
+                "password_changed_by": str(g.current_user["_id"]),
+            }
+        },
+    )
+
+    audit("change_tenant_user_password", "users", user_id)
+
+    return jsonify({"message": "Password updated successfully"})
+
+
+@superadmin_bp.patch("/tenant-users/<user_id>/status")
+@roles_required("super_admin")
+def update_tenant_user_status(user_id):
+    user_obj_id = safe_object_id(user_id)
+
+    if not user_obj_id:
+        return jsonify({"message": "Invalid user id"}), 400
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    is_active = truthy(data.get("is_active"))
+
+    existing = db.users.find_one({
+        "_id": user_obj_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not existing:
+        return jsonify({"message": "User not found"}), 404
+
+    user_roles = existing.get("roles") or []
+
+    if existing.get("role") == "super_admin" or "super_admin" in user_roles:
+        return jsonify({"message": "Super admin user status cannot be changed here"}), 400
+
+    status = "active" if is_active else "inactive"
+
+    db.users.update_one(
+        {"_id": user_obj_id},
+        {
+            "$set": {
+                "is_active": is_active,
+                "is_disabled": not is_active,
+                "status": status,
+                "updated_at": now(),
+                "updated_by": str(g.current_user["_id"]),
+            }
+        },
+    )
+
+    db.employees.update_many(
+        {
+            "tenant_id": existing.get("tenant_id"),
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"user_id": str(user_obj_id)},
+                {"user_id": user_obj_id},
+                {"email": normalize_email(existing.get("email"))},
+                {"official_email": normalize_email(existing.get("email"))},
+            ],
+        },
+        {
+            "$set": {
+                "status": "Active" if is_active else "Inactive",
+                "updated_at": now(),
+                "updated_by": str(g.current_user["_id"]),
+            }
+        },
+    )
+
+    audit("update_tenant_user_status", "users", user_id, {"is_active": is_active})
+
+    return jsonify({
+        "message": "User enabled successfully" if is_active else "User disabled successfully",
+    })
+
+
+@superadmin_bp.delete("/tenant-users/<user_id>")
+@roles_required("super_admin")
+def delete_tenant_user_from_control(user_id):
+    user_obj_id = safe_object_id(user_id)
+
+    if not user_obj_id:
+        return jsonify({"message": "Invalid user id"}), 400
+
+    db = get_db()
+    existing = db.users.find_one({"_id": user_obj_id})
+
+    if not existing:
+        return jsonify({"message": "User not found"}), 404
+
+    user_roles = existing.get("roles") or []
+
+    if existing.get("role") == "super_admin" or "super_admin" in user_roles:
+        return jsonify({"message": "Super admin user cannot be deleted"}), 400
+
+    delete_payload = {
+        "is_deleted": True,
+        "is_active": False,
+        "is_disabled": True,
+        "status": "deleted",
+        "deleted_at": now(),
+        "deleted_by": str(g.current_user["_id"]),
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+    }
+
+    db.users.update_one(
+        {"_id": user_obj_id},
+        {"$set": delete_payload},
+    )
+
+    db.employees.update_many(
+        {
+            "tenant_id": existing.get("tenant_id"),
+            "$or": [
+                {"user_id": str(user_obj_id)},
+                {"user_id": user_obj_id},
+                {"email": normalize_email(existing.get("email"))},
+                {"official_email": normalize_email(existing.get("email"))},
+            ],
+        },
+        {
+            "$set": {
+                "is_deleted": True,
+                "status": "Deleted",
+                "deleted_at": now(),
+                "deleted_by": str(g.current_user["_id"]),
+                "updated_at": now(),
+                "updated_by": str(g.current_user["_id"]),
+            }
+        },
+    )
+
+    audit("delete_tenant_user", "users", user_id)
+
+    return jsonify({"message": "User deleted successfully"})
