@@ -6,6 +6,7 @@ import {
   getInitials,
   getProfilePhotoUrl,
   refreshCurrentSession,
+  buildProfilePhotoPayload,
 } from '../api/client';
 
 function normalizeRoles(user) {
@@ -73,27 +74,44 @@ function roleLabel(role = '') {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function profilePhotoValue(record = {}) {
-  return (
-    record.avatar ||
-    record.profile_photo ||
-    record.profile_picture ||
-    record.photo ||
-    record.image ||
-    record.picture ||
-    ''
-  );
+function isUnsafePhotoValue(value = '') {
+  const photo = String(value || '').trim();
+
+  if (!photo) {
+    return false;
+  }
+
+  if (photo.startsWith('data:image') && photo.length > 5000) {
+    return true;
+  }
+
+  if (photo.length > 1000 && !photo.startsWith('http')) {
+    return true;
+  }
+
+  return false;
 }
 
-function buildProfilePhotoPayload(photoValue = '') {
-  const photo = String(photoValue || '').trim();
+function cleanPhotoValue(value = '') {
+  const photo = String(value || '').trim();
 
-  return {
-    avatar: photo,
-    profile_photo: photo,
-    profile_picture: photo,
-    photo,
-  };
+  if (!photo || isUnsafePhotoValue(photo)) {
+    return '';
+  }
+
+  return photo;
+}
+
+function profilePhotoValue(record = {}) {
+  return (
+    cleanPhotoValue(record.avatar) ||
+    cleanPhotoValue(record.profile_photo) ||
+    cleanPhotoValue(record.profile_picture) ||
+    cleanPhotoValue(record.photo) ||
+    cleanPhotoValue(record.image) ||
+    cleanPhotoValue(record.picture) ||
+    ''
+  );
 }
 
 function capabilityLabel(employee = {}, roles = []) {
@@ -124,7 +142,7 @@ function employeeId(employee = {}) {
 
 function ProfileAvatar({ user = {}, employee = {}, photoValue = '' }) {
   const name = user.name || employee.name || user.email || 'Employee';
-  const photo = photoValue || profilePhotoValue(employee) || profilePhotoValue(user);
+  const photo = cleanPhotoValue(photoValue) || profilePhotoValue(employee) || profilePhotoValue(user);
   const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
 
   return (
@@ -189,6 +207,7 @@ export default function Profile() {
   const mainName = user.name || employee.name || user.email || 'My Profile';
   const mainRole = 'Employee';
   const capabilities = capabilityLabel(employee, userRoles);
+  const previewPhotoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
 
   const profileRows = useMemo(() => {
     return [
@@ -209,7 +228,7 @@ export default function Profile() {
     ['Gender', employee.gender || ''],
     ['Date Of Birth', employee.date_of_birth || ''],
     ['Blood Group', employee.blood_group || ''],
-    ['Father\'s Name', employee.father_name || ''],
+    ["Father's Name", employee.father_name || ''],
     ['Religion', employee.religion || ''],
     ['Marital Status', employee.marital_status || ''],
     ['Speak Language', employee.speak_language || ''],
@@ -295,7 +314,17 @@ export default function Profile() {
   }
 
   function updatePhotoValue(value) {
-    setPhoto(String(value || '').trim());
+    const nextPhoto = String(value || '').trim();
+
+    setPhoto(nextPhoto);
+
+    if (isUnsafePhotoValue(nextPhoto)) {
+      setPhotoMessage(
+        'This photo value is too large. Please save only a short uploaded image path or URL, not base64 image data.',
+      );
+      return;
+    }
+
     setPhotoMessage('');
   }
 
@@ -308,28 +337,30 @@ export default function Profile() {
 
     if (!file.type.startsWith('image/')) {
       setPhotoMessage('Please choose an image file.');
+      event.target.value = '';
       return;
     }
 
-    if (file.size > 1024 * 1024 * 2) {
-      setPhotoMessage('Image size should be below 2MB.');
-      return;
-    }
+    event.target.value = '';
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      updatePhotoValue(reader.result || '');
-    };
-
-    reader.readAsDataURL(file);
+    setPhotoMessage(
+      'Direct browser image upload is disabled here to prevent dashboard crashes. Upload the file to your server/uploads folder first, then paste the saved image path or URL here.',
+    );
   }
 
   async function saveProfilePhoto() {
     const empId = employeeId(employee);
+    const cleanPhoto = String(photo || '').trim();
 
     if (!empId) {
       setPhotoMessage('Employee profile id not found. Please ask HR/Admin to sync your employee profile.');
+      return;
+    }
+
+    if (isUnsafePhotoValue(cleanPhoto)) {
+      setPhotoMessage(
+        'This image value is too large/base64 and cannot be saved because it can crash the dashboard. Please paste a saved image URL/path instead.',
+      );
       return;
     }
 
@@ -340,7 +371,7 @@ export default function Profile() {
 
       await api(`/employees/${empId}`, {
         method: 'PATCH',
-        body: JSON.stringify(buildProfilePhotoPayload(photo)),
+        body: JSON.stringify(buildProfilePhotoPayload(cleanPhoto)),
       });
 
       await refreshProfileSession();
@@ -567,14 +598,14 @@ export default function Profile() {
       <section className="panel">
         <h3>Profile Photo</h3>
         <p>
-          Upload or paste your photo URL/path. This photo will show in your profile,
+          Paste your saved photo URL/path. This photo will show in your profile,
           dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
         </p>
 
         <div className="profile-photo-panel">
           <div className="profile-photo-preview">
-            {getProfilePhotoUrl({ avatar: photo }) ? (
-              <img src={getProfilePhotoUrl({ avatar: photo })} alt={mainName} />
+            {previewPhotoUrl ? (
+              <img src={previewPhotoUrl} alt={mainName} />
             ) : (
               <span>{getInitials(mainName)}</span>
             )}
@@ -584,13 +615,13 @@ export default function Profile() {
             <input
               type="text"
               value={photo}
-              placeholder="Paste image URL/path or upload image"
+              placeholder="/uploads/profile_photos/employee-photo.jpg"
               onChange={(event) => updatePhotoValue(event.target.value)}
             />
 
             <div className="profile-photo-actions">
               <label className="profile-file-btn">
-                Upload Photo
+                Choose Photo
                 <input
                   type="file"
                   accept="image/*"
@@ -620,8 +651,8 @@ export default function Profile() {
             </div>
 
             <small>
-              Recommended size: square photo under 2MB. Uploaded image is stored as
-              a browser-readable image string unless your backend later adds file-upload storage.
+              Save only a short server path or URL. Do not save base64 image data,
+              because it can make dashboard APIs too large and crash Team Leader dashboards.
             </small>
 
             {photoMessage && <div className="inline-message">{photoMessage}</div>}

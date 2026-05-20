@@ -57,9 +57,20 @@ export function safeSessionPhotoValue(value = '') {
     return '';
   }
 
-  // Do not save large base64 image data in localStorage.
-  // It causes dashboard/session break after profile image upload.
+  /*
+    Never keep large base64 images in localStorage/session/dashboard state.
+    This prevents Team Leader dashboard crash after profile photo upload.
+  */
   if (raw.startsWith('data:image') && raw.length > 5000) {
+    return '';
+  }
+
+  /*
+    Any very long non-http value is also unsafe.
+    Real uploaded image paths should be short, for example:
+    /uploads/profile_photos/employee.jpg
+  */
+  if (raw.length > 1000 && !raw.startsWith('http')) {
     return '';
   }
 
@@ -67,16 +78,23 @@ export function safeSessionPhotoValue(value = '') {
 }
 
 export function getProfilePhotoValue(record = {}) {
+  if (!record || typeof record !== 'object') {
+    return '';
+  }
+
   return firstNonEmpty(
-    record.avatar,
-    record.profile_photo,
-    record.profile_picture,
-    record.photo,
-    record.image,
-    record.picture,
-    record.employee_avatar,
-    record.employee_profile_photo,
-    record.latest_progress_by_avatar,
+    safeSessionPhotoValue(record.avatar),
+    safeSessionPhotoValue(record.profile_photo),
+    safeSessionPhotoValue(record.profile_picture),
+    safeSessionPhotoValue(record.photo),
+    safeSessionPhotoValue(record.image),
+    safeSessionPhotoValue(record.picture),
+    safeSessionPhotoValue(record.employee_avatar),
+    safeSessionPhotoValue(record.employee_profile_photo),
+    safeSessionPhotoValue(record.latest_progress_by_avatar),
+    safeSessionPhotoValue(record.profile_photo_url),
+    safeSessionPhotoValue(record.avatar_url),
+    safeSessionPhotoValue(record.photo_url),
   );
 }
 
@@ -88,18 +106,46 @@ export function withProfilePhotoAliases(record = {}) {
   const cloned = { ...record };
   const photo = getProfilePhotoValue(cloned);
 
+  /*
+    Remove unsafe photo fields from frontend state.
+    This stops one bad base64 image from spreading into dashboard objects.
+  */
+  [
+    'avatar',
+    'profile_photo',
+    'profile_picture',
+    'photo',
+    'image',
+    'picture',
+    'employee_avatar',
+    'employee_profile_photo',
+    'latest_progress_by_avatar',
+    'profile_photo_url',
+    'avatar_url',
+    'photo_url',
+  ].forEach((key) => {
+    if (cloned[key] && !safeSessionPhotoValue(cloned[key])) {
+      delete cloned[key];
+    }
+  });
+
   if (photo) {
     cloned.avatar = photo;
     cloned.profile_photo = photo;
     cloned.profile_picture = photo;
     cloned.photo = photo;
+  } else {
+    delete cloned.avatar;
+    delete cloned.profile_photo;
+    delete cloned.profile_picture;
+    delete cloned.photo;
   }
 
   return cloned;
 }
 
 export function normalizeProfilePhotoUrl(value = '') {
-  const raw = String(value || '').trim();
+  const raw = safeSessionPhotoValue(value);
 
   if (!raw) {
     return '';
@@ -108,9 +154,16 @@ export function normalizeProfilePhotoUrl(value = '') {
   if (
     raw.startsWith('http://') ||
     raw.startsWith('https://') ||
-    raw.startsWith('data:') ||
     raw.startsWith('blob:')
   ) {
+    return raw;
+  }
+
+  /*
+    Small data images are allowed only as a fallback.
+    Large base64 images are already blocked by safeSessionPhotoValue().
+  */
+  if (raw.startsWith('data:image')) {
     return raw;
   }
 
@@ -812,7 +865,7 @@ export function normalizeApiPayload(data = {}) {
 }
 
 export function buildProfilePhotoPayload(photoValue, extra = {}) {
-  const photo = String(photoValue || '').trim();
+  const photo = safeSessionPhotoValue(photoValue);
 
   return {
     ...extra,

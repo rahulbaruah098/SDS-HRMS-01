@@ -99,30 +99,59 @@ def normalize_state(value):
 def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
 
+def safe_profile_photo_value(value):
+    photo = normalize_text(value)
+
+    if not photo:
+        return ""
+
+    # Never return/store large base64 images in auth/session payloads.
+    # This prevents frontend localStorage/session and Team Leader dashboard crashes.
+    if photo.startswith("data:image") and len(photo) > 5000:
+        return ""
+
+    # Normal uploaded image paths/URLs should be short.
+    # Example: /uploads/profile_photos/employee.jpg
+    if len(photo) > 1000 and not photo.startswith("http"):
+        return ""
+
+    return photo
+
 
 def profile_photo_value(doc):
     doc = doc or {}
 
     return (
-        normalize_text(doc.get("avatar"))
-        or normalize_text(doc.get("profile_photo"))
-        or normalize_text(doc.get("profile_picture"))
-        or normalize_text(doc.get("photo"))
-        or normalize_text(doc.get("image"))
-        or normalize_text(doc.get("picture"))
+        safe_profile_photo_value(doc.get("avatar"))
+        or safe_profile_photo_value(doc.get("profile_photo"))
+        or safe_profile_photo_value(doc.get("profile_picture"))
+        or safe_profile_photo_value(doc.get("photo"))
+        or safe_profile_photo_value(doc.get("image"))
+        or safe_profile_photo_value(doc.get("picture"))
         or ""
     )
 
-
 def apply_profile_photo_aliases(payload, photo_value=None):
     payload = payload or {}
-    photo = normalize_text(photo_value) or profile_photo_value(payload)
+    photo = safe_profile_photo_value(photo_value) or profile_photo_value(payload)
 
     if photo:
         payload["avatar"] = photo
         payload["profile_photo"] = photo
         payload["profile_picture"] = photo
         payload["photo"] = photo
+    else:
+        # Remove unsafe/huge photo fields from auth response/session payload.
+        for key in [
+            "avatar",
+            "profile_photo",
+            "profile_picture",
+            "photo",
+            "image",
+            "picture",
+        ]:
+            if payload.get(key) and not safe_profile_photo_value(payload.get(key)):
+                payload.pop(key, None)
 
     return payload
 
@@ -309,6 +338,8 @@ def sync_user_login_defaults(db, user):
     if photo:
         apply_profile_photo_aliases(update_data, photo)
         apply_profile_photo_aliases(user, photo)
+    else:
+        apply_profile_photo_aliases(user)
 
     if update_data:
         db.users.update_one(
@@ -326,26 +357,33 @@ def sync_user_employee_photo(db, user, employee):
     photo = merge_profile_photo_from_sources(employee, user)
 
     if not photo:
+        apply_profile_photo_aliases(user)
+
+        if employee:
+            apply_profile_photo_aliases(employee)
+
         return user, employee
 
     user_update = {}
     apply_profile_photo_aliases(user_update, photo)
     apply_profile_photo_aliases(user, photo)
 
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": user_update},
-    )
+    if user_update:
+        db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": user_update},
+        )
 
     if employee and employee.get("_id"):
         employee_update = {}
         apply_profile_photo_aliases(employee_update, photo)
         apply_profile_photo_aliases(employee, photo)
 
-        db.employees.update_one(
-            {"_id": employee["_id"]},
-            {"$set": employee_update},
-        )
+        if employee_update:
+            db.employees.update_one(
+                {"_id": employee["_id"]},
+                {"$set": employee_update},
+            )
 
     return user, employee
 
@@ -377,6 +415,9 @@ def sync_user_employee_link(db, user, employee):
         apply_profile_photo_aliases(employee_update, photo)
         apply_profile_photo_aliases(user, photo)
         apply_profile_photo_aliases(employee, photo)
+    else:
+        apply_profile_photo_aliases(user)
+        apply_profile_photo_aliases(employee)
 
     db.users.update_one(
         {"_id": user["_id"]},
@@ -412,6 +453,8 @@ def sync_user_employee_capabilities(db, user, employee):
     if photo:
         apply_profile_photo_aliases(update_data, photo)
         apply_profile_photo_aliases(user, photo)
+    else:
+        apply_profile_photo_aliases(user)
 
     if update_data:
         db.users.update_one(

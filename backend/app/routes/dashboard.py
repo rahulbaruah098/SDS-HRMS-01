@@ -185,30 +185,64 @@ def count_collection(db, collection, extra=None):
 def normalize_text(value):
     return str(value or "").strip()
 
+def safe_profile_photo_value(value):
+    photo = normalize_text(value)
+
+    if not photo:
+        return ""
+
+    # Never return large base64 profile images in dashboard APIs.
+    # One photo can be repeated in employee_summary, team_members,
+    # project cards, hierarchy tree, performance graphs, and crash the dashboard.
+    if photo.startswith("data:image") and len(photo) > 5000:
+        return ""
+
+    # Normal uploaded image path/URL should be short.
+    # Example: /uploads/profile_photos/employee.jpg
+    if len(photo) > 1000 and not photo.startswith("http"):
+        return ""
+
+    return photo
+
 
 def profile_photo_value(doc):
     doc = doc or {}
 
     return (
-        normalize_text(doc.get("avatar"))
-        or normalize_text(doc.get("profile_photo"))
-        or normalize_text(doc.get("profile_picture"))
-        or normalize_text(doc.get("photo"))
-        or normalize_text(doc.get("image"))
-        or normalize_text(doc.get("picture"))
+        safe_profile_photo_value(doc.get("avatar"))
+        or safe_profile_photo_value(doc.get("profile_photo"))
+        or safe_profile_photo_value(doc.get("profile_picture"))
+        or safe_profile_photo_value(doc.get("photo"))
+        or safe_profile_photo_value(doc.get("image"))
+        or safe_profile_photo_value(doc.get("picture"))
         or ""
     )
 
 
 def apply_profile_photo_aliases(payload, photo_value=None):
     payload = payload or {}
-    photo = normalize_text(photo_value) or profile_photo_value(payload)
+    photo = safe_profile_photo_value(photo_value) or profile_photo_value(payload)
 
     if photo:
         payload["avatar"] = photo
         payload["profile_photo"] = photo
         payload["profile_picture"] = photo
         payload["photo"] = photo
+    else:
+        # Remove unsafe/huge base64 photo fields from dashboard response objects.
+        for key in [
+            "avatar",
+            "profile_photo",
+            "profile_picture",
+            "photo",
+            "image",
+            "picture",
+            "employee_avatar",
+            "employee_profile_photo",
+            "latest_progress_by_avatar",
+        ]:
+            if payload.get(key) and not safe_profile_photo_value(payload.get(key)):
+                payload.pop(key, None)
 
     return payload
 
@@ -432,13 +466,32 @@ def employee_identifier_values(employee):
 def employee_mapping_query(field_name, employee, tenant_id):
     identifier_values = employee_identifier_values(employee)
 
-    return {
-        "tenant_id": tenant_id,
-        field_name: {"$in": identifier_values},
-        "status": {"$ne": "Inactive"},
-        "is_deleted": {"$ne": True},
-    }
+    tenant_text = normalize_text(tenant_id)
+    tenant_values = list(dict.fromkeys([
+        tenant_text,
+        tenant_text.lower(),
+        tenant_text.upper(),
+    ]))
 
+    return {
+        "$and": [
+            {
+                "$or": [
+                    {"tenant_id": {"$in": tenant_values}},
+                    {"tenant_id": {"$exists": False}},
+                    {"tenant_id": None},
+                    {"tenant_id": ""},
+                ]
+            },
+            {
+                field_name: {"$in": identifier_values},
+            },
+            {
+                "status": {"$ne": "Inactive"},
+                "is_deleted": {"$ne": True},
+            },
+        ]
+    }
 
 def employee_state(employee):
     employee = employee or {}
@@ -1313,33 +1366,51 @@ def project_scope_for_employee(tenant_id, emp_id, employee=None):
     if emp_id and emp_id not in identifier_values:
         identifier_values.append(emp_id)
 
+    tenant_text = normalize_text(tenant_id)
+    tenant_values = list(dict.fromkeys([
+        tenant_text,
+        tenant_text.lower(),
+        tenant_text.upper(),
+    ]))
+
     return {
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "$or": [
-            {"created_by_employee_id": {"$in": identifier_values}},
-            {"created_by": {"$in": identifier_values}},
+        "$and": [
+            {
+                "$or": [
+                    {"tenant_id": {"$in": tenant_values}},
+                    {"tenant_id": {"$exists": False}},
+                    {"tenant_id": None},
+                    {"tenant_id": ""},
+                ]
+            },
+            {
+                "is_deleted": {"$ne": True},
+                "$or": [
+                    {"created_by_employee_id": {"$in": identifier_values}},
+                    {"created_by": {"$in": identifier_values}},
 
-            {"team_leader_id": {"$in": identifier_values}},
-            {"reporting_officer_id": {"$in": identifier_values}},
+                    {"team_leader_id": {"$in": identifier_values}},
+                    {"reporting_officer_id": {"$in": identifier_values}},
 
-            {"assigned_to_id": {"$in": identifier_values}},
-            {"assigned_employee_ids": {"$in": identifier_values}},
-            {"assigned_members.employee_id": {"$in": identifier_values}},
-            {"assigned_members.user_id": {"$in": identifier_values}},
-            {"assigned_members.employee_code": {"$in": identifier_values}},
-            {"assigned_members.emp_code": {"$in": identifier_values}},
-            {"assigned_members.email": {"$in": identifier_values}},
+                    {"assigned_to_id": {"$in": identifier_values}},
+                    {"assigned_employee_ids": {"$in": identifier_values}},
+                    {"assigned_members.employee_id": {"$in": identifier_values}},
+                    {"assigned_members.user_id": {"$in": identifier_values}},
+                    {"assigned_members.employee_code": {"$in": identifier_values}},
+                    {"assigned_members.emp_code": {"$in": identifier_values}},
+                    {"assigned_members.email": {"$in": identifier_values}},
 
-            {"collaborator_ids": {"$in": identifier_values}},
-            {"collaborators.employee_id": {"$in": identifier_values}},
-            {"collaborators.user_id": {"$in": identifier_values}},
-            {"collaborators.employee_code": {"$in": identifier_values}},
-            {"collaborators.emp_code": {"$in": identifier_values}},
-            {"collaborators.email": {"$in": identifier_values}},
+                    {"collaborator_ids": {"$in": identifier_values}},
+                    {"collaborators.employee_id": {"$in": identifier_values}},
+                    {"collaborators.user_id": {"$in": identifier_values}},
+                    {"collaborators.employee_code": {"$in": identifier_values}},
+                    {"collaborators.emp_code": {"$in": identifier_values}},
+                    {"collaborators.email": {"$in": identifier_values}},
 
-            {"latest_progress_by": {"$in": identifier_values}},
-        ],
+                    {"latest_progress_by": {"$in": identifier_values}},
+                ],
+            },
+        ]
     }
 
 
@@ -1350,14 +1421,32 @@ def project_scope_for_team_leader(tenant_id, emp_id, employee=None):
     if emp_id and emp_id not in identifier_values:
         identifier_values.append(emp_id)
 
+    tenant_text = normalize_text(tenant_id)
+    tenant_values = list(dict.fromkeys([
+        tenant_text,
+        tenant_text.lower(),
+        tenant_text.upper(),
+    ]))
+
     return {
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "$or": [
-            {"created_by_employee_id": {"$in": identifier_values}},
-            {"created_by": {"$in": identifier_values}},
-            {"team_leader_id": {"$in": identifier_values}},
-        ],
+        "$and": [
+            {
+                "$or": [
+                    {"tenant_id": {"$in": tenant_values}},
+                    {"tenant_id": {"$exists": False}},
+                    {"tenant_id": None},
+                    {"tenant_id": ""},
+                ]
+            },
+            {
+                "is_deleted": {"$ne": True},
+                "$or": [
+                    {"created_by_employee_id": {"$in": identifier_values}},
+                    {"created_by": {"$in": identifier_values}},
+                    {"team_leader_id": {"$in": identifier_values}},
+                ],
+            },
+        ]
     }
 
 
@@ -1372,6 +1461,7 @@ def project_scope_for_reporting_officer(tenant_id, team_leader_ids, reporting_of
 
     if reporting_officer_id:
         scope_or.append({"reporting_officer_id": reporting_officer_id})
+        scope_or.append({"reporting_officer_id": str(reporting_officer_id)})
 
     if not scope_or:
         return {
@@ -2358,13 +2448,10 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
 
     if is_reporting_officer_capability(employee, roles):
         team_leaders = list(
-            db.employees
-            .find({
-                "tenant_id": tenant_id,
-                "reporting_officer_id": emp_id,
-                "status": {"$ne": "Inactive"},
-                "is_deleted": {"$ne": True},
-            }, {"_id": 1})
+            db.employees.find(
+                employee_mapping_query("reporting_officer_id", employee, tenant_id),
+                {"_id": 1},
+            )
         )
 
         team_leader_ids = [str(row["_id"]) for row in team_leaders]
@@ -2412,12 +2499,10 @@ def project_dashboard_for_employee(db, tenant_id, emp_id, employee, roles, team_
             tenant_id,
             [
                 str(row["_id"])
-                for row in db.employees.find({
-                    "tenant_id": tenant_id,
-                    "reporting_officer_id": emp_id,
-                    "status": {"$ne": "Inactive"},
-                    "is_deleted": {"$ne": True},
-                }, {"_id": 1})
+                for row in db.employees.find(
+                    employee_mapping_query("reporting_officer_id", employee, tenant_id),
+                    {"_id": 1},
+                )
             ],
         ) if is_reporting_officer_capability(employee, roles) else [],
         "summary": {

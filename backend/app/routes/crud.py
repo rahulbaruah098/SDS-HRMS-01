@@ -229,6 +229,8 @@ PROFILE_PHOTO_FIELDS = {
     "profile_photo",
     "profile_picture",
     "photo",
+    "image",
+    "picture",
 }
 
 REPORTING_OFFICER_DESIGNATION_REGEX = re.compile(
@@ -397,25 +399,60 @@ def normalize_email(value):
     return normalize_text(value).lower()
 
 
+def safe_employee_avatar_value(value):
+    avatar = normalize_text(value)
+
+    if not avatar:
+        return ""
+
+    # Never store large base64 images in employee/user/project/dashboard payloads.
+    # This prevents Team Leader dashboard crashes after profile photo upload.
+    if avatar.startswith("data:image") and len(avatar) > 5000:
+        return ""
+
+    # Normal uploaded image paths should be short:
+    # /uploads/profile_photos/employee.jpg
+    # uploads/profile_photos/employee.jpg
+    # https://domain.com/photo.jpg
+    if len(avatar) > 1000 and not avatar.startswith("http"):
+        return ""
+
+    return avatar
+
 def employee_avatar_from_payload(payload):
+    payload = payload or {}
+
     return (
-        normalize_text(payload.get("avatar"))
-        or normalize_text(payload.get("profile_photo"))
-        or normalize_text(payload.get("profile_picture"))
-        or normalize_text(payload.get("photo"))
-        or normalize_text(payload.get("image"))
-        or normalize_text(payload.get("picture"))
+        safe_employee_avatar_value(payload.get("avatar"))
+        or safe_employee_avatar_value(payload.get("profile_photo"))
+        or safe_employee_avatar_value(payload.get("profile_picture"))
+        or safe_employee_avatar_value(payload.get("photo"))
+        or safe_employee_avatar_value(payload.get("image"))
+        or safe_employee_avatar_value(payload.get("picture"))
+        or ""
     )
 
-
 def apply_avatar_aliases(payload, avatar_value=None):
-    avatar = normalize_text(avatar_value) or employee_avatar_from_payload(payload)
+    payload = payload or {}
+    avatar = safe_employee_avatar_value(avatar_value) or employee_avatar_from_payload(payload)
 
     if avatar:
         payload["avatar"] = avatar
         payload["profile_photo"] = avatar
         payload["profile_picture"] = avatar
         payload["photo"] = avatar
+    else:
+        # Remove unsafe photo fields from the payload before saving/syncing.
+        for key in [
+            "avatar",
+            "profile_photo",
+            "profile_picture",
+            "photo",
+            "image",
+            "picture",
+        ]:
+            if payload.get(key) and not safe_employee_avatar_value(payload.get(key)):
+                payload.pop(key, None)
 
     return payload
 
@@ -1195,6 +1232,33 @@ def get_collection(db, collection):
     return getattr(db, collection)
 
 
+def validate_employee_photo_payload(data):
+    data = data or {}
+
+    raw_avatar = (
+        data.get("avatar")
+        or data.get("profile_photo")
+        or data.get("profile_picture")
+        or data.get("photo")
+        or data.get("image")
+        or data.get("picture")
+        or ""
+    )
+
+    raw_avatar_text = normalize_text(raw_avatar)
+
+    if not raw_avatar_text:
+        return ""
+
+    if raw_avatar_text.startswith("data:image") and len(raw_avatar_text) > 5000:
+        return "Profile photo is too large/base64. Please save only an uploaded image path or URL."
+
+    if len(raw_avatar_text) > 1000 and not raw_avatar_text.startswith("http"):
+        return "Profile photo value is too long. Please save only a short image path or URL."
+
+    return ""
+
+
 def clean_payload(data):
     blocked_keys = {
         "_id",
@@ -1803,6 +1867,8 @@ def resolve_employee_for_project(db, employee_id, tenant_id):
 
 
 def project_member_payload(employee, relation="member"):
+    avatar = employee_avatar(employee)
+
     return {
         "employee_id": str(employee["_id"]),
         "employee_code": employee_code(employee),
@@ -1813,10 +1879,10 @@ def project_member_payload(employee, relation="member"):
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
         "user_id": employee.get("user_id", ""),
-        "avatar": employee_avatar(employee),
-        "profile_photo": employee_avatar(employee),
-        "profile_picture": employee_avatar(employee),
-        "photo": employee_avatar(employee),
+        "avatar": avatar,
+        "profile_photo": avatar,
+        "profile_picture": avatar,
+        "photo": avatar,
         "is_team_leader": truthy(employee.get("is_team_leader")),
         "is_reporting_officer": truthy(employee.get("is_reporting_officer")),
         "is_it_support_head": truthy(employee.get("is_it_support_head")),
@@ -1921,16 +1987,12 @@ def enrich_member_from_db(db, tenant_id, member, relation):
         or "Employee"
     )
     fallback["name"] = fallback.get("employee_name")
-    fallback["avatar"] = (
-        fallback.get("avatar")
-        or fallback.get("profile_photo")
-        or fallback.get("profile_picture")
-        or fallback.get("photo")
-        or ""
-    )
-    fallback["profile_photo"] = fallback.get("avatar")
-    fallback["profile_picture"] = fallback.get("avatar")
-    fallback["photo"] = fallback.get("avatar")
+    fallback_avatar = employee_avatar_from_payload(fallback)
+
+    fallback["avatar"] = fallback_avatar
+    fallback["profile_photo"] = fallback_avatar
+    fallback["profile_picture"] = fallback_avatar
+    fallback["photo"] = fallback_avatar
     fallback["relation"] = relation
     return fallback
 
@@ -1995,18 +2057,23 @@ def build_project_team_tree(db, project):
         if latest_employee:
             latest_progress_person = project_member_payload(latest_employee, "latest_progress_by")
 
-    if not latest_progress_person and project.get("latest_progress_by_name"):
-        latest_progress_person = {
-            "employee_id": latest_progress_by,
-            "employee_name": project.get("latest_progress_by_name"),
-            "name": project.get("latest_progress_by_name"),
-            "employee_code": "",
-            "department": project.get("department", ""),
-            "designation": "",
-            "avatar": project.get("latest_progress_by_avatar", ""),
-            "profile_photo": project.get("latest_progress_by_avatar", ""),
-            "relation": "latest_progress_by",
-        }
+    latest_progress_avatar = safe_employee_avatar_value(
+        project.get("latest_progress_by_avatar", "")
+    )
+
+    latest_progress_person = {
+        "employee_id": latest_progress_by,
+        "employee_name": project.get("latest_progress_by_name"),
+        "name": project.get("latest_progress_by_name"),
+        "employee_code": "",
+        "department": project.get("department", ""),
+        "designation": "",
+        "avatar": latest_progress_avatar,
+        "profile_photo": latest_progress_avatar,
+        "profile_picture": latest_progress_avatar,
+        "photo": latest_progress_avatar,
+        "relation": "latest_progress_by",
+    }
 
     reporting_officer_payload = (
         project_member_payload(reporting_officer, "reporting_officer")
@@ -2734,6 +2801,11 @@ def create_collection_item(collection):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+    if collection == "employees":
+        photo_error = validate_employee_photo_payload(data)
+
+    if photo_error:
+        return jsonify({"message": photo_error}), 400
 
     if collection == "projects":
         payload = normalize_project_payload(payload)
@@ -2940,6 +3012,13 @@ def update_collection_item(collection, item_id):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+
+    if collection == "employees":
+        photo_error = validate_employee_photo_payload(data)
+
+        if photo_error:
+            return jsonify({"message": photo_error}), 400
+
     if self_photo_update:
         apply_avatar_aliases(payload)
 
