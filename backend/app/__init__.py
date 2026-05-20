@@ -17,6 +17,7 @@ from .routes.crud import crud_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
 from .routes.password_requests import password_requests_bp
+from .routes.profile_photos import profile_photos_bp
 
 
 def _get_allowed_origins():
@@ -142,6 +143,13 @@ def create_app():
     #
     # Keep this before generic CRUD so upload/download routes are preferred.
     app.register_blueprint(policies_bp, url_prefix="/api/v1")
+    
+    # Profile Photo APIs:
+    # Employees/Admins upload profile photos from computer.
+    # Backend stores the file under uploads/profile_photos and saves only the safe URL/path in MongoDB.
+    #
+    # Keep this before generic CRUD so upload/static profile photo routes are preferred.
+    app.register_blueprint(profile_photos_bp, url_prefix="/api/v1")
     
     # Hidden Celebrations APIs:
     # Birthday and work anniversary greetings are tenant-wise and released at 10:00 AM.

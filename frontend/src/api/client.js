@@ -167,13 +167,35 @@ export function normalizeProfilePhotoUrl(value = '') {
     return raw;
   }
 
+  const apiBase = String(API_BASE).replace(/\/+$/, '');
+  const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
+
+  /*
+    New uploaded profile photos are served from:
+    /api/v1/uploads/profile_photos/...
+  */
+  if (raw.startsWith('/api/v1/uploads/profile_photos/')) {
+    return `${apiRoot}${raw}`;
+  }
+
+  /*
+    Backward compatibility for photos already saved as:
+    /uploads/profile_photos/...
+    uploads/profile_photos/...
+  */
+  if (raw.startsWith('/uploads/profile_photos/')) {
+    return `${apiBase}${raw}`;
+  }
+
+  if (raw.startsWith('uploads/profile_photos/')) {
+    return `${apiBase}/${raw}`;
+  }
+
   if (raw.startsWith('/')) {
-    const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
     return `${apiRoot}${raw}`;
   }
 
   if (raw.startsWith('uploads/') || raw.startsWith('static/')) {
-    const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
     return `${apiRoot}/${raw}`;
   }
 
@@ -2767,6 +2789,27 @@ export function updateEmployeeProfilePhoto(employeeId, photoValue, extra = {}) {
 
 export function updateMyEmployeeProfilePhoto(employeeId, photoValue, extra = {}) {
   return updateEmployeeProfilePhoto(employeeId, photoValue, extra);
+}
+
+export function uploadEmployeeProfilePhoto(employeeId, file) {
+  if (!employeeId) {
+    return Promise.reject(new Error('Employee ID is required to upload profile photo.'));
+  }
+
+  if (!file) {
+    return Promise.reject(new Error('Photo file is required.'));
+  }
+
+  const formData = new FormData();
+
+  formData.append('employee_id', employeeId);
+  formData.append('photo', file);
+
+  return api('/profile-photos/upload', {
+    method: 'POST',
+    body: formData,
+    timeoutMs: 60000,
+  });
 }
 
 /* -------------------------------------------------------------------------- */

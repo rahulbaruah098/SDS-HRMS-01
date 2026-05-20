@@ -7,6 +7,7 @@ import {
   getProfilePhotoUrl,
   refreshCurrentSession,
   buildProfilePhotoPayload,
+  uploadEmployeeProfilePhoto,
 } from '../api/client';
 
 function normalizeRoles(user) {
@@ -192,6 +193,7 @@ export default function Profile() {
   const initialPhoto = profilePhotoValue(employee) || profilePhotoValue(user);
 
   const [photo, setPhoto] = useState(initialPhoto);
+  const [photoFile, setPhotoFile] = useState(null);
   const [photoMessage, setPhotoMessage] = useState('');
   const [photoSaving, setPhotoSaving] = useState(false);
 
@@ -302,10 +304,11 @@ export default function Profile() {
         setUser(data.user);
       }
 
-      if (data.employee) {
-        setEmployee(data.employee);
-        setPhoto(profilePhotoValue(data.employee) || profilePhotoValue(data.user));
-      }
+    if (data.employee) {
+      setEmployee(data.employee);
+      setPhoto(profilePhotoValue(data.employee) || profilePhotoValue(data.user));
+      setPhotoFile(null);
+    }
 
       return data;
     } catch {
@@ -313,78 +316,104 @@ export default function Profile() {
     }
   }
 
-  function updatePhotoValue(value) {
-    const nextPhoto = String(value || '').trim();
+function updatePhotoValue(value) {
+  const nextPhoto = String(value || '').trim();
 
-    setPhoto(nextPhoto);
+  setPhoto(nextPhoto);
+  setPhotoFile(null);
 
-    if (isUnsafePhotoValue(nextPhoto)) {
-      setPhotoMessage(
-        'This photo value is too large. Please save only a short uploaded image path or URL, not base64 image data.',
-      );
-      return;
-    }
-
-    setPhotoMessage('');
-  }
-
-  function handlePhotoFileChange(event) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setPhotoMessage('Please choose an image file.');
-      event.target.value = '';
-      return;
-    }
-
-    event.target.value = '';
-
+  if (isUnsafePhotoValue(nextPhoto)) {
     setPhotoMessage(
-      'Direct browser image upload is disabled here to prevent dashboard crashes. Upload the file to your server/uploads folder first, then paste the saved image path or URL here.',
+      'This photo value is too large. Please upload a photo file or save only a short uploaded image path/URL.',
     );
+    return;
   }
 
-  async function saveProfilePhoto() {
-    const empId = employeeId(employee);
-    const cleanPhoto = String(photo || '').trim();
+  setPhotoMessage('');
+}
 
-    if (!empId) {
-      setPhotoMessage('Employee profile id not found. Please ask HR/Admin to sync your employee profile.');
-      return;
-    }
+function handlePhotoFileChange(event) {
+  const file = event.target.files?.[0];
 
-    if (isUnsafePhotoValue(cleanPhoto)) {
-      setPhotoMessage(
-        'This image value is too large/base64 and cannot be saved because it can crash the dashboard. Please paste a saved image URL/path instead.',
-      );
-      return;
-    }
+  if (!file) {
+    return;
+  }
 
-    setPhotoMessage('');
+  if (!file.type.startsWith('image/')) {
+    setPhotoFile(null);
+    setPhotoMessage('Please choose a valid image file.');
+    event.target.value = '';
+    return;
+  }
 
-    try {
-      setPhotoSaving(true);
+  if (file.size > 1024 * 1024 * 2) {
+    setPhotoFile(null);
+    setPhotoMessage('Image size should be below 2MB.');
+    event.target.value = '';
+    return;
+  }
+
+  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+  if (!allowedTypes.includes(file.type.toLowerCase())) {
+    setPhotoFile(null);
+    setPhotoMessage('Only JPG, JPEG, PNG, and WEBP images are allowed.');
+    event.target.value = '';
+    return;
+  }
+
+  setPhotoFile(file);
+  setPhotoMessage(`Selected: ${file.name}. Click Save Photo to upload.`);
+}
+
+async function saveProfilePhoto() {
+  const empId = employeeId(employee);
+  const cleanPhoto = String(photo || '').trim();
+
+  if (!empId) {
+    setPhotoMessage('Employee profile id not found. Please ask HR/Admin to sync your employee profile.');
+    return;
+  }
+
+  setPhotoMessage('');
+
+  try {
+    setPhotoSaving(true);
+
+    if (photoFile) {
+      const data = await uploadEmployeeProfilePhoto(empId, photoFile);
+      const uploadedPhoto = data.photo || data.photo_url || '';
+
+      if (uploadedPhoto) {
+        setPhoto(uploadedPhoto);
+      }
+
+      setPhotoFile(null);
+    } else {
+      if (isUnsafePhotoValue(cleanPhoto)) {
+        setPhotoMessage(
+          'This image value is too large/base64 and cannot be saved because it can crash the dashboard. Please upload a photo file or paste a saved image URL/path.',
+        );
+        return;
+      }
 
       await api(`/employees/${empId}`, {
         method: 'PATCH',
         body: JSON.stringify(buildProfilePhotoPayload(cleanPhoto)),
       });
-
-      await refreshProfileSession();
-
-      window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
-
-      setPhotoMessage('Profile photo updated successfully.');
-    } catch (error) {
-      setPhotoMessage(error.message || 'Unable to update profile photo.');
-    } finally {
-      setPhotoSaving(false);
     }
+
+    await refreshProfileSession();
+
+    window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
+
+    setPhotoMessage('Profile photo updated successfully.');
+  } catch (error) {
+    setPhotoMessage(error.message || 'Unable to update profile photo.');
+  } finally {
+    setPhotoSaving(false);
   }
+}
 
   async function submit(e) {
     e.preventDefault();
@@ -597,10 +626,10 @@ export default function Profile() {
 
       <section className="panel">
         <h3>Profile Photo</h3>
-        <p>
-          Paste your saved photo URL/path. This photo will show in your profile,
-          dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
-        </p>
+            <p>
+              Choose a photo from your computer and click Save Photo. This photo will show in
+              your profile, dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
+            </p>
 
         <div className="profile-photo-panel">
           <div className="profile-photo-preview">
@@ -615,13 +644,13 @@ export default function Profile() {
             <input
               type="text"
               value={photo}
-              placeholder="/uploads/profile_photos/employee-photo.jpg"
+              placeholder="Photo path will appear after upload"
               onChange={(event) => updatePhotoValue(event.target.value)}
             />
 
             <div className="profile-photo-actions">
               <label className="profile-file-btn">
-                Choose Photo
+                Choose Photo from Computer
                 <input
                   type="file"
                   accept="image/*"
@@ -650,10 +679,15 @@ export default function Profile() {
               </button>
             </div>
 
-            <small>
-              Save only a short server path or URL. Do not save base64 image data,
-              because it can make dashboard APIs too large and crash Team Leader dashboards.
-            </small>
+              <small>
+                Select a JPG, JPEG, PNG, or WEBP image below 2MB. The backend saves the file
+                safely and stores only the image path in MongoDB, not base64 image data.
+              </small>
+                  {photoFile && (
+                    <small>
+                      Ready to upload: <strong>{photoFile.name}</strong>
+                    </small>
+                  )}
 
             {photoMessage && <div className="inline-message">{photoMessage}</div>}
           </div>
