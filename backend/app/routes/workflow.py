@@ -65,6 +65,10 @@ TENANT_NOTIFICATION_CREATOR_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
+    "team_leader",
+    "reporting_officer",
+    "ro",
+    "manager",
 }
 
 NOTIFICATION_CREATOR_ROLES = {
@@ -74,6 +78,8 @@ NOTIFICATION_CREATOR_ROLES = {
 
 NOTIFICATION_ALLOWED_TARGETS = {
     "tenant",
+    "department",
+    "team",
     "all_tenants",
     "selected_tenant",
     "selected_users",
@@ -544,6 +550,267 @@ def selected_user_ids_from_payload(data):
 
     return [normalize_text(user_id) for user_id in user_ids if normalize_text(user_id)]
 
+def selected_values_from_payload(data, *keys):
+    for key in keys:
+        value = data.get(key)
+
+        if isinstance(value, list):
+            return [
+                normalize_text(item)
+                for item in value
+                if normalize_text(item)
+            ]
+
+        if isinstance(value, str):
+            return [
+                item.strip()
+                for item in value.split(",")
+                if item.strip()
+            ]
+
+    return []
+
+
+def employee_display_name(employee):
+    employee = employee or {}
+
+    return (
+        employee.get("employee_name")
+        or employee.get("name")
+        or employee.get("full_name")
+        or employee.get("email")
+        or employee.get("official_email")
+        or "Employee"
+    )
+
+
+def employee_department_value(employee):
+    employee = employee or {}
+
+    return normalize_text(
+        employee.get("department_id")
+        or employee.get("department_name")
+        or employee.get("department")
+    )
+
+
+def employee_to_user_lookup_values(employee):
+    employee = employee or {}
+    values = []
+
+    raw_values = [
+        employee.get("user_id"),
+        employee.get("employee_user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+        employee.get("official_email"),
+    ]
+
+    for value in raw_values:
+        value = normalize_text(value)
+
+        if value and value not in values:
+            values.append(value)
+
+    return values
+
+
+def employees_to_notification_users(db, employees, tenant_id):
+    lookup_values = []
+    object_ids = []
+
+    for employee in employees:
+        for value in employee_to_user_lookup_values(employee):
+            lookup_values.append(value)
+
+            obj_id = safe_object_id(value)
+            if obj_id:
+                object_ids.append(obj_id)
+
+    lookup_values = list(dict.fromkeys([value for value in lookup_values if value]))
+    object_ids = list(dict.fromkeys([value for value in object_ids if value]))
+
+    if not lookup_values and not object_ids:
+        return []
+
+    q = active_user_query(tenant_id)
+
+    q["$or"] = [
+        {"_id": {"$in": object_ids}},
+        {"id": {"$in": lookup_values}},
+        {"employee_id": {"$in": lookup_values}},
+        {"employee_code": {"$in": lookup_values}},
+        {"emp_code": {"$in": lookup_values}},
+        {"email": {"$in": lookup_values}},
+        {"official_email": {"$in": lookup_values}},
+        {"username": {"$in": lookup_values}},
+    ]
+
+    return list(
+        db.users
+        .find(q, notification_user_projection())
+        .sort("name", 1)
+        .limit(5000)
+    )
+
+
+def department_employee_query(tenant_id, department_values):
+    department_values = [
+        normalize_text(value)
+        for value in department_values
+        if normalize_text(value)
+    ]
+
+    department_values = list(dict.fromkeys(department_values))
+
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+        "$or": [
+            {"department_id": {"$in": department_values}},
+            {"department": {"$in": department_values}},
+            {"department_name": {"$in": department_values}},
+        ],
+    }
+
+
+def team_employee_query(tenant_id, owner_values, team_type=""):
+    owner_values = [
+        normalize_text(value)
+        for value in owner_values
+        if normalize_text(value)
+    ]
+
+    owner_values = list(dict.fromkeys(owner_values))
+
+    team_type = normalize_text(team_type).lower()
+
+    if team_type in {"reporting_officer", "ro", "manager"}:
+        team_or = [
+            {"reporting_officer_id": {"$in": owner_values}},
+            {"reporting_officer_user_id": {"$in": owner_values}},
+            {"reporting_officer_employee_id": {"$in": owner_values}},
+            {"reporting_officer_email": {"$in": owner_values}},
+        ]
+    elif team_type in {"team_leader", "tl"}:
+        team_or = [
+            {"team_leader_id": {"$in": owner_values}},
+            {"team_leader_user_id": {"$in": owner_values}},
+            {"team_leader_employee_id": {"$in": owner_values}},
+            {"team_leader_email": {"$in": owner_values}},
+        ]
+    else:
+        team_or = [
+            {"team_leader_id": {"$in": owner_values}},
+            {"team_leader_user_id": {"$in": owner_values}},
+            {"team_leader_employee_id": {"$in": owner_values}},
+            {"team_leader_email": {"$in": owner_values}},
+            {"reporting_officer_id": {"$in": owner_values}},
+            {"reporting_officer_user_id": {"$in": owner_values}},
+            {"reporting_officer_employee_id": {"$in": owner_values}},
+            {"reporting_officer_email": {"$in": owner_values}},
+        ]
+
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+        "$or": team_or,
+    }
+
+
+def notification_department_options(db, tenant_id):
+    employees = list(
+        db.employees.find(
+            {
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+                "status": {"$ne": "Inactive"},
+            },
+            {
+                "department": 1,
+                "department_id": 1,
+                "department_name": 1,
+            },
+        ).limit(5000)
+    )
+
+    departments = {}
+
+    for employee in employees:
+        value = employee_department_value(employee)
+
+        if not value:
+            continue
+
+        label = (
+            employee.get("department_name")
+            or employee.get("department")
+            or employee.get("department_id")
+            or value
+        )
+
+        departments[value] = {
+            "value": value,
+            "label": label,
+        }
+
+    return sorted(departments.values(), key=lambda item: item["label"].lower())
+
+
+def notification_team_options(db, tenant_id):
+    employees = list(
+        db.employees.find(
+            {
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+                "status": {"$ne": "Inactive"},
+                "$or": [
+                    {"is_team_leader": True},
+                    {"is_reporting_officer": True},
+                    {"roles": {"$in": ["team_leader", "reporting_officer", "ro", "manager"]}},
+                    {"role": {"$in": ["team_leader", "reporting_officer", "ro", "manager"]}},
+                ],
+            },
+            {
+                "_id": 1,
+                "user_id": 1,
+                "employee_id": 1,
+                "employee_code": 1,
+                "emp_code": 1,
+                "email": 1,
+                "official_email": 1,
+                "employee_name": 1,
+                "name": 1,
+                "department": 1,
+                "department_name": 1,
+                "department_id": 1,
+                "is_team_leader": 1,
+                "is_reporting_officer": 1,
+            },
+        ).sort("employee_name", 1).limit(1000)
+    )
+
+    options = []
+
+    for employee in employees:
+        values = employee_to_user_lookup_values(employee)
+        owner_value = values[0] if values else str(employee.get("_id"))
+
+        options.append({
+            "value": owner_value,
+            "label": employee_display_name(employee),
+            "department": employee.get("department_name") or employee.get("department") or employee.get("department_id") or "",
+            "is_team_leader": bool(employee.get("is_team_leader")),
+            "is_reporting_officer": bool(employee.get("is_reporting_officer")),
+        })
+
+    return options
+
 
 def notification_user_projection():
     return {
@@ -552,16 +819,31 @@ def notification_user_projection():
         "name": 1,
         "full_name": 1,
         "email": 1,
+        "username": 1,
+        "official_email": 1,
         "role": 1,
         "roles": 1,
         "department": 1,
+        "department_id": 1,
+        "department_name": 1,
         "designation": 1,
+        "designation_id": 1,
+        "designation_name": 1,
+        "employee_id": 1,
+        "employee_code": 1,
+        "emp_code": 1,
+        "team_leader_id": 1,
+        "reporting_officer_id": 1,
+        "is_team_leader": 1,
+        "is_reporting_officer": 1,
     }
 
 
 def resolve_notification_recipients(db, data):
     roles = current_user_roles()
     is_super_admin = "super_admin" in roles
+    current_tenant = current_tenant_id()
+
     target_scope = normalize_text(
         data.get("target_scope")
         or data.get("target")
@@ -572,7 +854,6 @@ def resolve_notification_recipients(db, data):
     if target_scope not in NOTIFICATION_ALLOWED_TARGETS:
         target_scope = "tenant"
 
-    current_tenant = current_tenant_id()
     requested_tenant = normalize_text(
         data.get("target_tenant_id")
         or data.get("tenant_id")
@@ -580,35 +861,132 @@ def resolve_notification_recipients(db, data):
     )
 
     if not is_super_admin:
-        target_scope = "tenant"
         requested_tenant = current_tenant
+
+        if target_scope in {"all_tenants", "selected_tenant"}:
+            target_scope = "tenant"
 
     q = active_user_query()
 
     if target_scope == "all_tenants" and is_super_admin:
-        pass
+        users = list(
+            db.users
+            .find(q, notification_user_projection())
+            .sort("name", 1)
+            .limit(5000)
+        )
+
     elif target_scope == "selected_tenant" and is_super_admin:
         if not requested_tenant:
             raise ValueError("Please select a tenant")
+
         q["tenant_id"] = requested_tenant
+        users = list(
+            db.users
+            .find(q, notification_user_projection())
+            .sort("name", 1)
+            .limit(5000)
+        )
+
     elif target_scope == "selected_users":
         selected_ids = selected_user_ids_from_payload(data)
+
         if not selected_ids:
             raise ValueError("Please select at least one user")
 
-        object_ids = [safe_object_id(item) for item in selected_ids if safe_object_id(item)]
+        object_ids = [
+            safe_object_id(item)
+            for item in selected_ids
+            if safe_object_id(item)
+        ]
+
         q["$or"] = [
             {"_id": {"$in": object_ids}},
             {"id": {"$in": selected_ids}},
+            {"employee_id": {"$in": selected_ids}},
+            {"employee_code": {"$in": selected_ids}},
+            {"email": {"$in": selected_ids}},
+            {"official_email": {"$in": selected_ids}},
         ]
 
         if not is_super_admin:
             q["tenant_id"] = current_tenant
+
+        users = list(
+            db.users
+            .find(q, notification_user_projection())
+            .sort("name", 1)
+            .limit(5000)
+        )
+
+    elif target_scope == "department":
+        department_values = selected_values_from_payload(
+            data,
+            "department_ids",
+            "department_id",
+            "department",
+            "department_name",
+            "selected_department",
+        )
+
+        if not department_values:
+            raise ValueError("Please select a department")
+
+        tenant_id = requested_tenant or current_tenant
+
+        employees = list(
+            db.employees
+            .find(department_employee_query(tenant_id, department_values))
+            .sort("employee_name", 1)
+            .limit(5000)
+        )
+
+        users = employees_to_notification_users(db, employees, tenant_id)
+
+    elif target_scope == "team":
+        tenant_id = requested_tenant or current_tenant
+        team_type = normalize_text(
+            data.get("team_type")
+            or data.get("notification_team_type")
+            or ""
+        ).lower()
+
+        owner_values = selected_values_from_payload(
+            data,
+            "team_owner_ids",
+            "team_owner_id",
+            "team_leader_id",
+            "reporting_officer_id",
+            "selected_team_id",
+            "team_id",
+        )
+
+        current_emp = current_employee(db)
+
+        if not owner_values and current_emp:
+            owner_values = employee_identifier_values(current_emp)
+
+        if not owner_values:
+            raise ValueError("Please select a team")
+
+        employees = list(
+            db.employees
+            .find(team_employee_query(tenant_id, owner_values, team_type))
+            .sort("employee_name", 1)
+            .limit(5000)
+        )
+
+        users = employees_to_notification_users(db, employees, tenant_id)
+
     else:
         target_scope = "tenant"
         q["tenant_id"] = requested_tenant or current_tenant
-
-    users = list(db.users.find(q, notification_user_projection()).limit(5000))
+        users = list(
+            db.users
+            .find(q, notification_user_projection())
+            .sort("name", 1)
+            .limit(5000)
+        )
 
     if not users:
         raise ValueError("No active users found for the selected notification target")
@@ -1683,6 +2061,9 @@ def notification_options():
             "can_create_global": False,
             "tenants": [],
             "users": [],
+            "departments": [],
+            "teams": [],
+            "target_options": [],
         })
 
     can_global = "super_admin" in roles
@@ -1691,18 +2072,42 @@ def notification_options():
     if can_global:
         tenants = list(
             db.companies
-            .find({"is_deleted": {"$ne": True}}, {"tenant_id": 1, "name": 1, "company_name": 1, "tenant_name": 1, "status": 1})
+            .find(
+                {"is_deleted": {"$ne": True}},
+                {
+                    "tenant_id": 1,
+                    "name": 1,
+                    "company_name": 1,
+                    "tenant_name": 1,
+                    "status": 1,
+                },
+            )
             .sort("name", 1)
             .limit(1000)
         )
-        users = list(db.users.find(active_user_query(), notification_user_projection()).sort("name", 1).limit(5000))
+
+        users = list(
+            db.users
+            .find(active_user_query(), notification_user_projection())
+            .sort("name", 1)
+            .limit(5000)
+        )
     else:
         tenants = [{
             "tenant_id": tenant_id,
             "name": tenant_name_from_id(db, tenant_id),
             "status": "active",
         }]
-        users = list(db.users.find(active_user_query(tenant_id), notification_user_projection()).sort("name", 1).limit(1000))
+
+        users = list(
+            db.users
+            .find(active_user_query(tenant_id), notification_user_projection())
+            .sort("name", 1)
+            .limit(1000)
+        )
+
+    departments = notification_department_options(db, tenant_id)
+    teams = notification_team_options(db, tenant_id)
 
     return jsonify({
         "can_create": True,
@@ -1710,13 +2115,17 @@ def notification_options():
         "current_tenant_id": tenant_id,
         "tenants": clean_doc(tenants),
         "users": clean_doc(users),
+        "departments": clean_doc(departments),
+        "teams": clean_doc(teams),
         "target_options": [
-            {"value": "tenant", "label": "This Tenant"},
+            {"value": "tenant", "label": "All Employees of This Tenant"},
+            {"value": "department", "label": "Specific Department"},
+            {"value": "team", "label": "Specific Team"},
+            {"value": "selected_users", "label": "Selected Employees"},
             *([
                 {"value": "all_tenants", "label": "All Tenants"},
                 {"value": "selected_tenant", "label": "Selected Tenant"},
             ] if can_global else []),
-            {"value": "selected_users", "label": "Selected Users"},
         ],
     })
 

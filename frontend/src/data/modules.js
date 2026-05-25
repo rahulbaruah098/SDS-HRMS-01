@@ -117,9 +117,17 @@ export const TENANT_ADMIN_NOTIFICATION_ROLES = [
   'hr',
 ];
 
+export const TEAM_NOTIFICATION_CREATOR_ROLES = [
+  'team_leader',
+  'reporting_officer',
+  'ro',
+  'manager',
+];
+
 export const NOTIFICATION_CREATE_ROLES = [
   'super_admin',
   ...TENANT_ADMIN_NOTIFICATION_ROLES,
+  ...TEAM_NOTIFICATION_CREATOR_ROLES,
 ];
 
 export const NOTIFICATION_VIEW_ROLES = [
@@ -352,10 +360,12 @@ export const REPORTING_OFFICER_DESIGNATION_KEYWORDS = [
 ];
 
 export const NOTIFICATION_TARGET_OPTIONS = [
-  { value: 'tenant', label: 'This Tenant' },
+  { value: 'tenant', label: 'All Employees of This Tenant' },
+  { value: 'department', label: 'Specific Department' },
+  { value: 'team', label: 'Specific Team' },
+  { value: 'selected_users', label: 'Selected Employees' },
   { value: 'all_tenants', label: 'All Tenants' },
   { value: 'selected_tenant', label: 'Selected Tenant' },
-  { value: 'selected_users', label: 'Selected Users' },
 ];
 
 export const GRIEVANCE_TYPE_OPTIONS = [

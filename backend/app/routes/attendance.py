@@ -35,11 +35,22 @@ ATTENDANCE_MANAGER_ROLES = (
 )
 
 HOLIDAY_MANAGER_ROLES = (
-    "super_admin",
     "admin",
     "hr_admin",
     "hr_manager",
     "hr",
+)
+
+HOLIDAY_VIEWER_ROLES = (
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "employee",
+    "team_leader",
+    "reporting_officer",
+    "manager",
+    "ro",
 )
 
 FULL_TENANT_REPORT_ROLES = {
@@ -162,6 +173,37 @@ def current_user_roles():
     role = normalize_role(g.current_user.get("role"))
 
     return {role} if role else set()
+
+def current_employee_state(db):
+    user = getattr(g, "current_user", {}) or {}
+    user_id = str(user.get("_id") or "")
+    tenant_id = current_tenant_id()
+
+    if not user_id:
+        return DEFAULT_STATE
+
+    employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not employee:
+        employee = db.employees.find_one({
+            "user_id": user_id,
+            "is_deleted": {"$ne": True},
+        })
+
+    if not employee:
+        return normalize_state(user.get("state") or DEFAULT_STATE)
+
+    return normalize_state(
+        employee.get("state")
+        or employee.get("office_state")
+        or employee.get("current_state")
+        or user.get("state")
+        or DEFAULT_STATE
+    )
 
 
 def has_role(*allowed_roles):
@@ -1236,7 +1278,7 @@ def verify(attendance_id):
 
 
 @attendance_bp.get("/holidays")
-@roles_required(*HOLIDAY_MANAGER_ROLES)
+@roles_required(*HOLIDAY_VIEWER_ROLES)
 def list_holidays():
     db = get_db()
     roles = current_user_roles()
@@ -1246,18 +1288,39 @@ def list_holidays():
     date_to = normalize_text(request.args.get("date_to"))
     tenant_arg = normalize_text(request.args.get("tenant_id"))
 
+    manager_roles = {
+        "admin",
+        "hr_admin",
+        "hr_manager",
+        "hr",
+        "super_admin",
+    }
+
+    can_manage_holidays = bool(roles.intersection(manager_roles))
+    requested_state = normalize_state(state_arg) if state_arg else ""
+
     q = {
         "status": {"$ne": "inactive"},
         "is_deleted": {"$ne": True},
     }
 
+    # Tenant isolation:
+    # Super Admin can filter tenant by tenant_id.
+    # All tenant users, including employees, can only see their own tenant.
     if "super_admin" in roles and tenant_arg:
         q["tenant_id"] = tenant_arg
     else:
         q["tenant_id"] = current_tenant_id()
 
-    if state_arg:
-        q["state"] = normalize_state(state_arg)
+    # Employee default view:
+    # If employee opens holiday page without selecting state,
+    # show only their own state holidays.
+    # If employee selects another state from filter,
+    # allow viewing that state within same tenant only.
+    if requested_state:
+        q["state"] = requested_state
+    elif not can_manage_holidays:
+        q["state"] = current_employee_state(db)
 
     if date_from or date_to:
         q["date"] = {}
@@ -1271,12 +1334,14 @@ def list_holidays():
     items = list(
         db.holiday_calendar
         .find(q)
-        .sort("date", 1)
+        .sort([("date", 1), ("state", 1)])
         .limit(500)
     )
 
     return jsonify({
         "states": SUPPORTED_HOLIDAY_STATES,
+        "default_state": current_employee_state(db),
+        "can_manage": can_manage_holidays,
         "items": clean_doc(items),
     })
 

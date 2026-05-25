@@ -11,6 +11,7 @@ import Attendance from './pages/Attendance';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
+import HolidayCalendar from './pages/HolidayCalendar';
 import Employees from './pages/Employees';
 import Departments from './pages/Departments';
 import Designations from './pages/Designations';
@@ -20,12 +21,14 @@ import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 import Projects from './pages/Projects';
 import Policies from './pages/Policies.jsx';
+import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
 import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
 import Grievance from './pages/Grievance';
 import ITSupport from './pages/ITSupport';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
+
 
 import './styles.css';
 
@@ -485,8 +488,16 @@ function PageRouter({ page, user, setPage }) {
     return <Reports setPage={setPage} user={safeUser} />;
   }
 
+  if (normalizedPage === 'notifications') {
+    return <Notifications setPage={setPage} user={safeUser} />;
+  }
+
   if (normalizedPage === 'application_status') {
     return <ApplicationStatus setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'holiday_calendar') {
+    return <HolidayCalendar setPage={setPage} user={safeUser} />;
   }
 
   return <ModuleCrud collection={normalizedPage} setPage={setPage} user={safeUser} />;

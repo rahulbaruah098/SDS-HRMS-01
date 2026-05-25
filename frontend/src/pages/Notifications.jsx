@@ -14,6 +14,24 @@ const EMPTY_FORM = {
   priority: 'normal',
   notification_type: 'general',
   show_popup: true,
+
+  target_scope: 'tenant',
+  target_tenant_id: '',
+  department_id: '',
+  team_owner_id: '',
+  team_type: '',
+  user_ids: [],
+};
+
+const EMPTY_OPTIONS = {
+  can_create: false,
+  can_create_global: false,
+  current_tenant_id: '',
+  tenants: [],
+  users: [],
+  departments: [],
+  teams: [],
+  target_options: [],
 };
 
 function formatDate(value) {
@@ -57,6 +75,33 @@ function priorityClass(priority = '') {
   }
 
   return 'notif-pill-blue';
+}
+
+function optionValue(item = {}) {
+  return String(item.value || item._id || item.id || item.tenant_id || '').trim();
+}
+
+function optionLabel(item = {}) {
+  return String(
+    item.label ||
+    item.name ||
+    item.full_name ||
+    item.employee_name ||
+    item.email ||
+    item.company_name ||
+    item.tenant_name ||
+    item.tenant_id ||
+    item.value ||
+    'Option',
+  ).trim();
+}
+
+function userOptionLabel(user = {}) {
+  const name = user.name || user.full_name || user.employee_name || user.email || 'Employee';
+  const dept = user.department_name || user.department || '';
+  const email = user.email || user.official_email || '';
+
+  return [name, dept, email].filter(Boolean).join(' • ');
 }
 
 function TextInput({
@@ -142,6 +187,56 @@ function SelectInput({
   );
 }
 
+
+function MultiSelectInput({
+  label,
+  name,
+  value = [],
+  onChange,
+  options = [],
+  required = false,
+  helper = '',
+}) {
+  const selectedValues = Array.isArray(value) ? value : [];
+
+  return (
+    <label className="notif-field notif-field-full">
+      <span>
+        {label}
+        {required ? <b>*</b> : null}
+      </span>
+
+      <select
+        name={name}
+        value={selectedValues}
+        multiple
+        onChange={(event) => {
+          const nextValues = Array.from(event.target.selectedOptions).map(
+            (option) => option.value,
+          );
+
+          onChange({
+            target: {
+              name,
+              value: nextValues,
+              type: 'multiselect',
+            },
+          });
+        }}
+        required={required}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+
+      {helper ? <small className="notif-helper-text">{helper}</small> : null}
+    </label>
+  );
+}
+
 function NotificationCard({ item, onMarkRead }) {
   const isUnread = item.read !== true && item.status !== 'read';
 
@@ -202,6 +297,7 @@ export default function Notifications() {
 
   const [items, setItems] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [options, setOptions] = useState(EMPTY_OPTIONS);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -254,6 +350,73 @@ export default function Notifications() {
     };
   }, [items]);
 
+
+  const targetOptions = useMemo(() => {
+    const backendOptions = Array.isArray(options.target_options)
+      ? options.target_options
+      : [];
+
+    if (backendOptions.length) {
+      return backendOptions;
+    }
+
+    return [
+      { value: 'tenant', label: 'All Employees of This Tenant' },
+      { value: 'department', label: 'Specific Department' },
+      { value: 'team', label: 'Specific Team' },
+      { value: 'selected_users', label: 'Selected Employees' },
+      ...(options.can_create_global
+        ? [
+            { value: 'all_tenants', label: 'All Tenants' },
+            { value: 'selected_tenant', label: 'Selected Tenant' },
+          ]
+        : []),
+    ];
+  }, [options]);
+
+  const tenantOptions = useMemo(() => {
+    return (options.tenants || [])
+      .map((tenant) => ({
+        value: tenant.tenant_id || tenant._id || tenant.id,
+        label: tenant.name || tenant.company_name || tenant.tenant_name || tenant.tenant_id,
+      }))
+      .filter((item) => item.value);
+  }, [options.tenants]);
+
+  const departmentOptions = useMemo(() => {
+    return (options.departments || [])
+      .map((department) => ({
+        value: optionValue(department),
+        label: optionLabel(department),
+      }))
+      .filter((item) => item.value);
+  }, [options.departments]);
+
+  const teamOptions = useMemo(() => {
+    return (options.teams || [])
+      .map((team) => ({
+        value: optionValue(team),
+        label: [
+          optionLabel(team),
+          team.department ? `Department: ${team.department}` : '',
+          team.is_reporting_officer ? 'RO' : '',
+          team.is_team_leader ? 'TL' : '',
+        ]
+          .filter(Boolean)
+          .join(' • '),
+      }))
+      .filter((item) => item.value);
+  }, [options.teams]);
+
+  const userOptions = useMemo(() => {
+    return (options.users || [])
+      .map((targetUser) => ({
+        value: targetUser._id || targetUser.id || targetUser.employee_id || targetUser.email,
+        label: userOptionLabel(targetUser),
+      }))
+      .filter((item) => item.value);
+  }, [options.users]);
+
   const showMessage = (type, text) => {
     setMessage({ type, text });
 
@@ -286,10 +449,41 @@ export default function Notifications() {
     }
   };
 
+  const loadNotificationOptions = async () => {
+    if (!canCreate) {
+      setOptions(EMPTY_OPTIONS);
+      return;
+    }
+
+    try {
+      const data = await api('/notifications/options');
+
+      setOptions({
+        ...EMPTY_OPTIONS,
+        ...data,
+        tenants: data.tenants || [],
+        users: data.users || [],
+        departments: data.departments || [],
+        teams: data.teams || [],
+        target_options: data.target_options || [],
+      });
+    } catch (error) {
+      setOptions(EMPTY_OPTIONS);
+      showMessage('error', error.message || 'Unable to load notification target options.');
+    }
+  };
+
+
   useEffect(() => {
     loadNotifications();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.unread, filters.limit]);
+
+
+  useEffect(() => {
+    loadNotificationOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canCreate]);
 
   const handleFilterChange = (event) => {
     const { name, value } = event.target;
@@ -303,14 +497,30 @@ export default function Notifications() {
   const handleFormChange = (event) => {
     const { name, value, type, checked } = event.target;
 
-    setForm((previous) => ({
-      ...previous,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
+    setForm((previous) => {
+      const nextValue = type === 'checkbox' ? checked : value;
+
+      if (name === 'target_scope') {
+        return {
+          ...previous,
+          target_scope: nextValue,
+          target_tenant_id: '',
+          department_id: '',
+          team_owner_id: '',
+          team_type: '',
+          user_ids: [],
+        };
+      }
+
+      return {
+        ...previous,
+        [name]: nextValue,
+      };
+    });
   };
 
   const resetForm = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM });
   };
 
   const handleCreateNotification = async (event) => {
@@ -336,9 +546,21 @@ export default function Notifications() {
       priority: form.priority || 'normal',
       notification_type: form.notification_type || 'general',
       show_popup: Boolean(form.show_popup),
-      target: 'tenant',
-      target_scope: 'tenant',
-      audience: 'tenant',
+
+      target: form.target_scope || 'tenant',
+      target_scope: form.target_scope || 'tenant',
+      audience: form.target_scope || 'tenant',
+
+      target_tenant_id: form.target_tenant_id || '',
+      department_id: form.department_id || '',
+      department_ids: form.department_id ? [form.department_id] : [],
+
+      team_owner_id: form.team_owner_id || '',
+      team_owner_ids: form.team_owner_id ? [form.team_owner_id] : [],
+      team_type: form.team_type || '',
+
+      user_ids: Array.isArray(form.user_ids) ? form.user_ids : [],
+      selected_user_ids: Array.isArray(form.user_ids) ? form.user_ids : [],
     };
 
     setSaving(true);
@@ -351,7 +573,10 @@ export default function Notifications() {
 
       resetForm();
       await loadNotifications();
-      showMessage('success', 'Notification sent to this tenant successfully.');
+
+      window.dispatchEvent(new Event('sds_hrms_notification_created'));
+
+      showMessage('success', 'Notification sent successfully.');
     } catch (error) {
       showMessage('error', error.message || 'Unable to create notification.');
     } finally {
@@ -667,6 +892,17 @@ export default function Notifications() {
           min-height: 120px;
         }
 
+                .notif-field select[multiple] {
+          min-height: 180px;
+        }
+
+        .notif-helper-text {
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 800;
+          line-height: 1.4;
+        }
+
         .notif-field input:focus,
         .notif-field select:focus,
         .notif-field textarea:focus,
@@ -967,9 +1203,10 @@ export default function Notifications() {
         <div className="notif-form-card">
           <div className="notif-section-heading">
             <div>
-              <h3>Create Tenant Notification</h3>
+              <h3>Create Notification</h3>
               <p>
-                This notification will be sent only to active users of your own tenant.
+                Send notifications to all employees, one department, one team or selected employees
+                based on your role access.
               </p>
             </div>
           </div>
@@ -1001,6 +1238,81 @@ export default function Notifications() {
                   onChange={handleFormChange}
                   options={notificationTypeOptions}
                 />
+
+                <SelectInput
+                  label="Send To"
+                  name="target_scope"
+                  value={form.target_scope}
+                  onChange={handleFormChange}
+                  options={targetOptions}
+                />
+
+                {form.target_scope === 'selected_tenant' ? (
+                  <SelectInput
+                    label="Select Tenant"
+                    name="target_tenant_id"
+                    value={form.target_tenant_id}
+                    onChange={handleFormChange}
+                    options={[
+                      { value: '', label: 'Select tenant' },
+                      ...tenantOptions,
+                    ]}
+                    required
+                  />
+                ) : null}
+
+                {form.target_scope === 'department' ? (
+                  <SelectInput
+                    label="Select Department"
+                    name="department_id"
+                    value={form.department_id}
+                    onChange={handleFormChange}
+                    options={[
+                      { value: '', label: 'Select department' },
+                      ...departmentOptions,
+                    ]}
+                    required
+                  />
+                ) : null}
+
+                {form.target_scope === 'team' ? (
+                  <>
+                    <SelectInput
+                      label="Team Type"
+                      name="team_type"
+                      value={form.team_type}
+                      onChange={handleFormChange}
+                      options={[
+                        { value: '', label: 'Auto / My Mapped Team' },
+                        { value: 'team_leader', label: 'Team Leader Team' },
+                        { value: 'reporting_officer', label: 'Reporting Officer Team' },
+                      ]}
+                    />
+
+                    <SelectInput
+                      label="Select Team Owner"
+                      name="team_owner_id"
+                      value={form.team_owner_id}
+                      onChange={handleFormChange}
+                      options={[
+                        { value: '', label: 'My mapped team / auto' },
+                        ...teamOptions,
+                      ]}
+                    />
+                  </>
+                ) : null}
+
+                {form.target_scope === 'selected_users' ? (
+                  <MultiSelectInput
+                    label="Select Employees"
+                    name="user_ids"
+                    value={form.user_ids}
+                    onChange={handleFormChange}
+                    options={userOptions}
+                    required
+                    helper="Hold Ctrl and click to select multiple employees."
+                  />
+                ) : null}
 
                 <TextAreaInput
                   label="Message"

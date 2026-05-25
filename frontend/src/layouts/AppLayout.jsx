@@ -759,13 +759,50 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   }, [setUser]);
 
   useEffect(() => {
-    loadNotifications({ silent: true, showPopup: true });
+    let cancelled = false;
+
+    async function refreshNotificationsFast() {
+      if (cancelled) {
+        return;
+      }
+
+      await loadNotifications({
+        silent: true,
+        showPopup: true,
+      });
+    }
+
+    refreshNotificationsFast();
 
     const interval = window.setInterval(() => {
-      loadNotifications({ silent: true, showPopup: true });
-    }, 30000);
+      refreshNotificationsFast();
+    }, 8000);
 
-    return () => window.clearInterval(interval);
+    function handleNotificationCreated() {
+      refreshNotificationsFast();
+    }
+
+    function handleWindowFocus() {
+      refreshNotificationsFast();
+    }
+
+    function handleVisibilityChange() {
+      if (!document.hidden) {
+        refreshNotificationsFast();
+      }
+    }
+
+    window.addEventListener('sds_hrms_notification_created', handleNotificationCreated);
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('sds_hrms_notification_created', handleNotificationCreated);
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeUser?._id, safeUser?.email]);
 
