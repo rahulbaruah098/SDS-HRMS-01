@@ -2651,6 +2651,311 @@ def enrich_items(collection, items):
     return items
 
 
+
+# --------------------------------------------------------------------------
+# Employee Directory API
+# --------------------------------------------------------------------------
+# Tenant-wide public employee contact directory.
+# Every logged-in user can view active employees of their own tenant only.
+# Resigned/left/terminated/alumni employees are automatically hidden.
+# Only safe contact fields are exposed.
+
+DIRECTORY_SEARCH_FIELDS = [
+    "name",
+    "employee_name",
+    "full_name",
+    "designation",
+    "designation_name",
+    "title",
+    "state",
+    "office_state",
+    "work_state",
+    "current_state",
+    "phone",
+    "mobile",
+    "contact_number",
+    "phone_number",
+    "email",
+    "official_email",
+    "work_email",
+]
+
+
+def directory_employee_name(employee):
+    return (
+        normalize_text(employee.get("name"))
+        or normalize_text(employee.get("employee_name"))
+        or normalize_text(employee.get("full_name"))
+        or normalize_text(employee.get("email"))
+        or "Employee"
+    )
+
+
+def directory_employee_designation(employee):
+    return (
+        normalize_text(employee.get("designation"))
+        or normalize_text(employee.get("designation_name"))
+        or normalize_text(employee.get("title"))
+        or normalize_text(employee.get("position"))
+    )
+
+def directory_employee_department(employee):
+    return (
+        normalize_text(employee.get("department"))
+        or normalize_text(employee.get("department_name"))
+        or normalize_text(employee.get("dept"))
+        or normalize_text(employee.get("dept_name"))
+    )
+
+
+def directory_employee_state(employee):
+    return (
+        normalize_text(employee.get("state"))
+        or normalize_text(employee.get("office_state"))
+        or normalize_text(employee.get("work_state"))
+        or normalize_text(employee.get("current_state"))
+    )
+
+
+def directory_employee_phone(employee):
+    return (
+        normalize_text(employee.get("phone"))
+        or normalize_text(employee.get("mobile"))
+        or normalize_text(employee.get("contact_number"))
+        or normalize_text(employee.get("phone_number"))
+    )
+
+
+def directory_employee_email(employee):
+    return normalize_email(
+        employee.get("email")
+        or employee.get("official_email")
+        or employee.get("work_email")
+    )
+
+
+def directory_employee_photo(employee):
+    return (
+        safe_employee_avatar_value(employee.get("avatar"))
+        or safe_employee_avatar_value(employee.get("profile_photo"))
+        or safe_employee_avatar_value(employee.get("profile_picture"))
+        or safe_employee_avatar_value(employee.get("photo"))
+        or safe_employee_avatar_value(employee.get("image"))
+        or safe_employee_avatar_value(employee.get("picture"))
+        or ""
+    )
+
+
+def directory_search_query(search_text):
+    search_text = normalize_text(search_text)
+
+    if not search_text:
+        return {}
+
+    regex = re.compile(re.escape(search_text), re.IGNORECASE)
+
+    return {
+        "$or": [
+            {field: regex}
+            for field in DIRECTORY_SEARCH_FIELDS
+        ]
+    }
+
+
+def directory_field_regex(value):
+    value = normalize_text(value)
+
+    if not value:
+        return None
+
+    return re.compile(re.escape(value), re.IGNORECASE)
+
+
+def directory_item_matches_filter(item, key, value):
+    value = normalize_text(value).lower()
+
+    if not value:
+        return True
+
+    return value in normalize_text(item.get(key)).lower()
+
+
+@crud_bp.get("/employee-directory")
+@current_user_required
+def employee_directory():
+    db = get_db()
+
+    search_text = normalize_text(
+        request.args.get("q")
+        or request.args.get("search")
+    )
+
+    name_filter = normalize_text(request.args.get("name"))
+    designation_filter = normalize_text(request.args.get("designation"))
+    state_filter = normalize_text(request.args.get("state"))
+    phone_filter = normalize_text(request.args.get("phone"))
+    email_filter = normalize_text(request.args.get("email"))
+
+    try:
+        page = int(request.args.get("page", 1))
+    except Exception:
+        page = 1
+
+    try:
+        limit = int(request.args.get("limit", 200))
+    except Exception:
+        limit = 200
+
+    page = max(page, 1)
+    limit = min(max(limit, 1), 500)
+
+    q = {
+        "tenant_id": current_tenant_id(),
+        "is_deleted": {"$ne": True},
+    }
+
+    # Hide resigned / left / terminated / alumni employees.
+    q = and_query(q, employee_active_query())
+
+    search_q = directory_search_query(search_text)
+
+    if search_q:
+        q = and_query(q, search_q)
+
+    name_regex = directory_field_regex(name_filter)
+    designation_regex = directory_field_regex(designation_filter)
+    state_regex = directory_field_regex(state_filter)
+    phone_regex = directory_field_regex(phone_filter)
+    email_regex = directory_field_regex(email_filter)
+
+    extra_filters = []
+
+    if name_regex:
+        extra_filters.append({
+            "$or": [
+                {"name": name_regex},
+                {"employee_name": name_regex},
+                {"full_name": name_regex},
+            ]
+        })
+
+    if designation_regex:
+        extra_filters.append({
+            "$or": [
+                {"designation": designation_regex},
+                {"designation_name": designation_regex},
+                {"title": designation_regex},
+                {"position": designation_regex},
+            ]
+        })
+
+    if state_regex:
+        extra_filters.append({
+            "$or": [
+                {"state": state_regex},
+                {"office_state": state_regex},
+                {"work_state": state_regex},
+                {"current_state": state_regex},
+            ]
+        })
+
+    if phone_regex:
+        extra_filters.append({
+            "$or": [
+                {"phone": phone_regex},
+                {"mobile": phone_regex},
+                {"contact_number": phone_regex},
+                {"phone_number": phone_regex},
+            ]
+        })
+
+    if email_regex:
+        extra_filters.append({
+            "$or": [
+                {"email": email_regex},
+                {"official_email": email_regex},
+                {"work_email": email_regex},
+            ]
+        })
+
+    for extra_filter in extra_filters:
+        q = and_query(q, extra_filter)
+
+    employees = list(
+        db.employees
+        .find(q)
+        .sort("name", 1)
+        .limit(1000)
+    )
+
+    items = []
+
+    for employee in employees:
+        photo = directory_employee_photo(employee)
+
+        item = {
+            "id": str(employee.get("_id")),
+            "_id": str(employee.get("_id")),
+            "name": directory_employee_name(employee),
+            "designation": directory_employee_designation(employee),
+            "department": directory_employee_department(employee),
+            "department_name": directory_employee_department(employee),
+            "state": directory_employee_state(employee),
+            "phone": directory_employee_phone(employee),
+            "email": directory_employee_email(employee),
+            "avatar": photo,
+            "profile_photo": photo,
+            "profile_picture": photo,
+            "photo": photo,
+        }
+
+        # Final fallback filtering handles data stored under mixed field names.
+        if not directory_item_matches_filter(item, "name", name_filter):
+            continue
+
+        if not directory_item_matches_filter(item, "designation", designation_filter):
+            continue
+
+        if not directory_item_matches_filter(item, "state", state_filter):
+            continue
+
+        if not directory_item_matches_filter(item, "phone", phone_filter):
+            continue
+
+        if not directory_item_matches_filter(item, "email", email_filter):
+            continue
+
+        items.append(item)
+
+    total = len(items)
+    start = (page - 1) * limit
+    end = start + limit
+    paged_items = items[start:end]
+
+    designations = sorted({
+        item.get("designation")
+        for item in items
+        if normalize_text(item.get("designation"))
+    })
+
+    states = sorted({
+        item.get("state")
+        for item in items
+        if normalize_text(item.get("state"))
+    })
+
+    return jsonify({
+        "items": paged_items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "filters": {
+            "designations": designations,
+            "states": states,
+        },
+        "message": "Employee directory loaded successfully",
+    })
+
 @crud_bp.get("/<collection>")
 @current_user_required
 def list_collection(collection):

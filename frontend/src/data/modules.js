@@ -18,6 +18,7 @@ import {
   UserCircle,
   LockKeyhole,
   ClipboardList,
+  ContactRound,
 } from 'lucide-react';
 
 /*
@@ -497,6 +498,13 @@ export const coreModules = [
     Users,
     'Employee Master, Create Employee and Alumni records with DB dropdowns, TL/RO mapping, resignation movement and CSV downloads.',
     HR_ROLES,
+  ],
+  [
+    'employee_directory',
+    'Employee Directory',
+    ContactRound,
+    'Tenant-wise employee contact directory with name, designation, state, phone, email and profile photo.',
+    ALL_COMMON_ROLES,
   ],
   [
     'attendance',

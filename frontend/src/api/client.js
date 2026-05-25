@@ -1489,6 +1489,17 @@ export function getEmployees(params = {}) {
   }));
 }
 
+export function getEmployeeDirectory(params = {}) {
+  return api(`/employee-directory${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizePeopleList(data.items || []),
+    filters: data.filters || {
+      designations: [],
+      states: [],
+    },
+  }));
+}
+
 export function getActiveEmployees(params = {}) {
   return getEmployees({
     ...params,

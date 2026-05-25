@@ -13,6 +13,7 @@ import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
 import HolidayCalendar from './pages/HolidayCalendar';
 import Employees from './pages/Employees';
+import EmployeeDirectory from './pages/EmployeeDirectory';
 import Departments from './pages/Departments';
 import Designations from './pages/Designations';
 import States from './pages/States';
@@ -59,6 +60,13 @@ const PAGE_ALIASES = {
   employee_management: 'employees',
   staff_master: 'employees',
   staff_management: 'employees',
+
+  employee_directory: 'employee_directory',
+  employee_contact_directory: 'employee_directory',
+  employee_contacts: 'employee_directory',
+  staff_directory: 'employee_directory',
+  staff_contacts: 'employee_directory',
+  directory: 'employee_directory',
 
   department: 'departments',
   departments: 'departments',
@@ -438,6 +446,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'employees') {
     return <Employees setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'employee_directory') {
+    return <EmployeeDirectory setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'departments') {
