@@ -11,31 +11,31 @@ const demoLogins = [
   {
     label: 'SDS Admin',
     email: 'admin@sdshr.in',
-    password: 'Admin@123',
+    password: '12345678',
     tone: 'Admin',
   },
   {
     label: 'HR',
     email: 'hr@sdshr.in',
-    password: 'Hr@123',
+    password: '12345678',
     tone: 'People',
   },
   {
     label: 'Finance',
     email: 'finance@sdshr.in',
-    password: 'Finance@123',
+    password: '12345678',
     tone: 'Payroll',
   },
   {
     label: 'Manager',
     email: 'manager@sdshr.in',
-    password: 'Manager@123',
+    password: '12345678',
     tone: 'Team',
   },
   {
     label: 'Employee',
     email: 'employee@sdshr.in',
-    password: 'Employee@123',
+    password: '12345678',
     tone: 'Self',
   },
   {
