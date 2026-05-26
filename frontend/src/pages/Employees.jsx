@@ -6,6 +6,7 @@ import {
   downloadEmployeeCsv,
   filterEmployees,
   getActiveEmployees,
+  getActiveOrganisations,
   getAlumniEmployees,
   getEmployeeFormOptions,
   getReportingOfficerOptions,
@@ -48,6 +49,13 @@ const EMPTY_EMPLOYEE_FORM = {
   password_mode: 'default',
 
   role: 'employee',
+
+  organisation_id: '',
+  organisation: '',
+  organisation_code: '',
+  organization_id: '',
+  organization: '',
+  organization_code: '',
 
   designation: 'Employee',
   department: 'HR & Admin',
@@ -256,6 +264,8 @@ function optionText(option = {}) {
     option.label ||
       option.name ||
       option.title ||
+      option.organisation_name ||
+      option.organization_name ||
       option.department_name ||
       option.designation_name ||
       option.state_name ||
@@ -277,6 +287,37 @@ function masterOptions(items = [], placeholder = 'Choose One') {
   });
 
   return options;
+}
+
+
+function organisationOptions(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+
+  return [
+    { value: '', label: 'Choose Organisation / Entity' },
+    ...rows.map((item) => {
+      const id = item.id || item._id || '';
+      const name =
+        item.name ||
+        item.organisation_name ||
+        item.organization_name ||
+        '';
+
+      const code =
+        item.code ||
+        item.organisation_code ||
+        item.organization_code ||
+        '';
+
+      return {
+        value: id || code || name,
+        label: code ? `${name} (${code})` : name,
+        name,
+        code,
+        id,
+      };
+    }).filter((item) => item.label && item.value),
+  ];
 }
 
 function employeeOptionLabel(employee = {}) {
@@ -331,6 +372,12 @@ function normalizeEmployeeForForm(employee = {}) {
   merged.employee_id = merged.employee_id || merged.employee_code || merged.emp_code || '';
   merged.emp_code = merged.emp_code || merged.employee_code || merged.employee_id || '';
   merged.employee_code = merged.employee_code || merged.emp_code || merged.employee_id || '';
+  merged.organisation_id = merged.organisation_id || merged.organization_id || '';
+  merged.organization_id = merged.organization_id || merged.organisation_id || '';
+  merged.organisation = merged.organisation || merged.organization || '';
+  merged.organization = merged.organization || merged.organisation || '';
+  merged.organisation_code = merged.organisation_code || merged.organization_code || '';
+  merged.organization_code = merged.organization_code || merged.organisation_code || '';
   merged.joining_date = normalizeDateValue(merged.joining_date || merged.date_of_joining);
   merged.date_of_joining = normalizeDateValue(merged.date_of_joining || merged.joining_date);
   merged.date_of_birth = normalizeDateValue(merged.date_of_birth || merged.dob);
@@ -362,6 +409,12 @@ function employeePayloadFromForm(form = {}, extra = {}) {
   payload.employee_code = payload.employee_code || payload.emp_code || payload.employee_id || '';
   payload.emp_code = payload.emp_code || payload.employee_code || payload.employee_id || '';
   payload.employee_id = payload.employee_id || payload.emp_code || payload.employee_code || '';
+  payload.organisation_id = payload.organisation_id || payload.organization_id || '';
+  payload.organization_id = payload.organization_id || payload.organisation_id || '';
+  payload.organisation = payload.organisation || payload.organization || '';
+  payload.organization = payload.organization || payload.organisation || '';
+  payload.organisation_code = payload.organisation_code || payload.organization_code || '';
+  payload.organization_code = payload.organization_code || payload.organisation_code || '';
   payload.joining_date = payload.joining_date || payload.date_of_joining || '';
   payload.date_of_joining = payload.date_of_joining || payload.joining_date || '';
   payload.date_of_birth = payload.date_of_birth || payload.dob || '';
@@ -536,6 +589,7 @@ function EmployeeForm({
   loading,
   isAlumniForm = false,
   isEdit = false,
+  organisations = [],
   departments = [],
   designations = [],
   states = [],
@@ -546,6 +600,7 @@ function EmployeeForm({
   reportingOfficerSearch,
   setReportingOfficerSearch,
 }) {
+  const entityOptions = organisationOptions(organisations);
   const departmentOptions = masterOptions(departments, 'Choose Department');
   const designationOptions = masterOptions(designations, 'Choose Designation');
   const stateOptions = masterOptions(states, 'Choose State');
@@ -593,6 +648,27 @@ function EmployeeForm({
       if (name === 'dob') next.date_of_birth = value;
       if (name === 'last_working_date') next.resignation_date = previous.resignation_date || value;
       if (name === 'resignation_date') next.last_working_date = previous.last_working_date || value;
+      if (name === 'organisation_id') {
+        const selected = entityOptions.find((option) => option.value === value);
+
+        next.organisation_id = value;
+        next.organization_id = value;
+        next.organisation = selected?.name || '';
+        next.organization = selected?.name || '';
+        next.organisation_code = selected?.code || '';
+        next.organization_code = selected?.code || '';
+      }
+
+      if (name === 'organisation_id') {
+        const selected = entityOptions.find((option) => option.value === value);
+
+        next.organisation_id = value;
+        next.organization_id = value;
+        next.organisation = selected?.name || '';
+        next.organization = selected?.name || '';
+        next.organisation_code = selected?.code || '';
+        next.organization_code = selected?.code || '';
+      }
 
       if (name === 'is_team_leader') next.is_team_leader = value === 'true';
       if (name === 'is_reporting_officer') next.is_reporting_officer = value === 'true';
@@ -634,6 +710,13 @@ function EmployeeForm({
 
       <FormSection title="Job & Organization Details">
         <SelectInput label="Role" name="role" value={form.role} onChange={handleChange} options={ROLE_OPTIONS} required />
+        <SelectInput
+          label="Organisation / Entity"
+          name="organisation_id"
+          value={form.organisation_id}
+          onChange={handleChange}
+          options={entityOptions}
+        />
         <SelectInput label="Designation" name="designation" value={form.designation} onChange={handleChange} options={designationOptions} required />
         <SelectInput label="Department" name="department" value={form.department} onChange={handleChange} options={departmentOptions} required />
         <TextInput label="Shift" name="shift" value={form.shift} onChange={handleChange} placeholder="General" required />
@@ -758,7 +841,9 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
           <tr>
             <th>Employee</th>
             <th>Code</th>
+            <th>Organisation</th>
             <th>Department</th>
+            <th>Designation</th>
             <th>Designation</th>
             <th>Contact</th>
             <th>Joining</th>
@@ -784,6 +869,10 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
                 <td>
                   <strong>{displayValue(employee.emp_code || employee.employee_id)}</strong>
                   <small>{displayValue(employee.employee_id, '')}</small>
+                </td>
+                <td>
+                  <strong>{displayValue(employee.organisation_code || employee.organization_code)}</strong>
+                  <small>{displayValue(employee.organisation || employee.organization, '')}</small>
                 </td>
                 <td>{displayValue(employee.department)}</td>
                 <td>{displayValue(employee.designation)}</td>
@@ -878,6 +967,7 @@ export default function Employees() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
+  const [organisations, setOrganisations] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [designations, setDesignations] = useState([]);
   const [states, setStates] = useState([]);
@@ -923,12 +1013,14 @@ export default function Employees() {
 
   const loadFormOptions = async () => {
     try {
-      const [masterData, teamLeaderData, reportingOfficerData] = await Promise.all([
+      const [masterData, organisationData, teamLeaderData, reportingOfficerData] = await Promise.all([
         getEmployeeFormOptions(),
+        getActiveOrganisations({ limit: 500 }),
         getTeamLeaderOptions({ limit: 500 }),
         getReportingOfficerOptions({ limit: 500 }),
       ]);
 
+      setOrganisations(organisationData.items || []);
       setDepartments(masterData.departments || []);
       setDesignations(masterData.designations || []);
       setStates(masterData.states || []);
@@ -1185,6 +1277,7 @@ export default function Employees() {
           onSubmit={handleCreateEmployee}
           submitLabel="Create Employee"
           loading={saving}
+          organisations={organisations}
           departments={departments}
           designations={designations}
           states={states}
@@ -1245,6 +1338,7 @@ export default function Employees() {
             submitLabel="Add To Alumni"
             loading={saving}
             isAlumniForm
+            organisations={organisations}
             departments={departments}
             designations={designations}
             states={states}
@@ -1270,6 +1364,7 @@ export default function Employees() {
               submitLabel="Update Employee"
               loading={saving}
               isEdit
+              organisations={organisations}
               departments={departments}
               designations={designations}
               states={states}

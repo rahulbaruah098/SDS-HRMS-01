@@ -138,6 +138,18 @@ const EMPLOYEE_MASTER_TABLE_FIELDS = [
   'is_it_support_member',
 ];
 
+const ORGANISATION_MASTER_TABLE_FIELDS = [
+  'name',
+  'code',
+  'status',
+];
+
+const ORGANISATION_MASTER_FORM_FIELDS = [
+  'name',
+  'code',
+  'status',
+];
+
 const EMPLOYEE_READONLY_SNAPSHOT_FIELDS = new Set([
   'employee_name',
   'department',
@@ -678,9 +690,22 @@ export default function ModuleCrud({
   requiredFields = [],
   defaultValues = null,
 }) {
-  const moduleInfo = allModules.find((m) => m[0] === collection);
-  const template = defaultValues ? { ...(templates[collection] || {}), ...defaultValues } : (templates[collection] || { title: '', status: 'active' });
-  const hiddenFieldSet = useMemo(() => new Set(hiddenFields || []), [hiddenFields]);
+const moduleInfo = allModules.find((m) => m[0] === collection);
+
+const baseTemplate =
+  collection === 'organisations'
+    ? {
+        name: '',
+        code: '',
+        status: 'active',
+      }
+    : (templates[collection] || { title: '', status: 'active' });
+
+const template = defaultValues
+  ? { ...baseTemplate, ...defaultValues }
+  : baseTemplate;
+
+const hiddenFieldSet = useMemo(() => new Set(hiddenFields || []), [hiddenFields]);
   const requiredFieldSet = useMemo(() => new Set(requiredFields || []), [requiredFields]);
 
   const [rows, setRows] = useState([]);
@@ -715,35 +740,43 @@ export default function ModuleCrud({
     [projectOptions],
   );
 
-  const createFields = useMemo(() => {
-    if (collection === 'leave_requests') {
-      return SIMPLE_LEAVE_CREATE_FIELDS;
-    }
+const createFields = useMemo(() => {
+  if (collection === 'organisations') {
+    return ORGANISATION_MASTER_FORM_FIELDS;
+  }
 
-    if (collection === 'leave_balances') {
-      return LEAVE_BALANCE_CREATE_FIELDS;
-    }
+  if (collection === 'leave_requests') {
+    return SIMPLE_LEAVE_CREATE_FIELDS;
+  }
 
-    return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
-  }, [collection, template, hiddenFieldSet]);
+  if (collection === 'leave_balances') {
+    return LEAVE_BALANCE_CREATE_FIELDS;
+  }
 
-  const editFields = useMemo(() => {
-    if (collection === 'employees') {
-      return Object.keys(template).filter(
-        (key) => key !== 'password' && key !== 'password_mode',
-      );
-    }
+  return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
+}, [collection, template, hiddenFieldSet]);
 
-    if (collection === 'leave_requests') {
-      return SIMPLE_LEAVE_EDIT_FIELDS;
-    }
+const editFields = useMemo(() => {
+  if (collection === 'organisations') {
+    return ORGANISATION_MASTER_FORM_FIELDS;
+  }
 
-    if (collection === 'leave_balances') {
-      return LEAVE_BALANCE_CREATE_FIELDS;
-    }
+  if (collection === 'employees') {
+    return Object.keys(template).filter(
+      (key) => key !== 'password' && key !== 'password_mode',
+    );
+  }
 
-    return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
-  }, [collection, template, hiddenFieldSet]);
+  if (collection === 'leave_requests') {
+    return SIMPLE_LEAVE_EDIT_FIELDS;
+  }
+
+  if (collection === 'leave_balances') {
+    return LEAVE_BALANCE_CREATE_FIELDS;
+  }
+
+  return Object.keys(template).filter((key) => !hiddenFieldSet.has(key));
+}, [collection, template, hiddenFieldSet]);
 
   function buildParams(nextQ = q, nextTenant = tenant) {
     const params = {};
@@ -967,15 +1000,17 @@ export default function ModuleCrud({
       }
 
       resetForm();
-      setMessage(
-        collection === 'leave_balances'
-          ? 'Casual Leave and Earned Leave balances saved successfully'
-          : collection === 'leave_requests'
-            ? 'Leave request submitted successfully'
-            : collection === 'employees'
-              ? 'Employee and login account created successfully'
-              : 'Record created successfully',
-      );
+setMessage(
+  collection === 'leave_balances'
+    ? 'Casual Leave and Earned Leave balances saved successfully'
+    : collection === 'leave_requests'
+      ? 'Leave request submitted successfully'
+      : collection === 'employees'
+        ? 'Employee and login account created successfully'
+        : collection === 'organisations'
+          ? 'Organisation / Entity created successfully'
+          : 'Record created successfully',
+);
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
@@ -1107,13 +1142,15 @@ export default function ModuleCrud({
       });
 
       setEdit(null);
-      setMessage(
-        collection === 'leave_balances'
-          ? 'Casual Leave and Earned Leave balances updated successfully'
-          : collection === 'employees'
-            ? 'Employee and login account updated successfully'
-            : 'Record updated successfully',
-      );
+setMessage(
+  collection === 'leave_balances'
+    ? 'Casual Leave and Earned Leave balances updated successfully'
+    : collection === 'employees'
+      ? 'Employee and login account updated successfully'
+      : collection === 'organisations'
+        ? 'Organisation / Entity updated successfully'
+        : 'Record updated successfully',
+);
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
@@ -1466,6 +1503,7 @@ export default function ModuleCrud({
 
     const requiredFields = [
       'name',
+      'code',
       'email',
       'phone',
       'country',
@@ -1497,10 +1535,12 @@ export default function ModuleCrud({
 
     let labelText = titleCase(label);
 
-    const customLabels = {
-      is_it_support_head: 'IT Support Head',
-      is_it_support_member: 'IT Support Member',
-    };
+  const customLabels = {
+    is_it_support_head: 'IT Support Head',
+    is_it_support_member: 'IT Support Member',
+    name: collection === 'organisations' ? 'Organisation Name' : 'Name',
+    code: collection === 'organisations' ? 'Organisation Code' : 'Code',
+  };
 
     if (customLabels[key]) {
       labelText = customLabels[key];
@@ -1739,23 +1779,23 @@ export default function ModuleCrud({
       );
     }
 
-    if (
-      ['states', 'departments', 'designations'].includes(collection) &&
-      key === 'status'
-    ) {
-      return (
-        <label key={key}>
-          {finalLabel}
-          <select
-            value={state[key] ?? 'active'}
-            onChange={(event) => setState({ ...state, [key]: event.target.value })}
-          >
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-        </label>
-      );
-    }
+if (
+  ['organisations', 'states', 'departments', 'designations'].includes(collection) &&
+  key === 'status'
+) {
+  return (
+    <label key={key}>
+      {finalLabel}
+      <select
+        value={state[key] ?? 'active'}
+        onChange={(event) => setState({ ...state, [key]: event.target.value })}
+      >
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+      </select>
+    </label>
+  );
+}
 
     if (
       (collection === 'holiday_calendar' || collection === 'leave_balances') &&
@@ -2131,6 +2171,33 @@ export default function ModuleCrud({
               if (key === 'department_name') nextState.name = value;
             }
 
+            if (collection === 'organisations') {
+              if (key === 'name') {
+                nextState.organisation_name = value;
+                nextState.organization_name = value;
+              }
+
+              if (key === 'organisation_name' || key === 'organization_name') {
+                nextState.name = value;
+                nextState.organisation_name = value;
+                nextState.organization_name = value;
+              }
+
+              if (key === 'code') {
+                const upperCode = value.toUpperCase();
+                nextState.code = upperCode;
+                nextState.organisation_code = upperCode;
+                nextState.organization_code = upperCode;
+              }
+
+              if (key === 'organisation_code' || key === 'organization_code') {
+                const upperCode = value.toUpperCase();
+                nextState.code = upperCode;
+                nextState.organisation_code = upperCode;
+                nextState.organization_code = upperCode;
+              }
+            }
+
             if (collection === 'designations') {
               if (key === 'name') {
                 nextState.title = value;
@@ -2153,10 +2220,14 @@ export default function ModuleCrud({
     );
   }
 
-  function visibleTableKeys(row) {
-    if (collection === 'employees') {
-      return EMPLOYEE_MASTER_TABLE_FIELDS;
-    }
+function visibleTableKeys(row) {
+  if (collection === 'employees') {
+    return EMPLOYEE_MASTER_TABLE_FIELDS;
+  }
+
+  if (collection === 'organisations') {
+    return ORGANISATION_MASTER_TABLE_FIELDS;
+  }
 
     if (collection === 'leave_requests') {
       return [
@@ -2194,7 +2265,8 @@ export default function ModuleCrud({
   function tableHeaderLabel(key) {
     const labels = {
       profile_photo: 'Photo',
-      name: 'Employee Name',
+      name: collection === 'organisations' ? 'Organisation Name' : 'Employee Name',
+      code: collection === 'organisations' ? 'Organisation Code' : 'Code',
       employee_id: 'Emp ID',
       designation: 'Designation',
       department: 'Department',
@@ -2223,14 +2295,23 @@ export default function ModuleCrud({
       return <EmployeeAvatar employee={row} size="sm" />;
     }
 
-    if (key === 'name') {
-      return (
-        <div className="mc-employee-name-cell">
-          <strong>{displayValue(row.name || row.employee_name || row.full_name)}</strong>
-          <small>{displayValue(row.email)}</small>
-        </div>
-      );
-    }
+if (key === 'name') {
+  if (collection === 'organisations') {
+    return (
+      <div className="mc-employee-name-cell">
+        <strong>{displayValue(row.name || row.organisation_name || row.organization_name)}</strong>
+        <small>{displayValue(row.code || row.organisation_code || row.organization_code, '')}</small>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mc-employee-name-cell">
+      <strong>{displayValue(row.name || row.employee_name || row.full_name)}</strong>
+      <small>{displayValue(row.email)}</small>
+    </div>
+  );
+}
 
     if (key === 'employee_id') {
       return displayValue(row.employee_id || row.emp_code || row.code);
@@ -2511,6 +2592,14 @@ export default function ModuleCrud({
               Create every staff member as an Employee. Add/update profile photo
               here. Mark Team Leader, Reporting Officer, IT Support Head or IT
               Support Member only through capability mapping.
+            </p>
+          )}
+          
+          {collection === 'organisations' && (
+            <p>
+              Create legal entities or internal organisations under this tenant. These
+              entities will later appear in Employee Master and will be used for
+              entity-wise attendance Excel exports.
             </p>
           )}
 

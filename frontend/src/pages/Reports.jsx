@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCcw, Search, X } from 'lucide-react';
-import { api } from '../api/client';
+import {
+  api,
+  downloadAttendanceRegisterExcel,
+  getActiveOrganisations,
+} from '../api/client';
 import Table from '../components/Table';
 import Stat from '../components/Stat';
 
@@ -63,6 +67,20 @@ const HOLIDAY_STATES = [
   'Mizoram',
   'Arunachal Pradesh',
 ];
+
+
+const EMPTY_ATTENDANCE_EXCEL_FILTERS = {
+  period: 'month',
+  year: String(new Date().getFullYear()),
+  month: String(new Date().getMonth() + 1),
+  date: new Date().toISOString().slice(0, 10),
+  week_start: '',
+  week_end: '',
+  organisation_id: '',
+  organisation_code: '',
+  organisation: '',
+  state: '',
+};
 
 const EMPTY_FILTERS = {
   tenant_id: '',
@@ -193,6 +211,27 @@ function yesNo(value) {
   return value ? 'Yes' : 'No';
 }
 
+
+function organisationOptionLabel(organisation = {}) {
+  const name =
+    organisation.name ||
+    organisation.organisation_name ||
+    organisation.organization_name ||
+    '';
+
+  const code =
+    organisation.code ||
+    organisation.organisation_code ||
+    organisation.organization_code ||
+    '';
+
+  if (name && code) {
+    return `${name} (${code})`;
+  }
+
+  return name || code || 'Organisation';
+}
+
 function normalizeRows(tab, rows = []) {
   if (tab === 'attendance') {
     return rows.map((row) => ({
@@ -312,35 +351,39 @@ function normalizeRows(tab, rows = []) {
 }
 
 function normalizeLeaveSummary(summary = {}) {
+  const safeSummary = summary || {};
+
   return {
-    total: summary.total || 0,
-    pending: summary.pending || 0,
-    approved: summary.approved || 0,
-    rejected: summary.rejected || 0,
-    pending_with_team_leader: summary.pending_with_team_leader || 0,
-    pending_with_reporting_officer: summary.pending_with_reporting_officer || 0,
-    pending_with_hr: summary.pending_with_hr || 0,
-    casual_leave: summary.casual_leave || 0,
-    earned_leave: summary.earned_leave || 0,
-    comp_off: summary.comp_off || 0,
-    total_days: summary.total_days || 0,
-    deducted_days: summary.deducted_days || 0,
-    not_deducted_days: summary.not_deducted_days || 0,
+    total: safeSummary.total || 0,
+    pending: safeSummary.pending || 0,
+    approved: safeSummary.approved || 0,
+    rejected: safeSummary.rejected || 0,
+    pending_with_team_leader: safeSummary.pending_with_team_leader || 0,
+    pending_with_reporting_officer: safeSummary.pending_with_reporting_officer || 0,
+    pending_with_hr: safeSummary.pending_with_hr || 0,
+    casual_leave: safeSummary.casual_leave || 0,
+    earned_leave: safeSummary.earned_leave || 0,
+    comp_off: safeSummary.comp_off || 0,
+    total_days: safeSummary.total_days || 0,
+    deducted_days: safeSummary.deducted_days || 0,
+    not_deducted_days: safeSummary.not_deducted_days || 0,
   };
 }
 
 function normalizeBalanceSummary(summary = {}) {
+  const safeSummary = summary || {};
+
   return {
-    employees: summary.employees || 0,
-    casual_credited: summary.casual_credited || 0,
-    casual_used: summary.casual_used || 0,
-    casual_available: summary.casual_available || 0,
-    earned_credited: summary.earned_credited || 0,
-    earned_used: summary.earned_used || 0,
-    earned_available: summary.earned_available || 0,
-    total_credited: summary.total_credited || 0,
-    total_used_deducted: summary.total_used_deducted || 0,
-    total_available: summary.total_available || 0,
+    employees: safeSummary.employees || 0,
+    casual_credited: safeSummary.casual_credited || 0,
+    casual_used: safeSummary.casual_used || 0,
+    casual_available: safeSummary.casual_available || 0,
+    earned_credited: safeSummary.earned_credited || 0,
+    earned_used: safeSummary.earned_used || 0,
+    earned_available: safeSummary.earned_available || 0,
+    total_credited: safeSummary.total_credited || 0,
+    total_used_deducted: safeSummary.total_used_deducted || 0,
+    total_available: safeSummary.total_available || 0,
   };
 }
 
@@ -353,6 +396,11 @@ export default function Reports() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
+    const [organisations, setOrganisations] = useState([]);
+  const [excelFilters, setExcelFilters] = useState({
+    ...EMPTY_ATTENDANCE_EXCEL_FILTERS,
+  });
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const currentTab = REPORT_TABS.find((tab) => tab.key === activeTab);
 
@@ -401,6 +449,15 @@ export default function Reports() {
     }
 
     return payload;
+  }
+
+  async function loadOrganisations() {
+    try {
+      const data = await getActiveOrganisations({ limit: 500 });
+      setOrganisations(data.items || []);
+    } catch {
+      setOrganisations([]);
+    }
   }
 
   async function loadSummary(nextFilters = filters) {
@@ -457,6 +514,7 @@ export default function Reports() {
 
   useEffect(() => {
     refreshAll(activeTab, filters);
+    loadOrganisations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -485,6 +543,71 @@ export default function Reports() {
       ...current,
       [key]: value,
     }));
+  }
+
+  function updateExcelFilter(key, value) {
+    setExcelFilters((current) => {
+      const next = {
+        ...current,
+        [key]: value,
+      };
+
+      if (key === 'organisation_id') {
+        const selected = organisations.find((organisation) => {
+          const id = organisation.id || organisation._id || '';
+          return id === value;
+        });
+
+        next.organisation = selected
+          ? selected.name || selected.organisation_name || selected.organization_name || ''
+          : '';
+
+        next.organisation_code = selected
+          ? selected.code || selected.organisation_code || selected.organization_code || ''
+          : '';
+      }
+
+      return next;
+    });
+  }
+
+  async function handleAttendanceExcelDownload(event) {
+    event.preventDefault();
+
+    if (!excelFilters.organisation_id && !excelFilters.organisation_code && !excelFilters.organisation) {
+      setMessage('Please select Organisation / Entity before downloading the attendance Excel.');
+      return;
+    }
+
+    setDownloadingExcel(true);
+    setMessage('');
+
+    try {
+      const payload = {
+        period: excelFilters.period,
+        organisation_id: excelFilters.organisation_id,
+        organisation_code: excelFilters.organisation_code,
+        organisation: excelFilters.organisation,
+        state: excelFilters.state,
+      };
+
+      if (excelFilters.period === 'day') {
+        payload.date = excelFilters.date;
+      } else if (excelFilters.period === 'week') {
+        payload.week_start = excelFilters.week_start;
+        payload.week_end = excelFilters.week_end;
+      } else {
+        payload.year = excelFilters.year;
+        payload.month = excelFilters.month;
+      }
+
+      await downloadAttendanceRegisterExcel(payload);
+      setMessage('Attendance Excel downloaded successfully.');
+    } catch (error) {
+      setMessage(error.message || 'Unable to download attendance Excel report.');
+    } finally {
+      setDownloadingExcel(false);
+    }
   }
 
   const counts = summary?.counts || {};
@@ -616,6 +739,150 @@ export default function Reports() {
           <Stat label="Total Available" value={balanceSummary.total_available} />
         </section>
       )}
+
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>Styled Attendance Excel Export</h3>
+            <p>
+              Download entity-wise attendance register in Excel format with
+              colours, borders, attendance codes, leave counts, and day-wise
+              columns.
+            </p>
+          </div>
+        </div>
+
+        <form className="dynamic-form" onSubmit={handleAttendanceExcelDownload}>
+          <label>
+            Organisation / Entity
+            <select
+              value={excelFilters.organisation_id}
+              onChange={(e) => updateExcelFilter('organisation_id', e.target.value)}
+              required
+            >
+              <option value="">Select Organisation / Entity</option>
+              {organisations.map((organisation) => {
+                const id = organisation.id || organisation._id || '';
+                return (
+                  <option key={id || organisation.code || organisation.name} value={id}>
+                    {organisationOptionLabel(organisation)}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <label>
+            State
+            <select
+              value={excelFilters.state}
+              onChange={(e) => updateExcelFilter('state', e.target.value)}
+            >
+              <option value="">All States</option>
+              {HOLIDAY_STATES.map((state) => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Export Period
+            <select
+              value={excelFilters.period}
+              onChange={(e) => updateExcelFilter('period', e.target.value)}
+            >
+              <option value="month">Month Wise</option>
+              <option value="week">Week Wise</option>
+              <option value="day">Day Wise</option>
+            </select>
+          </label>
+
+          {excelFilters.period === 'month' && (
+            <>
+              <label>
+                Year
+                <input
+                  type="number"
+                  value={excelFilters.year}
+                  onChange={(e) => updateExcelFilter('year', e.target.value)}
+                  min="2020"
+                  max="2100"
+                  required
+                />
+              </label>
+
+              <label>
+                Month
+                <select
+                  value={excelFilters.month}
+                  onChange={(e) => updateExcelFilter('month', e.target.value)}
+                  required
+                >
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </label>
+            </>
+          )}
+
+          {excelFilters.period === 'week' && (
+            <>
+              <label>
+                Week Start
+                <input
+                  type="date"
+                  value={excelFilters.week_start}
+                  onChange={(e) => updateExcelFilter('week_start', e.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Week End
+                <input
+                  type="date"
+                  value={excelFilters.week_end}
+                  onChange={(e) => updateExcelFilter('week_end', e.target.value)}
+                  required
+                />
+              </label>
+            </>
+          )}
+
+          {excelFilters.period === 'day' && (
+            <label>
+              Date
+              <input
+                type="date"
+                value={excelFilters.date}
+                onChange={(e) => updateExcelFilter('date', e.target.value)}
+                required
+              />
+            </label>
+          )}
+
+          <button
+            type="submit"
+            className="primary"
+            disabled={downloadingExcel}
+          >
+            {downloadingExcel ? 'Downloading...' : 'Download Styled Attendance Excel'}
+          </button>
+        </form>
+      </section>
+
 
       <section className="panel">
         <div className="toolbar">

@@ -26,6 +26,7 @@ PROJECT_CREATOR_ROLES = {
 
 READ_ALLOWED_COLLECTIONS = {
     "employees",
+    "organisations",
     "departments",
     "designations",
     "states",
@@ -44,6 +45,7 @@ READ_ALLOWED_COLLECTIONS = {
 
 WRITE_ALLOWED_COLLECTIONS = {
     "employees",
+    "organisations",
     "departments",
     "designations",
     "states",
@@ -55,6 +57,7 @@ WRITE_ALLOWED_COLLECTIONS = {
 
 SOFT_DELETE_COLLECTIONS = {
     "employees",
+    "organisations",
     "departments",
     "designations",
     "states",
@@ -67,17 +70,27 @@ SOFT_DELETE_COLLECTIONS = {
 }
 
 SEARCH_FIELDS = {
-    "employees": [
+"employees": [
         "name",
         "employee_name",
+        "full_name",
         "email",
         "official_email",
         "phone",
         "mobile",
         "employee_id",
         "emp_code",
+        "employee_code",
+        "organisation",
+        "organization",
+        "organisation_name",
+        "organization_name",
+        "organisation_code",
+        "organization_code",
         "department",
+        "department_name",
         "designation",
+        "designation_name",
         "branch",
         "state",
         "role",
@@ -91,6 +104,16 @@ SEARCH_FIELDS = {
         "is_it_support_head",
         "is_it_support_member",
     ],
+    "organisations": [
+        "name",
+        "organisation_name",
+        "organization_name",
+        "code",
+        "organisation_code",
+        "organization_code",
+        "status",
+    ],
+    
     "departments": [
         "name",
         "department_name",
@@ -361,6 +384,36 @@ def normalize_employee_capability_flags(payload):
 
     return payload
 
+def normalize_employee_organisation_fields(payload):
+    organisation_id = normalize_text(
+        payload.get("organisation_id")
+        or payload.get("organization_id")
+    )
+
+    organisation_name = normalize_text(
+        payload.get("organisation")
+        or payload.get("organization")
+        or payload.get("organisation_name")
+        or payload.get("organization_name")
+    )
+
+    organisation_code = normalize_text(
+        payload.get("organisation_code")
+        or payload.get("organization_code")
+    ).upper()
+
+    payload["organisation_id"] = organisation_id
+    payload["organization_id"] = organisation_id
+
+    payload["organisation"] = organisation_name
+    payload["organization"] = organisation_name
+    payload["organisation_name"] = organisation_name
+    payload["organization_name"] = organisation_name
+
+    payload["organisation_code"] = organisation_code
+    payload["organization_code"] = organisation_code
+
+    return payload
 
 def normalize_master_payload(collection, payload):
     if not isinstance(payload, dict):
@@ -371,6 +424,32 @@ def normalize_master_payload(collection, payload):
         if name:
             payload["name"] = name
             payload["state_name"] = name
+        payload["status"] = normalize_text(payload.get("status") or "active")
+        
+    if collection == "organisations":
+        name = normalize_text(
+            payload.get("name")
+            or payload.get("title")
+            or payload.get("organisation_name")
+            or payload.get("organization_name")
+        )
+        code = normalize_text(
+            payload.get("code")
+            or payload.get("organisation_code")
+            or payload.get("organization_code")
+        ).upper()
+
+    if name:
+        payload["name"] = name
+        payload["title"] = name
+        payload["organisation_name"] = name
+        payload["organization_name"] = name
+
+        if code:
+            payload["code"] = code
+            payload["organisation_code"] = code
+            payload["organization_code"] = code
+
         payload["status"] = normalize_text(payload.get("status") or "active")
 
     if collection == "departments":
@@ -2269,8 +2348,14 @@ def validate_required_fields(collection, payload):
         if not normalize_text(payload.get("name") or payload.get("employee_name")):
             return "Employee name is required"
 
-    if collection in {"departments", "designations", "states"}:
-        if not normalize_text(payload.get("name") or payload.get("title") or payload.get("state_name")):
+    if collection in {"organisations", "departments", "designations", "states"}:
+        if not normalize_text(
+            payload.get("name")
+            or payload.get("title")
+            or payload.get("state_name")
+            or payload.get("organisation_name")
+            or payload.get("organization_name")
+        ):
             return "Name is required"
 
     return ""
@@ -2708,6 +2793,21 @@ def directory_employee_department(employee):
     )
 
 
+def directory_employee_organisation(employee):
+    return (
+        normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+        or normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organization_name"))
+    )
+
+
+def directory_employee_organisation_code(employee):
+    return (
+        normalize_text(employee.get("organisation_code"))
+        or normalize_text(employee.get("organization_code"))
+    )
+
 def directory_employee_state(employee):
     return (
         normalize_text(employee.get("state"))
@@ -2894,20 +2994,54 @@ def employee_directory():
         photo = directory_employee_photo(employee)
 
         item = {
-            "id": str(employee.get("_id")),
-            "_id": str(employee.get("_id")),
-            "name": directory_employee_name(employee),
-            "designation": directory_employee_designation(employee),
-            "department": directory_employee_department(employee),
-            "department_name": directory_employee_department(employee),
-            "state": directory_employee_state(employee),
-            "phone": directory_employee_phone(employee),
-            "email": directory_employee_email(employee),
-            "avatar": photo,
-            "profile_photo": photo,
-            "profile_picture": photo,
-            "photo": photo,
-        }
+    "id": str(employee.get("_id")),
+    "_id": str(employee.get("_id")),
+    "name": directory_employee_name(employee),
+    "designation": directory_employee_designation(employee),
+    "department": directory_employee_department(employee),
+    "department_name": directory_employee_department(employee),
+
+    "organisation": (
+        normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+        or normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organization_name"))
+    ),
+    "organization": (
+        normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+        or normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organization_name"))
+    ),
+    "organisation_name": (
+        normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+        or normalize_text(employee.get("organization_name"))
+    ),
+    "organization_name": (
+        normalize_text(employee.get("organization_name"))
+        or normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+    ),
+    "organisation_code": (
+        normalize_text(employee.get("organisation_code"))
+        or normalize_text(employee.get("organization_code"))
+    ),
+    "organization_code": (
+        normalize_text(employee.get("organization_code"))
+        or normalize_text(employee.get("organisation_code"))
+    ),
+
+    "state": directory_employee_state(employee),
+    "phone": directory_employee_phone(employee),
+    "email": directory_employee_email(employee),
+    "avatar": photo,
+    "profile_photo": photo,
+    "profile_picture": photo,
+    "photo": photo,
+}
 
         # Final fallback filtering handles data stored under mixed field names.
         if not directory_item_matches_filter(item, "name", name_filter):
@@ -3106,16 +3240,17 @@ def create_collection_item(collection):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+
     if collection == "employees":
         photo_error = validate_employee_photo_payload(data)
 
-    if photo_error:
-        return jsonify({"message": photo_error}), 400
+        if photo_error:
+            return jsonify({"message": photo_error}), 400
 
     if collection == "projects":
         payload = normalize_project_payload(payload)
 
-    if collection in {"departments", "designations", "states"}:
+    if collection in {"organisations", "departments", "designations", "states"}:
         payload = normalize_master_payload(collection, payload)
 
     validation_error = validate_required_fields(collection, payload)
@@ -3133,6 +3268,7 @@ def create_collection_item(collection):
         payload["name"] = employee_name_from_payload(payload)
         payload["employee_name"] = payload["name"]
         payload["email"] = employee_email_from_payload(payload)
+        payload = normalize_employee_organisation_fields(payload)
         payload.setdefault("status", "active")
         payload.setdefault("employment_status", payload.get("status") or "active")
         payload.setdefault("is_team_leader", "false")
@@ -3388,7 +3524,7 @@ def update_collection_item(collection, item_id):
     if collection == "projects":
         payload = normalize_project_payload(payload, existing)
 
-    if collection in {"departments", "designations", "states"}:
+    if collection in {"organisations", "departments", "designations", "states"}:
         payload = normalize_master_payload(collection, payload)
 
     if collection == "employees":

@@ -112,25 +112,35 @@ export default function EmployeeDirectory() {
     const email = String(filters.email || '').trim().toLowerCase();
 
     return directory.filter((employee) => {
-        const employeeName = String(employee.name || employee.employee_name || '').toLowerCase();
-        const employeeDesignation = String(employee.designation || '').toLowerCase();
-        const employeeDepartment = String(
-        employee.department || employee.department_name || ''
-        ).toLowerCase();
-        const employeeState = String(employee.state || '').toLowerCase();
-        const employeePhone = String(employee.phone || '').toLowerCase();
-        const employeeEmail = String(employee.email || '').toLowerCase();
+    const employeeName = String(employee.name || employee.employee_name || '').toLowerCase();
+    const employeeDesignation = String(employee.designation || '').toLowerCase();
+const employeeOrganisation = String(
+  employee.organisation ||
+    employee.organization ||
+    employee.organisation_name ||
+    employee.organization_name ||
+    employee.organisation_code ||
+    employee.organization_code ||
+    ''
+).toLowerCase();
+    const employeeDepartment = String(
+      employee.department || employee.department_name || ''
+    ).toLowerCase();
+    const employeeState = String(employee.state || '').toLowerCase();
+    const employeePhone = String(employee.phone || '').toLowerCase();
+    const employeeEmail = String(employee.email || '').toLowerCase();
 
-        const searchMatch =
-        !search ||
-        [
-            employeeName,
-            employeeDesignation,
-            employeeDepartment,
-            employeeState,
-            employeePhone,
-            employeeEmail,
-        ].some((value) => value.includes(search));
+    const searchMatch =
+      !search ||
+      [
+        employeeName,
+        employeeDesignation,
+        employeeOrganisation,
+        employeeDepartment,
+        employeeState,
+        employeePhone,
+        employeeEmail,
+      ].some((value) => value.includes(search));
 
       if (!searchMatch) return false;
       if (designation && employeeDesignation !== designation) return false;
@@ -529,18 +539,27 @@ export default function EmployeeDirectory() {
           font-size: 13px;
           font-weight: 750;
         }
-            .employee-directory-department {
-            margin-top: 6px;
-            width: fit-content;
-            max-width: 100%;
-            padding: 5px 10px;
-            border-radius: 999px;
-            background: rgba(11, 77, 58, 0.08);
-            color: #0b4d3a;
-            font-size: 12px;
-            font-weight: 850;
-            line-height: 1.25;
-            }
+        .employee-directory-entity,
+        .employee-directory-department {
+          margin-top: 6px;
+          width: fit-content;
+          max-width: 100%;
+          padding: 5px 10px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 850;
+          line-height: 1.25;
+        }
+
+        .employee-directory-entity {
+          background: rgba(37, 99, 235, 0.09);
+          color: #1d4ed8;
+        }
+
+        .employee-directory-department {
+          background: rgba(11, 77, 58, 0.08);
+          color: #0b4d3a;
+        }
 
         .employee-directory-contact-list {
           display: grid;
@@ -847,9 +866,21 @@ export default function EmployeeDirectory() {
                     <BriefcaseBusiness size={14} />
                     {cleanText(employee.designation)}
                   </div>
-                    <div className="employee-directory-department">
+
+                  <div className="employee-directory-entity">
+                   Organisation: {cleanText(
+                    employee.organisation ||
+                      employee.organization ||
+                      employee.organisation_name ||
+                      employee.organization_name ||
+                      employee.organisation_code ||
+                      employee.organization_code
+                  )}
+                  </div>
+
+                  <div className="employee-directory-department">
                     Department: {cleanText(employee.department || employee.department_name)}
-                    </div>
+                  </div>
                 </div>
               </div>
 

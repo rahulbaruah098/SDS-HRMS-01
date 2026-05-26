@@ -19,6 +19,7 @@ import {
   LockKeyhole,
   ClipboardList,
   ContactRound,
+  Network,
 } from 'lucide-react';
 
 /*
@@ -497,6 +498,13 @@ export const coreModules = [
     'Employee Management',
     Users,
     'Employee Master, Create Employee and Alumni records with DB dropdowns, TL/RO mapping, resignation movement and CSV downloads.',
+    HR_ROLES,
+  ],
+  [
+    'organisations',
+    'Organisation / Entity Master',
+    Network,
+    'Create tenant-level organisations or legal entities for employee mapping and entity-wise attendance exports.',
     HR_ROLES,
   ],
   [

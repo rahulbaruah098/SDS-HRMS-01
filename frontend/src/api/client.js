@@ -1240,6 +1240,83 @@ export function normalizeMasterOptionList(items = [], fallbackLabelKeys = []) {
     .filter(Boolean);
 }
 
+
+export function normalizeOrganisation(organisation = {}) {
+  if (!organisation || typeof organisation !== 'object') {
+    return organisation;
+  }
+
+  const name =
+    organisation.name ||
+    organisation.organisation_name ||
+    organisation.organization_name ||
+    '';
+
+  const code =
+    organisation.code ||
+    organisation.organisation_code ||
+    organisation.organization_code ||
+    '';
+
+  return {
+    ...organisation,
+    id: organisation.id || organisation._id || '',
+    _id: organisation._id || organisation.id || '',
+    name,
+    organisation_name: organisation.organisation_name || name,
+    organization_name: organisation.organization_name || name,
+    code,
+    organisation_code: organisation.organisation_code || code,
+    organization_code: organisation.organization_code || code,
+    status: organisation.status || 'active',
+    label: code ? `${name} (${code})` : name || 'Organisation',
+    value: organisation.id || organisation._id || code || name,
+  };
+}
+
+export function normalizeOrganisationList(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeOrganisation(item)).filter(Boolean);
+}
+
+export function getOrganisations(params = {}) {
+  return listCollection('organisations', {
+    limit: 500,
+    ...params,
+  }).then((data = {}) => ({
+    ...data,
+    items: normalizeOrganisationList(data.items || []),
+  }));
+}
+
+export function getActiveOrganisations(params = {}) {
+  return getOrganisations({
+    ...params,
+    status: params.status || 'active',
+  });
+}
+
+export function createOrganisation(payload = {}) {
+  return createCollectionItem('organisations', payload).then((data = {}) => ({
+    ...data,
+    item: normalizeOrganisation(data.item || {}),
+  }));
+}
+
+export function updateOrganisation(organisationId, payload = {}) {
+  return updateCollectionItem('organisations', organisationId, payload).then((data = {}) => ({
+    ...data,
+    item: normalizeOrganisation(data.item || {}),
+  }));
+}
+
+export function deleteOrganisation(organisationId) {
+  return deleteCollectionItem('organisations', organisationId);
+}
+
 export function getDepartments(params = {}) {
   return listCollection('departments', {
     limit: 500,
@@ -1297,6 +1374,8 @@ export const EMPLOYEE_CSV_COLUMNS = [
   ['official_email', 'Official Email'],
   ['phone', 'Phone'],
   ['mobile', 'Mobile'],
+  ['organisation_code', 'Organisation Code'],
+  ['organisation', 'Organisation / Entity'],
   ['department', 'Department'],
   ['designation', 'Designation'],
   ['branch', 'Branch'],
@@ -1319,6 +1398,8 @@ export const ALUMNI_CSV_COLUMNS = [
   ['official_email', 'Official Email'],
   ['phone', 'Phone'],
   ['mobile', 'Mobile'],
+  ['organisation_code', 'Organisation Code'],
+  ['organisation', 'Organisation / Entity'],
   ['department', 'Department'],
   ['designation', 'Designation'],
   ['branch', 'Branch'],
@@ -1371,6 +1452,39 @@ export function normalizeEmployee(employee = {}) {
 
   normalized.phone = normalized.phone || normalized.mobile || '';
   normalized.mobile = normalized.mobile || normalized.phone || '';
+
+  normalized.organisation_id =
+    normalized.organisation_id ||
+    normalized.organization_id ||
+    '';
+
+  normalized.organization_id =
+    normalized.organization_id ||
+    normalized.organisation_id ||
+    '';
+
+  normalized.organisation =
+    normalized.organisation ||
+    normalized.organization ||
+    normalized.organisation_name ||
+    normalized.organization_name ||
+    '';
+
+  normalized.organization =
+    normalized.organization ||
+    normalized.organisation ||
+    '';
+
+  normalized.organisation_code =
+    normalized.organisation_code ||
+    normalized.organization_code ||
+    normalized.code ||
+    '';
+
+  normalized.organization_code =
+    normalized.organization_code ||
+    normalized.organisation_code ||
+    '';
 
   normalized.department = normalized.department || normalized.department_name || '';
   normalized.designation = normalized.designation || normalized.designation_name || '';
@@ -1446,6 +1560,40 @@ export function normalizeEmployeePayload(payload = {}) {
   if (normalizedPayload.mobile && !normalizedPayload.phone) {
     normalizedPayload.phone = normalizedPayload.mobile;
   }
+
+    normalizedPayload.organisation_id =
+    normalizedPayload.organisation_id ||
+    normalizedPayload.organization_id ||
+    '';
+
+  normalizedPayload.organization_id =
+    normalizedPayload.organization_id ||
+    normalizedPayload.organisation_id ||
+    '';
+
+  normalizedPayload.organisation =
+    normalizedPayload.organisation ||
+    normalizedPayload.organization ||
+    normalizedPayload.organisation_name ||
+    normalizedPayload.organization_name ||
+    '';
+
+  normalizedPayload.organization =
+    normalizedPayload.organization ||
+    normalizedPayload.organisation ||
+    '';
+
+  normalizedPayload.organisation_code =
+    normalizedPayload.organisation_code ||
+    normalizedPayload.organization_code ||
+    normalizedPayload.code ||
+    '';
+
+  normalizedPayload.organization_code =
+    normalizedPayload.organization_code ||
+    normalizedPayload.organisation_code ||
+    '';
+
 
   if (normalizedPayload.date_of_joining && !normalizedPayload.joining_date) {
     normalizedPayload.joining_date = normalizedPayload.date_of_joining;
@@ -1613,6 +1761,12 @@ export function employeeMatchesSearch(employee = {}, searchText = '') {
     employee.employee_id,
     employee.emp_code,
     employee.employee_code,
+    employee.organisation,
+    employee.organization,
+    employee.organisation_name,
+    employee.organization_name,
+    employee.organisation_code,
+    employee.organization_code,
     employee.department,
     employee.department_name,
     employee.designation,
@@ -1636,6 +1790,13 @@ export function employeeMatchesSearch(employee = {}, searchText = '') {
 
 export function filterEmployees(items = [], filters = {}) {
   const searchText = filters.q || filters.search || '';
+  const organisation = String(
+    filters.organisation ||
+      filters.organization ||
+      filters.organisation_code ||
+      filters.organization_code ||
+      ''
+  ).trim().toLowerCase();
   const department = String(filters.department || '').trim().toLowerCase();
   const designation = String(filters.designation || '').trim().toLowerCase();
   const branch = String(filters.branch || '').trim().toLowerCase();
@@ -1645,6 +1806,21 @@ export function filterEmployees(items = [], filters = {}) {
     if (!employeeMatchesSearch(employee, searchText)) {
       return false;
     }
+
+        if (
+      organisation &&
+      ![
+        employee.organisation,
+        employee.organization,
+        employee.organisation_code,
+        employee.organization_code,
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .includes(organisation)
+    ) {
+      return false;
+    }
+
 
     if (department && String(employee.department || '').trim().toLowerCase() !== department) {
       return false;
@@ -2491,6 +2667,68 @@ export function markAllNotificationsRead() {
 /* -------------------------------------------------------------------------- */
 /* Reports APIs                                                               */
 /* -------------------------------------------------------------------------- */
+
+export async function downloadAttendanceRegisterExcel(params = {}) {
+  const token = getToken();
+  const query = buildQuery(params);
+
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(buildUrl(`/reports/attendance-register.xlsx${query}`), {
+    method: 'GET',
+    headers,
+  });
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error('You do not have permission to download this attendance Excel report.');
+  }
+
+  if (!response.ok) {
+    let message = 'Unable to download attendance Excel report.';
+
+    try {
+      const data = await response.json();
+      message = data.message || message;
+    } catch {
+      // Keep default message if response is not JSON.
+    }
+
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+
+  let filename = 'attendance-register.xlsx';
+
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i);
+
+  if (filenameMatch) {
+    filename = decodeURIComponent(filenameMatch[1] || filenameMatch[2] || filename);
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return true;
+}
 
 export function getReportsSummary(params = {}) {
   return api(`/reports/summary${buildQuery(params)}`);

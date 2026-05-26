@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, g, request
+from flask import Blueprint, jsonify, g, request, send_file
 from datetime import datetime, date, timedelta
 from bson import ObjectId
 
@@ -6,6 +6,11 @@ from app.extensions import get_db
 from app.utils.auth import roles_required
 from app.utils.serializers import clean_doc
 
+from app.services.attendance_excel import (
+    build_attendance_excel_file,
+    build_attendance_excel_filename,
+    build_period_dates,
+)
 
 reports_bp = Blueprint("reports", __name__)
 
@@ -789,6 +794,242 @@ def scoped_collection_query_for_summary(db, collection, base_query):
 
 
 # -----------------------------------------------------------------------------
+# Styled Attendance Excel Export helpers
+# -----------------------------------------------------------------------------
+
+def active_employee_query():
+    return {
+        "$and": [
+            {"is_alumni": {"$ne": True}},
+            {
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": {"$nin": ["inactive", "Inactive", "Resigned", "resigned", "Left", "left", "Terminated", "terminated", "alumni"]}},
+                ]
+            },
+            {
+                "$or": [
+                    {"employment_status": {"$exists": False}},
+                    {"employment_status": {"$nin": ["inactive", "Inactive", "Resigned", "resigned", "Left", "left", "Terminated", "terminated", "alumni"]}},
+                ]
+            },
+        ]
+    }
+
+
+def excel_employee_identifier_values(employee):
+    values = []
+
+    for value in [
+        employee.get("_id"),
+        str(employee.get("_id")) if employee.get("_id") else "",
+        employee.get("id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("user_id"),
+        employee.get("email"),
+        employee.get("official_email"),
+    ]:
+        text = normalize_text(value)
+
+        if text and text not in values:
+            values.append(text)
+
+    return values
+
+
+def selected_organisation_query():
+    organisation_id = normalize_text(
+        request.args.get("organisation_id")
+        or request.args.get("organization_id")
+        or request.args.get("entity_id")
+    )
+
+    organisation_code = normalize_text(
+        request.args.get("organisation_code")
+        or request.args.get("organization_code")
+        or request.args.get("entity_code")
+    )
+
+    organisation_name = normalize_text(
+        request.args.get("organisation")
+        or request.args.get("organization")
+        or request.args.get("entity")
+    )
+
+    organisation_q = {}
+
+    if organisation_id:
+        organisation_q["$or"] = [
+            {"organisation_id": organisation_id},
+            {"organization_id": organisation_id},
+        ]
+
+    if organisation_code:
+        code_regex = {"$regex": f"^{organisation_code}$", "$options": "i"}
+        organisation_q["$or"] = [
+            {"organisation_code": code_regex},
+            {"organization_code": code_regex},
+        ]
+
+    if organisation_name:
+        name_regex = {"$regex": f"^{organisation_name}$", "$options": "i"}
+        organisation_q["$or"] = [
+            {"organisation": name_regex},
+            {"organization": name_regex},
+            {"organisation_name": name_regex},
+            {"organization_name": name_regex},
+        ]
+
+    return organisation_q
+
+
+def selected_organisation_display(db, tenant_id):
+    organisation_id = normalize_text(
+        request.args.get("organisation_id")
+        or request.args.get("organization_id")
+        or request.args.get("entity_id")
+    )
+
+    organisation_code = normalize_text(
+        request.args.get("organisation_code")
+        or request.args.get("organization_code")
+        or request.args.get("entity_code")
+    )
+
+    organisation_name = normalize_text(
+        request.args.get("organisation")
+        or request.args.get("organization")
+        or request.args.get("entity")
+    )
+
+    organisation = None
+
+    if organisation_id:
+        org_obj_id = safe_object_id(organisation_id)
+        org_query = {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        }
+
+        if org_obj_id:
+            org_query["_id"] = org_obj_id
+        else:
+            org_query["$or"] = [
+                {"id": organisation_id},
+                {"organisation_id": organisation_id},
+                {"organization_id": organisation_id},
+            ]
+
+        organisation = db.organisations.find_one(org_query)
+
+    if not organisation and organisation_code:
+        organisation = db.organisations.find_one({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"code": {"$regex": f"^{organisation_code}$", "$options": "i"}},
+                {"organisation_code": {"$regex": f"^{organisation_code}$", "$options": "i"}},
+                {"organization_code": {"$regex": f"^{organisation_code}$", "$options": "i"}},
+            ],
+        })
+
+    if not organisation and organisation_name:
+        organisation = db.organisations.find_one({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"name": {"$regex": f"^{organisation_name}$", "$options": "i"}},
+                {"organisation_name": {"$regex": f"^{organisation_name}$", "$options": "i"}},
+                {"organization_name": {"$regex": f"^{organisation_name}$", "$options": "i"}},
+            ],
+        })
+
+    if organisation:
+        return {
+            "name": (
+                organisation.get("name")
+                or organisation.get("organisation_name")
+                or organisation.get("organization_name")
+                or organisation_name
+                or organisation_code
+            ),
+            "code": (
+                organisation.get("code")
+                or organisation.get("organisation_code")
+                or organisation.get("organization_code")
+                or organisation_code
+            ),
+        }
+
+    return {
+        "name": organisation_name or organisation_code or "Organisation",
+        "code": organisation_code,
+    }
+
+
+def excel_date_range_query(dates):
+    if not dates:
+        return {}
+
+    return {
+        "$gte": dates[0].isoformat(),
+        "$lte": dates[-1].isoformat(),
+    }
+
+
+def employee_attendance_match_query(employee_identifiers):
+    if not employee_identifiers:
+        return {"_id": {"$exists": False}}
+
+    return {
+        "$or": [
+            {"employee_id": {"$in": employee_identifiers}},
+            {"employee_ref_id": {"$in": employee_identifiers}},
+            {"employee_code": {"$in": employee_identifiers}},
+            {"emp_code": {"$in": employee_identifiers}},
+            {"user_id": {"$in": employee_identifiers}},
+            {"email": {"$in": employee_identifiers}},
+            {"official_email": {"$in": employee_identifiers}},
+        ]
+    }
+
+
+def employee_leave_match_query(employee_identifiers):
+    if not employee_identifiers:
+        return {"_id": {"$exists": False}}
+
+    return {
+        "$or": [
+            {"employee_id": {"$in": employee_identifiers}},
+            {"employee_ref_id": {"$in": employee_identifiers}},
+            {"employee_code": {"$in": employee_identifiers}},
+            {"emp_code": {"$in": employee_identifiers}},
+            {"user_id": {"$in": employee_identifiers}},
+            {"email": {"$in": employee_identifiers}},
+            {"official_email": {"$in": employee_identifiers}},
+        ]
+    }
+
+
+def excel_safe_query_and(base_q, extra_q):
+    if not extra_q:
+        return base_q
+
+    if not base_q:
+        return extra_q
+
+    return {
+        "$and": [
+            base_q,
+            extra_q,
+        ]
+    }
+
+# -----------------------------------------------------------------------------
 # Reports APIs
 # -----------------------------------------------------------------------------
 
@@ -954,6 +1195,164 @@ def summary():
         "extra": clean_doc(extra),
     })
 
+@reports_bp.get("/attendance-register.xlsx")
+@roles_required(*AUDIT_ROLES)
+def attendance_register_excel_export():
+    db = get_db()
+
+    tenant_id = current_tenant_id()
+
+    period = normalize_text(request.args.get("period") or "month").lower()
+    year = request.args.get("year")
+    month = request.args.get("month")
+    date_value = request.args.get("date") or request.args.get("on_date")
+    week_start = request.args.get("week_start") or request.args.get("date_from")
+    week_end = request.args.get("week_end") or request.args.get("date_to")
+
+    state = normalize_text(request.args.get("state"))
+    normalized_state = normalize_state(state) if state else ""
+
+    dates = build_period_dates(
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+    )
+
+    employee_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }
+
+    employee_q = excel_safe_query_and(employee_q, active_employee_query())
+
+    organisation_q = selected_organisation_query()
+
+    if organisation_q:
+        employee_q = excel_safe_query_and(employee_q, organisation_q)
+
+    if normalized_state:
+        employee_q = excel_safe_query_and(employee_q, {
+            "$or": [
+                {"state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
+                {"office_state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
+                {"work_state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
+                {"branch": {"$regex": normalized_state, "$options": "i"}},
+            ]
+        })
+
+    employees = list(
+        db.employees
+        .find(employee_q)
+        .sort([("organisation_code", 1), ("state", 1), ("name", 1)])
+    )
+
+    employee_identifiers = []
+
+    for employee in employees:
+        for value in excel_employee_identifier_values(employee):
+            if value not in employee_identifiers:
+                employee_identifiers.append(value)
+
+    date_q = excel_date_range_query(dates)
+
+    attendance_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "date": date_q,
+    }
+
+    attendance_q = excel_safe_query_and(
+        attendance_q,
+        employee_attendance_match_query(employee_identifiers),
+    )
+
+    attendance_logs = list(db.attendance_logs.find(attendance_q))
+
+    leave_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"from_date": {"$lte": dates[-1].isoformat()}, "to_date": {"$gte": dates[0].isoformat()}},
+            {"from_date": {"$lte": dates[-1].isoformat()}, "upto_date": {"$gte": dates[0].isoformat()}},
+            {"date": date_q},
+        ],
+    }
+
+    leave_q = excel_safe_query_and(
+        leave_q,
+        employee_leave_match_query(employee_identifiers),
+    )
+
+    leave_requests = list(db.leave_requests.find(leave_q))
+
+    holiday_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "date": date_q,
+        "status": {"$ne": "inactive"},
+    }
+
+    if normalized_state:
+        holiday_q["state"] = normalized_state
+
+    holidays = list(db.holiday_calendar.find(holiday_q))
+
+    organisation_display = selected_organisation_display(db, tenant_id)
+
+    if employees and not organisation_display.get("code"):
+        first_employee = employees[0]
+        organisation_display = {
+            "name": (
+                first_employee.get("organisation")
+                or first_employee.get("organization")
+                or first_employee.get("organisation_name")
+                or first_employee.get("organization_name")
+                or organisation_display.get("name")
+            ),
+            "code": (
+                first_employee.get("organisation_code")
+                or first_employee.get("organization_code")
+                or organisation_display.get("code")
+            ),
+        }
+
+    excel_stream = build_attendance_excel_file(
+        employees=employees,
+        attendance_logs=attendance_logs,
+        leave_requests=leave_requests,
+        holidays=holidays,
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+        organisation_name=organisation_display.get("name", ""),
+        organisation_code=organisation_display.get("code", ""),
+        state_name=normalized_state or "All States",
+    )
+
+    filename = build_attendance_excel_filename(
+        organisation_name=organisation_display.get("name", ""),
+        organisation_code=organisation_display.get("code", ""),
+        state_name=normalized_state or "All States",
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+    )
+
+    return send_file(
+        excel_stream,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
 
 @reports_bp.get("/attendance")
 @roles_required(*REPORT_ROLES)
