@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, g, request, send_file
 from datetime import datetime, date, timedelta
+import re
 from bson import ObjectId
 
 from app.extensions import get_db
@@ -820,23 +821,27 @@ def active_employee_query():
 def excel_employee_identifier_values(employee):
     values = []
 
-    for value in [
-        employee.get("_id"),
-        str(employee.get("_id")) if employee.get("_id") else "",
-        employee.get("id"),
-        employee.get("employee_id"),
-        employee.get("employee_ref_id"),
-        employee.get("employee_code"),
-        employee.get("emp_code"),
-        employee.get("code"),
-        employee.get("user_id"),
-        employee.get("email"),
-        employee.get("official_email"),
-    ]:
-        text = normalize_text(value)
+    def add(value):
+        value = normalize_text(value)
+        if value and value not in values:
+            values.append(value)
 
-        if text and text not in values:
-            values.append(text)
+    employee_id = employee.get("_id")
+
+    if employee_id:
+        add(str(employee_id))
+
+    add(employee.get("id"))
+    add(employee.get("employee_id"))
+    add(employee.get("employee_code"))
+    add(employee.get("emp_code"))
+    add(employee.get("code"))
+    add(employee.get("user_id"))
+    add(employee.get("employee_ref_id"))
+    add(employee.get("email"))
+    add(employee.get("official_email"))
+    add(employee.get("phone"))
+    add(employee.get("mobile"))
 
     return values
 
@@ -852,39 +857,46 @@ def selected_organisation_query():
         request.args.get("organisation_code")
         or request.args.get("organization_code")
         or request.args.get("entity_code")
-    )
+    ).upper()
 
     organisation_name = normalize_text(
         request.args.get("organisation")
         or request.args.get("organization")
         or request.args.get("entity")
+        or request.args.get("organisation_name")
+        or request.args.get("organization_name")
     )
 
-    organisation_q = {}
+    conditions = []
 
     if organisation_id:
-        organisation_q["$or"] = [
+        conditions.extend([
             {"organisation_id": organisation_id},
             {"organization_id": organisation_id},
-        ]
+            {"entity_id": organisation_id},
+        ])
 
     if organisation_code:
-        code_regex = {"$regex": f"^{organisation_code}$", "$options": "i"}
-        organisation_q["$or"] = [
-            {"organisation_code": code_regex},
-            {"organization_code": code_regex},
-        ]
+        conditions.extend([
+            {"organisation_code": organisation_code},
+            {"organization_code": organisation_code},
+            {"entity_code": organisation_code},
+            {"code": organisation_code},
+        ])
 
     if organisation_name:
-        name_regex = {"$regex": f"^{organisation_name}$", "$options": "i"}
-        organisation_q["$or"] = [
-            {"organisation": name_regex},
-            {"organization": name_regex},
-            {"organisation_name": name_regex},
-            {"organization_name": name_regex},
-        ]
+        conditions.extend([
+            {"organisation": {"$regex": f"^{re.escape(organisation_name)}$", "$options": "i"}},
+            {"organization": {"$regex": f"^{re.escape(organisation_name)}$", "$options": "i"}},
+            {"organisation_name": {"$regex": f"^{re.escape(organisation_name)}$", "$options": "i"}},
+            {"organization_name": {"$regex": f"^{re.escape(organisation_name)}$", "$options": "i"}},
+            {"entity": {"$regex": f"^{re.escape(organisation_name)}$", "$options": "i"}},
+        ])
 
-    return organisation_q
+    if not conditions:
+        return {}
+
+    return {"$or": conditions}
 
 
 def selected_organisation_display(db, tenant_id):
@@ -982,35 +994,53 @@ def excel_date_range_query(dates):
 
 
 def employee_attendance_match_query(employee_identifiers):
-    if not employee_identifiers:
-        return {"_id": {"$exists": False}}
+    identifiers = [
+        normalize_text(value)
+        for value in employee_identifiers
+        if normalize_text(value)
+    ]
+
+    if not identifiers:
+        return {"employee_id": {"$in": []}}
 
     return {
         "$or": [
-            {"employee_id": {"$in": employee_identifiers}},
-            {"employee_ref_id": {"$in": employee_identifiers}},
-            {"employee_code": {"$in": employee_identifiers}},
-            {"emp_code": {"$in": employee_identifiers}},
-            {"user_id": {"$in": employee_identifiers}},
-            {"email": {"$in": employee_identifiers}},
-            {"official_email": {"$in": employee_identifiers}},
+            {"employee_id": {"$in": identifiers}},
+            {"employee_code": {"$in": identifiers}},
+            {"emp_code": {"$in": identifiers}},
+            {"code": {"$in": identifiers}},
+            {"user_id": {"$in": identifiers}},
+            {"employee_ref_id": {"$in": identifiers}},
+            {"email": {"$in": identifiers}},
+            {"official_email": {"$in": identifiers}},
+            {"phone": {"$in": identifiers}},
+            {"mobile": {"$in": identifiers}},
         ]
     }
 
 
 def employee_leave_match_query(employee_identifiers):
-    if not employee_identifiers:
-        return {"_id": {"$exists": False}}
+    identifiers = [
+        normalize_text(value)
+        for value in employee_identifiers
+        if normalize_text(value)
+    ]
+
+    if not identifiers:
+        return {"employee_id": {"$in": []}}
 
     return {
         "$or": [
-            {"employee_id": {"$in": employee_identifiers}},
-            {"employee_ref_id": {"$in": employee_identifiers}},
-            {"employee_code": {"$in": employee_identifiers}},
-            {"emp_code": {"$in": employee_identifiers}},
-            {"user_id": {"$in": employee_identifiers}},
-            {"email": {"$in": employee_identifiers}},
-            {"official_email": {"$in": employee_identifiers}},
+            {"employee_id": {"$in": identifiers}},
+            {"employee_code": {"$in": identifiers}},
+            {"emp_code": {"$in": identifiers}},
+            {"code": {"$in": identifiers}},
+            {"user_id": {"$in": identifiers}},
+            {"employee_ref_id": {"$in": identifiers}},
+            {"email": {"$in": identifiers}},
+            {"official_email": {"$in": identifiers}},
+            {"phone": {"$in": identifiers}},
+            {"mobile": {"$in": identifiers}},
         ]
     }
 
@@ -1221,6 +1251,19 @@ def attendance_register_excel_export():
         week_end=week_end,
     )
 
+    if not dates:
+        return jsonify({
+            "message": "Invalid attendance export period or date range.",
+            "filters": {
+                "period": period,
+                "year": year,
+                "month": month,
+                "date": date_value,
+                "week_start": week_start,
+                "week_end": week_end,
+            },
+        }), 400
+
     employee_q = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
@@ -1234,13 +1277,23 @@ def attendance_register_excel_export():
         employee_q = excel_safe_query_and(employee_q, organisation_q)
 
     if normalized_state:
+        state_conditions = [
+            {"state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
+            {"office_state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
+            {"work_state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
+            {"branch": {"$regex": normalized_state, "$options": "i"}},
+        ]
+
+        if state and state.lower() != normalized_state.lower():
+            state_conditions.extend([
+                {"state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+                {"office_state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+                {"work_state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+                {"branch": {"$regex": state, "$options": "i"}},
+            ])
+
         employee_q = excel_safe_query_and(employee_q, {
-            "$or": [
-                {"state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
-                {"office_state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
-                {"work_state": {"$regex": f"^{normalized_state}$", "$options": "i"}},
-                {"branch": {"$regex": normalized_state, "$options": "i"}},
-            ]
+            "$or": state_conditions
         })
 
     employees = list(
@@ -1248,6 +1301,36 @@ def attendance_register_excel_export():
         .find(employee_q)
         .sort([("organisation_code", 1), ("state", 1), ("name", 1)])
     )
+
+    if not employees:
+        return jsonify({
+            "message": "No active employees found for the selected organisation/entity and filters.",
+            "filters": {
+                "tenant_id": tenant_id,
+                "organisation_id": (
+                    request.args.get("organisation_id")
+                    or request.args.get("organization_id")
+                    or request.args.get("entity_id")
+                ),
+                "organisation_code": (
+                    request.args.get("organisation_code")
+                    or request.args.get("organization_code")
+                    or request.args.get("entity_code")
+                ),
+                "organisation": (
+                    request.args.get("organisation")
+                    or request.args.get("organization")
+                    or request.args.get("entity")
+                ),
+                "state": state,
+                "period": period,
+                "year": year,
+                "month": month,
+                "date": date_value,
+                "week_start": week_start,
+                "week_end": week_end,
+            },
+        }), 404
 
     employee_identifiers = []
 
@@ -1258,31 +1341,39 @@ def attendance_register_excel_export():
 
     date_q = excel_date_range_query(dates)
 
-    attendance_q = {
+    attendance_base_q = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "date": date_q,
     }
 
     attendance_q = excel_safe_query_and(
-        attendance_q,
+        attendance_base_q,
         employee_attendance_match_query(employee_identifiers),
     )
 
     attendance_logs = list(db.attendance_logs.find(attendance_q))
 
-    leave_q = {
+    leave_base_q = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "$or": [
-            {"from_date": {"$lte": dates[-1].isoformat()}, "to_date": {"$gte": dates[0].isoformat()}},
-            {"from_date": {"$lte": dates[-1].isoformat()}, "upto_date": {"$gte": dates[0].isoformat()}},
-            {"date": date_q},
+            {
+                "from_date": {"$lte": dates[-1].isoformat()},
+                "to_date": {"$gte": dates[0].isoformat()},
+            },
+            {
+                "from_date": {"$lte": dates[-1].isoformat()},
+                "upto_date": {"$gte": dates[0].isoformat()},
+            },
+            {
+                "date": date_q,
+            },
         ],
     }
 
     leave_q = excel_safe_query_and(
-        leave_q,
+        leave_base_q,
         employee_leave_match_query(employee_identifiers),
     )
 
@@ -1296,7 +1387,10 @@ def attendance_register_excel_export():
     }
 
     if normalized_state:
-        holiday_q["state"] = normalized_state
+        holiday_q["$or"] = [
+            {"state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
+            {"state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
+        ]
 
     holidays = list(db.holiday_calendar.find(holiday_q))
 

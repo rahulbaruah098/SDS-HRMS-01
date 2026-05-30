@@ -229,36 +229,66 @@ def employee_last_working_date(employee):
 
 
 def employee_identifier_values(employee):
+    employee = employee or {}
     values = []
 
-    for key in [
-        "_id",
-        "id",
-        "employee_id",
-        "employee_code",
-        "emp_code",
-        "code",
-        "user_id",
-        "email",
-        "official_email",
-    ]:
-        value = normalize_text(employee.get(key))
+    def add(value):
+        value = normalize_text(value)
 
         if value and value not in values:
             values.append(value)
 
+    employee_id = employee.get("_id")
+
+    if employee_id:
+        add(str(employee_id))
+
+    add(employee.get("id"))
+    add(employee.get("employee_id"))
+    add(employee.get("employee_code"))
+    add(employee.get("emp_code"))
+    add(employee.get("code"))
+    add(employee.get("user_id"))
+    add(employee.get("employee_ref_id"))
+    add(employee.get("email"))
+    add(employee.get("official_email"))
+    add(employee.get("phone"))
+    add(employee.get("mobile"))
+
     return values
 
+def attendance_row_identifier_values(row):
+    row = row or {}
+    values = []
+
+    def add(value):
+        value = normalize_text(value)
+
+        if value and value not in values:
+            values.append(value)
+
+    row_id = row.get("_id")
+
+    if row_id:
+        add(str(row_id))
+
+    add(row.get("employee_id"))
+    add(row.get("employee_ref_id"))
+    add(row.get("employee_code"))
+    add(row.get("emp_code"))
+    add(row.get("code"))
+    add(row.get("user_id"))
+    add(row.get("id"))
+    add(row.get("email"))
+    add(row.get("official_email"))
+    add(row.get("phone"))
+    add(row.get("mobile"))
+
+    return values
 
 def attendance_employee_identifier(row):
-    return normalize_text(
-        row.get("employee_id")
-        or row.get("employee_ref_id")
-        or row.get("employee_code")
-        or row.get("emp_code")
-        or row.get("user_id")
-        or row.get("email")
-    )
+    identifiers = attendance_row_identifier_values(row)
+    return identifiers[0] if identifiers else ""
 
 
 def attendance_status_code(row):
@@ -348,10 +378,18 @@ def build_attendance_lookup(attendance_logs):
     lookup = {}
 
     for row in attendance_logs or []:
-        emp_key = attendance_employee_identifier(row)
-        day_key = date_key(row.get("date") or row.get("attendance_date") or row.get("created_at"))
+        employee_keys = attendance_row_identifier_values(row)
+        day_key = date_key(
+            row.get("date")
+            or row.get("attendance_date")
+            or row.get("attendance_day")
+            or row.get("created_at")
+            or row.get("check_in")
+            or row.get("check_in_time")
+            or row.get("checked_in_at")
+        )
 
-        if not emp_key or not day_key:
+        if not employee_keys or not day_key:
             continue
 
         code = attendance_status_code(row)
@@ -359,7 +397,8 @@ def build_attendance_lookup(attendance_logs):
         if not code:
             continue
 
-        lookup[(emp_key, day_key)] = code
+        for emp_key in employee_keys:
+            lookup[(emp_key, day_key)] = code
 
     return lookup
 
@@ -373,16 +412,18 @@ def build_leave_lookup(leave_requests):
         if not code:
             continue
 
-        emp_key = attendance_employee_identifier(row)
+        employee_keys = attendance_row_identifier_values(row)
         start, end = leave_date_range(row)
 
-        if not emp_key or not start or not end:
+        if not employee_keys or not start or not end:
             continue
 
         current = start
 
         while current <= end:
-            lookup[(emp_key, current.isoformat())] = code
+            for emp_key in employee_keys:
+                lookup[(emp_key, current.isoformat())] = code
+
             current += timedelta(days=1)
 
     return lookup
@@ -414,13 +455,15 @@ def code_for_employee_date(employee, target_date, attendance_lookup, leave_looku
     if last_working_date and target_date > last_working_date:
         return ""
 
-    for identifier in employee_identifier_values(employee):
+    identifiers = employee_identifier_values(employee)
+
+    for identifier in identifiers:
         leave_code = leave_lookup.get((identifier, target_key))
 
         if leave_code:
             return leave_code
 
-    for identifier in employee_identifier_values(employee):
+    for identifier in identifiers:
         attendance_code = attendance_lookup.get((identifier, target_key))
 
         if attendance_code:

@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCcw, Search, X } from 'lucide-react';
+import {
+  Building2,
+  CalendarDays,
+  Filter,
+  MapPin,
+  RefreshCcw,
+  Search,
+  UserRound,
+  X,
+} from 'lucide-react';
 import { api } from '../api/client';
 import {
   roles,
@@ -19,7 +28,10 @@ const HOLIDAY_STATES = [
 
 const EMPTY_REPORT_FILTERS = {
   employee_id: '',
+  employee_name: '',
   department: '',
+  organisation: '',
+  state: '',
   mode: '',
   status: '',
   date_from: '',
@@ -110,6 +122,62 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+
+function cleanText(value, fallback = '—') {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
+function attendanceStatusClass(value) {
+  const normalized = String(value || '').toLowerCase();
+
+  if (normalized.includes('late')) return 'is-late';
+  if (normalized.includes('holiday')) return 'is-holiday';
+  if (normalized.includes('early')) return 'is-warning';
+  if (normalized.includes('present')) return 'is-present';
+  if (normalized.includes('absent')) return 'is-absent';
+
+  return 'is-neutral';
+}
+
+function locationText(location) {
+  if (!location || typeof location !== 'object') {
+    return '—';
+  }
+
+  const latitude = location.latitude;
+  const longitude = location.longitude;
+
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+    return cleanText(location.address || location.location_address);
+  }
+
+  const accuracy = location.accuracy
+    ? ` • ±${Math.round(Number(location.accuracy))}m`
+    : '';
+
+  const address = cleanText(location.address || location.location_address, '');
+
+  return address
+    ? `${address} • ${latitude}, ${longitude}${accuracy}`
+    : `${latitude}, ${longitude}${accuracy}`;
+}
+
+function locationMapUrl(location) {
+  if (!location || typeof location !== 'object') {
+    return '';
+  }
+
+  const latitude = location.latitude;
+  const longitude = location.longitude;
+
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+    return '';
+  }
+
+  return `https://www.google.com/maps?q=${latitude},${longitude}`;
+}
+
 function requestLiveStatus(row = {}) {
   const status = String(row.status || '').toLowerCase();
   const stage = String(row.approval_stage || '').toLowerCase();
@@ -125,24 +193,46 @@ function requestLiveStatus(row = {}) {
 }
 
 function normalizeAttendanceRows(rows = []) {
-  return rows.map((row) => ({
-    employee_name: row.employee_name || '—',
-    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
-    department: row.department || '—',
-    designation: row.designation || '—',
-    state: row.state || '—',
-    date: formatDate(row.date),
-    mode: modeLabel(row.mode),
-    status: statusLabel(row.status),
-    check_in: formatDateTime(row.check_in),
-    check_out: formatDateTime(row.check_out),
-    late_reason: row.late_reason || '—',
-    early_checkout_reason: row.early_checkout_reason || '—',
-    holiday: row.holiday_title || '—',
-    verified: row.verified_by_ro ? 'Yes' : 'No',
-    _id: row._id,
-    verified_by_ro: row.verified_by_ro,
-  }));
+  return rows.map((row) => {
+    const organisation =
+      row.organisation ||
+      row.organization ||
+      row.organisation_name ||
+      row.organization_name ||
+      row.organisation_code ||
+      row.organization_code ||
+      '';
+
+    return {
+      employee_name: row.employee_name || '—',
+      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+      department: row.department || '—',
+      designation: row.designation || '—',
+      organisation: organisation || '—',
+      organisation_code: row.organisation_code || row.organization_code || '',
+      state: row.state || '—',
+      date: formatDate(row.date),
+      raw_date: row.date || '',
+      mode: modeLabel(row.mode),
+      status: statusLabel(row.status),
+      raw_status: row.status || '',
+      check_in: formatDateTime(row.check_in),
+      check_out: formatDateTime(row.check_out),
+      check_in_location: row.check_in_location || null,
+      check_out_location: row.check_out_location || null,
+      check_in_location_text: locationText(row.check_in_location),
+      check_out_location_text: locationText(row.check_out_location),
+      check_in_map_url: locationMapUrl(row.check_in_location),
+      check_out_map_url: locationMapUrl(row.check_out_location),
+      field_location: row.field_location || '—',
+      late_reason: row.late_reason || '—',
+      early_checkout_reason: row.early_checkout_reason || '—',
+      holiday: row.holiday_title || '—',
+      verified: row.verified_by_ro ? 'Yes' : 'No',
+      _id: row._id,
+      verified_by_ro: row.verified_by_ro,
+    };
+  });
 }
 
 function normalizeModeRequestRows(rows = []) {
@@ -195,6 +285,161 @@ function normalizeCompOffRows(rows = []) {
   }));
 }
 
+
+function AttendanceReportList({ rows = [], loading = false }) {
+  if (loading) {
+    return (
+      <div className="attendance-record-list">
+        {[1, 2, 3].map((item) => (
+          <div key={item} className="attendance-record-card is-loading">
+            <div className="attendance-skeleton-line wide" />
+            <div className="attendance-skeleton-line" />
+            <div className="attendance-skeleton-grid">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="attendance-empty-state">
+        <CalendarDays size={34} />
+        <strong>No attendance records found</strong>
+        <span>Today’s attendance will appear here. Use filters to view past records.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="attendance-record-list">
+      {rows.map((row) => (
+        <article key={row._id || `${row.employee_id}-${row.raw_date}`} className="attendance-record-card">
+          <div className="attendance-record-top">
+            <div className="attendance-employee-block">
+              <div className="attendance-avatar">
+                <UserRound size={18} />
+              </div>
+
+              <div>
+                <h4>{cleanText(row.employee_name)}</h4>
+                <p>
+                  {cleanText(row.employee_id)}
+                  {' • '}
+                  {cleanText(row.designation)}
+                </p>
+              </div>
+            </div>
+
+            <span className={`attendance-status-pill ${attendanceStatusClass(row.status)}`}>
+              {cleanText(row.status)}
+            </span>
+          </div>
+
+          <div className="attendance-meta-grid">
+            <div>
+              <span>Date</span>
+              <strong>{cleanText(row.date)}</strong>
+            </div>
+
+            <div>
+              <span>Mode</span>
+              <strong>{cleanText(row.mode)}</strong>
+            </div>
+
+            <div>
+              <span>Department</span>
+              <strong>{cleanText(row.department)}</strong>
+            </div>
+
+            <div>
+              <span>Organisation</span>
+              <strong>{cleanText(row.organisation)}</strong>
+            </div>
+
+            <div>
+              <span>State</span>
+              <strong>{cleanText(row.state)}</strong>
+            </div>
+
+            <div>
+              <span>Verified</span>
+              <strong>{cleanText(row.verified)}</strong>
+            </div>
+          </div>
+
+          <div className="attendance-time-grid">
+            <div>
+              <span>Check In</span>
+              <strong>{cleanText(row.check_in)}</strong>
+            </div>
+
+            <div>
+              <span>Check Out</span>
+              <strong>{cleanText(row.check_out)}</strong>
+            </div>
+
+            <div>
+              <span>Late Reason</span>
+              <strong>{cleanText(row.late_reason)}</strong>
+            </div>
+
+            <div>
+              <span>Early Checkout Reason</span>
+              <strong>{cleanText(row.early_checkout_reason)}</strong>
+            </div>
+          </div>
+
+          <div className="attendance-location-grid">
+            <div className="attendance-location-box">
+              <MapPin size={16} />
+              <div>
+                <span>Check-in Location</span>
+                <strong>{cleanText(row.check_in_location_text)}</strong>
+
+                {row.check_in_map_url && (
+                  <a href={row.check_in_map_url} target="_blank" rel="noreferrer">
+                    Open map
+                  </a>
+                )}
+              </div>
+            </div>
+
+            <div className="attendance-location-box">
+              <MapPin size={16} />
+              <div>
+                <span>Check-out Location</span>
+                <strong>{cleanText(row.check_out_location_text)}</strong>
+
+                {row.check_out_map_url && (
+                  <a href={row.check_out_map_url} target="_blank" rel="noreferrer">
+                    Open map
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="attendance-record-footer">
+            <div>
+              <span>Field Location</span>
+              <strong>{cleanText(row.field_location)}</strong>
+            </div>
+
+            <div className="attendance-record-action">
+              {row.action}
+            </div>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export default function Attendance() {
   const [myAttendance, setMyAttendance] = useState([]);
   const [report, setReport] = useState([]);
@@ -229,6 +474,12 @@ export default function Attendance() {
       ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
     );
 
+  const isHrAdminAttendanceView = userRoles.some((role) =>
+    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
+  );
+
+  const showEmployeeSelfAttendancePanel = !isHrAdminAttendanceView;
+
   const canManageHoliday = userRoles.some((role) =>
     ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
   );
@@ -237,7 +488,24 @@ export default function Attendance() {
     return Object.values(filters).some((value) => String(value || '').trim());
   }, [filters]);
 
+
+  const reportSummary = useMemo(() => {
+    const total = report.length;
+
+    return {
+      total,
+      present: report.filter((row) => String(row.raw_status || row.status || '').toLowerCase().includes('present')).length,
+      late: report.filter((row) => String(row.raw_status || row.status || '').toLowerCase().includes('late')).length,
+      verified: report.filter((row) => row.verified_by_ro).length,
+    };
+  }, [report]);
+
   async function loadMyAttendance() {
+    if (!showEmployeeSelfAttendancePanel) {
+      setMyAttendance([]);
+      return;
+    }
+
     const data = await api('/attendance/my');
     setMyAttendance(normalizeAttendanceRows(data.items || []));
   }
@@ -263,6 +531,11 @@ export default function Attendance() {
   }
 
   async function loadMyModeRequests() {
+    if (!showEmployeeSelfAttendancePanel) {
+      setMyModeRequests([]);
+      return;
+    }
+
     const data = await api('/attendance/my-mode-requests');
     setMyModeRequests(normalizeModeRequestRows(data.items || []));
   }
@@ -275,6 +548,11 @@ export default function Attendance() {
   }
 
   async function loadMyCompOffs() {
+    if (!showEmployeeSelfAttendancePanel) {
+      setMyCompOffs([]);
+      return;
+    }
+
     const data = await api('/attendance/compoffs');
     setMyCompOffs(normalizeCompOffRows(data.items || []));
   }
@@ -548,12 +826,14 @@ export default function Attendance() {
     <div className="page-grid">
       <section className="hero compact">
         <div>
-          <span className="kicker">Office + WFH + Field</span>
+          <span className="kicker">
+            {isHrAdminAttendanceView ? 'HR Attendance Control' : 'Office + WFH + Field'}
+          </span>
           <h1>Attendance Management</h1>
           <p>
-            Press and hold for attendance, capture exact latitude and longitude,
-            manage late entry reasons after 09:50 AM, early checkout reasons,
-            holiday work, WFH/Field approvals and comp-off claims.
+            {isHrAdminAttendanceView
+              ? 'Monitor daily attendance records, employee locations, late reasons, WFH/Field approvals, and holiday attendance from one HR control panel.'
+              : 'Press and hold for attendance, capture exact latitude and longitude, manage late entry reasons after 09:50 AM, early checkout reasons, holiday work, WFH/Field approvals and comp-off claims.'}
           </p>
 
           <div className="hero-actions">
@@ -569,11 +849,14 @@ export default function Attendance() {
           </div>
         </div>
 
-        <AttendanceWidget onSuccess={refreshAttendance} />
+                {showEmployeeSelfAttendancePanel && (
+          <AttendanceWidget onSuccess={refreshAttendance} />
+        )}
       </section>
 
       {message && <div className="inline-message">{message}</div>}
 
+              {showEmployeeSelfAttendancePanel && (
       <section className="two-col">
         <div className="panel">
           <h3>Request Work From Home / Field</h3>
@@ -669,7 +952,9 @@ export default function Attendance() {
           <Table rows={myModeRequests} maxColumns={10} />
         </div>
       </section>
+      )}
 
+      {showEmployeeSelfAttendancePanel && (
       <section className="two-col">
         <div className="panel">
           <h3>My Attendance</h3>
@@ -743,124 +1028,194 @@ export default function Attendance() {
           <Table rows={myCompOffs} maxColumns={10} />
         </div>
       </section>
+      )}
 
       {canViewReport && (
-        <section className="panel">
-          <div className="toolbar">
+        <section className="panel attendance-report-panel">
+          <div className="attendance-report-header">
             <div>
-              <h3>Attendance Report</h3>
+              <span className="kicker">Daily Attendance</span>
+              <h3>Today’s Attendance Records</h3>
               <p>
-                HR/Admin can view records across the company. Mapped Team
-                Leaders and Reporting Officers can view records for employees
-                assigned under them.
+                Showing daily attendance by default. Past records will appear only after selecting a date or date range.
               </p>
             </div>
 
-            {hasActiveReportFilters && (
+            <div className="attendance-report-actions">
+              {hasActiveReportFilters && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={clearReportFilters}
+                  disabled={loadingReport}
+                >
+                  <X size={16} />
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="attendance-summary-grid">
+            <div className="attendance-summary-card">
+              <span>Total Records</span>
+              <strong>{reportSummary.total}</strong>
+            </div>
+
+            <div className="attendance-summary-card">
+              <span>Present</span>
+              <strong>{reportSummary.present}</strong>
+            </div>
+
+            <div className="attendance-summary-card">
+              <span>Late</span>
+              <strong>{reportSummary.late}</strong>
+            </div>
+
+            <div className="attendance-summary-card">
+              <span>Verified</span>
+              <strong>{reportSummary.verified}</strong>
+            </div>
+          </div>
+
+          <form className="attendance-filter-card" onSubmit={searchReport}>
+            <div className="attendance-filter-title">
+              <Filter size={16} />
+              <strong>Filter attendance</strong>
+              <span>Use filters only when you need specific employee or past records.</span>
+            </div>
+
+            <div className="attendance-filter-grid">
+              <label>
+                Employee Name
+                <input
+                  value={filters.employee_name}
+                  onChange={(e) =>
+                    setFilters({ ...filters, employee_name: e.target.value })
+                  }
+                  placeholder="Search by name, email or code"
+                />
+              </label>
+
+              <label>
+                Employee ID
+                <input
+                  value={filters.employee_id}
+                  onChange={(e) =>
+                    setFilters({ ...filters, employee_id: e.target.value })
+                  }
+                  placeholder="Employee ID"
+                />
+              </label>
+
+              <label>
+                Organisation / Entity
+                <div className="input-with-icon">
+                  <Building2 size={16} />
+                  <input
+                    value={filters.organisation}
+                    onChange={(e) =>
+                      setFilters({ ...filters, organisation: e.target.value })
+                    }
+                    placeholder="SDS / AVPL / SDF"
+                  />
+                </div>
+              </label>
+
+              <label>
+                State
+                <input
+                  value={filters.state}
+                  onChange={(e) =>
+                    setFilters({ ...filters, state: e.target.value })
+                  }
+                  placeholder="State"
+                />
+              </label>
+
+              <label>
+                Department
+                <input
+                  value={filters.department}
+                  onChange={(e) =>
+                    setFilters({ ...filters, department: e.target.value })
+                  }
+                  placeholder="Department"
+                />
+              </label>
+
+              <label>
+                Mode
+                <select
+                  value={filters.mode}
+                  onChange={(e) =>
+                    setFilters({ ...filters, mode: e.target.value })
+                  }
+                >
+                  <option value="">All Modes</option>
+                  <option value="office">Office</option>
+                  <option value="wfh">Work From Home</option>
+                  <option value="field">Field</option>
+                </select>
+              </label>
+
+              <label>
+                Status
+                <select
+                  value={filters.status}
+                  onChange={(e) =>
+                    setFilters({ ...filters, status: e.target.value })
+                  }
+                >
+                  <option value="">All Status</option>
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="early_checkout">Early Checkout</option>
+                  <option value="holiday_work">Holiday Work</option>
+                </select>
+              </label>
+
+              <label>
+                Date From
+                <input
+                  type="date"
+                  value={filters.date_from}
+                  onChange={(e) =>
+                    setFilters({ ...filters, date_from: e.target.value })
+                  }
+                />
+              </label>
+
+              <label>
+                Date To
+                <input
+                  type="date"
+                  value={filters.date_to}
+                  onChange={(e) =>
+                    setFilters({ ...filters, date_to: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="attendance-filter-actions">
+              <button type="submit" className="primary" disabled={loadingReport}>
+                <Search size={16} />
+                {loadingReport ? 'Searching...' : 'Search Records'}
+              </button>
+
               <button
                 type="button"
                 className="secondary"
                 onClick={clearReportFilters}
                 disabled={loadingReport}
               >
-                <X size={16} />
-                Clear Filters
+                Clear
               </button>
-            )}
-          </div>
-
-          <form className="dynamic-form" onSubmit={searchReport}>
-            <label>
-              Employee ID
-              <input
-                value={filters.employee_id}
-                onChange={(e) =>
-                  setFilters({ ...filters, employee_id: e.target.value })
-                }
-                placeholder="Employee Mongo ID"
-              />
-            </label>
-
-            <label>
-              Department
-              <input
-                value={filters.department}
-                onChange={(e) =>
-                  setFilters({ ...filters, department: e.target.value })
-                }
-                placeholder="Department"
-              />
-            </label>
-
-            <label>
-              Mode
-              <select
-                value={filters.mode}
-                onChange={(e) =>
-                  setFilters({ ...filters, mode: e.target.value })
-                }
-              >
-                <option value="">All Modes</option>
-                <option value="office">Office</option>
-                <option value="wfh">Work From Home</option>
-                <option value="field">Field</option>
-              </select>
-            </label>
-
-            <label>
-              Status
-              <select
-                value={filters.status}
-                onChange={(e) =>
-                  setFilters({ ...filters, status: e.target.value })
-                }
-              >
-                <option value="">All Status</option>
-                <option value="present">Present</option>
-                <option value="late">Late</option>
-                <option value="early_checkout">Early Checkout</option>
-                <option value="holiday_work">Holiday Work</option>
-              </select>
-            </label>
-
-            <label>
-              Date From
-              <input
-                type="date"
-                value={filters.date_from}
-                onChange={(e) =>
-                  setFilters({ ...filters, date_from: e.target.value })
-                }
-              />
-            </label>
-
-            <label>
-              Date To
-              <input
-                type="date"
-                value={filters.date_to}
-                onChange={(e) =>
-                  setFilters({ ...filters, date_to: e.target.value })
-                }
-              />
-            </label>
-
-            <button type="submit" className="primary" disabled={loadingReport}>
-              <Search size={16} />
-              {loadingReport ? 'Searching...' : 'Search'}
-            </button>
-
-            <button
-              type="button"
-              className="secondary"
-              onClick={clearReportFilters}
-              disabled={loadingReport}
-            >
-              Clear
-            </button>
+            </div>
           </form>
 
-          <Table rows={reportRows} maxColumns={12} />
+          <AttendanceReportList rows={reportRows} loading={loadingReport} />
         </section>
       )}
 

@@ -300,6 +300,192 @@ def employee_code(employee):
         or ""
     )
 
+def employee_organisation_name(employee):
+    employee = employee or {}
+
+    return normalize_text(
+        employee.get("organisation")
+        or employee.get("organization")
+        or employee.get("organisation_name")
+        or employee.get("organization_name")
+    )
+
+
+def employee_organisation_code(employee):
+    employee = employee or {}
+
+    return normalize_text(
+        employee.get("organisation_code")
+        or employee.get("organization_code")
+    ).upper()
+
+
+def active_employee_base_query(tenant_id=None):
+    q = {
+        "is_deleted": {"$ne": True},
+        "status": {"$nin": [
+            "Inactive",
+            "inactive",
+            "Resigned",
+            "resigned",
+            "Left",
+            "left",
+            "Terminated",
+            "terminated",
+            "Alumni",
+            "alumni",
+        ]},
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    return q
+
+
+def employee_filter_ids(db, tenant_id=None, name="", state="", organisation=""):
+    q = active_employee_base_query(tenant_id)
+
+    and_conditions = []
+
+    if name:
+        and_conditions.append({
+            "$or": [
+                {"name": {"$regex": name, "$options": "i"}},
+                {"employee_name": {"$regex": name, "$options": "i"}},
+                {"full_name": {"$regex": name, "$options": "i"}},
+                {"email": {"$regex": name, "$options": "i"}},
+                {"official_email": {"$regex": name, "$options": "i"}},
+                {"employee_id": {"$regex": name, "$options": "i"}},
+                {"employee_code": {"$regex": name, "$options": "i"}},
+                {"emp_code": {"$regex": name, "$options": "i"}},
+                {"code": {"$regex": name, "$options": "i"}},
+            ]
+        })
+
+    if state:
+        and_conditions.append({
+            "$or": [
+                {"state": {"$regex": state, "$options": "i"}},
+                {"office_state": {"$regex": state, "$options": "i"}},
+                {"current_state": {"$regex": state, "$options": "i"}},
+                {"branch": {"$regex": state, "$options": "i"}},
+                {"work_state": {"$regex": state, "$options": "i"}},
+            ]
+        })
+
+    if organisation:
+        and_conditions.append({
+            "$or": [
+                {"organisation": {"$regex": organisation, "$options": "i"}},
+                {"organization": {"$regex": organisation, "$options": "i"}},
+                {"organisation_name": {"$regex": organisation, "$options": "i"}},
+                {"organization_name": {"$regex": organisation, "$options": "i"}},
+                {"organisation_code": {"$regex": organisation, "$options": "i"}},
+                {"organization_code": {"$regex": organisation, "$options": "i"}},
+                {"organisation_id": organisation},
+                {"organization_id": organisation},
+            ]
+        })
+
+    if and_conditions:
+        q["$and"] = and_conditions
+
+    rows = db.employees.find(q, {"_id": 1})
+
+    return [str(row["_id"]) for row in rows]
+
+
+def apply_employee_id_filter(q, employee_ids):
+    employee_ids = [str(value) for value in employee_ids if value]
+
+    if not employee_ids:
+        q["employee_id"] = {"$in": []}
+        return q
+
+    existing = q.get("employee_id")
+
+    if isinstance(existing, dict) and "$in" in existing:
+        allowed = {str(value) for value in existing.get("$in", [])}
+        matched = [value for value in employee_ids if value in allowed]
+        q["employee_id"] = {"$in": matched}
+        return q
+
+    if existing:
+        q["employee_id"] = existing if str(existing) in employee_ids else "__no_match__"
+        return q
+
+    q["employee_id"] = {"$in": employee_ids}
+    return q
+
+
+def enrich_attendance_log(db, row):
+    row = dict(row or {})
+    tenant_id = row.get("tenant_id")
+    employee_id = normalize_text(row.get("employee_id"))
+
+    employee = None
+
+    if employee_id:
+        employee_obj_id = safe_object_id(employee_id)
+
+        employee_or = [
+            {"employee_id": employee_id},
+            {"employee_code": employee_id},
+            {"emp_code": employee_id},
+            {"code": employee_id},
+            {"user_id": employee_id},
+            {"employee_ref_id": employee_id},
+        ]
+
+        if employee_obj_id:
+            employee_or.insert(0, {"_id": employee_obj_id})
+
+        employee_q = {
+            "is_deleted": {"$ne": True},
+            "$or": employee_or,
+        }
+
+        if tenant_id:
+            employee_q["tenant_id"] = tenant_id
+
+        employee = db.employees.find_one(employee_q)
+
+    if not employee:
+        return row
+
+    row["employee_name"] = row.get("employee_name") or employee_display_name(employee)
+    row["employee_code"] = row.get("employee_code") or employee_code(employee)
+    row["emp_code"] = row.get("emp_code") or employee.get("emp_code", "")
+    row["department"] = row.get("department") or employee.get("department", "")
+    row["designation"] = row.get("designation") or employee.get("designation", "")
+    row["state"] = row.get("state") or employee_state(employee)
+
+    row["organisation"] = (
+        row.get("organisation")
+        or row.get("organization")
+        or employee_organisation_name(employee)
+    )
+
+    row["organization"] = row["organisation"]
+
+    row["organisation_name"] = (
+        row.get("organisation_name")
+        or row.get("organization_name")
+        or row["organisation"]
+    )
+
+    row["organization_name"] = row["organisation_name"]
+
+    row["organisation_code"] = (
+        row.get("organisation_code")
+        or row.get("organization_code")
+        or employee_organisation_code(employee)
+    )
+
+    row["organization_code"] = row["organisation_code"]
+
+    return row
 
 def employee_identifier_values(employee):
     employee = employee or {}
@@ -400,6 +586,12 @@ def employee_snapshot(employee):
         "email": employee.get("email", ""),
         "department": employee.get("department", ""),
         "designation": employee.get("designation", ""),
+        "organisation": employee_organisation_name(employee),
+        "organization": employee_organisation_name(employee),
+        "organisation_name": employee_organisation_name(employee),
+        "organization_name": employee_organisation_name(employee),
+        "organisation_code": employee_organisation_code(employee),
+        "organization_code": employee_organisation_code(employee),
         "state": employee_state(employee),
         "branch": employee.get("branch", ""),
         "role": "Employee",
@@ -1006,6 +1198,12 @@ def check_in():
         "employee_name": employee_display_name(e),
         "department": e.get("department", ""),
         "designation": e.get("designation", ""),
+        "organisation": employee_organisation_name(e),
+        "organization": employee_organisation_name(e),
+        "organisation_name": employee_organisation_name(e),
+        "organization_name": employee_organisation_name(e),
+        "organisation_code": employee_organisation_code(e),
+        "organization_code": employee_organisation_code(e),
         "state": employee_state(e),
         "team_leader_id": e.get("team_leader_id", ""),
         "team_leader_name": e.get("team_leader_name", ""),
@@ -1184,11 +1382,37 @@ def report():
     q = manager_scope_query(db)
 
     employee_id = normalize_text(request.args.get("employee_id"))
+    employee_name = normalize_text(
+        request.args.get("employee_name")
+        or request.args.get("name")
+        or request.args.get("q")
+        or request.args.get("search")
+    )
     department = normalize_text(request.args.get("department"))
     mode = normalize_mode(request.args.get("mode"))
     status = normalize_text(request.args.get("status"))
+    state = normalize_text(request.args.get("state"))
+    organisation = normalize_text(
+        request.args.get("organisation")
+        or request.args.get("organization")
+        or request.args.get("organisation_name")
+        or request.args.get("organization_name")
+        or request.args.get("organisation_code")
+        or request.args.get("organization_code")
+        or request.args.get("entity")
+        or request.args.get("entity_code")
+        or request.args.get("organisation_id")
+        or request.args.get("organization_id")
+    )
+
+    exact_date = normalize_text(
+        request.args.get("date")
+        or request.args.get("on_date")
+    )
     date_from = normalize_text(request.args.get("date_from"))
     date_to = normalize_text(request.args.get("date_to"))
+
+    tenant_id = q.get("tenant_id") if isinstance(q.get("tenant_id"), str) else current_tenant_id()
 
     if employee_id:
         if isinstance(q.get("employee_id"), dict) and "$in" in q["employee_id"]:
@@ -1197,8 +1421,19 @@ def report():
 
         q["employee_id"] = employee_id
 
+    if employee_name or state or organisation:
+        matched_employee_ids = employee_filter_ids(
+            db,
+            tenant_id=tenant_id,
+            name=employee_name,
+            state=state,
+            organisation=organisation,
+        )
+
+        apply_employee_id_filter(q, matched_employee_ids)
+
     if department:
-        q["department"] = department
+        q["department"] = {"$regex": department, "$options": "i"}
 
     if mode:
         q["mode"] = mode
@@ -1206,7 +1441,9 @@ def report():
     if status:
         q["status"] = status
 
-    if date_from or date_to:
+    if exact_date:
+        q["date"] = exact_date
+    elif date_from or date_to:
         q["date"] = {}
 
         if date_from:
@@ -1214,17 +1451,29 @@ def report():
 
         if date_to:
             q["date"]["$lte"] = date_to
+    else:
+        # Default HR/Admin report should show daily attendance only.
+        # Past records will appear only when date/date_from/date_to is selected.
+        q["date"] = today_local().isoformat()
 
     q["is_deleted"] = {"$ne": True}
 
     items = list(
         db.attendance_logs
         .find(q)
-        .sort("date", -1)
+        .sort([("date", -1), ("check_in", -1), ("created_at", -1)])
         .limit(500)
     )
 
-    return jsonify({"items": clean_doc(items)})
+    enriched_items = [
+        enrich_attendance_log(db, item)
+        for item in items
+    ]
+
+    return jsonify({
+        "items": clean_doc(enriched_items),
+        "default_date": q.get("date") if isinstance(q.get("date"), str) else "",
+    })
 
 
 @attendance_bp.patch("/<attendance_id>/verify")
