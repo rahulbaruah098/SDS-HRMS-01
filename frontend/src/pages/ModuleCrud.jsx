@@ -316,6 +316,27 @@ function leaveLiveStatus(row = {}) {
 
 function normalizeLeavePayload(payload) {
   const nextPayload = { ...payload };
+  const leaveType = String(nextPayload.leave_type || '').toUpperCase();
+  const isHalfDay = leaveType === 'HALF-DAY';
+
+  if (isHalfDay) {
+    nextPayload.leave_days = 0.5;
+    nextPayload.is_half_day = true;
+    nextPayload.day_type = 'half_day';
+    nextPayload.requested_leave_type = 'HALF-DAY';
+    nextPayload.requested_leave_type_label = 'Half Day';
+
+    if (nextPayload.from_date) {
+      nextPayload.to_date = nextPayload.from_date;
+      nextPayload.upto_date = nextPayload.from_date;
+    }
+  } else {
+    nextPayload.is_half_day = false;
+    nextPayload.day_type = 'full_day';
+    nextPayload.requested_leave_type = leaveType || nextPayload.leave_type;
+    nextPayload.requested_leave_type_label = nextPayload.leave_type_label;
+    delete nextPayload.leave_days;
+  }
 
   if (nextPayload.upto_date && !nextPayload.to_date) {
     nextPayload.to_date = nextPayload.upto_date;
@@ -338,7 +359,9 @@ function normalizeLeavePayload(payload) {
   delete nextPayload.approval_stage_label;
   delete nextPayload.approval_history;
   delete nextPayload.balance_deducted;
-  delete nextPayload.leave_days;
+  delete nextPayload.deducted_leave_type;
+  delete nextPayload.deducted_leave_type_label;
+  delete nextPayload.lwp_days;
 
   return nextPayload;
 }
@@ -1715,33 +1738,47 @@ setMessage(
       );
     }
 
-    if (collection === 'leave_requests' && key === 'leave_type') {
-      return (
-        <label key={key}>
-          {finalLabel}
-          <select
-            value={state[key] ?? 'CL'}
-            onChange={(event) => {
-              const selected = LEAVE_TYPES_FOR_EMPLOYEE.find(
-                (item) => item.value === event.target.value,
-              );
+if (collection === 'leave_requests' && key === 'leave_type') {
+  return (
+    <label key={key}>
+      {finalLabel}
+      <select
+        value={state[key] ?? 'CL'}
+        onChange={(event) => {
+          const selectedValue = event.target.value;
+          const selected = LEAVE_TYPES_FOR_EMPLOYEE.find(
+            (item) => item.value === selectedValue,
+          );
+          const isHalfDay = selectedValue === 'HALF-DAY';
 
-              setState({
-                ...state,
-                leave_type: event.target.value,
-                leave_type_label: selected?.label || leaveTypeLabel(event.target.value),
-              });
-            }}
-          >
-            {LEAVE_TYPES_FOR_EMPLOYEE.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      );
-    }
+          const nextState = {
+            ...state,
+            leave_type: selectedValue,
+            leave_type_label: selected?.label || leaveTypeLabel(selectedValue),
+            requested_leave_type: selectedValue,
+            requested_leave_type_label: selected?.label || leaveTypeLabel(selectedValue),
+            is_half_day: isHalfDay,
+            day_type: isHalfDay ? 'half_day' : 'full_day',
+            leave_days: isHalfDay ? 0.5 : 1,
+          };
+
+          if (isHalfDay && nextState.from_date) {
+            nextState.to_date = nextState.from_date;
+            nextState.upto_date = nextState.from_date;
+          }
+
+          setState(nextState);
+        }}
+      >
+        {LEAVE_TYPES_FOR_EMPLOYEE.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
     if (collection === 'attendance_mode_requests' && key === 'mode') {
       return (
@@ -2069,30 +2106,42 @@ if (
       );
     }
 
-    if (DATE_FIELDS.has(key)) {
-      return (
-        <label key={key}>
-          {finalLabel}
-          <input
-            type="date"
-            value={state[key] ?? ''}
-            onChange={(event) => {
-              const nextState = { ...state, [key]: event.target.value };
+if (DATE_FIELDS.has(key)) {
+  const isHalfDayLeave =
+    collection === 'leave_requests' && String(state.leave_type || '').toUpperCase() === 'HALF-DAY';
 
-              if (collection === 'leave_requests' && key === 'upto_date') {
-                nextState.to_date = event.target.value;
-              }
+  return (
+    <label key={key}>
+      {finalLabel}
+      <input
+        type="date"
+        value={state[key] ?? ''}
+        readOnly={isHalfDayLeave && ['upto_date', 'to_date'].includes(key)}
+        onChange={(event) => {
+          const nextState = { ...state, [key]: event.target.value };
 
-              if (collection === 'leave_requests' && key === 'to_date') {
-                nextState.upto_date = event.target.value;
-              }
+          if (collection === 'leave_requests' && key === 'from_date' && isHalfDayLeave) {
+            nextState.to_date = event.target.value;
+            nextState.upto_date = event.target.value;
+            nextState.leave_days = 0.5;
+            nextState.is_half_day = true;
+            nextState.day_type = 'half_day';
+          }
 
-              setState(nextState);
-            }}
-          />
-        </label>
-      );
-    }
+          if (collection === 'leave_requests' && key === 'upto_date') {
+            nextState.to_date = event.target.value;
+          }
+
+          if (collection === 'leave_requests' && key === 'to_date') {
+            nextState.upto_date = event.target.value;
+          }
+
+          setState(nextState);
+        }}
+      />
+    </label>
+  );
+}
 
     if (collection === 'leave_balances' && key !== 'employee_id' && key !== 'status') {
       return (
@@ -2229,18 +2278,21 @@ function visibleTableKeys(row) {
     return ORGANISATION_MASTER_TABLE_FIELDS;
   }
 
-    if (collection === 'leave_requests') {
-      return [
-        'employee_name',
-        'leave_type',
-        'from_date',
-        'to_date',
-        'task_handover_to_name',
-        'project_handover_name',
-        'approval_stage_label',
-        'status',
-      ];
-    }
+if (collection === 'leave_requests') {
+  return [
+    'employee_name',
+    'leave_type',
+    'leave_days',
+    'deducted_leave_type_label',
+    'lwp_days',
+    'from_date',
+    'to_date',
+    'task_handover_to_name',
+    'project_handover_name',
+    'approval_stage_label',
+    'status',
+  ];
+}
 
     if (collection === 'leave_balances') {
       return [
@@ -2284,6 +2336,9 @@ function visibleTableKeys(row) {
       el_credited: 'EL Credited',
       el_used: 'EL Used',
       el_available: 'EL Available',
+      leave_days: 'Leave Days',
+      deducted_leave_type_label: 'Deducted From',
+      lwp_days: 'LWP Days',
       approval_stage_label: 'Live Status',
     };
 
@@ -2321,9 +2376,23 @@ if (key === 'name') {
       return displayValue(row.joining_date || row.date_of_joining || row.doj);
     }
 
-    if (key === 'leave_type') {
-      return leaveTypeLabel(row.leave_type_label || row.leave_type);
-    }
+if (key === 'leave_type') {
+  return leaveTypeLabel(row.requested_leave_type_label || row.leave_type_label || row.leave_type);
+}
+
+if (key === 'deducted_leave_type_label') {
+  if (row.status !== 'approved') {
+    return '—';
+  }
+
+  return displayValue(row.deducted_leave_type_label || row.deducted_leave_type || '—');
+}
+
+if (key === 'lwp_days') {
+  const value = Number(row.lwp_days || 0);
+
+  return value > 0 ? value : '—';
+}
 
     if (key === 'approval_stage_label') {
       return leaveLiveStatus(row);

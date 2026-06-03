@@ -10,12 +10,14 @@ from openpyxl.utils import get_column_letter
 
 GUIDELINE_ROWS = [
     ("Holiday", "H"),
-    ("Casual Leave-", "CL"),
-    ("Casual Leave Half Day-", "CLH"),
+    ("Casual Leave", "CL"),
+    ("Casual Leave Half Day", "CLH"),
     ("Earned Leave", "EL"),
+    ("Earned Leave Half Day", "ELH"),
     ("Maternity Leave", "ML"),
     ("Paternity Leave", "PL"),
     ("Leave Without Pay", "LWP"),
+    ("Leave Without Pay Half Day", "LWPH"),
     ("Compensatory Off", "CO"),
     ("Work From Home", "WFH"),
     ("Tour / Field Work", "T"),
@@ -309,6 +311,72 @@ def attendance_status_code(row):
 
     return ""
 
+def normalize_leave_type_for_excel(value):
+    value = normalize_text(value).upper()
+
+    aliases = {
+        "CL": "CL",
+        "CASUAL": "CL",
+        "CASUAL LEAVE": "CL",
+        "CASUAL_LEAVE": "CL",
+
+        "EL": "EL",
+        "EARNED": "EL",
+        "EARNED LEAVE": "EL",
+        "EARNED_LEAVE": "EL",
+
+        "COMP OFF": "CO",
+        "COMP-OFF": "CO",
+        "COMPOFF": "CO",
+        "COMPENSATORY LEAVE": "CO",
+        "COMPENSATORY OFF": "CO",
+
+        "HALF DAY": "HALF-DAY",
+        "HALF-DAY": "HALF-DAY",
+        "HALFDAY": "HALF-DAY",
+        "HD": "HALF-DAY",
+
+        "LWP": "LWP",
+        "LEAVE WITHOUT PAY": "LWP",
+        "LOSS OF PAY": "LWP",
+
+        "ML": "ML",
+        "MATERNITY": "ML",
+        "MATERNITY LEAVE": "ML",
+
+        "PL": "PL",
+        "PATERNITY": "PL",
+        "PATERNITY LEAVE": "PL",
+    }
+
+    return aliases.get(value, value)
+
+
+def is_half_day_leave(row):
+    if normalize_leave_type_for_excel(
+        row.get("requested_leave_type")
+        or row.get("requested_leave_type_label")
+        or row.get("leave_type")
+        or row.get("leave_type_label")
+    ) == "HALF-DAY":
+        return True
+
+    if str(row.get("day_type") or "").strip().lower() == "half_day":
+        return True
+
+    if str(row.get("half_day") or row.get("is_half_day") or "").lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }:
+        return True
+
+    try:
+        return float(row.get("leave_days", 0) or 0) == 0.5
+    except Exception:
+        return False
+
 
 def leave_status_code(row):
     status = normalize_text(row.get("status")).lower()
@@ -317,35 +385,48 @@ def leave_status_code(row):
     if status not in {"approved", "accepted"} and approval_stage != "approved":
         return ""
 
-    leave_type = normalize_text(
-        row.get("leave_type")
+    requested_leave_type = normalize_leave_type_for_excel(
+        row.get("requested_leave_type")
+        or row.get("requested_leave_type_label")
+        or row.get("leave_type")
         or row.get("leave_type_label")
         or row.get("type")
-    ).upper()
+    )
 
-    half_day = str(row.get("half_day") or row.get("is_half_day") or "").lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-    }
+    deducted_leave_type = normalize_leave_type_for_excel(
+        row.get("deducted_leave_type")
+        or row.get("deducted_leave_type_label")
+        or ""
+    )
 
-    if leave_type in {"CL", "CASUAL", "CASUAL LEAVE", "CASUAL_LEAVE"}:
+    leave_type = deducted_leave_type or requested_leave_type
+    half_day = is_half_day_leave(row)
+
+    if requested_leave_type == "HALF-DAY":
+        if deducted_leave_type == "EL":
+            return "ELH"
+
+        if deducted_leave_type == "LWP" or float(row.get("lwp_days", 0) or 0) > 0:
+            return "LWPH"
+
+        return "CLH"
+
+    if leave_type == "CL":
         return "CLH" if half_day else "CL"
 
-    if leave_type in {"EL", "EARNED", "EARNED LEAVE", "EARNED_LEAVE"}:
-        return "EL"
+    if leave_type == "EL":
+        return "ELH" if half_day else "EL"
 
-    if leave_type in {"LWP", "LEAVE WITHOUT PAY", "LOSS OF PAY"}:
-        return "LWP"
+    if leave_type == "LWP":
+        return "LWPH" if half_day else "LWP"
 
-    if leave_type in {"ML", "MATERNITY", "MATERNITY LEAVE"}:
+    if leave_type == "ML":
         return "ML"
 
-    if leave_type in {"PL", "PATERNITY", "PATERNITY LEAVE"}:
+    if leave_type == "PL":
         return "PL"
 
-    if leave_type in {"CO", "COMP OFF", "COMP-OFF", "COMPOFF"}:
+    if leave_type == "CO":
         return "CO"
 
     return leave_type or "L"
@@ -496,7 +577,7 @@ def style_status_cell(cell, value):
 
     if code == "P":
         fill = PRESENT_FILL
-    elif code in {"CL", "CLH", "EL", "ML", "PL", "LWP", "CO"}:
+    elif code in {"CL", "CLH", "EL", "ELH", "ML", "PL", "LWP", "LWPH", "CO"}:
         fill = LEAVE_FILL
     elif code == "H":
         fill = HOLIDAY_FILL
@@ -656,8 +737,8 @@ def create_attendance_sheet(
             style_status_cell(ws.cell(row, col), code)
 
         ws.cell(row, summary_start_col).value = count_code(row_codes, "CL") + (count_code(row_codes, "CLH") * 0.5)
-        ws.cell(row, summary_start_col + 1).value = count_code(row_codes, "EL")
-        ws.cell(row, summary_start_col + 2).value = count_code(row_codes, "LWP")
+        ws.cell(row, summary_start_col + 1).value = count_code(row_codes, "EL") + (count_code(row_codes, "ELH") * 0.5)
+        ws.cell(row, summary_start_col + 2).value = count_code(row_codes, "LWP") + (count_code(row_codes, "LWPH") * 0.5)
         ws.cell(row, summary_start_col + 3).value = normalize_text(employee.get("remarks") or "")
 
         for col in range(summary_start_col, final_col + 1):

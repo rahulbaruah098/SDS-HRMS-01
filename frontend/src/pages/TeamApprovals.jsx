@@ -89,8 +89,57 @@ function leaveTypeLabel(value) {
     return 'Comp-Off';
   }
 
+  if (
+    normalized === 'HALF-DAY' ||
+    normalized === 'HALF DAY' ||
+    normalized === 'HALFDAY' ||
+    normalized === 'HD'
+  ) {
+    return 'Half Day';
+  }
+
+  if (
+    normalized === 'LWP' ||
+    normalized === 'LEAVE WITHOUT PAY' ||
+    normalized === 'LOSS OF PAY'
+  ) {
+    return 'Leave Without Pay';
+  }
+
   return value || 'Leave';
 }
+
+
+function leaveRequestTypeLabel(row = {}) {
+  return leaveTypeLabel(
+    row.requested_leave_type_label ||
+      row.requested_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function deductedLeaveTypeLabel(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+
+  if (status !== 'approved') {
+    return '—';
+  }
+
+  return leaveTypeLabel(
+    row.deducted_leave_type_label ||
+      row.deducted_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function lwpDaysLabel(row = {}) {
+  const value = Number(row.lwp_days || 0);
+
+  return value > 0 ? value : '—';
+}
+
 
 function getRequestId(row = {}) {
   return row._id || row.id || row.request_id || row.leave_request_id || '';
@@ -390,10 +439,10 @@ function RequestCard({ row, onApprove, onReject, savingId, capabilities }) {
       </div>
 
       <div className="ta-details-grid">
-        <div>
-          <span>Leave Type</span>
-          <strong>{leaveTypeLabel(row.leave_type_label || row.leave_type)}</strong>
-        </div>
+          <div>
+            <span>Leave Type</span>
+            <strong>{leaveRequestTypeLabel(row)}</strong>
+          </div>
 
         <div>
           <span>From Date</span>
@@ -405,16 +454,25 @@ function RequestCard({ row, onApprove, onReject, savingId, capabilities }) {
           <strong>{formatDate(row.upto_date || row.to_date)}</strong>
         </div>
 
-        <div>
-          <span>Leave Days</span>
-          <strong>{row.leave_days ?? '—'}</strong>
-        </div>
+            <div>
+              <span>Leave Days</span>
+              <strong>{row.leave_days ?? '—'}</strong>
+            </div>
 
-        <div>
-          <span>Task Handover</span>
-          <strong>{row.task_handover_to_name || '—'}</strong>
-        </div>
+            <div>
+              <span>Deducted From</span>
+              <strong>{deductedLeaveTypeLabel(row)}</strong>
+            </div>
 
+            <div>
+              <span>LWP Days</span>
+              <strong>{lwpDaysLabel(row)}</strong>
+            </div>
+
+            <div>
+              <span>Task Handover</span>
+              <strong>{row.task_handover_to_name || '—'}</strong>
+            </div>
         <div>
           <span>Project Handover</span>
           <strong>{row.project_handover_name || '—'}</strong>
@@ -496,6 +554,11 @@ export default function TeamApprovals({ setPage }) {
         row.designation,
         row.leave_type,
         row.leave_type_label,
+        row.requested_leave_type,
+        row.requested_leave_type_label,
+        row.deducted_leave_type,
+        row.deducted_leave_type_label,
+        row.lwp_days,
         row.reason,
         row.task_handover_to_name,
         row.project_handover_name,
@@ -887,7 +950,7 @@ export default function TeamApprovals({ setPage }) {
 
         .ta-details-grid {
           display: grid;
-          grid-template-columns: repeat(6, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 10px;
           margin-top: 16px;
         }

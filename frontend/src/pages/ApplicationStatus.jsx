@@ -82,7 +82,55 @@ function leaveTypeLabel(value) {
     return 'Comp-Off';
   }
 
+  if (
+    normalized === 'HALF-DAY' ||
+    normalized === 'HALF DAY' ||
+    normalized === 'HALFDAY' ||
+    normalized === 'HD'
+  ) {
+    return 'Half Day';
+  }
+
+  if (
+    normalized === 'LWP' ||
+    normalized === 'LEAVE WITHOUT PAY' ||
+    normalized === 'LOSS OF PAY'
+  ) {
+    return 'Leave Without Pay';
+  }
+
   return value || '—';
+}
+
+
+function leaveRequestTypeLabel(row = {}) {
+  return leaveTypeLabel(
+    row.requested_leave_type_label ||
+      row.requested_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function deductedLeaveTypeLabel(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+
+  if (status !== 'approved') {
+    return '—';
+  }
+
+  return leaveTypeLabel(
+    row.deducted_leave_type_label ||
+      row.deducted_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function lwpDaysLabel(row = {}) {
+  const value = Number(row.lwp_days || 0);
+
+  return value > 0 ? value : '—';
 }
 
 function modeLabel(value) {
@@ -194,10 +242,12 @@ function normalizeMainRows(rows = []) {
 
 function normalizeLeaveRows(rows = []) {
   return normalizeLeaveApprovalList(rows).map((row) => ({
-    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
+    leave_type: leaveRequestTypeLabel(row),
+    leave_days: row.leave_days ?? '—',
+    deducted_from: deductedLeaveTypeLabel(row),
+    lwp_days: lwpDaysLabel(row),
     from_date: formatDate(row.from_date),
     upto_date: formatDate(row.to_date || row.upto_date),
-    leave_days: row.leave_days ?? '—',
     reason: row.reason || '—',
     task_handover_to: row.task_handover_to_name || '—',
     project_handover: row.project_handover_name || '—',
@@ -381,7 +431,7 @@ function LeaveStatusCard({ row }) {
               {row.employee_code || row.emp_code || row.employee_id || 'Employee'}
               {row.department ? ` • ${row.department}` : ''}
             </span>
-            <small>{row.designation || leaveTypeLabel(row.leave_type_label || row.leave_type)}</small>
+            <small>{row.designation || leaveRequestTypeLabel(row)}</small>
           </div>
         </div>
 
@@ -393,7 +443,7 @@ function LeaveStatusCard({ row }) {
       <div className="as-leave-meta-grid">
         <div>
           <span>Leave Type</span>
-          <strong>{leaveTypeLabel(row.leave_type_label || row.leave_type)}</strong>
+          <strong>{leaveRequestTypeLabel(row)}</strong>
         </div>
 
         <div>
@@ -406,15 +456,25 @@ function LeaveStatusCard({ row }) {
           <strong>{formatDate(row.upto_date || row.to_date)}</strong>
         </div>
 
-        <div>
-          <span>Days</span>
-          <strong>{row.leave_days ?? '—'}</strong>
-        </div>
+          <div>
+            <span>Days</span>
+            <strong>{row.leave_days ?? '—'}</strong>
+          </div>
 
-        <div>
-          <span>Task Handover</span>
-          <strong>{row.task_handover_to_name || '—'}</strong>
-        </div>
+          <div>
+            <span>Deducted From</span>
+            <strong>{deductedLeaveTypeLabel(row)}</strong>
+          </div>
+
+          <div>
+            <span>LWP Days</span>
+            <strong>{lwpDaysLabel(row)}</strong>
+          </div>
+
+          <div>
+            <span>Task Handover</span>
+            <strong>{row.task_handover_to_name || '—'}</strong>
+          </div>
 
         <div>
           <span>Project Handover</span>

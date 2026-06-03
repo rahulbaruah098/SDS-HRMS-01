@@ -159,6 +159,15 @@ def normalize_leave_type(value):
         "COMP-OFF": "COMP-OFF",
         "COMPENSATORY LEAVE": "COMP-OFF",
         "COMPENSATORY OFF": "COMP-OFF",
+
+        "HALF DAY": "HALF-DAY",
+        "HALF-DAY": "HALF-DAY",
+        "HALFDAY": "HALF-DAY",
+        "HD": "HALF-DAY",
+
+        "LWP": "LWP",
+        "LEAVE WITHOUT PAY": "LWP",
+        "LOSS OF PAY": "LWP",
     }
 
     return aliases.get(value, value)
@@ -169,6 +178,8 @@ def leave_type_label(leave_type):
         "CL": "Casual Leave",
         "EL": "Earned Leave",
         "COMP-OFF": "Comp-Off",
+        "HALF-DAY": "Half Day",
+        "LWP": "Leave Without Pay",
     }
 
     return labels.get(normalize_leave_type(leave_type), normalize_text(leave_type))
@@ -1196,12 +1207,53 @@ def mode_request_live_status(item):
 def enrich_leave_request_doc(item):
     item = dict(item or {})
     live_status = leave_request_live_status(item)
+    leave_type = normalize_leave_type(item.get("leave_type") or item.get("leave_type_label"))
+    requested_leave_type = normalize_leave_type(
+        item.get("requested_leave_type")
+        or item.get("requested_leave_type_label")
+        or leave_type
+    )
+    deducted_leave_type = normalize_leave_type(
+        item.get("deducted_leave_type")
+        or item.get("deducted_leave_type_label")
+        or ""
+    )
+
+    is_half_day = (
+        requested_leave_type == "HALF-DAY"
+        or truthy(item.get("is_half_day"))
+        or normalize_text(item.get("day_type")).lower() == "half_day"
+    )
+
+    if is_half_day and float(item.get("leave_days", 0) or 0) == 0:
+        item["leave_days"] = 0.5
+
+    item["leave_type"] = leave_type
+    item["leave_type_label"] = item.get("leave_type_label") or leave_type_label(leave_type)
+
+    item["requested_leave_type"] = requested_leave_type
+    item["requested_leave_type_label"] = (
+        item.get("requested_leave_type_label")
+        or leave_type_label(requested_leave_type)
+    )
+
+    item["deducted_leave_type"] = deducted_leave_type
+    item["deducted_leave_type_label"] = (
+        item.get("deducted_leave_type_label")
+        or leave_type_label(deducted_leave_type)
+        if deducted_leave_type
+        else ""
+    )
+
+    item["is_half_day"] = is_half_day
+    item["day_type"] = "half_day" if is_half_day else item.get("day_type") or "full_day"
+    item["lwp_days"] = float(item.get("lwp_days", 0) or 0)
+
     item["live_status"] = live_status
     item["status_text"] = live_status
     item["status_display"] = live_status
     item["current_approval_stage"] = live_status
     item["approval_stage_label"] = item.get("approval_stage_label") or leave_stage_label(item.get("approval_stage"))
-    item["leave_type_label"] = item.get("leave_type_label") or leave_type_label(item.get("leave_type"))
     item["approval_timeline"] = item.get("approval_history") or []
 
     team_leader_approved = (
@@ -1282,6 +1334,11 @@ def enrich_mode_request_docs(items):
 # -----------------------------------------------------------------------------
 
 def calculate_leave_days(data):
+    leave_type = normalize_leave_type(data.get("leave_type"))
+
+    if leave_type == "HALF-DAY":
+        return 0.5
+
     if data.get("leave_days") not in [None, ""]:
         try:
             value = float(data.get("leave_days"))
@@ -1299,6 +1356,7 @@ def calculate_leave_days(data):
         return float((to_date - from_date).days + 1)
 
     return 1.0
+
 
 
 def build_initial_leave_stage(employee):
@@ -1638,6 +1696,12 @@ def upsert_leave_balance_from_payload(db, employee, leave_type, payload):
 def has_sufficient_leave_balance(db, employee, leave_type, leave_days):
     leave_type = normalize_leave_type(leave_type)
 
+    if leave_type == "HALF-DAY":
+        # Half-day never fails at apply time.
+        # At final approval it will deduct from CL first, then EL,
+        # and finally become LWP if both balances are exhausted.
+        return True, None
+
     if leave_type not in LEAVE_TYPES_WITH_BALANCE:
         return True, None
 
@@ -1650,17 +1714,52 @@ def has_sufficient_leave_balance(db, employee, leave_type, leave_days):
     return True, balance
 
 
-def deduct_leave_balance(db, employee, leave_doc):
-    leave_type = normalize_leave_type(leave_doc.get("leave_type"))
+def resolve_half_day_deduction_balance(db, employee, leave_days):
+    """
+    Half-day deduction priority:
+    1. Deduct from CL if at least 0.5 CL is available.
+    2. Else deduct from EL if at least 0.5 EL is available.
+    3. Else approve as LWP without balance deduction.
+    """
 
-    if leave_type not in LEAVE_TYPES_WITH_BALANCE:
-        return None
+    for leave_type in ["CL", "EL"]:
+        balance = ensure_leave_balance(db, employee, leave_type)
+        available = float(balance.get("available", 0) or 0)
+
+        if available >= float(leave_days):
+            return leave_type, balance
+
+    return "LWP", None
+
+
+def deduct_leave_balance(db, employee, leave_doc):
+    original_leave_type = normalize_leave_type(leave_doc.get("leave_type"))
+    leave_type = original_leave_type
 
     if leave_doc.get("balance_deducted"):
-        return get_leave_balance(db, employee, leave_type)
+        deducted_leave_type = normalize_leave_type(leave_doc.get("deducted_leave_type") or leave_type)
+        return get_leave_balance(db, employee, deducted_leave_type)
 
     leave_days = float(leave_doc.get("leave_days", 1) or 1)
-    balance = ensure_leave_balance(db, employee, leave_type)
+
+    if original_leave_type == "HALF-DAY":
+        leave_type, balance = resolve_half_day_deduction_balance(db, employee, leave_days)
+
+        if leave_type == "LWP":
+            return {
+                "leave_type": "LWP",
+                "leave_type_label": leave_type_label("LWP"),
+                "available": 0,
+                "used": 0,
+                "lwp_days": leave_days,
+            }
+
+    elif leave_type not in LEAVE_TYPES_WITH_BALANCE:
+        return None
+
+    else:
+        balance = ensure_leave_balance(db, employee, leave_type)
+
     available = float(balance.get("available", 0) or 0)
 
     if available < leave_days:
@@ -2906,7 +3005,11 @@ def list_leave_requests():
         q["project_handover_id"] = project_handover_id
 
     if leave_type:
-        q["leave_type"] = leave_type
+        q["$or"] = [
+            {"leave_type": leave_type},
+            {"requested_leave_type": leave_type},
+            {"deducted_leave_type": leave_type},
+        ]
 
     if period and not (date_from or date_to):
         date_from, date_to = date_range_for_period(period, base_date)
@@ -2952,10 +3055,15 @@ def apply_leave_request():
         "from_date": from_date.isoformat() if from_date else "",
         "to_date": to_date.isoformat() if to_date else "",
         "leave_days": data.get("leave_days"),
+        "leave_type": leave_type,
+        "is_half_day": data.get("is_half_day"),
+        "day_type": data.get("day_type"),
     })
 
-    if leave_type not in ["CL", "EL", "COMP-OFF"]:
-        return jsonify({"message": "Leave type must be Casual Leave or Earned Leave"}), 400
+    if leave_type not in ["CL", "EL", "COMP-OFF", "HALF-DAY"]:
+        return jsonify({
+            "message": "Leave type must be Casual Leave, Earned Leave, Comp-Off, or Half Day"
+        }), 400
 
     if not from_date or not to_date:
         return jsonify({"message": "From date and upto date are required"}), 400
@@ -3025,6 +3133,10 @@ def apply_leave_request():
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
         "leave_type": leave_type,
         "leave_type_label": leave_type_label(leave_type),
+        "requested_leave_type": leave_type,
+        "requested_leave_type_label": leave_type_label(leave_type),
+        "is_half_day": leave_type == "HALF-DAY" or leave_days == 0.5,
+        "day_type": "half_day" if leave_type == "HALF-DAY" or leave_days == 0.5 else "full_day",
         "leave_days": leave_days,
         "from_date": from_date.isoformat(),
         "to_date": to_date.isoformat(),
@@ -3216,7 +3328,23 @@ def leave_decision(req_id):
     leave_type = normalize_leave_type(existing.get("leave_type"))
     leave_days = float(existing.get("leave_days", 1) or 1)
 
-    if leave_type in LEAVE_TYPES_WITH_BALANCE and not existing.get("balance_deducted"):
+    deducted_leave_type = leave_type
+    deducted_leave_type_label = leave_type_label(leave_type)
+    balance_deducted = False
+    lwp_days = 0.0
+
+    if leave_type == "HALF-DAY" and not existing.get("balance_deducted"):
+        deduction_result = deduct_leave_balance(db, employee, existing)
+
+        deducted_leave_type = normalize_leave_type(
+            deduction_result.get("leave_type") if isinstance(deduction_result, dict) else leave_type
+        )
+        deducted_leave_type_label = leave_type_label(deducted_leave_type)
+
+        balance_deducted = deducted_leave_type in LEAVE_TYPES_WITH_BALANCE
+        lwp_days = leave_days if deducted_leave_type == "LWP" else 0.0
+
+    elif leave_type in LEAVE_TYPES_WITH_BALANCE and not existing.get("balance_deducted"):
         sufficient, balance = has_sufficient_leave_balance(db, employee, leave_type, leave_days)
 
         if not sufficient:
@@ -3226,6 +3354,7 @@ def leave_decision(req_id):
             }), 400
 
         deduct_leave_balance(db, employee, existing)
+        balance_deducted = True
 
     update_set = {
         "status": "approved",
@@ -3235,7 +3364,10 @@ def leave_decision(req_id):
         "approved_at": now,
         "approved_by": str(g.current_user["_id"]),
         "approved_by_name": g.current_user.get("name") or g.current_user.get("email"),
-        "balance_deducted": leave_type in LEAVE_TYPES_WITH_BALANCE,
+        "deducted_leave_type": deducted_leave_type,
+        "deducted_leave_type_label": deducted_leave_type_label,
+        "lwp_days": lwp_days,
+        "balance_deducted": balance_deducted,
         "updated_at": now,
         **current_stage_fields,
     }

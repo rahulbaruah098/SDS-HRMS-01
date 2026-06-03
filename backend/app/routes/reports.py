@@ -109,15 +109,26 @@ LEAVE_TYPE_ALIASES = {
     "CASUAL LEAVE": "CL",
     "CASUAL": "CL",
     "CASUAL_LEAVE": "CL",
+
     "EL": "EL",
     "EARNED LEAVE": "EL",
     "EARNED": "EL",
     "EARNED_LEAVE": "EL",
+
     "COMP OFF": "COMP-OFF",
     "COMPOFF": "COMP-OFF",
     "COMP-OFF": "COMP-OFF",
     "COMPENSATORY LEAVE": "COMP-OFF",
     "COMPENSATORY OFF": "COMP-OFF",
+
+    "HALF DAY": "HALF-DAY",
+    "HALF-DAY": "HALF-DAY",
+    "HALFDAY": "HALF-DAY",
+    "HD": "HALF-DAY",
+
+    "LWP": "LWP",
+    "LEAVE WITHOUT PAY": "LWP",
+    "LOSS OF PAY": "LWP",
 }
 
 
@@ -199,6 +210,8 @@ def leave_type_label(value):
         "CL": "Casual Leave",
         "EL": "Earned Leave",
         "COMP-OFF": "Comp-Off",
+        "HALF-DAY": "Half Day",
+        "LWP": "Leave Without Pay",
     }
 
     return labels.get(leave_type, normalize_text(value) or "Leave")
@@ -245,10 +258,36 @@ def leave_live_status(row):
 def enrich_leave_request(row):
     row = dict(row or {})
     live_status = leave_live_status(row)
+
     leave_type = normalize_leave_type(row.get("leave_type") or row.get("leave_type_label"))
+    requested_leave_type = normalize_leave_type(
+        row.get("requested_leave_type") or row.get("requested_leave_type_label") or leave_type
+    )
+    deducted_leave_type = normalize_leave_type(
+        row.get("deducted_leave_type") or row.get("deducted_leave_type_label") or ""
+    )
 
     row["leave_type"] = leave_type
     row["leave_type_label"] = row.get("leave_type_label") or leave_type_label(leave_type)
+
+    row["requested_leave_type"] = requested_leave_type
+    row["requested_leave_type_label"] = (
+        row.get("requested_leave_type_label") or leave_type_label(requested_leave_type)
+    )
+
+    if deducted_leave_type:
+        row["deducted_leave_type"] = deducted_leave_type
+        row["deducted_leave_type_label"] = (
+            row.get("deducted_leave_type_label") or leave_type_label(deducted_leave_type)
+        )
+    else:
+        row["deducted_leave_type"] = ""
+        row["deducted_leave_type_label"] = ""
+
+    row["is_half_day"] = bool(row.get("is_half_day")) or requested_leave_type == "HALF-DAY"
+    row["day_type"] = row.get("day_type") or ("half_day" if row["is_half_day"] else "full_day")
+    row["lwp_days"] = float(row.get("lwp_days", 0) or 0)
+
     row["live_status"] = live_status
     row["status_text"] = live_status
     row["status_display"] = live_status
@@ -661,6 +700,8 @@ def summarize_leave_requests(items):
         "casual_leave": 0.0,
         "earned_leave": 0.0,
         "comp_off": 0.0,
+        "half_day": 0.0,
+        "lwp": 0.0,
         "total_days": 0.0,
         "deducted_days": 0.0,
         "not_deducted_days": 0.0,
@@ -669,7 +710,8 @@ def summarize_leave_requests(items):
     for item in items:
         status = normalize_text(item.get("status")).lower()
         stage = normalize_text(item.get("approval_stage")).lower()
-        leave_type = normalize_leave_type(item.get("leave_type"))
+        leave_type = normalize_leave_type(item.get("requested_leave_type") or item.get("leave_type"))
+        deducted_leave_type = normalize_leave_type(item.get("deducted_leave_type"))
         days = float(item.get("leave_days", 0) or 0)
 
         if status in ["pending", "approved", "rejected"]:
@@ -690,13 +732,19 @@ def summarize_leave_requests(items):
             summary["earned_leave"] += days
         elif leave_type == "COMP-OFF":
             summary["comp_off"] += days
+        elif leave_type == "HALF-DAY":
+            summary["half_day"] += days
+
+        if deducted_leave_type == "LWP" or float(item.get("lwp_days", 0) or 0) > 0:
+            summary["lwp"] += float(item.get("lwp_days", 0) or days)
 
         if item.get("balance_deducted"):
             summary["deducted_days"] += days
+        elif deducted_leave_type == "LWP" or float(item.get("lwp_days", 0) or 0) > 0:
+            summary["deducted_days"] += 0
+            summary["not_deducted_days"] += days
         else:
             summary["not_deducted_days"] += days
-
-        summary["total_days"] += days
 
     return summary
 
@@ -765,6 +813,9 @@ def leave_type_options():
     return [
         {"value": "CL", "label": "Casual Leave"},
         {"value": "EL", "label": "Earned Leave"},
+        {"value": "COMP-OFF", "label": "Comp-Off"},
+        {"value": "HALF-DAY", "label": "Half Day"},
+        {"value": "LWP", "label": "Leave Without Pay"},
     ]
 
 
@@ -1701,7 +1752,11 @@ def leave_deductions_report():
     q = with_not_deleted(q)
 
     q["status"] = "approved"
-    q["balance_deducted"] = True
+    q["$or"] = [
+        {"balance_deducted": True},
+        {"deducted_leave_type": "LWP"},
+        {"lwp_days": {"$gt": 0}},
+    ]
 
     leave_type = normalize_leave_type(request.args.get("leave_type"))
 

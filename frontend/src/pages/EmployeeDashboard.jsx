@@ -101,7 +101,55 @@ function leaveTypeLabel(value) {
     return 'Comp-Off';
   }
 
+  if (
+    normalized === 'HALF-DAY' ||
+    normalized === 'HALF DAY' ||
+    normalized === 'HALFDAY' ||
+    normalized === 'HD'
+  ) {
+    return 'Half Day';
+  }
+
+  if (
+    normalized === 'LWP' ||
+    normalized === 'LEAVE WITHOUT PAY' ||
+    normalized === 'LOSS OF PAY'
+  ) {
+    return 'Leave Without Pay';
+  }
+
   return value || '—';
+}
+
+
+function leaveRequestTypeLabel(row = {}) {
+  return leaveTypeLabel(
+    row.requested_leave_type_label ||
+      row.requested_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function deductedLeaveTypeLabel(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+
+  if (status !== 'approved') {
+    return '—';
+  }
+
+  return leaveTypeLabel(
+    row.deducted_leave_type_label ||
+      row.deducted_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function lwpDaysLabel(row = {}) {
+  const value = Number(row.lwp_days || 0);
+
+  return value > 0 ? value : '—';
 }
 
 function statusLabel(value) {
@@ -1104,6 +1152,8 @@ function LeaveApprovalTable({ rows = [], saving, onDecision }) {
             <th>From</th>
             <th>Upto</th>
             <th>Days</th>
+            <th>Deducted From</th>
+            <th>LWP Days</th>
             <th>Task Handover</th>
             <th>Project Handover</th>
             <th>Current Stage</th>
@@ -1119,10 +1169,12 @@ function LeaveApprovalTable({ rows = [], saving, onDecision }) {
                 <br />
                 <small>{row.employee_code || row.emp_code || row.employee_id || '—'}</small>
               </td>
-              <td>{leaveTypeLabel(row.leave_type_label || row.leave_type)}</td>
+              <td>{leaveRequestTypeLabel(row)}</td>
               <td>{formatDate(row.from_date)}</td>
               <td>{formatDate(row.to_date || row.upto_date)}</td>
               <td>{row.leave_days ?? '—'}</td>
+              <td>{deductedLeaveTypeLabel(row)}</td>
+              <td>{lwpDaysLabel(row)}</td>
               <td>{row.task_handover_to_name || '—'}</td>
               <td>{row.project_handover_name || '—'}</td>
               <td>{leaveLiveStatus(row)}</td>
@@ -1728,17 +1780,19 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
     status: statusLabel(row.status),
   }));
 
-  const leaveRows = myLeaveRows.map((row) => ({
-    leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-    from_date: formatDate(row.from_date),
-    upto_date: formatDate(row.to_date || row.upto_date),
-    leave_days: row.leave_days ?? '—',
-    reason: row.reason || '—',
-    task_handover_to: row.task_handover_to_name || '—',
-    project_handover: row.project_handover_name || '—',
-    current_status: leaveLiveStatus(row),
-    final_status: statusLabel(row.status),
-  }));
+    const leaveRows = myLeaveRows.map((row) => ({
+      leave_type: leaveRequestTypeLabel(row),
+      leave_days: row.leave_days ?? '—',
+      deducted_from: deductedLeaveTypeLabel(row),
+      lwp_days: lwpDaysLabel(row),
+      from_date: formatDate(row.from_date),
+      upto_date: formatDate(row.to_date || row.upto_date),
+      reason: row.reason || '—',
+      task_handover_to: row.task_handover_to_name || '—',
+      project_handover: row.project_handover_name || '—',
+      current_status: leaveLiveStatus(row),
+      final_status: statusLabel(row.status),
+    }));
 
   const notificationRows = (data?.notifications || []).map((row) => ({
     title: row.title || '—',
@@ -3132,11 +3186,12 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
             </div>
           </div>
 
-          <div className="emp-leave-note">
-            When you apply for leave, it first goes to your Team Leader. If no
-            Team Leader is mapped, it goes directly to your Reporting Officer.
-            Balance is deducted only after final approval.
-          </div>
+        <div className="emp-leave-note">
+          When you apply for leave, it first goes to your Team Leader. If no
+          Team Leader is mapped, it goes directly to your Reporting Officer.
+          Balance is deducted only after final approval. Half Day is deducted
+          from CL first, then EL, and becomes LWP if both balances are exhausted.
+        </div>
 
           <Table rows={leaveBalanceRows} maxColumns={8} />
         </div>

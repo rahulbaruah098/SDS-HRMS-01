@@ -79,6 +79,18 @@ DEFAULT_LEAVE_TYPES = [
         "days_per_year": 0,
         "carry_forward": False,
     },
+    {
+        "name": "Half Day",
+        "code": "HALF-DAY",
+        "days_per_year": 0,
+        "carry_forward": False,
+    },
+    {
+        "name": "Leave Without Pay",
+        "code": "LWP",
+        "days_per_year": 0,
+        "carry_forward": False,
+    },
 ]
 
 ATTENDANCE_SETTINGS = [
@@ -615,6 +627,8 @@ def ensure_leave_balance_for_employee(db, tenant_id, employee, leave_type, total
         "CL": "Casual Leave",
         "EL": "Earned Leave",
         "COMP-OFF": "Comp-Off",
+        "HALF-DAY": "Half Day",
+        "LWP": "Leave Without Pay",
     }
 
     existing = db.leave_balances.find_one({

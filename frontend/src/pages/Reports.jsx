@@ -195,7 +195,55 @@ function leaveTypeLabel(value) {
     return 'Comp-Off';
   }
 
+  if (
+    normalized === 'HALF-DAY' ||
+    normalized === 'HALF DAY' ||
+    normalized === 'HALFDAY' ||
+    normalized === 'HD'
+  ) {
+    return 'Half Day';
+  }
+
+  if (
+    normalized === 'LWP' ||
+    normalized === 'LEAVE WITHOUT PAY' ||
+    normalized === 'LOSS OF PAY'
+  ) {
+    return 'Leave Without Pay';
+  }
+
   return value || '—';
+}
+
+
+function leaveRequestTypeLabel(row = {}) {
+  return leaveTypeLabel(
+    row.requested_leave_type_label ||
+      row.requested_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function deductedLeaveTypeLabel(row = {}) {
+  const status = String(row.status || '').toLowerCase();
+
+  if (status !== 'approved') {
+    return '—';
+  }
+
+  return leaveTypeLabel(
+    row.deducted_leave_type_label ||
+      row.deducted_leave_type ||
+      row.leave_type_label ||
+      row.leave_type,
+  );
+}
+
+function lwpDaysLabel(row = {}) {
+  const value = Number(row.lwp_days || 0);
+
+  return value > 0 ? value : '—';
 }
 
 function statusLabel(value) {
@@ -304,37 +352,36 @@ function normalizeRows(tab, rows = []) {
     }));
   }
 
-  if (
-    tab === 'leave-requests' ||
-    tab === 'leave-records' ||
-    tab === 'leave-approvals' ||
-    tab === 'leave-deductions'
-  ) {
-    return rows.map((row) => ({
-      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
-      employee_name: row.employee_name || '—',
-      department: row.department || '—',
-      designation: row.designation || '—',
-      leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
-      from_date: formatDate(row.from_date),
-      upto_date: formatDate(row.to_date || row.upto_date),
-      leave_days: row.leave_days ?? '—',
-      reason: row.reason || '—',
-      task_handover_to: row.task_handover_to_name || '—',
-      project_handover: row.project_handover_name || '—',
-      team_leader: row.team_leader_name || '—',
-      reporting_officer: row.reporting_officer_name || '—',
-      current_stage: row.live_status || row.status_text || row.current_approval_stage || row.approval_stage_label || statusLabel(row.approval_stage),
-      final_status: statusLabel(row.status),
-      deducted: yesNo(row.deducted_from_balance || row.balance_deducted),
-      approved_by: row.approved_by_name || '—',
-      approved_at: formatDateTime(row.approved_at),
-      rejected_by: row.rejected_by_name || '—',
-      rejected_at: formatDateTime(row.rejected_at),
-      created_at: formatDateTime(row.created_at),
-      updated_at: formatDateTime(row.updated_at),
-    }));
-  }
+if (
+  tab === 'leave-requests' ||
+  tab === 'leave-records' ||
+  tab === 'leave-approvals' ||
+  tab === 'leave-deductions'
+) {
+  return rows.map((row) => ({
+    employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
+    employee_name: row.employee_name || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    leave_type: leaveRequestTypeLabel(row),
+    deducted_from: deductedLeaveTypeLabel(row),
+    lwp_days: lwpDaysLabel(row),
+    from_date: formatDate(row.from_date),
+    upto_date: formatDate(row.to_date || row.upto_date),
+    leave_days: row.leave_days ?? '—',
+    reason: row.reason || '—',
+    task_handover_to: row.task_handover_to_name || '—',
+    project_handover: row.project_handover_name || '—',
+    team_leader: row.team_leader_name || '—',
+    reporting_officer: row.reporting_officer_name || '—',
+    current_stage: row.live_status || row.status_text || row.current_approval_stage || row.approval_stage_label || statusLabel(row.approval_stage),
+    final_status: statusLabel(row.status),
+    deducted: yesNo(row.deducted_from_balance || row.balance_deducted),
+    approved_by: row.approved_by_name || '—',
+    approved_at: formatDateTime(row.approved_at || row.decided_at),
+    created_at: formatDateTime(row.created_at),
+  }));
+}
 
   if (tab === 'audit') {
     return rows.map((row) => ({
@@ -364,6 +411,8 @@ function normalizeLeaveSummary(summary = {}) {
     casual_leave: safeSummary.casual_leave || 0,
     earned_leave: safeSummary.earned_leave || 0,
     comp_off: safeSummary.comp_off || 0,
+    half_day: safeSummary.half_day || 0,
+    lwp: safeSummary.lwp || 0,
     total_days: safeSummary.total_days || 0,
     deducted_days: safeSummary.deducted_days || 0,
     not_deducted_days: safeSummary.not_deducted_days || 0,
@@ -714,18 +763,20 @@ export default function Reports() {
         </div>
       </section>
 
-      {showLeaveAdvancedFilters && (
-        <section className="stats-grid">
-          <Stat label="Filtered Leaves" value={leaveSummary.total} />
-          <Stat label="Pending" value={leaveSummary.pending} />
-          <Stat label="Approved" value={leaveSummary.approved} />
-          <Stat label="Rejected" value={leaveSummary.rejected} />
-          <Stat label="Pending TL" value={leaveSummary.pending_with_team_leader} />
-          <Stat label="Pending RO" value={leaveSummary.pending_with_reporting_officer} />
-          <Stat label="Deducted Days" value={leaveSummary.deducted_days} />
-          <Stat label="Total Leave Days" value={leaveSummary.total_days} />
-        </section>
-      )}
+        {showLeaveAdvancedFilters && (
+          <section className="stats-grid">
+            <Stat label="Filtered Leaves" value={leaveSummary.total} />
+            <Stat label="Pending" value={leaveSummary.pending} />
+            <Stat label="Approved" value={leaveSummary.approved} />
+            <Stat label="Rejected" value={leaveSummary.rejected} />
+            <Stat label="Pending TL" value={leaveSummary.pending_with_team_leader} />
+            <Stat label="Pending RO" value={leaveSummary.pending_with_reporting_officer} />
+            <Stat label="Half Day" value={leaveSummary.half_day} />
+            <Stat label="LWP Days" value={leaveSummary.lwp} />
+            <Stat label="Deducted Days" value={leaveSummary.deducted_days} />
+            <Stat label="Total Leave Days" value={leaveSummary.total_days} />
+          </section>
+        )}
 
       {activeTab === 'leave-balances' && (
         <section className="stats-grid">
@@ -994,6 +1045,8 @@ export default function Reports() {
                 <option value="CL">Casual Leave</option>
                 <option value="EL">Earned Leave</option>
                 <option value="COMP-OFF">Comp-Off</option>
+                <option value="HALF-DAY">Half Day</option>
+                <option value="LWP">Leave Without Pay</option>
               </select>
             </label>
           )}

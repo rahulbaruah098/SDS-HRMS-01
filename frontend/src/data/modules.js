@@ -224,6 +224,7 @@ export const IT_SUPPORT_ROLES = ALL_COMMON_ROLES;
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
+  { value: 'HALF-DAY', label: 'Half Day' },
 ];
 
 export const LEAVE_BALANCE_TYPES = [
@@ -1246,6 +1247,13 @@ export const templates = {
     designation: '',
     leave_type: 'CL',
     leave_type_label: 'Casual Leave',
+    requested_leave_type: 'CL',
+    requested_leave_type_label: 'Casual Leave',
+    deducted_leave_type: '',
+    deducted_leave_type_label: '',
+    is_half_day: false,
+    day_type: 'full_day',
+    lwp_days: 0,
     from_date: '',
     to_date: '',
     upto_date: '',
@@ -1400,6 +1408,10 @@ export const templates = {
     reporting_officer_name: '',
     leave_type: 'CL',
     leave_type_label: 'Casual Leave',
+    requested_leave_type: 'CL',
+    requested_leave_type_label: 'Casual Leave',
+    is_half_day: false,
+    day_type: 'full_day',
     from_date: '',
     to_date: '',
     upto_date: '',

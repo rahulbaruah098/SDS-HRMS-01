@@ -25,6 +25,19 @@ def normalize_text(value):
     return str(value or "").strip()
 
 
+def leave_type_label(leave_type):
+    leave_type = normalize_text(leave_type).upper()
+
+    labels = {
+        "CL": "Casual Leave",
+        "EL": "Earned Leave",
+        "COMP-OFF": "Comp-Off",
+        "HALF-DAY": "Half Day",
+        "LWP": "Leave Without Pay",
+    }
+
+    return labels.get(leave_type, leave_type)
+
 def normalize_state(value):
     state = normalize_text(value)
 
@@ -103,6 +116,7 @@ def create_leave_balance(db, tenant_id, employee_id, employee_name, department, 
         "department": department,
         "designation": designation,
         "leave_type": leave_type,
+        "leave_type_label": leave_type_label(leave_type),
         "opening_balance": total_value,
         "credited": total_value,
         "used": 0.0,
@@ -517,7 +531,12 @@ with app.app_context():
         "team_leader_name": "Manager User",
         "reporting_officer_id": eids["hr@sdshr.in"],
         "reporting_officer_name": "HR Manager",
-        "leave_type": "CL",
+        "leave_type": "HALF-DAY",
+        "leave_type_label": "Half Day",
+        "requested_leave_type": "HALF-DAY",
+        "requested_leave_type_label": "Half Day",
+        "is_half_day": True,
+        "day_type": "half_day",
         "from_date": "2026-05-12",
         "to_date": "2026-05-12",
         "leave_days": 0.5,
@@ -526,6 +545,9 @@ with app.app_context():
         "approval_stage": "team_leader",
         "approval_stage_label": "Team Leader",
         "approval_history": [],
+        "deducted_leave_type": "",
+        "deducted_leave_type_label": "",
+        "lwp_days": 0,
         "balance_deducted": False,
         "created_at": now(),
     })
