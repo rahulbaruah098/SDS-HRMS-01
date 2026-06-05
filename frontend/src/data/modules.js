@@ -521,6 +521,21 @@ export const coreModules = [
     'Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
     ATTENDANCE_ROLES,
   ],
+  [
+    'leave_requests',
+    'Apply Leave',
+    CalendarDays,
+    'Employees can apply for Casual Leave, Earned Leave and Half Day leave, and track approval status.',
+    EMPLOYEE_PORTAL_ROLES,
+  ],
+  [
+    'leave',
+    'Leave Management',
+    CalendarDays,
+    'HR can review today’s leave records, filter previous leave history, and monitor approval status.',
+    HR_ROLES,
+  ],
+
 [
   'projects',
   'Projects',
@@ -535,13 +550,7 @@ export const coreModules = [
     'Team Leader and Reporting Officer approval inbox plus HR/Admin leave record panel with live approval stage and history.',
     TEAM_APPROVAL_ROLES,
   ],
-  [
-    'leave',
-    'Leave Management',
-    CalendarDays,
-    'HR can review today’s leave records, filter previous leave history, and monitor approval status.',
-    HR_ROLES,
-  ],
+
   [
     'application_status',
     'Application Status',

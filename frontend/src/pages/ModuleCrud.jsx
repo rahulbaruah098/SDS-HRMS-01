@@ -2410,28 +2410,8 @@ if (key === 'lwp_days') {
   }
 
   function renderRowActions(row) {
-    if (collection === 'leave_requests' && row.status === 'pending') {
-      return (
-        <>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => decideLeave(row, 'approved')}
-            disabled={saving}
-          >
-            Approve
-          </button>
-
-          <button
-            type="button"
-            className="danger"
-            onClick={() => decideLeave(row, 'rejected')}
-            disabled={saving}
-          >
-            Reject
-          </button>
-        </>
-      );
+    if (collection === 'leave_requests') {
+      return <span>Track in Application Status</span>;
     }
 
     if (collection === 'attendance_mode_requests' && row.status === 'pending') {
@@ -2672,13 +2652,13 @@ if (key === 'lwp_days') {
             </p>
           )}
 
-          {collection === 'leave_requests' && (
-            <p>
-              Leave apply form is simplified to Leave Type, Reason, From Date,
-              Upto Date, Task Handover To, and Project Handover. Only active
-              projects are shown in the Project Handover dropdown.
-            </p>
-          )}
+            {collection === 'leave_requests' && (
+              <p>
+                Apply for CL, EL or Half Day leave. Hand over your task or active
+                project to a team member before submission. After applying, the request
+                goes first to the Team Leader and then to the Reporting Officer.
+              </p>
+            )}
 
           {collection === 'leave_balances' && (
             <p>
@@ -2756,7 +2736,7 @@ if (key === 'lwp_days') {
             )}
 
             <button type="submit" className="primary" disabled={saving}>
-              <Plus size={16} /> {saving ? 'Saving...' : collection === 'leave_balances' ? 'Save Leave Balances' : 'Create'}
+              <Plus size={16} /> {saving ? 'Saving...' : collection === 'leave_balances' ? 'Save Leave Balances' : collection === 'leave_requests' ? 'Apply Leave' : 'Create'}
             </button>
           </form>
         )}
@@ -2817,8 +2797,8 @@ if (key === 'lwp_days') {
 
               {collection === 'leave_requests' && (
                 <p>
-                  Leave approval should be handled using Approve/Reject actions.
-                  Form edit is kept only for correction of basic leave details.
+                  Leave approval is handled from Team Approvals. This edit form is only
+                  for correcting basic leave details before or during review.
                 </p>
               )}
 

@@ -219,6 +219,7 @@ function moduleGroup(key) {
       'compoff_credits',
       'team_approvals',
       'leave_requests',
+      'leave',
       'leave_balances',
       'leave_types',
       'application_status',

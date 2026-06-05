@@ -91,9 +91,15 @@ const PAGE_ALIASES = {
   tenant_employees: 'users',
 
   leave: 'leave',
-  leave_request: 'leave',
-  leave_requests: 'leave',
   leave_management: 'leave',
+
+  apply_leave: 'leave_requests',
+  leave_apply: 'leave_requests',
+  leave_request: 'leave_requests',
+  leave_requests: 'leave_requests',
+  my_leave: 'leave_requests',
+  my_leaves: 'leave_requests',
+
   leave_deductions: 'reports',
   leave_records: 'reports',
 
