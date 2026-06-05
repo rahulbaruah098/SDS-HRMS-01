@@ -12,6 +12,9 @@ projects_bp = Blueprint("projects", __name__)
 
 ADMIN_VIEW_ROLES = {
     "super_admin",
+}
+
+HR_PROJECT_BLOCKED_ROLES = {
     "admin",
     "hr_admin",
     "hr_manager",
@@ -355,6 +358,21 @@ def is_admin_view_user():
     return bool(current_user_roles().intersection(ADMIN_VIEW_ROLES))
 
 
+def is_hr_project_blocked_user():
+    roles = current_user_roles()
+
+    return bool(
+        "super_admin" not in roles
+        and roles.intersection(HR_PROJECT_BLOCKED_ROLES)
+    )
+
+
+def hr_project_access_denied_response():
+    return jsonify({
+        "message": "HR/Admin users cannot access the Project module. Projects are limited to Team Leaders, Reporting Officers and assigned employees."
+    }), 403
+
+
 def can_create_assign_or_collaborate_projects(db):
     """
     Rule:
@@ -461,6 +479,10 @@ def project_scope_query(db):
             {"is_deleted": {"$ne": True}},
         ]
     }
+
+    if is_hr_project_blocked_user():
+        q["$and"].append({"_id": {"$exists": False}})
+        return q
 
     if is_admin_view_user():
         return q
@@ -1518,6 +1540,9 @@ def fetch_project_options(db):
 def project_options():
     db = get_db()
 
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
+
     if not can_create_assign_or_collaborate_projects(db):
         return jsonify({
             "current_employee": clean_doc(employee_option_payload(get_current_employee(db), "self") if get_current_employee(db) else {}),
@@ -1548,6 +1573,9 @@ def project_options():
 @current_user_required
 def list_projects():
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     tenant_id = current_tenant_id()
     q = project_scope_query(db)
 
@@ -1766,6 +1794,9 @@ def create_project():
 @current_user_required
 def update_project(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -1846,6 +1877,9 @@ def update_project(project_id):
 @current_user_required
 def assign_project(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -1905,6 +1939,9 @@ def assign_project(project_id):
 @current_user_required
 def update_project_collaborators(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -1957,6 +1994,9 @@ def update_project_collaborators(project_id):
 @current_user_required
 def update_project_status(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -2000,6 +2040,9 @@ def update_project_status(project_id):
 @current_user_required
 def delete_project(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -2035,6 +2078,9 @@ def delete_project(project_id):
 @current_user_required
 def project_analytics():
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     tenant_id = current_tenant_id()
 
     q = project_scope_query(db)
@@ -2110,6 +2156,9 @@ def project_analytics():
 @current_user_required
 def my_project_progress():
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     employee = get_current_employee(db)
 
     if not employee:
@@ -2142,6 +2191,9 @@ def my_project_progress():
 @current_user_required
 def list_project_progress(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -2171,6 +2223,9 @@ def list_project_progress(project_id):
 @current_user_required
 def add_project_progress(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:
@@ -2290,6 +2345,9 @@ def add_project_progress(project_id):
 @current_user_required
 def get_project_detail(project_id):
     db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
     project, error = get_project_or_404(db, project_id)
 
     if error:

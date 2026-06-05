@@ -29,6 +29,7 @@ SUMMARY_COLUMNS = [
     ("CL Availed", "CL"),
     ("EL Availed", "EL"),
     ("LWP", "LWP"),
+    ("Half Day", "half_day"),
     ("Remarks", "remarks"),
 ]
 
@@ -137,6 +138,20 @@ def day_dates(target_date):
     return [parsed]
 
 
+def year_dates(year):
+    year = int(year or date.today().year)
+
+    dates = []
+    current = date(year, 1, 1)
+    end = date(year, 12, 31)
+
+    while current <= end:
+        dates.append(current)
+        current += timedelta(days=1)
+
+    return dates
+
+
 def build_period_dates(period="month", year=None, month=None, date_value=None, week_start=None, week_end=None):
     period = normalize_text(period).lower() or "month"
 
@@ -145,6 +160,9 @@ def build_period_dates(period="month", year=None, month=None, date_value=None, w
 
     if period == "week":
         return week_dates(week_start or date_value, week_end)
+
+    if period == "year":
+        return year_dates(year)
 
     today = date.today()
     return month_dates(year or today.year, month or today.month)
@@ -353,15 +371,48 @@ def normalize_leave_type_for_excel(value):
 
 
 def is_half_day_leave(row):
-    if normalize_leave_type_for_excel(
+    requested_type = normalize_leave_type_for_excel(
         row.get("requested_leave_type")
         or row.get("requested_leave_type_label")
         or row.get("leave_type")
         or row.get("leave_type_label")
-    ) == "HALF-DAY":
+        or row.get("type")
+    )
+
+    if requested_type == "HALF-DAY":
         return True
 
-    if str(row.get("day_type") or "").strip().lower() == "half_day":
+    day_type = normalize_text(
+        row.get("day_type")
+        or row.get("duration_type")
+        or row.get("leave_duration")
+        or row.get("duration")
+    ).lower().replace("-", "_").replace(" ", "_")
+
+    if day_type in {
+        "half_day",
+        "half",
+        "first_half",
+        "second_half",
+        "morning_half",
+        "afternoon_half",
+    }:
+        return True
+
+    session_value = normalize_text(
+        row.get("half_day_session")
+        or row.get("session")
+        or row.get("leave_session")
+    ).lower().replace("-", "_").replace(" ", "_")
+
+    if session_value in {
+        "first_half",
+        "second_half",
+        "morning",
+        "afternoon",
+        "forenoon",
+        "afternoon_session",
+    }:
         return True
 
     if str(row.get("half_day") or row.get("is_half_day") or "").lower() in {
@@ -372,17 +423,41 @@ def is_half_day_leave(row):
     }:
         return True
 
-    try:
-        return float(row.get("leave_days", 0) or 0) == 0.5
-    except Exception:
-        return False
+    for key in ("leave_days", "days", "total_days", "approved_days"):
+        try:
+            if float(row.get(key, 0) or 0) == 0.5:
+                return True
+        except Exception:
+            pass
+
+    for key in ("lwp_days", "deducted_days"):
+        try:
+            if float(row.get(key, 0) or 0) == 0.5:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def leave_status_code(row):
     status = normalize_text(row.get("status")).lower()
     approval_stage = normalize_text(row.get("approval_stage")).lower()
+    final_status = normalize_text(row.get("final_status")).lower()
 
-    if status not in {"approved", "accepted"} and approval_stage != "approved":
+    approved_values = {
+        "approved",
+        "accepted",
+        "hr_approved",
+        "manager_approved",
+        "ro_approved",
+    }
+
+    if (
+        status not in approved_values
+        and approval_stage not in approved_values
+        and final_status not in approved_values
+    ):
         return ""
 
     requested_leave_type = normalize_leave_type_for_excel(
@@ -396,18 +471,28 @@ def leave_status_code(row):
     deducted_leave_type = normalize_leave_type_for_excel(
         row.get("deducted_leave_type")
         or row.get("deducted_leave_type_label")
+        or row.get("approved_leave_type")
+        or row.get("approved_leave_type_label")
         or ""
     )
 
     leave_type = deducted_leave_type or requested_leave_type
     half_day = is_half_day_leave(row)
 
+    try:
+        lwp_days = float(row.get("lwp_days", 0) or 0)
+    except Exception:
+        lwp_days = 0
+
     if requested_leave_type == "HALF-DAY":
         if deducted_leave_type == "EL":
             return "ELH"
 
-        if deducted_leave_type == "LWP" or float(row.get("lwp_days", 0) or 0) > 0:
+        if deducted_leave_type == "LWP" or lwp_days > 0:
             return "LWPH"
+
+        if deducted_leave_type == "CL":
+            return "CLH"
 
         return "CLH"
 
@@ -561,6 +646,12 @@ def code_for_employee_date(employee, target_date, attendance_lookup, leave_looku
 
 def count_code(row_codes, target_code):
     return sum(1 for code in row_codes if normalize_text(code).upper() == target_code)
+
+
+def count_half_day_codes(row_codes):
+    half_day_codes = {"CLH", "ELH", "LWPH"}
+
+    return sum(1 for code in row_codes if normalize_text(code).upper() in half_day_codes)
 
 
 def apply_cell_style(cell, fill=None, bold=False, size=11, align="center", vertical="center"):
@@ -736,10 +827,16 @@ def create_attendance_sheet(
             ws.cell(row, col).value = code
             style_status_cell(ws.cell(row, col), code)
 
-        ws.cell(row, summary_start_col).value = count_code(row_codes, "CL") + (count_code(row_codes, "CLH") * 0.5)
-        ws.cell(row, summary_start_col + 1).value = count_code(row_codes, "EL") + (count_code(row_codes, "ELH") * 0.5)
-        ws.cell(row, summary_start_col + 2).value = count_code(row_codes, "LWP") + (count_code(row_codes, "LWPH") * 0.5)
-        ws.cell(row, summary_start_col + 3).value = normalize_text(employee.get("remarks") or "")
+        cl_total = count_code(row_codes, "CL") + (count_code(row_codes, "CLH") * 0.5)
+        el_total = count_code(row_codes, "EL") + (count_code(row_codes, "ELH") * 0.5)
+        lwp_total = count_code(row_codes, "LWP") + (count_code(row_codes, "LWPH") * 0.5)
+        half_day_total = count_half_day_codes(row_codes)
+
+        ws.cell(row, summary_start_col).value = cl_total
+        ws.cell(row, summary_start_col + 1).value = el_total
+        ws.cell(row, summary_start_col + 2).value = lwp_total
+        ws.cell(row, summary_start_col + 3).value = half_day_total
+        ws.cell(row, summary_start_col + 4).value = normalize_text(employee.get("remarks") or "")
 
         for col in range(summary_start_col, final_col + 1):
             apply_cell_style(ws.cell(row, col))
@@ -775,7 +872,8 @@ def create_attendance_sheet(
     ws.column_dimensions[get_column_letter(summary_start_col)].width = 12
     ws.column_dimensions[get_column_letter(summary_start_col + 1)].width = 12
     ws.column_dimensions[get_column_letter(summary_start_col + 2)].width = 10
-    ws.column_dimensions[get_column_letter(summary_start_col + 3)].width = 24
+    ws.column_dimensions[get_column_letter(summary_start_col + 3)].width = 10
+    ws.column_dimensions[get_column_letter(summary_start_col + 4)].width = 24
 
     for row in range(1, total_row + 1):
         ws.row_dimensions[row].height = 22
@@ -832,6 +930,8 @@ def build_attendance_workbook(
         period_label = f"Attendance Record for {dates[0].strftime('%d %B %Y')}"
     elif period_key == "week":
         period_label = f"Attendance Record from {dates[0].strftime('%d %B %Y')} to {dates[-1].strftime('%d %B %Y')}"
+    elif period_key == "year":
+        period_label = f"Attendance Record for the Year {dates[0].year}"
     else:
         period_label = f"Attendance Record for the Month of {month_name(dates)}"
 
@@ -926,6 +1026,8 @@ def build_attendance_excel_filename(
         period_part = dates[0].strftime("%d_%b_%Y")
     elif period_key == "week":
         period_part = f"{dates[0].strftime('%d_%b_%Y')}_to_{dates[-1].strftime('%d_%b_%Y')}"
+    elif period_key == "year":
+        period_part = str(dates[0].year)
     else:
         period_part = dates[0].strftime("%B_%Y")
 

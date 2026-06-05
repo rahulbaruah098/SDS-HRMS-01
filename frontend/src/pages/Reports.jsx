@@ -3,6 +3,7 @@ import { RefreshCcw, Search, X } from 'lucide-react';
 import {
   api,
   downloadAttendanceRegisterExcel,
+  getActiveEmployees,
   getActiveOrganisations,
 } from '../api/client';
 import Table from '../components/Table';
@@ -80,6 +81,10 @@ const EMPTY_ATTENDANCE_EXCEL_FILTERS = {
   organisation_code: '',
   organisation: '',
   state: '',
+  employee_id: '',
+  employee_code: '',
+  employee_email: '',
+  employee_name: '',
 };
 
 const EMPTY_FILTERS = {
@@ -280,6 +285,33 @@ function organisationOptionLabel(organisation = {}) {
   return name || code || 'Organisation';
 }
 
+function employeeOptionLabel(employee = {}) {
+  const name =
+    employee.name ||
+    employee.employee_name ||
+    employee.full_name ||
+    employee.email ||
+    'Employee';
+
+  const code =
+    employee.employee_code ||
+    employee.emp_code ||
+    employee.employee_id ||
+    employee.code ||
+    '';
+
+  const organisation =
+    employee.organisation_code ||
+    employee.organization_code ||
+    employee.organisation ||
+    employee.organization ||
+    '';
+
+  const meta = [code, organisation].filter(Boolean).join(' • ');
+
+  return meta ? `${name} (${meta})` : name;
+}
+
 function normalizeRows(tab, rows = []) {
   if (tab === 'attendance') {
     return rows.map((row) => ({
@@ -445,7 +477,8 @@ export default function Reports() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
-    const [organisations, setOrganisations] = useState([]);
+  const [organisations, setOrganisations] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [excelFilters, setExcelFilters] = useState({
     ...EMPTY_ATTENDANCE_EXCEL_FILTERS,
   });
@@ -509,6 +542,19 @@ export default function Reports() {
     }
   }
 
+  async function loadEmployees() {
+    try {
+      const data = await getActiveEmployees({
+        limit: 1000,
+        employee_scope: 'active',
+      });
+
+      setEmployees(data.items || []);
+    } catch {
+      setEmployees([]);
+    }
+  }
+
   async function loadSummary(nextFilters = filters) {
     try {
       setLoadingSummary(true);
@@ -564,6 +610,7 @@ export default function Reports() {
   useEffect(() => {
     refreshAll(activeTab, filters);
     loadOrganisations();
+    loadEmployees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -616,6 +663,55 @@ export default function Reports() {
           : '';
       }
 
+      if (key === 'employee_id') {
+        const selected = employees.find((employee) => {
+          const id = employee.id || employee._id || '';
+          return id === value;
+        });
+
+        next.employee_code = selected
+          ? selected.employee_code || selected.emp_code || selected.employee_id || selected.code || ''
+          : '';
+
+        next.employee_email = selected
+          ? selected.official_email || selected.email || ''
+          : '';
+
+        next.employee_name = selected
+          ? selected.name || selected.employee_name || selected.full_name || ''
+          : '';
+      }
+
+      if (key === 'period') {
+        if (value === 'week' && (!next.week_start || !next.week_end)) {
+          const today = new Date();
+          const day = today.getDay();
+          const diffToMonday = day === 0 ? -6 : 1 - day;
+          const monday = new Date(today);
+
+          monday.setDate(today.getDate() + diffToMonday);
+
+          const sunday = new Date(monday);
+
+          sunday.setDate(monday.getDate() + 6);
+
+          next.week_start = monday.toISOString().slice(0, 10);
+          next.week_end = sunday.toISOString().slice(0, 10);
+        }
+
+        if (value === 'day' && !next.date) {
+          next.date = new Date().toISOString().slice(0, 10);
+        }
+
+        if ((value === 'month' || value === 'year') && !next.year) {
+          next.year = String(new Date().getFullYear());
+        }
+
+        if (value === 'month' && !next.month) {
+          next.month = String(new Date().getMonth() + 1);
+        }
+      }
+
       return next;
     });
   }
@@ -638,6 +734,10 @@ export default function Reports() {
         organisation_code: excelFilters.organisation_code,
         organisation: excelFilters.organisation,
         state: excelFilters.state,
+        employee_id: excelFilters.employee_id,
+        employee_code: excelFilters.employee_code,
+        employee_email: excelFilters.employee_email,
+        employee_name: excelFilters.employee_name,
       };
 
       if (excelFilters.period === 'day') {
@@ -645,6 +745,8 @@ export default function Reports() {
       } else if (excelFilters.period === 'week') {
         payload.week_start = excelFilters.week_start;
         payload.week_end = excelFilters.week_end;
+      } else if (excelFilters.period === 'year') {
+        payload.year = excelFilters.year;
       } else {
         payload.year = excelFilters.year;
         payload.month = excelFilters.month;
@@ -796,9 +898,9 @@ export default function Reports() {
           <div>
             <h3>Styled Attendance Excel Export</h3>
             <p>
-              Download entity-wise attendance register in Excel format with
-              colours, borders, attendance codes, leave counts, and day-wise
-              columns.
+              Download entity-wise or employee-wise attendance register in Excel
+              format with attendance codes, CL/EL/LWP counts, half-day leave
+              marking, and day-wise columns.
             </p>
           </div>
         </div>
@@ -839,6 +941,28 @@ export default function Reports() {
           </label>
 
           <label>
+            Employee
+            <select
+              value={excelFilters.employee_id}
+              onChange={(e) => updateExcelFilter('employee_id', e.target.value)}
+            >
+              <option value="">All Employees</option>
+              {employees.map((employee) => {
+                const id = employee.id || employee._id || '';
+
+                return (
+                  <option
+                    key={id || employee.employee_code || employee.email}
+                    value={id}
+                  >
+                    {employeeOptionLabel(employee)}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <label>
             Export Period
             <select
               value={excelFilters.period}
@@ -847,6 +971,7 @@ export default function Reports() {
               <option value="month">Month Wise</option>
               <option value="week">Week Wise</option>
               <option value="day">Day Wise</option>
+              <option value="year">Year Wise</option>
             </select>
           </label>
 
@@ -919,6 +1044,20 @@ export default function Reports() {
                 type="date"
                 value={excelFilters.date}
                 onChange={(e) => updateExcelFilter('date', e.target.value)}
+                required
+              />
+            </label>
+          )}
+
+          {excelFilters.period === 'year' && (
+            <label>
+              Year
+              <input
+                type="number"
+                value={excelFilters.year}
+                onChange={(e) => updateExcelFilter('year', e.target.value)}
+                min="2020"
+                max="2100"
                 required
               />
             </label>

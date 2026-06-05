@@ -20,6 +20,7 @@ import States from './pages/States';
 import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
+import Leave from './pages/Leave';
 import Projects from './pages/Projects';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
@@ -89,10 +90,10 @@ const PAGE_ALIASES = {
   tenant_employee_control: 'users',
   tenant_employees: 'users',
 
-  leave: 'leave_requests',
-  leave_request: 'leave_requests',
-  leave_requests: 'leave_requests',
-  leave_management: 'leave_requests',
+  leave: 'leave',
+  leave_request: 'leave',
+  leave_requests: 'leave',
+  leave_management: 'leave',
   leave_deductions: 'reports',
   leave_records: 'reports',
 
@@ -494,6 +495,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'password_requests') {
     return <PasswordRequests setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'leave') {
+    return <Leave setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'reports') {

@@ -2670,7 +2670,46 @@ export function markAllNotificationsRead() {
 
 export async function downloadAttendanceRegisterExcel(params = {}) {
   const token = getToken();
-  const query = buildQuery(params);
+
+  const allowedParams = {
+    period: params.period,
+    date: params.date,
+    on_date: params.on_date,
+    week_start: params.week_start,
+    week_end: params.week_end,
+    date_from: params.date_from,
+    date_to: params.date_to,
+    year: params.year,
+    month: params.month,
+
+    organisation_id: params.organisation_id,
+    organization_id: params.organization_id,
+    entity_id: params.entity_id,
+    organisation_code: params.organisation_code,
+    organization_code: params.organization_code,
+    entity_code: params.entity_code,
+    organisation: params.organisation,
+    organization: params.organization,
+    entity: params.entity,
+    organisation_name: params.organisation_name,
+    organization_name: params.organization_name,
+
+    state: params.state,
+
+    employee_id: params.employee_id,
+    employee: params.employee,
+    staff_id: params.staff_id,
+    employee_code: params.employee_code,
+    emp_code: params.emp_code,
+    staff_code: params.staff_code,
+    employee_email: params.employee_email,
+    email: params.email,
+    official_email: params.official_email,
+    employee_name: params.employee_name,
+    name: params.name,
+  };
+
+  const query = buildQuery(allowedParams);
 
   const headers = {};
 

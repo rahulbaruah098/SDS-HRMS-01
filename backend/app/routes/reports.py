@@ -897,6 +897,71 @@ def excel_employee_identifier_values(employee):
     return values
 
 
+def selected_employee_query():
+    employee_id = normalize_text(
+        request.args.get("employee_id")
+        or request.args.get("employee")
+        or request.args.get("staff_id")
+    )
+
+    employee_code = normalize_text(
+        request.args.get("employee_code")
+        or request.args.get("emp_code")
+        or request.args.get("staff_code")
+    )
+
+    employee_email = normalize_text(
+        request.args.get("employee_email")
+        or request.args.get("email")
+        or request.args.get("official_email")
+    )
+
+    employee_name = normalize_text(
+        request.args.get("employee_name")
+        or request.args.get("name")
+    )
+
+    conditions = []
+
+    if employee_id:
+        employee_obj_id = safe_object_id(employee_id)
+
+        if employee_obj_id:
+            conditions.append({"_id": employee_obj_id})
+
+        conditions.extend([
+            {"id": employee_id},
+            {"employee_id": employee_id},
+            {"user_id": employee_id},
+            {"employee_ref_id": employee_id},
+        ])
+
+    if employee_code:
+        conditions.extend([
+            {"employee_code": employee_code},
+            {"emp_code": employee_code},
+            {"code": employee_code},
+        ])
+
+    if employee_email:
+        conditions.extend([
+            {"email": {"$regex": f"^{re.escape(employee_email)}$", "$options": "i"}},
+            {"official_email": {"$regex": f"^{re.escape(employee_email)}$", "$options": "i"}},
+        ])
+
+    if employee_name:
+        conditions.extend([
+            {"name": {"$regex": re.escape(employee_name), "$options": "i"}},
+            {"employee_name": {"$regex": re.escape(employee_name), "$options": "i"}},
+            {"full_name": {"$regex": re.escape(employee_name), "$options": "i"}},
+        ])
+
+    if not conditions:
+        return {}
+
+    return {"$or": conditions}
+
+
 def selected_organisation_query():
     organisation_id = normalize_text(
         request.args.get("organisation_id")
@@ -1327,6 +1392,11 @@ def attendance_register_excel_export():
     if organisation_q:
         employee_q = excel_safe_query_and(employee_q, organisation_q)
 
+    employee_filter_q = selected_employee_query()
+
+    if employee_filter_q:
+        employee_q = excel_safe_query_and(employee_q, employee_filter_q)
+
     if normalized_state:
         state_conditions = [
             {"state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
@@ -1374,6 +1444,25 @@ def attendance_register_excel_export():
                     or request.args.get("entity")
                 ),
                 "state": state,
+                "employee_id": (
+                    request.args.get("employee_id")
+                    or request.args.get("employee")
+                    or request.args.get("staff_id")
+                ),
+                "employee_code": (
+                    request.args.get("employee_code")
+                    or request.args.get("emp_code")
+                    or request.args.get("staff_code")
+                ),
+                "employee_email": (
+                    request.args.get("employee_email")
+                    or request.args.get("email")
+                    or request.args.get("official_email")
+                ),
+                "employee_name": (
+                    request.args.get("employee_name")
+                    or request.args.get("name")
+                ),
                 "period": period,
                 "year": year,
                 "month": month,
@@ -1480,10 +1569,23 @@ def attendance_register_excel_export():
         state_name=normalized_state or "All States",
     )
 
+    filename_state_name = normalized_state or "All States"
+
+    if len(employees) == 1:
+        single_employee = employees[0]
+        filename_state_name = (
+            single_employee.get("employee_code")
+            or single_employee.get("emp_code")
+            or single_employee.get("code")
+            or single_employee.get("name")
+            or single_employee.get("employee_name")
+            or filename_state_name
+        )
+
     filename = build_attendance_excel_filename(
         organisation_name=organisation_display.get("name", ""),
         organisation_code=organisation_display.get("code", ""),
-        state_name=normalized_state or "All States",
+        state_name=filename_state_name,
         period=period,
         year=year,
         month=month,

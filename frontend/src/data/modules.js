@@ -185,7 +185,6 @@ export const EMPLOYEE_PORTAL_ROLES = [
 export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
 export const PROJECT_ROLES = [
-  ...HR_ROLES,
   ...CAPABILITY_ROLES,
   BASE_EMPLOYEE_ROLE,
 ];
@@ -522,13 +521,13 @@ export const coreModules = [
     'Office/WFH/Field check-in, geolocation, late reason, early checkout, holiday calendar and comp-off.',
     ATTENDANCE_ROLES,
   ],
-  [
-    'projects',
-    'Projects',
-    Briefcase,
-    'Team Leaders and Reporting Officers create/assign projects; employees view scoped projects and update progress/status.',
-    PROJECT_ROLES,
-  ],
+[
+  'projects',
+  'Projects',
+  Briefcase,
+  'Team Leaders and Reporting Officers create/assign projects; employees view only their scoped projects and update progress/status.',
+  PROJECT_ROLES,
+],
   [
     'team_approvals',
     'Team Approvals',
@@ -537,11 +536,11 @@ export const coreModules = [
     TEAM_APPROVAL_ROLES,
   ],
   [
-    'leave_requests',
+    'leave',
     'Leave Management',
     CalendarDays,
-    'Apply Casual Leave or Earned Leave with mapped Team Leader / Reporting Officer approval.',
-    TEAM_ROLES,
+    'HR can review today’s leave records, filter previous leave history, and monitor approval status.',
+    HR_ROLES,
   ],
   [
     'application_status',
@@ -929,8 +928,7 @@ export function canUpdateProjectProgress(user) {
 
   return (
     roles.includes(BASE_EMPLOYEE_ROLE) ||
-    roles.some(isCapabilityRole) ||
-    hasAnyRole(roles, HR_ROLES)
+    roles.some(isCapabilityRole)
   );
 }
 
@@ -939,8 +937,7 @@ export function canViewProjectTeamTree(user) {
 
   return (
     roles.includes(BASE_EMPLOYEE_ROLE) ||
-    roles.some(isCapabilityRole) ||
-    hasAnyRole(roles, ADMIN_HR_FINANCE_ROLES)
+    roles.some(isCapabilityRole)
   );
 }
 
