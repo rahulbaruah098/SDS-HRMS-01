@@ -3582,6 +3582,10 @@ export function decidePasswordRequest(requestId, payload = {}) {
 /* Location Helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
+const LOCATION_TARGET_ACCURACY_METERS = 30;
+const LOCATION_MAX_ACCEPTED_ACCURACY_METERS = 100;
+const LOCATION_TIMEOUT_MS = 30000;
+
 export function hasLocationInPayload(payload = {}) {
   return (
     payload.latitude !== undefined &&
@@ -3596,7 +3600,7 @@ export function hasLocationInPayload(payload = {}) {
 export function getCurrentLocation(options = {}) {
   const geoOptions = {
     enableHighAccuracy: true,
-    timeout: 15000,
+    timeout: LOCATION_TIMEOUT_MS,
     maximumAge: 0,
     ...options,
   };
@@ -3607,34 +3611,104 @@ export function getCurrentLocation(options = {}) {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
+    let bestPosition = null;
+    let settled = false;
+    let watchId = null;
+    let timeoutId = null;
+
+    const stopWatching = () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const resolveWithPosition = (position) => {
+      if (settled) return;
+
+      settled = true;
+      stopWatching();
+
+      resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        address: '',
+      });
+    };
+
+    const rejectWithMessage = (message) => {
+      if (settled) return;
+
+      settled = true;
+      stopWatching();
+      reject(new Error(message));
+    };
+
+    watchId = navigator.geolocation.watchPosition(
       (position) => {
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          address: '',
-        });
+        const accuracy = Number(position.coords.accuracy || 999999);
+
+        if (
+          !bestPosition ||
+          accuracy < Number(bestPosition.coords.accuracy || 999999)
+        ) {
+          bestPosition = position;
+        }
+
+        if (accuracy <= LOCATION_TARGET_ACCURACY_METERS) {
+          resolveWithPosition(position);
+        }
       },
       (error) => {
+        if (bestPosition) {
+          const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
+
+          if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
+            resolveWithPosition(bestPosition);
+            return;
+          }
+        }
+
         let message = 'Unable to fetch current location.';
 
         if (error.code === 1) {
-          message = 'Location permission denied. Please allow location access.';
+          message = 'Location permission denied. Please allow precise location access.';
         }
 
         if (error.code === 2) {
-          message = 'Location unavailable. Please check GPS or network.';
+          message = 'Location unavailable. Please enable GPS/location accuracy and try again.';
         }
 
         if (error.code === 3) {
-          message = 'Location request timed out. Please try again.';
+          message = 'Location request timed out. Please move near an open area/window and try again.';
         }
 
-        reject(new Error(message));
+        rejectWithMessage(message);
       },
       geoOptions,
     );
+
+    timeoutId = setTimeout(() => {
+      if (bestPosition) {
+        const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
+
+        if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
+          resolveWithPosition(bestPosition);
+          return;
+        }
+
+        rejectWithMessage(
+          `Location accuracy is too low: ±${Math.round(bestAccuracy)}m. Please enable precise location/GPS, move near an open area/window and try again.`,
+        );
+        return;
+      }
+
+      rejectWithMessage('Unable to fetch current location. Please enable precise location/GPS and try again.');
+    }, LOCATION_TIMEOUT_MS);
   });
 }
 

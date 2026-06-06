@@ -7,6 +7,9 @@ import {
 } from '../api/client';
 
 const HOLD_DURATION = 1600;
+const LOCATION_TARGET_ACCURACY_METERS = 30;
+const LOCATION_MAX_ACCEPTED_ACCURACY_METERS = 100;
+const LOCATION_TIMEOUT_MS = 30000;
 
 function formatTodayLabel() {
   return new Date().toLocaleDateString('en-IN', {
@@ -69,39 +72,109 @@ function getCurrentLocation() {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
+    let bestPosition = null;
+    let settled = false;
+    let watchId = null;
+    let timeoutId = null;
+
+    const stopWatching = () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const resolveWithPosition = (position) => {
+      if (settled) return;
+
+      settled = true;
+      stopWatching();
+
+      resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        address: '',
+      });
+    };
+
+    const rejectWithMessage = (message) => {
+      if (settled) return;
+
+      settled = true;
+      stopWatching();
+      reject(new Error(message));
+    };
+
+    watchId = navigator.geolocation.watchPosition(
       (position) => {
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          address: '',
-        });
+        const accuracy = Number(position.coords.accuracy || 999999);
+
+        if (
+          !bestPosition ||
+          accuracy < Number(bestPosition.coords.accuracy || 999999)
+        ) {
+          bestPosition = position;
+        }
+
+        if (accuracy <= LOCATION_TARGET_ACCURACY_METERS) {
+          resolveWithPosition(position);
+        }
       },
       (error) => {
+        if (bestPosition) {
+          const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
+
+          if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
+            resolveWithPosition(bestPosition);
+            return;
+          }
+        }
+
         if (error.code === error.PERMISSION_DENIED) {
-          reject(new Error('Location permission is required for attendance'));
+          rejectWithMessage('Location permission is required for attendance');
           return;
         }
 
         if (error.code === error.POSITION_UNAVAILABLE) {
-          reject(new Error('Unable to fetch current location. Please enable GPS/location services.'));
+          rejectWithMessage('Unable to fetch accurate location. Please enable precise GPS/location services and try again.');
           return;
         }
 
         if (error.code === error.TIMEOUT) {
-          reject(new Error('Location request timed out. Please try again.'));
+          rejectWithMessage('Location request timed out. Please move near an open area/window and try again.');
           return;
         }
 
-        reject(new Error('Unable to fetch current location'));
+        rejectWithMessage('Unable to fetch current location');
       },
       {
         enableHighAccuracy: true,
-        timeout: 15000,
+        timeout: LOCATION_TIMEOUT_MS,
         maximumAge: 0,
       },
     );
+
+    timeoutId = setTimeout(() => {
+      if (bestPosition) {
+        const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
+
+        if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
+          resolveWithPosition(bestPosition);
+          return;
+        }
+
+        rejectWithMessage(
+          `Location accuracy is too low: ±${Math.round(bestAccuracy)}m. Please enable precise location/GPS, move near an open area/window and try again.`,
+        );
+        return;
+      }
+
+      rejectWithMessage('Unable to fetch current location. Please enable precise location/GPS and try again.');
+    }, LOCATION_TIMEOUT_MS);
   });
 }
 
