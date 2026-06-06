@@ -8539,3 +8539,944 @@ tr:hover td {
     grid-template-columns: 1fr;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Management Group Page                                                      */
+/* -------------------------------------------------------------------------- */
+
+.mg-page {
+  display: grid;
+  gap: 20px;
+  animation: softFadeUp .28s ease both;
+}
+
+.mg-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(79, 70, 229, .14), transparent 34%),
+    radial-gradient(circle at 92% 5%, rgba(5, 150, 105, .12), transparent 32%),
+    linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
+  box-shadow: var(--shadow);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 22px;
+}
+
+.mg-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .72), transparent 60%);
+}
+
+.mg-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.mg-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: var(--primarySoft);
+  color: var(--primary);
+  border: 1px solid var(--primaryRing);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.mg-hero h1 {
+  margin: 12px 0 8px;
+  color: var(--ink);
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: .95;
+  letter-spacing: -.05em;
+}
+
+.mg-hero p {
+  margin: 0;
+  max-width: 780px;
+  color: var(--muted);
+  line-height: 1.65;
+  font-weight: 650;
+}
+
+.mg-hero-card {
+  min-width: 190px;
+  border: 1px solid rgba(199, 210, 254, .9);
+  border-radius: 24px;
+  padding: 18px;
+  background: rgba(255, 255, 255, .82);
+  box-shadow: 0 18px 44px rgba(79, 70, 229, .12);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mg-hero-icon {
+  width: 58px;
+  height: 58px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary), var(--primaryDark));
+  box-shadow: 0 14px 30px rgba(79, 70, 229, .25);
+}
+
+.mg-hero-card strong {
+  display: block;
+  color: var(--ink);
+  font-size: 32px;
+  line-height: 1;
+}
+
+.mg-hero-card span {
+  display: block;
+  color: var(--muted);
+  font-weight: 850;
+  margin-top: 5px;
+}
+
+.mg-message {
+  border-radius: 18px;
+  padding: 13px 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: flex-start;
+  font-weight: 750;
+  line-height: 1.45;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .04);
+}
+
+.mg-message-success {
+  background: var(--successSoft);
+  color: #047857;
+  border: 1px solid #BBF7D0;
+}
+
+.mg-message-error {
+  background: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+.mg-message-icon {
+  display: inline-flex;
+  margin-top: 1px;
+}
+
+.mg-message-close,
+.mg-icon-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  border-radius: 10px;
+  padding: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mg-message-close:hover,
+.mg-icon-btn:hover {
+  background: rgba(15, 23, 42, .06);
+}
+
+.mg-restricted-note {
+  border: 1px solid #BAE6FD;
+  background: linear-gradient(135deg, #E0F2FE, #F8FAFC);
+  border-radius: 20px;
+  padding: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: #075985;
+}
+
+.mg-restricted-note strong {
+  color: #0C4A6E;
+}
+
+.mg-restricted-note p {
+  margin: 4px 0 0;
+  color: #075985;
+  line-height: 1.5;
+}
+
+.mg-compact-note {
+  margin-bottom: 14px;
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.mg-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.mg-stat-card {
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  transition: .2s ease;
+}
+
+.mg-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primaryRing);
+  box-shadow: var(--shadowHover);
+}
+
+.mg-stat-card svg {
+  color: var(--primary);
+}
+
+.mg-stat-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.mg-stat-card strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.mg-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, .95fr) minmax(0, 1.05fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.mg-panel {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  padding: 18px;
+  min-width: 0;
+}
+
+.mg-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.mg-panel-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 22px;
+  letter-spacing: -.03em;
+}
+
+.mg-panel-head p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.mg-primary-btn,
+.mg-secondary-btn,
+.mg-ghost-btn,
+.mg-danger-btn {
+  min-height: 40px;
+  border-radius: 13px;
+  padding: 10px 13px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: .2s ease;
+  white-space: nowrap;
+}
+
+.mg-primary-btn {
+  border: 1px solid var(--primary);
+  background: linear-gradient(135deg, var(--primary), var(--primaryDark));
+  color: #fff;
+  box-shadow: 0 12px 26px rgba(79, 70, 229, .18);
+}
+
+.mg-primary-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px rgba(79, 70, 229, .24);
+}
+
+.mg-secondary-btn {
+  border: 1px solid var(--primaryRing);
+  background: var(--primarySoft);
+  color: var(--primary);
+}
+
+.mg-secondary-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #E0E7FF;
+}
+
+.mg-ghost-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.mg-ghost-btn:hover:not(:disabled) {
+  background: #F8FAFC;
+  border-color: var(--primaryRing);
+  color: var(--primary);
+}
+
+.mg-danger-btn {
+  border: 1px solid #FECACA;
+  background: #FEF2F2;
+  color: var(--danger);
+  min-width: 42px;
+}
+
+.mg-danger-btn:hover:not(:disabled) {
+  background: #FEE2E2;
+}
+
+.mg-member-toolbar,
+.mg-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mg-search-box {
+  min-width: 260px;
+  flex: 1 1 280px;
+  border: 1px solid var(--line);
+  background: #F8FAFC;
+  border-radius: 15px;
+  padding: 0 12px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+}
+
+.mg-search-box input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text);
+  min-width: 0;
+}
+
+.mg-member-toolbar select,
+.mg-filter-bar input,
+.mg-filter-bar select,
+.mg-form input,
+.mg-form select,
+.mg-form textarea,
+.mg-minutes-panel input,
+.mg-minutes-panel select,
+.mg-minutes-panel textarea,
+.mg-inline-assign select {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  min-width: 0;
+}
+
+.mg-form input:focus,
+.mg-form select:focus,
+.mg-form textarea:focus,
+.mg-minutes-panel textarea:focus,
+.mg-member-toolbar select:focus,
+.mg-filter-bar input:focus,
+.mg-inline-assign select:focus {
+  border-color: var(--primaryRing);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, .10);
+}
+
+.mg-member-list {
+  max-height: 680px;
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.mg-member-list::-webkit-scrollbar,
+.mg-meeting-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.mg-member-list::-webkit-scrollbar-thumb,
+.mg-meeting-list::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 999px;
+}
+
+.mg-member-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 12px;
+  background: #fff;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  transition: .2s ease;
+}
+
+.mg-member-card:hover {
+  border-color: var(--primaryRing);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, .08);
+  transform: translateY(-1px);
+}
+
+.mg-member-active {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 34%),
+    #FFFFFF;
+  border-color: var(--primaryRing);
+}
+
+.mg-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 17px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--primarySoft), #E0F2FE);
+  color: var(--primary);
+  border: 1px solid #C7D2FE;
+  display: grid;
+  place-items: center;
+  font-weight: 950;
+}
+
+.mg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mg-member-info {
+  min-width: 0;
+}
+
+.mg-member-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mg-member-title strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.mg-member-info p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.mg-admin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--successSoft);
+  border: 1px solid #BBF7D0;
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.mg-member-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.mg-member-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #F8FAFC;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.mg-member-actions {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+}
+
+.mg-check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.mg-check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.mg-form {
+  display: grid;
+  gap: 14px;
+}
+
+.mg-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.mg-form label,
+.mg-minutes-panel label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mg-form textarea,
+.mg-minutes-panel textarea {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.5;
+}
+
+.mg-span-2 {
+  grid-column: span 2;
+}
+
+.mg-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.mg-history-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.mg-meeting-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, .82fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.mg-meeting-list {
+  max-height: 780px;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.mg-meeting-card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 15px;
+  background: #fff;
+  transition: .2s ease;
+}
+
+.mg-meeting-card:hover,
+.mg-meeting-active {
+  border-color: var(--primaryRing);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, .08);
+  transform: translateY(-1px);
+}
+
+.mg-meeting-active {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .08), transparent 35%),
+    #FFFFFF;
+}
+
+.mg-meeting-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mg-meeting-top h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.mg-meeting-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mg-meeting-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  background: #F8FAFC;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mg-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: #F8FAFC;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.mg-pill-completed {
+  background: var(--successSoft);
+  color: var(--success);
+  border-color: #BBF7D0;
+}
+
+.mg-pill-pending {
+  background: var(--warningSoft);
+  color: var(--warning);
+  border-color: #FED7AA;
+}
+
+.mg-pill-not_assigned {
+  background: #F1F5F9;
+  color: #475569;
+  border-color: #CBD5E1;
+}
+
+.mg-meeting-agenda {
+  margin: 12px 0 0;
+  color: var(--text);
+  line-height: 1.55;
+  font-size: 13px;
+  background: #F8FAFC;
+  border: 1px dashed var(--line2);
+  border-radius: 14px;
+  padding: 10px;
+}
+
+.mg-meeting-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mg-meeting-footer span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.mg-meeting-footer strong {
+  color: var(--ink);
+}
+
+.mg-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mg-inline-assign {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--primary);
+}
+
+.mg-minutes-panel {
+  position: sticky;
+  top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(79, 70, 229, .06), transparent 34%),
+    #FFFFFF;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .07);
+}
+
+.mg-minutes-panel form {
+  display: grid;
+  gap: 13px;
+}
+
+.mg-minutes-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mg-minutes-head span {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.mg-minutes-head h3 {
+  margin: 5px 0 4px;
+  color: var(--ink);
+}
+
+.mg-minutes-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.mg-update-note {
+  margin: 0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: #F8FAFC;
+  border: 1px dashed var(--line2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mg-empty {
+  min-height: 170px;
+  border: 1px dashed var(--line2);
+  border-radius: 18px;
+  background: #F8FAFC;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.mg-empty svg {
+  color: #94A3B8;
+}
+
+.mg-empty strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+}
+
+.mg-empty p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+  max-width: 360px;
+}
+
+.mg-sticky-empty {
+  min-height: 420px;
+}
+
+.mg-loading-card {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  padding: 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mg-loading-card h2 {
+  margin: 0;
+  color: var(--ink);
+}
+
+.mg-loading-card p {
+  margin: 5px 0 0;
+  color: var(--muted);
+}
+
+.mg-spin {
+  animation: mgSpin .8s linear infinite;
+}
+
+@keyframes mgSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1200px) {
+  .mg-grid,
+  .mg-meeting-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .mg-minutes-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  .mg-hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mg-hero-card {
+    width: 100%;
+  }
+
+  .mg-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mg-member-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .mg-member-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .mg-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mg-span-2 {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .mg-page {
+    gap: 14px;
+  }
+
+  .mg-hero,
+  .mg-panel {
+    border-radius: 20px;
+    padding: 15px;
+  }
+
+  .mg-hero h1 {
+    font-size: 34px;
+  }
+
+  .mg-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mg-panel-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mg-primary-btn,
+  .mg-secondary-btn,
+  .mg-ghost-btn,
+  .mg-danger-btn {
+    width: 100%;
+  }
+
+  .mg-member-toolbar,
+  .mg-filter-bar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .mg-search-box {
+    min-width: 0;
+  }
+
+  .mg-meeting-top,
+  .mg-meeting-footer,
+  .mg-minutes-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mg-card-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api, setSession, refreshCurrentSession, currentUser } from '../api/client';
 
 const demoLogins = [

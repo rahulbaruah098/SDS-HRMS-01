@@ -2664,6 +2664,181 @@ export function markAllNotificationsRead() {
   });
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* Management Group APIs                                                      */
+/* -------------------------------------------------------------------------- */
+
+export function normalizeManagementGroupMember(member = {}) {
+  if (!member || typeof member !== 'object') {
+    return member;
+  }
+
+  const normalized = normalizePerson(withProfilePhotoAliases({ ...member }));
+
+  normalized.id = normalized.id || normalized._id || normalized.employee_id || '';
+  normalized._id = normalized._id || normalized.id || '';
+  normalized.employee_id = normalized.employee_id || normalized._id || normalized.id || '';
+  normalized.user_id = normalized.user_id || '';
+
+  normalized.name =
+    normalized.name ||
+    normalized.employee_name ||
+    normalized.full_name ||
+    normalized.email ||
+    'Employee';
+
+  normalized.employee_name = normalized.employee_name || normalized.name;
+  normalized.email = normalized.email || normalized.official_email || '';
+  normalized.phone = normalized.phone || normalized.mobile || '';
+  normalized.department = normalized.department || normalized.department_name || '';
+  normalized.designation = normalized.designation || normalized.designation_name || '';
+
+  normalized.employee_code =
+    normalized.employee_code ||
+    normalized.emp_code ||
+    normalized.employee_id ||
+    '';
+
+  normalized.is_group_admin = toBoolean(normalized.is_group_admin);
+
+  return normalized;
+}
+
+export function normalizeManagementGroupMembers(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeManagementGroupMember(item)).filter(Boolean);
+}
+
+export function normalizeManagementGroupMeeting(meeting = {}) {
+  if (!meeting || typeof meeting !== 'object') {
+    return meeting;
+  }
+
+  const normalized = { ...meeting };
+
+  normalized.id = normalized.id || normalized._id || '';
+  normalized._id = normalized._id || normalized.id || '';
+
+  normalized.topic = normalized.topic || normalized.title || 'Management Group Meeting';
+  normalized.title = normalized.title || normalized.topic;
+
+  normalized.meeting_date = normalized.meeting_date || normalized.date || '';
+  normalized.date = normalized.date || normalized.meeting_date || '';
+
+  normalized.start_time = normalized.start_time || '';
+  normalized.end_time = normalized.end_time || '';
+  normalized.mode = normalized.mode || 'Offline';
+  normalized.location = normalized.location || '';
+  normalized.agenda = normalized.agenda || '';
+
+  normalized.assigned_minutes_user_id = normalized.assigned_minutes_user_id || '';
+  normalized.assigned_minutes_user_name = normalized.assigned_minutes_user_name || '';
+
+  normalized.status = normalized.status || 'scheduled';
+  normalized.minutes_status = normalized.minutes_status || 'not_assigned';
+
+  normalized.minutes = normalized.minutes || '';
+  normalized.decisions = normalized.decisions || '';
+  normalized.action_items = normalized.action_items || '';
+
+  normalized.created_by_name = normalized.created_by_name || '';
+  normalized.minutes_updated_by_name = normalized.minutes_updated_by_name || '';
+
+  return normalized;
+}
+
+export function normalizeManagementGroupMeetings(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeManagementGroupMeeting(item)).filter(Boolean);
+}
+
+export function getManagementGroup() {
+  return api('/management-groups').then((data = {}) => ({
+    ...data,
+    group: data.group || {},
+    members: normalizeManagementGroupMembers(data.members || []),
+    permissions: data.permissions || {},
+  }));
+}
+
+export function getManagementGroupEmployeeOptions(params = {}) {
+  return api(`/management-groups/employee-options${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeManagementGroupMembers(data.items || data.employees || []),
+    employees: normalizeManagementGroupMembers(data.employees || data.items || []),
+  }));
+}
+
+export function updateManagementGroupMembers(payload = {}) {
+  return api('/management-groups/members', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    group: data.group || {},
+    members: normalizeManagementGroupMembers(data.members || []),
+  }));
+}
+
+export function createManagementGroupMeeting(payload = {}) {
+  return api('/management-groups/meetings', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    meeting: normalizeManagementGroupMeeting(data.meeting || {}),
+  }));
+}
+
+export function getManagementGroupMeetings(params = {}) {
+  return api(`/management-groups/meetings${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeManagementGroupMeetings(data.items || data.meetings || []),
+    meetings: normalizeManagementGroupMeetings(data.meetings || data.items || []),
+  }));
+}
+
+export function getManagementGroupMeeting(meetingId) {
+  return api(`/management-groups/meetings/${meetingId}`).then((data = {}) => ({
+    ...data,
+    meeting: normalizeManagementGroupMeeting(data.meeting || {}),
+    permissions: data.permissions || {},
+  }));
+}
+
+export function updateManagementGroupMinutes(meetingId, payload = {}) {
+  return api(`/management-groups/meetings/${meetingId}/minutes`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    meeting: normalizeManagementGroupMeeting(data.meeting || {}),
+  }));
+}
+
+export function assignManagementGroupMinutesWriter(meetingId, payload = {}) {
+  return api(`/management-groups/meetings/${meetingId}/assign-minutes`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    meeting: normalizeManagementGroupMeeting(data.meeting || {}),
+  }));
+}
+
+export function deleteManagementGroupMeeting(meetingId) {
+  return api(`/management-groups/meetings/${meetingId}`, {
+    method: 'DELETE',
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Reports APIs                                                               */
 /* -------------------------------------------------------------------------- */

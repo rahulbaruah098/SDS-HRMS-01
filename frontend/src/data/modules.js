@@ -220,6 +220,8 @@ export const GRIEVANCE_MANAGER_ROLES = HR_ROLES;
 
 export const IT_SUPPORT_ROLES = ALL_COMMON_ROLES;
 
+export const MANAGEMENT_GROUP_ROLES = ALL_COMMON_ROLES;
+
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
@@ -514,6 +516,15 @@ export const coreModules = [
     'Tenant-wise employee contact directory with name, designation, state, phone, email and profile photo.',
     ALL_COMMON_ROLES,
   ],
+
+    [
+    'management_groups',
+    'Management Group',
+    Users,
+    'Tenant Management Group with member control, meeting scheduling, assigned minutes writer and searchable minutes history.',
+    MANAGEMENT_GROUP_ROLES,
+  ],
+
   [
     'attendance',
     'Attendance',
@@ -1293,6 +1304,31 @@ export const templates = {
     hr_notified_at: '',
     hr_notified_status: '',
     hr_record_notification_sent: false,
+  },
+
+  management_groups: {
+    tenant_id: 'sds',
+    name: 'Management Group',
+    description: '',
+    member_employee_ids: [],
+    member_user_ids: [],
+    group_admin_user_ids: [],
+    status: 'active',
+
+    topic: '',
+    title: '',
+    meeting_date: '',
+    start_time: '',
+    end_time: '',
+    mode: 'Offline',
+    location: '',
+    agenda: '',
+    assigned_minutes_user_id: '',
+    assigned_minutes_user_name: '',
+    minutes_status: 'not_assigned',
+    minutes: '',
+    decisions: '',
+    action_items: '',
   },
 
   grievances: {

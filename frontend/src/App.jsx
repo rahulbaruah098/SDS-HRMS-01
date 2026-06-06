@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { currentUser, getTodayCelebrations } from './api/client';
 import { canAccessModule } from './data/modules';
 
@@ -29,6 +29,7 @@ import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
 import Grievance from './pages/Grievance';
 import ITSupport from './pages/ITSupport';
+import ManagementGroup from './pages/ManagementGroup';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
 
 
@@ -185,6 +186,22 @@ const PAGE_ALIASES = {
   'support-tickets': 'it_support',
   'technology-support': 'it_support',
   'help-desk': 'it_support',
+
+  management_group: 'management_groups',
+  management_groups: 'management_groups',
+  management: 'management_groups',
+  management_committee: 'management_groups',
+  management_meetings: 'management_groups',
+  meeting_minutes: 'management_groups',
+  group_meetings: 'management_groups',
+
+  'management-group': 'management_groups',
+  'management-groups': 'management_groups',
+  'management-committee': 'management_groups',
+  'management-meetings': 'management_groups',
+  'meeting-minutes': 'management_groups',
+  'group-meetings': 'management_groups',
+
 
   notification: 'notifications',
   notifications: 'notifications',
@@ -493,6 +510,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'it_support') {
     return <ITSupport setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'management_groups') {
+    return <ManagementGroup setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'profile') {
