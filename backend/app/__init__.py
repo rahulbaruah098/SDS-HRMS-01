@@ -18,6 +18,7 @@ from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
 from .routes.password_requests import password_requests_bp
 from .routes.profile_photos import profile_photos_bp
+from app.routes.management_groups import management_groups_bp
 
 
 def _get_allowed_origins():
@@ -137,6 +138,15 @@ def create_app():
     # Keep this before generic CRUD so the dedicated IT Support routes are preferred.
     app.register_blueprint(it_support_bp, url_prefix="/api/v1/it-support")
 
+
+    # Management Group module APIs:
+    # tenant admin controls Management Group members, schedules group meetings,
+    # assigns minutes writers, and maintains meeting minutes history.
+    # Non-members can only view the Management Group member list.
+    #
+    # Keep this before generic CRUD so Management Group routes are not captured by CRUD fallback.
+    app.register_blueprint(management_groups_bp, url_prefix="/api/v1/management-groups")
+
     # Dedicated Policies APIs:
     # HR uploads tenant-wise policy documents.
     # Employees can view/download policies only from their own tenant.
@@ -232,6 +242,7 @@ def create_app():
                 "Leave Balances",
                 "Projects",
                 "Project Progress",
+                "Management Group",
                 "Grievances",
                 "IT Support",
                 "Reports",
@@ -260,6 +271,7 @@ def create_app():
             "project_progress_module": True,
             "grievance_module": True,
             "it_support_module": True,
+            "management_group_module": True,
             "reports_module": True,
             "employee_capability_mapping": True,
             "team_leader_as_capability": True,
