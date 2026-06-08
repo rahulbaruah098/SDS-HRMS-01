@@ -32,6 +32,7 @@ import Grievance from './pages/Grievance';
 import ITSupport from './pages/ITSupport';
 import ManagementGroup from './pages/ManagementGroup';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
+import AiAssistantWidget from "./components/AiAssistantWidget";
 
 
 import './styles.css';
@@ -681,6 +682,7 @@ export default function App() {
       </AppLayout>
 
       <CelebrationPopup celebrations={celebrations} />
+      <AiAssistantWidget />
     </>
   );
 }

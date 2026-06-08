@@ -20,6 +20,7 @@ from .routes.password_requests import password_requests_bp
 from .routes.profile_photos import profile_photos_bp
 from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
+from app.routes.ai_assistant import ai_assistant_bp
 
 
 def _get_allowed_origins():
@@ -161,6 +162,12 @@ def create_app():
     #
     # Keep this before generic CRUD so /assets routes are not captured by CRUD fallback.
     app.register_blueprint(assets_bp, url_prefix="/api/v1/assets")
+    
+    # AI Assistant APIs:
+    # HRMS workflow help chatbot for logged-in users.
+    # Provides text chat and AI knowledge seeding.
+    app.register_blueprint(ai_assistant_bp, url_prefix="/api/v1/ai-assistant")
+    
     # Dedicated Policies APIs:
     # HR uploads tenant-wise policy documents.
     # Employees can view/download policies only from their own tenant.

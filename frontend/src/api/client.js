@@ -4318,3 +4318,10 @@ export async function submitCheckOut(payload = {}) {
   const attendancePayload = await buildAttendancePayload(payload);
   return checkOutAttendance(attendancePayload);
 }
+
+export async function askAiAssistant(message) {
+  return api("/ai-assistant/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
