@@ -2840,6 +2840,408 @@ export function deleteManagementGroupMeeting(meetingId) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Asset APIs                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export const ASSET_TYPES = [
+  { value: 'hardware', label: 'Hardware' },
+  { value: 'software', label: 'Software' },
+];
+
+export const ASSET_STATUSES = [
+  { value: 'assigned', label: 'Assigned' },
+  { value: 'available', label: 'Available' },
+  { value: 'returned', label: 'Returned' },
+  { value: 'lost', label: 'Lost' },
+  { value: 'damaged', label: 'Damaged' },
+  { value: 'expired', label: 'Expired' },
+];
+
+export const ASSET_CONDITIONS = [
+  { value: 'new', label: 'New' },
+  { value: 'good', label: 'Good' },
+  { value: 'fair', label: 'Fair' },
+  { value: 'poor', label: 'Poor' },
+  { value: 'damaged', label: 'Damaged' },
+  { value: 'not_applicable', label: 'Not Applicable' },
+];
+
+export const ASSET_VERIFICATION_STATUSES = [
+  { value: 'pending', label: 'Pending Verification' },
+  { value: 'verified', label: 'Verified' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
+export function normalizeAssetType(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (normalized === 'hardware' || normalized === 'software') {
+    return normalized;
+  }
+
+  return 'hardware';
+}
+
+export function normalizeAssetStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (ASSET_STATUSES.some((item) => item.value === normalized)) {
+    return normalized;
+  }
+
+  return 'assigned';
+}
+
+export function normalizeAssetCondition(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (ASSET_CONDITIONS.some((item) => item.value === normalized)) {
+    return normalized;
+  }
+
+  return 'good';
+}
+
+export function normalizeAssetVerificationStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (ASSET_VERIFICATION_STATUSES.some((item) => item.value === normalized)) {
+    return normalized;
+  }
+
+  return 'pending';
+}
+
+export function getAssetTypeLabel(value = '') {
+  const normalized = normalizeAssetType(value);
+  return ASSET_TYPES.find((item) => item.value === normalized)?.label || 'Hardware';
+}
+
+export function getAssetStatusLabel(value = '') {
+  const normalized = normalizeAssetStatus(value);
+  return ASSET_STATUSES.find((item) => item.value === normalized)?.label || 'Assigned';
+}
+
+export function getAssetConditionLabel(value = '') {
+  const normalized = normalizeAssetCondition(value);
+  return ASSET_CONDITIONS.find((item) => item.value === normalized)?.label || 'Good';
+}
+
+export function getAssetVerificationStatusLabel(value = '') {
+  const normalized = normalizeAssetVerificationStatus(value);
+  return (
+    ASSET_VERIFICATION_STATUSES.find((item) => item.value === normalized)?.label ||
+    'Pending Verification'
+  );
+}
+
+export function normalizeAssetEmployee(employee = {}) {
+  if (!employee || typeof employee !== 'object') {
+    return employee;
+  }
+
+  const normalized = normalizePerson(withProfilePhotoAliases({ ...employee }));
+
+  normalized.id = normalized.id || normalized._id || normalized.employee_id || '';
+  normalized._id = normalized._id || normalized.id || '';
+  normalized.employee_id = normalized.employee_id || normalized._id || normalized.id || '';
+
+  normalized.name =
+    normalized.name ||
+    normalized.employee_name ||
+    normalized.full_name ||
+    normalized.email ||
+    'Employee';
+
+  normalized.employee_name = normalized.employee_name || normalized.name;
+  normalized.employee_code =
+    normalized.employee_code ||
+    normalized.emp_code ||
+    normalized.code ||
+    '';
+
+  normalized.department = normalized.department || normalized.department_name || '';
+  normalized.designation = normalized.designation || normalized.designation_name || '';
+  normalized.email = normalized.email || normalized.official_email || '';
+
+  return normalized;
+}
+
+export function normalizeAssetEmployees(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeAssetEmployee(item)).filter(Boolean);
+}
+
+export function normalizeAsset(asset = {}) {
+  if (!asset || typeof asset !== 'object') {
+    return asset;
+  }
+
+  const normalized = { ...asset };
+
+  normalized.id = normalized.id || normalized._id || '';
+  normalized._id = normalized._id || normalized.id || '';
+
+  normalized.asset_type = normalizeAssetType(normalized.asset_type || normalized.type);
+  normalized.type = normalized.asset_type;
+
+  normalized.asset_name = normalized.asset_name || normalized.name || '';
+  normalized.name = normalized.name || normalized.asset_name;
+
+  normalized.category = normalized.category || '';
+  normalized.brand = normalized.brand || '';
+  normalized.model = normalized.model || '';
+  normalized.serial_no = normalized.serial_no || '';
+  normalized.asset_code = normalized.asset_code || '';
+
+  normalized.license_key = normalized.license_key || '';
+  normalized.license_email = normalized.license_email || '';
+
+  normalized.vendor = normalized.vendor || '';
+  normalized.purchase_date = normalized.purchase_date || '';
+  normalized.warranty_expiry = normalized.warranty_expiry || '';
+  normalized.license_expiry = normalized.license_expiry || '';
+
+  normalized.status = normalizeAssetStatus(normalized.status);
+  normalized.condition = normalizeAssetCondition(normalized.condition);
+  normalized.verification_status = normalizeAssetVerificationStatus(
+    normalized.verification_status,
+  );
+
+  normalized.remarks = normalized.remarks || '';
+  normalized.rejection_reason = normalized.rejection_reason || '';
+
+  normalized.entry_source = normalized.entry_source || '';
+  normalized.created_by_name = normalized.created_by_name || '';
+  normalized.updated_by_name = normalized.updated_by_name || '';
+  normalized.verified_by_name = normalized.verified_by_name || '';
+
+  normalized.assigned_to_employee_id = normalized.assigned_to_employee_id || '';
+  normalized.assigned_to_user_id = normalized.assigned_to_user_id || '';
+  normalized.assigned_to_name = normalized.assigned_to_name || 'Employee';
+  normalized.assigned_to_employee_code = normalized.assigned_to_employee_code || '';
+  normalized.assigned_to_department = normalized.assigned_to_department || '';
+  normalized.assigned_to_designation = normalized.assigned_to_designation || '';
+  normalized.assigned_to_email = normalized.assigned_to_email || '';
+  normalized.assigned_to_phone = normalized.assigned_to_phone || '';
+
+  normalized.type_label = getAssetTypeLabel(normalized.asset_type);
+  normalized.status_label = getAssetStatusLabel(normalized.status);
+  normalized.condition_label = getAssetConditionLabel(normalized.condition);
+  normalized.verification_status_label = getAssetVerificationStatusLabel(
+    normalized.verification_status,
+  );
+
+  return normalized;
+}
+
+export function normalizeAssets(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeAsset(item)).filter(Boolean);
+}
+
+export function normalizeAssetReportRow(row = {}) {
+  if (!row || typeof row !== 'object') {
+    return row;
+  }
+
+  const normalized = { ...row };
+
+  normalized.employee_id = normalized.employee_id || '';
+  normalized.employee_name = normalized.employee_name || 'Employee';
+  normalized.employee_code = normalized.employee_code || '';
+  normalized.department = normalized.department || '';
+  normalized.designation = normalized.designation || '';
+  normalized.email = normalized.email || '';
+
+  normalized.hardware_count = Number(normalized.hardware_count || 0);
+  normalized.software_count = Number(normalized.software_count || 0);
+  normalized.total_assets = Number(normalized.total_assets || 0);
+
+  normalized.assets = normalizeAssets(normalized.assets || []);
+
+  return normalized;
+}
+
+export function normalizeAssetReportRows(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeAssetReportRow(item)).filter(Boolean);
+}
+
+export function getAssets(params = {}) {
+  return api(`/assets/${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeAssets(data.items || data.assets || []),
+    assets: normalizeAssets(data.assets || data.items || []),
+    stats: {
+      total: Number(data.stats?.total || 0),
+      hardware: Number(data.stats?.hardware || 0),
+      software: Number(data.stats?.software || 0),
+      assigned: Number(data.stats?.assigned || 0),
+      available: Number(data.stats?.available || 0),
+      pending: Number(data.stats?.pending || 0),
+      verified: Number(data.stats?.verified || 0),
+    },
+    can_manage: Boolean(data.can_manage),
+    can_report: Boolean(data.can_report),
+    total: Number(data.total || 0),
+    page: Number(data.page || 1),
+    limit: Number(data.limit || 100),
+  }));
+}
+
+export function getAssetEmployeeOptions(params = {}) {
+  return api(`/assets/employee-options${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeAssetEmployees(data.items || data.employees || []),
+    employees: normalizeAssetEmployees(data.employees || data.items || []),
+  }));
+}
+export function createAsset(payload = {}) {
+  return api('/assets/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    item: normalizeAsset(data.item || data.asset || {}),
+    asset: normalizeAsset(data.asset || data.item || {}),
+  }));
+}
+
+export function updateAsset(assetId, payload = {}) {
+  return api(`/assets/${assetId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }).then((data = {}) => ({
+    ...data,
+    item: normalizeAsset(data.item || data.asset || {}),
+    asset: normalizeAsset(data.asset || data.item || {}),
+  }));
+}
+
+export function deleteAsset(assetId) {
+  return api(`/assets/${assetId}`, {
+    method: 'DELETE',
+  });
+}
+
+export function getAssetReport(params = {}) {
+  return api(`/assets/report${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: normalizeAssetReportRows(data.items || data.rows || []),
+    rows: normalizeAssetReportRows(data.rows || data.items || []),
+    flat_items: normalizeAssets(data.flat_items || []),
+    summary: {
+      employee_count: Number(data.summary?.employee_count || 0),
+      asset_count: Number(data.summary?.asset_count || 0),
+      hardware_count: Number(data.summary?.hardware_count || 0),
+      software_count: Number(data.summary?.software_count || 0),
+    },
+  }));
+}
+
+export function exportAssetReportCsv(rows = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  const headers = [
+    'Employee Name',
+    'Employee Code',
+    'Department',
+    'Designation',
+    'Asset Type',
+    'Asset Name',
+    'Category',
+    'Brand',
+    'Model',
+    'Serial No',
+    'Asset Code',
+    'License Email',
+    'Status',
+    'Condition',
+    'Verification',
+    'Vendor',
+    'Purchase Date',
+    'Warranty Expiry',
+    'License Expiry',
+    'Remarks',
+  ];
+
+  const escapeCsvValue = (value = '') => {
+    const text = String(value ?? '').replace(/"/g, '""');
+    return `"${text}"`;
+  };
+
+  const lines = [headers.map(escapeCsvValue).join(',')];
+
+  safeRows.forEach((row) => {
+    const assets = Array.isArray(row.assets) ? row.assets : [];
+
+    if (!assets.length) {
+      lines.push([
+        row.employee_name,
+        row.employee_code,
+        row.department,
+        row.designation,
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+      ].map(escapeCsvValue).join(','));
+
+      return;
+    }
+
+    assets.forEach((asset) => {
+      lines.push([
+        row.employee_name,
+        row.employee_code,
+        row.department,
+        row.designation,
+        getAssetTypeLabel(asset.asset_type),
+        asset.asset_name,
+        asset.category,
+        asset.brand,
+        asset.model,
+        asset.serial_no,
+        asset.asset_code,
+        asset.license_email,
+        getAssetStatusLabel(asset.status),
+        getAssetConditionLabel(asset.condition),
+        getAssetVerificationStatusLabel(asset.verification_status),
+        asset.vendor,
+        asset.purchase_date,
+        asset.warranty_expiry,
+        asset.license_expiry,
+        asset.remarks,
+      ].map(escapeCsvValue).join(','));
+    });
+  });
+
+  return lines.join('\n');
+}
+
+/* -------------------------------------------------------------------------- */
 /* Reports APIs                                                               */
 /* -------------------------------------------------------------------------- */
 

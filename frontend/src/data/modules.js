@@ -222,6 +222,8 @@ export const IT_SUPPORT_ROLES = ALL_COMMON_ROLES;
 
 export const MANAGEMENT_GROUP_ROLES = ALL_COMMON_ROLES;
 
+export const ASSET_ROLES = ALL_COMMON_ROLES;
+
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
@@ -685,8 +687,8 @@ export const coreModules = [
     'assets',
     'Assets',
     Laptop,
-    'Inventory and allocation.',
-    HR_ROLES,
+    'Employees can submit assigned hardware/software assets; HR/Admin can verify, manage and generate employee-wise reports.',
+    ASSET_ROLES,
   ],
   [
     'notifications',

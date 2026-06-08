@@ -14,6 +14,7 @@ import ModuleCrud from './pages/ModuleCrud';
 import HolidayCalendar from './pages/HolidayCalendar';
 import Employees from './pages/Employees';
 import EmployeeDirectory from './pages/EmployeeDirectory';
+import Assets from './pages/Assets.jsx';
 import Departments from './pages/Departments';
 import Designations from './pages/Designations';
 import States from './pages/States';
@@ -202,6 +203,16 @@ const PAGE_ALIASES = {
   'meeting-minutes': 'management_groups',
   'group-meetings': 'management_groups',
 
+
+  asset: 'assets',
+  assets: 'assets',
+  asset_management: 'assets',
+  hardware_assets: 'assets',
+  software_assets: 'assets',
+
+  'asset-management': 'assets',
+  'hardware-assets': 'assets',
+  'software-assets': 'assets',
 
   notification: 'notifications',
   notifications: 'notifications',
@@ -470,6 +481,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'employees') {
     return <Employees setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'assets') {
+    return <Assets setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'employee_directory') {

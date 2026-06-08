@@ -202,6 +202,47 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("is_anonymous", ASCENDING), ("created_at", ASCENDING)],
     )
 
+    # Asset module:
+    # Employee and HR/Admin submitted hardware/software asset records.
+    # HR/Admin can report employee-wise asset allocation.
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("assigned_to_employee_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("assigned_to_user_id", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("asset_type", ASCENDING), ("status", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("verification_status", ASCENDING), ("created_at", ASCENDING)],
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("asset_code", ASCENDING)],
+        sparse=True,
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("serial_no", ASCENDING)],
+        sparse=True,
+    )
+
+    create_index_safe(
+        database.assets,
+        [("tenant_id", ASCENDING), ("license_key", ASCENDING)],
+        sparse=True,
+    )
+
     # IT Support module:
     # Tenant-wise IT ticket submission, IT Head assignment, IT member status updates,
     # employee review after resolution.

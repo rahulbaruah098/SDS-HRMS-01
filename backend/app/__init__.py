@@ -19,6 +19,7 @@ from .routes.superadmin import superadmin_bp
 from .routes.password_requests import password_requests_bp
 from .routes.profile_photos import profile_photos_bp
 from app.routes.management_groups import management_groups_bp
+from app.routes.assets import assets_bp
 
 
 def _get_allowed_origins():
@@ -35,9 +36,15 @@ def _get_allowed_origins():
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://localhost:3000",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
 
-        # Common LAN/dev origins.
-        # Keep these so frontend opened from another device can call backend.
+        # Current LAN/dev origin.
+        "http://192.168.29.94:5173",
+        "http://192.168.29.94:3000",
+        "http://192.168.29.94:4173",
+
+        # Previous LAN/dev origin kept for fallback.
         "http://192.168.29.85:5173",
         "http://192.168.29.85:3000",
         "http://192.168.29.85:4173",
@@ -147,6 +154,13 @@ def create_app():
     # Keep this before generic CRUD so Management Group routes are not captured by CRUD fallback.
     app.register_blueprint(management_groups_bp, url_prefix="/api/v1/management-groups")
 
+    # Asset module APIs:
+    # Employees can submit their own hardware/software asset entries.
+    # HR/Admin/Super Admin can add assets for employees, verify records,
+    # update asset status/condition, delete records softly, and generate reports.
+    #
+    # Keep this before generic CRUD so /assets routes are not captured by CRUD fallback.
+    app.register_blueprint(assets_bp, url_prefix="/api/v1/assets")
     # Dedicated Policies APIs:
     # HR uploads tenant-wise policy documents.
     # Employees can view/download policies only from their own tenant.
@@ -243,6 +257,7 @@ def create_app():
                 "Projects",
                 "Project Progress",
                 "Management Group",
+                "Assets",
                 "Grievances",
                 "IT Support",
                 "Reports",
@@ -272,6 +287,7 @@ def create_app():
             "grievance_module": True,
             "it_support_module": True,
             "management_group_module": True,
+            "asset_module": True,
             "reports_module": True,
             "employee_capability_mapping": True,
             "team_leader_as_capability": True,
