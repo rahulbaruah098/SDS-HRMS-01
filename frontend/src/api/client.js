@@ -4319,9 +4319,81 @@ export async function submitCheckOut(payload = {}) {
   return checkOutAttendance(attendancePayload);
 }
 
-export async function askAiAssistant(message) {
-  return api("/ai-assistant/chat", {
-    method: "POST",
-    body: JSON.stringify({ message }),
-  });
+export async function askAiAssistant(message, history = []) {
+  try {
+    const safeHistory = Array.isArray(history)
+      ? history
+          .slice(-8)
+          .map((item) => ({
+            role: item?.role,
+            text: item?.text,
+          }))
+          .filter((item) => item.role && item.text)
+      : [];
+
+    const response = await api("/ai-assistant/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        history: safeHistory,
+      }),
+    });
+
+    if (!response?.success) {
+      throw new Error(
+        response?.error ||
+          response?.details ||
+          response?.message ||
+          "AI Assistant could not process this request."
+      );
+    }
+
+    return response;
+  } catch (error) {
+    const rawMessage = String(error?.message || "");
+    const messageText = rawMessage.toLowerCase();
+
+    if (messageText.includes("failed to fetch")) {
+      throw new Error(
+        "AI Assistant backend is not reachable. Please check if Flask backend is running."
+      );
+    }
+
+    if (messageText.includes("401") || messageText.includes("unauthorized")) {
+      throw new Error(
+        "Your login session expired. Please logout and login again."
+      );
+    }
+
+    if (messageText.includes("403") || messageText.includes("permission")) {
+      throw new Error("You do not have permission to use AI Assistant.");
+    }
+
+    if (messageText.includes("429") || messageText.includes("quota")) {
+      throw new Error(
+        "AI provider quota is exceeded. Please try again later or check Gemini API quota."
+      );
+    }
+
+    if (
+      messageText.includes("gemini") ||
+      messageText.includes("api key") ||
+      messageText.includes("generate_content") ||
+      messageText.includes("embed_content")
+    ) {
+      throw new Error(
+        "AI provider configuration issue. Please check GEMINI_API_KEY and backend AI service configuration."
+      );
+    }
+
+    if (messageText.includes("500")) {
+      throw new Error(
+        "AI Assistant backend had a temporary issue. Please try again. If it continues, check backend terminal logs."
+      );
+    }
+
+    throw new Error(
+      rawMessage || "AI Assistant failed. Please try again."
+    );
+  }
 }

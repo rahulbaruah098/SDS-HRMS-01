@@ -9480,3 +9480,71 @@ tr:hover td {
     grid-template-columns: 1fr auto;
   }
 }
+
+/* =========================================================
+   FIX: Application Status / Team Approval faded text overlay
+   Reason:
+   Some decorative ::after layers were covering the content and
+   making text/cards look white or unreadable.
+   ========================================================= */
+
+.application-status-page .hero,
+.application-status-page .panel,
+.application-status-page .as-leave-card,
+.team-approvals-page .ta-hero,
+.team-approvals-page .panel,
+.team-approvals-page .ta-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.application-status-page .hero::after,
+.application-status-page .panel::after,
+.application-status-page .as-leave-card::after,
+.team-approvals-page .ta-hero::after,
+.team-approvals-page .panel::after,
+.team-approvals-page .ta-card::after {
+  opacity: 0.12 !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
+
+.application-status-page .hero > *,
+.application-status-page .panel > *,
+.application-status-page .as-leave-card > *,
+.team-approvals-page .ta-hero > *,
+.team-approvals-page .panel > *,
+.team-approvals-page .ta-card > * {
+  position: relative;
+  z-index: 2;
+}
+
+.application-status-page,
+.application-status-page h1,
+.application-status-page h2,
+.application-status-page h3,
+.application-status-page h4,
+.application-status-page p,
+.application-status-page span,
+.application-status-page small,
+.application-status-page strong,
+.application-status-page label,
+.application-status-page td,
+.application-status-page th,
+.application-status-page button,
+.team-approvals-page,
+.team-approvals-page h1,
+.team-approvals-page h2,
+.team-approvals-page h3,
+.team-approvals-page h4,
+.team-approvals-page p,
+.team-approvals-page span,
+.team-approvals-page small,
+.team-approvals-page strong,
+.team-approvals-page label,
+.team-approvals-page td,
+.team-approvals-page th,
+.team-approvals-page button {
+  opacity: 1 !important;
+  filter: none !important;
+}
