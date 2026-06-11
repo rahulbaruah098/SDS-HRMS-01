@@ -9548,3 +9548,1258 @@ tr:hover td {
   opacity: 1 !important;
   filter: none !important;
 }
+
+/* =========================================================
+   IT SUPPORT PAGE — CLEAN RESPONSIVE UI/UX OVERRIDE
+   File: frontend/src/styles.css
+   Purpose:
+   - Only improves IT Support page UI/UX
+   - Does not change any workflow or functionality
+   - Makes layout cleaner on desktop, tablet, and mobile
+   ========================================================= */
+
+.it-support-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  gap: 24px;
+}
+
+/* Main hero */
+.it-support-page .it-hero {
+  border-radius: 28px;
+  padding: 30px;
+  border: 1px solid #E2E8F0;
+  background:
+    radial-gradient(circle at top left, rgba(79, 70, 229, 0.10), transparent 34%),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.10), transparent 30%),
+    linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+}
+
+.it-support-page .it-hero h1 {
+  margin-top: 12px;
+  font-size: clamp(30px, 4vw, 46px);
+  color: #0F172A;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+}
+
+.it-support-page .it-hero p {
+  max-width: 850px;
+  color: #64748B;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.it-support-page .it-hero .eyebrow {
+  background: #EEF2FF;
+  color: #4338CA;
+  border-color: #C7D2FE;
+}
+
+/* Refresh button */
+.it-support-page .grievance-hero-actions .ghost-btn {
+  min-height: 44px;
+  border-radius: 14px;
+  background: #FFFFFF;
+  color: #334155;
+  border-color: #CBD5E1;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.it-support-page .grievance-hero-actions .ghost-btn:hover {
+  background: #EEF2FF;
+  color: #4338CA;
+  border-color: #C7D2FE;
+}
+
+/* Stats */
+.it-support-page .grievance-stats {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.it-support-page .mini-stat-card {
+  min-height: 112px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.07);
+}
+
+.it-support-page .mini-stat-card::before {
+  width: 82px;
+  height: 82px;
+  right: -34px;
+  top: -34px;
+  background: rgba(79, 70, 229, 0.10);
+}
+
+.it-support-page .mini-stat-card span {
+  color: #64748B;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+}
+
+.it-support-page .mini-stat-card strong {
+  color: #0F172A;
+  font-size: 32px;
+}
+
+/* Main two-column layout */
+.it-support-page .grievance-grid.it-support-grid {
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.5fr);
+  gap: 22px;
+  align-items: start;
+}
+
+/* Panels */
+.it-support-page .panel {
+  border-radius: 26px;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.07);
+}
+
+.it-support-page .grievance-form-panel,
+.it-support-page .grievance-list-panel {
+  min-width: 0;
+}
+
+/* Section heading */
+.it-support-page .section-heading {
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.it-support-page .section-heading h2 {
+  color: #0F172A;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.it-support-page .section-heading p {
+  color: #64748B;
+  font-size: 14px;
+}
+
+.it-support-page .section-heading svg {
+  flex: 0 0 auto;
+  color: #4F46E5;
+}
+
+/* Prefilled employee details */
+.it-support-page .profile-prefill-card {
+  border-radius: 22px;
+  border-color: #E2E8F0;
+  background: #F8FAFC;
+}
+
+.it-support-page .profile-prefill-title {
+  color: #0F172A;
+}
+
+.it-support-page .profile-prefill-title svg {
+  color: #4F46E5;
+}
+
+.it-support-page .profile-prefill-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.it-support-page .profile-prefill-grid div {
+  border-color: #E2E8F0;
+  background: #FFFFFF;
+}
+
+.it-support-page .profile-prefill-grid span {
+  color: #64748B;
+}
+
+.it-support-page .profile-prefill-grid strong {
+  color: #0F172A;
+}
+
+/* Form fields */
+.it-support-page .modern-form input,
+.it-support-page .modern-form select,
+.it-support-page .modern-form textarea,
+.it-support-page .filter-bar input,
+.it-support-page .filter-bar select,
+.it-support-page .side-drawer input,
+.it-support-page .side-drawer select,
+.it-support-page .side-drawer textarea {
+  min-height: 46px;
+  border-radius: 14px;
+  border-color: #CBD5E1;
+  background: #FFFFFF;
+  color: #0F172A;
+  font-size: 14px;
+}
+
+.it-support-page .modern-form textarea,
+.it-support-page .side-drawer textarea {
+  min-height: 120px;
+}
+
+.it-support-page .modern-form input:focus,
+.it-support-page .modern-form select:focus,
+.it-support-page .modern-form textarea:focus,
+.it-support-page .filter-bar input:focus,
+.it-support-page .filter-bar select:focus,
+.it-support-page .side-drawer input:focus,
+.it-support-page .side-drawer select:focus,
+.it-support-page .side-drawer textarea:focus {
+  border-color: #818CF8;
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+}
+
+.it-support-page .modern-form label > span {
+  color: #475569;
+}
+
+/* Submit buttons */
+.it-support-page .modern-form .primary {
+  min-height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #4F46E5, #2563EB);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.22);
+}
+
+.it-support-page .modern-form .primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.28);
+}
+
+/* Filter bar */
+.it-support-page .filter-bar {
+  grid-template-columns: auto repeat(5, minmax(130px, 1fr)) auto;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 20px;
+  border-color: #E2E8F0;
+  background: #F8FAFC;
+}
+
+.it-support-page .filter-label {
+  color: #475569;
+}
+
+/* IT team strip */
+.it-support-page .it-team-strip {
+  border-radius: 20px;
+  border-color: #E2E8F0;
+  background:
+    radial-gradient(circle at top left, rgba(79, 70, 229, 0.08), transparent 35%),
+    #F8FAFC;
+}
+
+.it-support-page .it-team-strip div {
+  color: #0F172A;
+}
+
+.it-support-page .it-team-strip div svg {
+  color: #4F46E5;
+}
+
+.it-support-page .it-team-strip strong {
+  color: #4F46E5;
+}
+
+.it-support-page .it-team-strip small {
+  color: #64748B;
+}
+
+/* Ticket cards */
+.it-support-page .ticket-list {
+  gap: 16px;
+}
+
+.it-support-page .ticket-card {
+  border-radius: 24px;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.06);
+}
+
+.it-support-page .ticket-card:hover {
+  transform: translateY(-2px);
+  border-color: #C7D2FE;
+  box-shadow: 0 20px 52px rgba(15, 23, 42, 0.10);
+}
+
+.it-support-page .ticket-card h3 {
+  color: #0F172A;
+  font-size: 19px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.it-support-page .ticket-card p {
+  color: #64748B;
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.it-support-page .ticket-topline {
+  gap: 14px;
+}
+
+.it-support-page .ticket-topline strong {
+  color: #4F46E5;
+}
+
+.it-support-page .ticket-topline span {
+  color: #64748B;
+}
+
+.it-support-page .ticket-badges {
+  max-width: 100%;
+}
+
+/* Ticket meta */
+.it-support-page .ticket-meta-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.it-support-page .ticket-meta-grid div {
+  border-color: #E2E8F0;
+  background: #F8FAFC;
+}
+
+.it-support-page .ticket-meta-grid span {
+  color: #64748B;
+}
+
+.it-support-page .ticket-meta-grid strong {
+  color: #0F172A;
+}
+
+/* Pills */
+.it-support-page .pill {
+  min-height: 25px;
+  padding: 7px 10px;
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.it-support-page .pill.success {
+  background: #ECFDF5;
+  color: #047857;
+  border-color: #A7F3D0;
+}
+
+.it-support-page .pill.warning {
+  background: #FFFBEB;
+  color: #B45309;
+  border-color: #FDE68A;
+}
+
+.it-support-page .pill.info {
+  background: #EFF6FF;
+  color: #1D4ED8;
+  border-color: #BFDBFE;
+}
+
+.it-support-page .pill.danger,
+.it-support-page .ticket-badges .pill.danger {
+  background: #FFF1F2;
+  color: #BE123C;
+  border-color: #FECDD3;
+}
+
+/* Notes */
+.it-support-page .anonymous-note,
+.it-support-page .review-note {
+  border-radius: 16px;
+  overflow-wrap: anywhere;
+}
+
+/* Action buttons */
+.it-support-page .ticket-actions {
+  gap: 10px;
+}
+
+.it-support-page .ticket-actions .ghost-btn {
+  min-height: 42px;
+  border-radius: 13px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
+/* Drawer */
+.it-support-page .drawer-backdrop {
+  background: rgba(15, 23, 42, 0.50);
+}
+
+.it-support-page .side-drawer {
+  width: min(540px, 100vw);
+  background: #FFFFFF;
+  border-left: 1px solid #E2E8F0;
+}
+
+.it-support-page .drawer-header h2 {
+  color: #0F172A;
+}
+
+.it-support-page .drawer-summary {
+  border-color: #E2E8F0;
+  background: #F8FAFC;
+}
+
+.it-support-page .drawer-summary strong {
+  color: #4F46E5;
+}
+
+.it-support-page .drawer-summary h3 {
+  color: #0F172A;
+}
+
+.it-support-page .drawer-summary p {
+  color: #64748B;
+}
+
+/* Empty states */
+.it-support-page .empty-state {
+  border-radius: 22px;
+  border-color: #CBD5E1;
+  background: #F8FAFC;
+  color: #64748B;
+}
+
+.it-support-page .empty-state svg {
+  color: #4F46E5;
+}
+
+/* Tablet */
+@media (max-width: 1280px) {
+  .it-support-page .grievance-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .it-support-page .grievance-grid.it-support-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .it-support-page .filter-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .it-support-page .filter-label {
+    grid-column: 1 / -1;
+  }
+
+  .it-support-page .filter-bar .ghost-btn {
+    width: 100%;
+  }
+}
+
+/* Small tablet */
+@media (max-width: 920px) {
+  .it-support-page .it-hero {
+    align-items: stretch;
+    padding: 24px;
+  }
+
+  .it-support-page .grievance-hero-actions,
+  .it-support-page .grievance-hero-actions .ghost-btn {
+    width: 100%;
+  }
+
+  .it-support-page .profile-prefill-grid,
+  .it-support-page .ticket-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .it-support-page .ticket-topline {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .it-support-page .ticket-badges {
+    justify-content: flex-start;
+  }
+}
+
+/* Mobile */
+@media (max-width: 720px) {
+  .it-support-page {
+    gap: 16px;
+  }
+
+  .it-support-page .it-hero {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .it-support-page .it-hero h1 {
+    font-size: 30px;
+  }
+
+  .it-support-page .it-hero p {
+    font-size: 14px;
+  }
+
+  .it-support-page .grievance-stats,
+  .it-support-page .filter-bar,
+  .it-support-page .profile-prefill-grid,
+  .it-support-page .form-row.two,
+  .it-support-page .ticket-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .it-support-page .mini-stat-card {
+    min-height: auto;
+  }
+
+  .it-support-page .panel {
+    border-radius: 20px;
+  }
+
+  .it-support-page .section-heading {
+    align-items: flex-start;
+  }
+
+  .it-support-page .section-heading h2 {
+    font-size: 20px;
+  }
+
+  .it-support-page .ticket-card {
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .it-support-page .ticket-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .it-support-page .ticket-actions .ghost-btn,
+  .it-support-page .modern-form .primary,
+  .it-support-page .filter-bar .ghost-btn {
+    width: 100%;
+  }
+
+  .it-support-page .drawer-backdrop {
+    align-items: stretch;
+  }
+
+  .it-support-page .side-drawer {
+    width: 100vw;
+    height: 100dvh;
+    border-left: 0;
+    border-radius: 0;
+    padding: 18px;
+  }
+}
+
+/* Very small mobile */
+@media (max-width: 420px) {
+  .it-support-page .it-hero {
+    padding: 18px;
+  }
+
+  .it-support-page .mini-stat-card,
+  .it-support-page .ticket-card,
+  .it-support-page .profile-prefill-card,
+  .it-support-page .it-team-strip,
+  .it-support-page .empty-state {
+    border-radius: 18px;
+  }
+
+  .it-support-page .ticket-card h3 {
+    font-size: 18px;
+  }
+
+  .it-support-page .pill {
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+/* =========================================================
+   ADMIN / HR DASHBOARD — ATTENDANCE WIDGET RESPONSIVE FIX
+   File: frontend/src/styles.css
+   Purpose:
+   - Fix AttendanceWidget responsiveness in Admin and HR dashboard
+   - No API / backend / logic change
+   - Only layout, spacing, wrapping, mobile responsiveness
+   ========================================================= */
+
+.panel > .attendance-card,
+.panel > .attendance-pro-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0 !important;
+  box-sizing: border-box;
+}
+
+.attendance-card,
+.attendance-pro-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0 !important;
+  box-sizing: border-box;
+}
+
+/* Main widget card */
+.attendance-pro-card {
+  padding: 22px;
+  border-radius: 26px;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.07);
+}
+
+/* Header */
+.attendance-head {
+  width: 100%;
+  min-width: 0;
+}
+
+.attendance-head > div {
+  min-width: 0;
+}
+
+.attendance-kicker {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.attendance-head h2,
+.attendance-head h3 {
+  overflow-wrap: anywhere;
+}
+
+.attendance-subtext {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Refresh button */
+.attendance-head .soft-refresh-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Status summary cards */
+.attendance-summary {
+  width: 100%;
+  max-width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.attendance-summary > div {
+  min-width: 0;
+}
+
+.attendance-summary span,
+.attendance-summary strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Attendance mode buttons */
+.attendance-mode-row {
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  gap: 6px;
+}
+
+.attendance-mode-row button {
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+
+/* Hold buttons */
+.attendance-hold-grid {
+  width: 100%;
+  max-width: 100%;
+}
+
+.hold-btn {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hold-text {
+  overflow-wrap: anywhere;
+}
+
+/* Extra controls / comp-off / request buttons */
+.attendance-extra-grid {
+  width: 100%;
+  max-width: 100%;
+}
+
+.attendance-extra-grid > * {
+  min-width: 0;
+}
+
+.compoff-pill {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Request forms inside widget */
+.attendance-request-box {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.attendance-request-box input,
+.attendance-request-box textarea,
+.attendance-request-box select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.attendance-request-box textarea {
+  resize: vertical;
+}
+
+/* Fix parent dashboard overflow */
+.panel {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Laptop / small desktop */
+@media (max-width: 1280px) {
+  .attendance-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attendance-pro-card {
+    padding: 20px;
+  }
+}
+
+/* Tablet */
+@media (max-width: 920px) {
+  .attendance-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .attendance-head .soft-refresh-btn {
+    width: 100%;
+  }
+
+  .attendance-mode-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .attendance-hold-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Mobile */
+@media (max-width: 720px) {
+  .attendance-pro-card {
+    padding: 16px;
+    border-radius: 22px;
+    gap: 14px;
+  }
+
+  .attendance-summary,
+  .attendance-hold-grid,
+  .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .attendance-mode-row {
+    grid-template-columns: 1fr;
+    padding: 8px;
+  }
+
+  .attendance-mode-row button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .hold-btn {
+    min-height: 128px;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .hold-ring {
+    width: 66px;
+    height: 66px;
+  }
+
+  .hold-ring-inner {
+    width: 50px;
+    height: 50px;
+    font-size: 13px;
+  }
+
+  .attendance-extra-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .attendance-extra-grid button,
+  .attendance-extra-grid .mini-action-btn,
+  .attendance-extra-grid .soft-refresh-btn {
+    width: 100%;
+  }
+
+  .attendance-request-box {
+    padding: 12px;
+    border-radius: 18px;
+  }
+}
+
+/* Very small mobile */
+@media (max-width: 420px) {
+  .attendance-pro-card {
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .attendance-summary > div {
+    padding: 11px;
+    border-radius: 14px;
+  }
+
+  .attendance-summary strong {
+    font-size: 14px;
+  }
+
+  .attendance-subtext {
+    font-size: 12px;
+  }
+
+  .hold-btn {
+    min-height: 118px;
+  }
+
+  .holiday-banner {
+    flex-direction: column;
+  }
+}
+
+/* =========================================================
+   HOLIDAY CALENDAR PAGE — UNIFORM THEME COLOR OVERRIDE
+   File: frontend/src/styles.css
+   Purpose:
+   - Remove old green-heavy holiday page theme
+   - Make it uniform with HRMS blue/indigo dashboard UI
+   - No JSX / API / backend / logic change
+   ========================================================= */
+
+.holiday-page {
+  color: #0F172A;
+}
+
+/* Hero */
+.holiday-hero {
+  border: 1px solid #E2E8F0;
+  background:
+    radial-gradient(circle at top left, rgba(79, 70, 229, 0.10), transparent 34%),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.09), transparent 32%),
+    linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+}
+
+.holiday-eyebrow {
+  background: #EEF2FF;
+  color: #4338CA;
+  border: 1px solid #C7D2FE;
+}
+
+.holiday-hero h1 {
+  color: #0F172A;
+}
+
+.holiday-hero p {
+  color: #64748B;
+}
+
+.holiday-hero-card {
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.07);
+}
+
+.holiday-hero-card span,
+.holiday-hero-card small {
+  color: #64748B;
+}
+
+.holiday-hero-card strong {
+  color: #4F46E5;
+}
+
+/* Alert */
+.holiday-alert.success {
+  border-color: #A7F3D0;
+  background: #ECFDF5;
+  color: #047857;
+}
+
+.holiday-alert.error {
+  border-color: #FECDD3;
+  background: #FFF1F2;
+  color: #BE123C;
+}
+
+/* Toolbar */
+.holiday-search {
+  border: 1px solid #CBD5E1;
+  background: #FFFFFF;
+  color: #4F46E5;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.holiday-search input {
+  color: #0F172A;
+}
+
+.holiday-search input::placeholder {
+  color: #94A3B8;
+}
+
+.holiday-refresh-btn {
+  background: linear-gradient(135deg, #4F46E5, #2563EB);
+  color: #FFFFFF;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.20);
+}
+
+/* Main cards */
+.holiday-filter-card,
+.holiday-form-card,
+.holiday-list-card,
+.holiday-calendar-card {
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.07);
+}
+
+.holiday-section-title {
+  color: #4F46E5;
+}
+
+.holiday-section-title h3 {
+  color: #0F172A;
+}
+
+.holiday-section-title p {
+  color: #64748B;
+}
+
+/* Form fields */
+.holiday-filter-grid label,
+.holiday-form-grid label {
+  color: #475569;
+}
+
+.holiday-filter-grid input,
+.holiday-filter-grid select,
+.holiday-form-grid input,
+.holiday-form-grid select,
+.holiday-form-grid textarea {
+  border: 1px solid #CBD5E1;
+  background: #FFFFFF;
+  color: #0F172A;
+}
+
+.holiday-filter-grid input:focus,
+.holiday-filter-grid select:focus,
+.holiday-form-grid input:focus,
+.holiday-form-grid select:focus,
+.holiday-form-grid textarea:focus {
+  border-color: #818CF8;
+  background: #FFFFFF;
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+}
+
+/* Filter buttons */
+.holiday-filter-actions button {
+  background: linear-gradient(135deg, #4F46E5, #2563EB);
+  color: #FFFFFF;
+}
+
+.holiday-filter-actions button + button {
+  background: #F1F5F9;
+  color: #334155;
+  border: 1px solid #CBD5E1;
+}
+
+/* Form buttons */
+.holiday-save-btn {
+  background: linear-gradient(135deg, #4F46E5, #2563EB);
+  color: #FFFFFF;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.20);
+}
+
+.holiday-cancel-btn {
+  background: #FFF1F2;
+  color: #BE123C;
+}
+
+/* Table */
+.holiday-table-wrap {
+  border: 1px solid #E2E8F0;
+}
+
+.holiday-table th {
+  background: #EEF2FF;
+  color: #4338CA;
+}
+
+.holiday-table td {
+  border-top: 1px solid #E2E8F0;
+  color: #334155;
+}
+
+.holiday-table tbody tr:hover {
+  background: #F8FAFC;
+}
+
+.holiday-title-cell strong {
+  color: #0F172A;
+}
+
+/* Status */
+.holiday-status.active {
+  background: #ECFDF5;
+  color: #047857;
+  border: 1px solid #A7F3D0;
+}
+
+.holiday-status.inactive {
+  background: #FFF1F2;
+  color: #BE123C;
+  border: 1px solid #FECDD3;
+}
+
+/* Row action buttons */
+.holiday-row-actions button {
+  background: #EEF2FF;
+  color: #4338CA;
+  border: 1px solid #C7D2FE;
+}
+
+.holiday-row-actions button.delete {
+  background: #FFF1F2;
+  color: #BE123C;
+  border: 1px solid #FECDD3;
+}
+
+/* Empty state */
+.holiday-empty {
+  border: 1px dashed #CBD5E1;
+  background: #F8FAFC;
+  color: #64748B;
+}
+
+/* Mobile cards */
+.holiday-mobile-card {
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.holiday-mobile-card > div:first-child span,
+.holiday-mobile-meta > span:last-child {
+  color: #64748B;
+}
+
+.holiday-mobile-card > div:first-child strong {
+  color: #0F172A;
+}
+
+.holiday-mobile-card p {
+  color: #475569;
+}
+
+/* Monthly calendar header */
+.holiday-calendar-actions {
+  border: 1px solid #E2E8F0;
+  background: #F8FAFC;
+}
+
+.holiday-calendar-actions strong {
+  color: #0F172A;
+}
+
+.holiday-calendar-actions button {
+  background: #FFFFFF;
+  color: #4338CA;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.holiday-calendar-actions button.today {
+  background: linear-gradient(135deg, #4F46E5, #2563EB);
+  color: #FFFFFF;
+  border-color: transparent;
+}
+
+/* Calendar legend — clean uniform colors */
+.holiday-calendar-legend .manual {
+  background: #EEF2FF;
+  color: #4338CA;
+  border: 1px solid #C7D2FE;
+}
+
+.holiday-calendar-legend .manual::before {
+  background: #4F46E5;
+}
+
+.holiday-calendar-legend .sunday {
+  background: #FFF1F2;
+  color: #BE123C;
+  border: 1px solid #FECDD3;
+}
+
+.holiday-calendar-legend .sunday::before {
+  background: #E11D48;
+}
+
+.holiday-calendar-legend .second-saturday {
+  background: #EFF6FF;
+  color: #1D4ED8;
+  border: 1px solid #BFDBFE;
+}
+
+.holiday-calendar-legend .second-saturday::before {
+  background: #2563EB;
+}
+
+.holiday-calendar-legend .fourth-saturday {
+  background: #F5F3FF;
+  color: #6D28D9;
+  border: 1px solid #DDD6FE;
+}
+
+.holiday-calendar-legend .fourth-saturday::before {
+  background: #7C3AED;
+}
+
+.holiday-calendar-legend .working {
+  background: #F8FAFC;
+  color: #475569;
+  border: 1px solid #E2E8F0;
+}
+
+.holiday-calendar-legend .working::before {
+  background: #94A3B8;
+}
+
+/* Calendar grid */
+.holiday-calendar-weekdays {
+  border: 1px solid #E2E8F0;
+  border-bottom: 0;
+  background: #EEF2FF;
+}
+
+.holiday-calendar-weekdays span {
+  color: #4338CA;
+}
+
+.holiday-calendar-days {
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+}
+
+.holiday-calendar-day {
+  border-right: 1px solid #E2E8F0;
+  border-bottom: 1px solid #E2E8F0;
+  background: #FFFFFF;
+}
+
+.holiday-calendar-day strong {
+  color: #0F172A;
+}
+
+.holiday-calendar-day span {
+  color: #64748B;
+}
+
+.holiday-calendar-day.blank {
+  background: #F8FAFC;
+}
+
+.holiday-calendar-day.working {
+  background: #FFFFFF;
+}
+
+.holiday-calendar-day.manual {
+  background: #EEF2FF;
+}
+
+.holiday-calendar-day.manual strong {
+  background: #4F46E5;
+  color: #FFFFFF;
+}
+
+.holiday-calendar-day.manual span {
+  color: #4338CA;
+}
+
+.holiday-calendar-day.sunday {
+  background: #FFF1F2;
+}
+
+.holiday-calendar-day.sunday strong {
+  background: #E11D48;
+  color: #FFFFFF;
+}
+
+.holiday-calendar-day.sunday span {
+  color: #BE123C;
+}
+
+.holiday-calendar-day.second-saturday {
+  background: #EFF6FF;
+}
+
+.holiday-calendar-day.second-saturday strong {
+  background: #2563EB;
+  color: #FFFFFF;
+}
+
+.holiday-calendar-day.second-saturday span {
+  color: #1D4ED8;
+}
+
+.holiday-calendar-day.fourth-saturday {
+  background: #F5F3FF;
+}
+
+.holiday-calendar-day.fourth-saturday strong {
+  background: #7C3AED;
+  color: #FFFFFF;
+}
+
+.holiday-calendar-day.fourth-saturday span {
+  color: #6D28D9;
+}
+
+/* Extra small refinement */
+@media (max-width: 640px) {
+  .holiday-calendar-legend span {
+    border-radius: 12px;
+  }
+
+  .holiday-calendar-day {
+    word-break: break-word;
+  }
+}

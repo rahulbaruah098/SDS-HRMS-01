@@ -1,73 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { api, setSession, refreshCurrentSession, currentUser } from '../api/client';
-
-const demoLogins = [
-  {
-    label: 'Super Admin',
-    email: 'superadmin@sdshr.in',
-    password: 'Super@123',
-    tone: 'System',
-  },
-  {
-    label: 'SDS Admin',
-    email: 'admin@sdshr.in',
-    password: '12345678',
-    tone: 'Admin',
-  },
-  {
-    label: 'HR',
-    email: 'hr@sdshr.in',
-    password: '12345678',
-    tone: 'People',
-  },
-  {
-    label: 'Finance',
-    email: 'finance@sdshr.in',
-    password: '12345678',
-    tone: 'Payroll',
-  },
-  {
-    label: 'Manager',
-    email: 'manager@sdshr.in',
-    password: '12345678',
-    tone: 'Team',
-  },
-  {
-    label: 'Employee',
-    email: 'employee@sdshr.in',
-    password: '12345678',
-    tone: 'Self',
-  },
-  {
-    label: 'Demo Company Admin',
-    email: 'clientadmin@example.com',
-    password: 'Client@123',
-    tone: 'Client',
-  },
-];
 
 export default function Login({ onLogin }) {
   const [form, setForm] = useState({
-    email: 'superadmin@sdshr.in',
-    password: 'Super@123',
+    email: '',
+    password: '',
   });
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-
-  const selectedDemo = useMemo(
-    () => demoLogins.find((item) => item.email === form.email) || demoLogins[0],
-    [form.email],
-  );
-
-  function chooseDemo(item) {
-    setForm({
-      email: item.email,
-      password: item.password,
-    });
-    setError('');
-  }
 
   async function submit(e) {
     e.preventDefault();
@@ -116,15 +58,17 @@ export default function Login({ onLogin }) {
       <style>
         {`
           .sds-login-page {
-            height: 100vh;
+            min-height: 100vh;
             width: 100%;
-            padding: 18px;
+            padding: 22px;
             display: flex;
             align-items: center;
             justify-content: center;
             background:
-              linear-gradient(120deg, rgba(2, 6, 23, 0.96), rgba(15, 23, 42, 0.95)),
-              radial-gradient(circle at 82% 82%, rgba(34, 197, 94, 0.18), transparent 30%);
+              radial-gradient(circle at 12% 16%, rgba(99, 102, 241, 0.28), transparent 30%),
+              radial-gradient(circle at 84% 18%, rgba(14, 165, 233, 0.24), transparent 28%),
+              radial-gradient(circle at 72% 86%, rgba(34, 197, 94, 0.16), transparent 30%),
+              linear-gradient(135deg, #020617 0%, #0f172a 46%, #111827 100%);
             position: relative;
             overflow: hidden;
           }
@@ -136,34 +80,67 @@ export default function Login({ onLogin }) {
             background-image:
               linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
               linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-            background-size: 46px 46px;
+            background-size: 44px 44px;
+            mask-image: radial-gradient(circle at center, black 0%, transparent 82%);
+            pointer-events: none;
+          }
+
+          .sds-login-page::after {
+            content: "";
+            position: absolute;
+            width: 720px;
+            height: 720px;
+            border-radius: 999px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background:
+              conic-gradient(
+                from 120deg,
+                rgba(79, 70, 229, 0.18),
+                rgba(14, 165, 233, 0.14),
+                rgba(34, 197, 94, 0.10),
+                rgba(79, 70, 229, 0.18)
+              );
+            filter: blur(90px);
+            opacity: 0.72;
             pointer-events: none;
           }
 
           .sds-orb {
             position: absolute;
             border-radius: 999px;
-            filter: blur(4px);
-            opacity: 0.55;
-            animation: sdsFloat 9s ease-in-out infinite;
             pointer-events: none;
+            animation: sdsFloat 9s ease-in-out infinite;
+          }
+
+          .sds-orb.one {
+            width: 190px;
+            height: 190px;
+            left: 5%;
+            top: 9%;
+            background: rgba(99, 102, 241, 0.18);
+            filter: blur(5px);
           }
 
           .sds-orb.two {
-            width: 220px;
-            height: 220px;
-            right: 5%;
+            width: 240px;
+            height: 240px;
+            right: 4%;
             bottom: 4%;
-            background: rgba(34, 197, 94, 0.12);
+            background: rgba(14, 165, 233, 0.14);
+            filter: blur(6px);
+            animation-delay: 1.4s;
           }
 
           .sds-orb.three {
-            width: 105px;
-            height: 105px;
-            right: 28%;
+            width: 110px;
+            height: 110px;
+            right: 30%;
             top: 8%;
-            background: rgba(251, 191, 36, 0.1);
-            animation-delay: 2.2s;
+            background: rgba(34, 197, 94, 0.14);
+            filter: blur(4px);
+            animation-delay: 2.4s;
           }
 
           @keyframes sdsFloat {
@@ -171,17 +148,17 @@ export default function Login({ onLogin }) {
               transform: translate3d(0, 0, 0) scale(1);
             }
             50% {
-              transform: translate3d(0, 14px, 0) scale(1.03);
+              transform: translate3d(0, 16px, 0) scale(1.04);
             }
           }
 
           .sds-login-stage {
-            width: min(1200px, 100%);
-            height: min(680px, calc(100vh - 36px));
+            width: min(1180px, 100%);
+            min-height: min(690px, calc(100vh - 44px));
             position: relative;
             z-index: 2;
             display: grid;
-            grid-template-columns: 1.04fr 0.96fr;
+            grid-template-columns: minmax(0, 1.05fr) minmax(420px, 0.95fr);
             gap: 18px;
             animation: sdsStageIn 0.45s ease both;
           }
@@ -199,16 +176,18 @@ export default function Login({ onLogin }) {
 
           .sds-command-panel,
           .sds-access-panel {
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            background: rgba(15, 23, 42, 0.58);
-            backdrop-filter: blur(22px);
-            border-radius: 30px;
+            border: 1px solid rgba(226, 232, 240, 0.16);
+            background: rgba(15, 23, 42, 0.62);
+            backdrop-filter: blur(24px);
+            border-radius: 32px;
             overflow: hidden;
-            box-shadow: 0 26px 80px rgba(0, 0, 0, 0.3);
+            box-shadow:
+              0 32px 90px rgba(0, 0, 0, 0.36),
+              inset 0 1px 0 rgba(255, 255, 255, 0.08);
           }
 
           .sds-command-panel {
-            padding: 28px;
+            padding: 30px;
             color: #f8fafc;
             display: flex;
             flex-direction: column;
@@ -216,8 +195,13 @@ export default function Login({ onLogin }) {
             position: relative;
           }
 
-          .sds-command-panel::after {
-            display: none;
+          .sds-command-panel::before {
+            content: "";
+            position: absolute;
+            inset: 18px;
+            border-radius: 28px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            pointer-events: none;
           }
 
           .sds-topbar {
@@ -233,23 +217,25 @@ export default function Login({ onLogin }) {
             display: flex;
             align-items: center;
             gap: 13px;
+            min-width: 0;
           }
 
           .sds-logo {
-            width: 52px;
-            height: 52px;
-            border-radius: 18px;
+            width: 54px;
+            height: 54px;
+            border-radius: 20px;
             display: flex;
             align-items: center;
             justify-content: center;
             background:
-              linear-gradient(135deg, rgba(255,255,255,0.98), rgba(219,234,254,0.92));
+              linear-gradient(135deg, rgba(255,255,255,0.98), rgba(219,234,254,0.94));
             color: #0f172a;
             font-weight: 950;
             letter-spacing: -0.08em;
             box-shadow:
-              0 14px 34px rgba(14, 165, 233, 0.18),
-              inset 0 -8px 18px rgba(15, 23, 42, 0.06);
+              0 18px 42px rgba(14, 165, 233, 0.22),
+              inset 0 -9px 18px rgba(15, 23, 42, 0.07);
+            flex: 0 0 auto;
           }
 
           .sds-brand strong {
@@ -276,7 +262,8 @@ export default function Login({ onLogin }) {
             border: 1px solid rgba(34, 197, 94, 0.25);
             color: #bbf7d0;
             font-size: 12px;
-            font-weight: 800;
+            font-weight: 900;
+            white-space: nowrap;
           }
 
           .sds-live-dot {
@@ -290,7 +277,7 @@ export default function Login({ onLogin }) {
           .sds-hero-copy {
             position: relative;
             z-index: 1;
-            margin-top: 34px;
+            margin-top: 44px;
           }
 
           .sds-eyebrow {
@@ -298,29 +285,67 @@ export default function Login({ onLogin }) {
             padding: 8px 12px;
             border-radius: 999px;
             background: rgba(56, 189, 248, 0.12);
-            border: 1px solid rgba(56, 189, 248, 0.18);
+            border: 1px solid rgba(56, 189, 248, 0.20);
             color: #bae6fd;
             font-size: 11px;
-            font-weight: 900;
+            font-weight: 950;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            margin-bottom: 16px;
+            margin-bottom: 18px;
           }
 
           .sds-hero-copy h1 {
             margin: 0;
-            max-width: 590px;
-            font-size: clamp(40px, 4.8vw, 64px);
-            line-height: 0.96;
-            letter-spacing: -0.075em;
+            max-width: 610px;
+            font-size: clamp(42px, 4.8vw, 66px);
+            line-height: 0.95;
+            letter-spacing: -0.078em;
           }
 
           .sds-hero-copy p {
-            margin: 18px 0 0;
-            max-width: 560px;
+            margin: 20px 0 0;
+            max-width: 575px;
             color: rgba(226, 232, 240, 0.72);
             font-size: 15px;
-            line-height: 1.65;
+            line-height: 1.7;
+          }
+
+          .sds-testing-note {
+            margin-top: 22px;
+            max-width: 590px;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 15px;
+            border-radius: 22px;
+            background: rgba(251, 191, 36, 0.10);
+            border: 1px solid rgba(251, 191, 36, 0.24);
+            color: #fde68a;
+          }
+
+          .sds-testing-note span {
+            width: 32px;
+            height: 32px;
+            border-radius: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(251, 191, 36, 0.14);
+            flex: 0 0 auto;
+          }
+
+          .sds-testing-note b {
+            display: block;
+            font-size: 13px;
+            color: #fef3c7;
+            margin-bottom: 4px;
+          }
+
+          .sds-testing-note small {
+            display: block;
+            font-size: 12px;
+            color: rgba(254, 243, 199, 0.78);
+            line-height: 1.45;
           }
 
           .sds-module-orbit {
@@ -333,26 +358,26 @@ export default function Login({ onLogin }) {
           }
 
           .sds-module-card {
-            min-height: 88px;
-            padding: 14px;
-            border-radius: 22px;
+            min-height: 94px;
+            padding: 15px;
+            border-radius: 23px;
             background: rgba(255, 255, 255, 0.075);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.10);
             transition: 0.25s ease;
           }
 
           .sds-module-card:hover {
             transform: translateY(-3px);
-            background: rgba(255, 255, 255, 0.105);
+            background: rgba(255, 255, 255, 0.11);
           }
 
           .sds-module-card span {
             display: inline-flex;
-            width: 30px;
-            height: 30px;
+            width: 31px;
+            height: 31px;
             align-items: center;
             justify-content: center;
-            border-radius: 12px;
+            border-radius: 13px;
             background: rgba(255, 255, 255, 0.12);
             margin-bottom: 9px;
             font-size: 14px;
@@ -362,22 +387,22 @@ export default function Login({ onLogin }) {
             display: block;
             color: #ffffff;
             font-size: 13px;
-            margin-bottom: 3px;
+            margin-bottom: 4px;
           }
 
           .sds-module-card small {
             color: rgba(226, 232, 240, 0.62);
-            line-height: 1.35;
+            line-height: 1.36;
             font-size: 11px;
           }
 
           .sds-mini-dashboard {
             position: relative;
             z-index: 1;
-            margin-top: 20px;
-            padding: 14px 16px;
-            border-radius: 24px;
-            background: rgba(2, 6, 23, 0.34);
+            margin-top: 24px;
+            padding: 15px 16px;
+            border-radius: 25px;
+            background: rgba(2, 6, 23, 0.36);
             border: 1px solid rgba(255, 255, 255, 0.08);
           }
 
@@ -410,7 +435,7 @@ export default function Login({ onLogin }) {
             width: 106px;
             height: 8px;
             border-radius: 999px;
-            background: rgba(148, 163, 184, 0.2);
+            background: rgba(148, 163, 184, 0.20);
             overflow: hidden;
           }
 
@@ -427,13 +452,17 @@ export default function Login({ onLogin }) {
 
           .sds-login-card {
             height: 100%;
-            padding: 28px;
-            border-radius: 24px;
-            background: rgba(248, 250, 252, 0.96);
+            padding: 32px;
+            border-radius: 26px;
+            background:
+              radial-gradient(circle at top right, rgba(79, 70, 229, 0.10), transparent 34%),
+              linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(255, 255, 255, 0.96));
             color: #0f172a;
             display: flex;
             flex-direction: column;
+            justify-content: center;
             overflow: hidden;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
           }
 
           .sds-card-head {
@@ -441,7 +470,7 @@ export default function Login({ onLogin }) {
             justify-content: space-between;
             align-items: flex-start;
             gap: 16px;
-            margin-bottom: 21px;
+            margin-bottom: 24px;
           }
 
           .sds-card-head small {
@@ -457,26 +486,28 @@ export default function Login({ onLogin }) {
           }
 
           .sds-card-head h2 {
-            margin: 12px 0 6px;
-            font-size: 31px;
-            letter-spacing: -0.06em;
+            margin: 13px 0 7px;
+            font-size: 34px;
+            letter-spacing: -0.065em;
           }
 
           .sds-card-head p {
             margin: 0;
             color: #64748b;
-            line-height: 1.5;
+            line-height: 1.55;
             font-size: 14px;
           }
 
           .sds-role-badge {
-            min-width: 82px;
-            padding: 11px;
-            border-radius: 18px;
-            background: #0f172a;
+            min-width: 92px;
+            padding: 12px;
+            border-radius: 19px;
+            background:
+              radial-gradient(circle at top left, rgba(56, 189, 248, 0.32), transparent 45%),
+              #0f172a;
             color: #ffffff;
             text-align: center;
-            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.16);
+            box-shadow: 0 16px 34px rgba(15, 23, 42, 0.17);
           }
 
           .sds-role-badge span {
@@ -493,14 +524,14 @@ export default function Login({ onLogin }) {
 
           .sds-form {
             display: grid;
-            gap: 14px;
+            gap: 15px;
           }
 
           .sds-field label {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 7px;
+            margin-bottom: 8px;
             font-size: 12px;
             font-weight: 900;
             color: #334155;
@@ -508,8 +539,10 @@ export default function Login({ onLogin }) {
 
           .sds-field label span {
             color: #94a3b8;
-            font-weight: 700;
+            font-weight: 800;
             font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
           }
 
           .sds-input-box {
@@ -518,16 +551,16 @@ export default function Login({ onLogin }) {
 
           .sds-input-box input {
             width: 100%;
-            height: 50px;
+            height: 52px;
             border: 1px solid #dbe4f0;
-            border-radius: 17px;
+            border-radius: 18px;
             background: #ffffff;
             color: #0f172a;
-            padding: 0 15px 0 45px;
+            padding: 0 15px 0 46px;
             font-size: 14px;
             outline: none;
             transition: 0.2s ease;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+            box-shadow: 0 9px 20px rgba(15, 23, 42, 0.045);
           }
 
           .sds-input-box input:focus {
@@ -540,9 +573,9 @@ export default function Login({ onLogin }) {
             left: 14px;
             top: 50%;
             transform: translateY(-50%);
-            width: 23px;
-            height: 23px;
-            border-radius: 9px;
+            width: 24px;
+            height: 24px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -556,10 +589,10 @@ export default function Login({ onLogin }) {
             right: 9px;
             top: 50%;
             transform: translateY(-50%);
-            width: 36px;
-            height: 36px;
+            width: 37px;
+            height: 37px;
             border: 0;
-            border-radius: 13px;
+            border-radius: 14px;
             background: #eff6ff;
             color: #075985;
             cursor: pointer;
@@ -572,30 +605,30 @@ export default function Login({ onLogin }) {
           }
 
           .sds-input-box.password input {
-            padding-right: 54px;
+            padding-right: 56px;
           }
 
           .sds-alert {
-            padding: 11px 13px;
-            border-radius: 14px;
+            padding: 12px 14px;
+            border-radius: 15px;
             background: #fff1f2;
             border: 1px solid #fecdd3;
             color: #be123c;
             font-size: 12px;
-            font-weight: 800;
+            font-weight: 850;
           }
 
           .sds-login-btn {
-            height: 52px;
+            height: 54px;
             border: 0;
-            border-radius: 18px;
+            border-radius: 19px;
             background:
               linear-gradient(135deg, #0f172a, #164e63 48%, #0284c7);
             color: #ffffff;
             font-weight: 950;
             font-size: 14px;
             cursor: pointer;
-            box-shadow: 0 18px 38px rgba(14, 116, 144, 0.24);
+            box-shadow: 0 20px 42px rgba(14, 116, 144, 0.25);
             transition: 0.22s ease;
             position: relative;
             overflow: hidden;
@@ -608,14 +641,14 @@ export default function Login({ onLogin }) {
             left: -70%;
             width: 60%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.24), transparent);
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.26), transparent);
             transform: skewX(-18deg);
             transition: 0.45s ease;
           }
 
           .sds-login-btn:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 22px 44px rgba(14, 116, 144, 0.3);
+            box-shadow: 0 24px 48px rgba(14, 116, 144, 0.31);
           }
 
           .sds-login-btn:hover:not(:disabled)::after {
@@ -627,76 +660,49 @@ export default function Login({ onLogin }) {
             cursor: not-allowed;
           }
 
-          .sds-demo-strip {
-            margin-top: 17px;
+          .sds-login-meta {
+            margin-top: 18px;
+            padding: 15px;
+            border-radius: 20px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            display: grid;
+            gap: 11px;
           }
 
-          .sds-demo-strip-head {
+          .sds-login-meta-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            color: #475569;
+            font-size: 12px;
+            line-height: 1.45;
+          }
+
+          .sds-login-meta-row i {
+            width: 24px;
+            height: 24px;
+            border-radius: 10px;
+            background: #eef2ff;
+            color: #4338ca;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            margin-bottom: 10px;
+            justify-content: center;
+            font-style: normal;
+            flex: 0 0 auto;
           }
 
-          .sds-demo-strip-head b {
-            font-size: 12px;
-            color: #0f172a;
-          }
-
-          .sds-demo-strip-head span {
-            font-size: 10px;
-            color: #64748b;
-          }
-
-          .sds-demo-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-          }
-
-          .sds-demo-card {
-            border: 1px solid #e2e8f0;
-            background: #ffffff;
-            border-radius: 15px;
-            padding: 10px 11px;
-            cursor: pointer;
-            text-align: left;
-            transition: 0.2s ease;
-          }
-
-          .sds-demo-card:hover {
-            transform: translateY(-2px);
-            border-color: #bae6fd;
-            box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
-          }
-
-          .sds-demo-card.active {
-            border-color: #0284c7;
-            background: #f0f9ff;
-          }
-
-          .sds-demo-card strong {
+          .sds-login-meta-row b {
             display: block;
             color: #0f172a;
-            font-size: 11px;
-            margin-bottom: 3px;
-          }
-
-          .sds-demo-card span {
-            display: block;
-            color: #64748b;
-            font-size: 10px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            margin-bottom: 2px;
           }
 
           .sds-security-note {
-            margin-top: auto;
-            padding-top: 14px;
+            margin-top: 18px;
             color: #64748b;
             font-size: 11px;
-            line-height: 1.45;
+            line-height: 1.48;
           }
 
           .sds-security-note b {
@@ -705,8 +711,6 @@ export default function Login({ onLogin }) {
 
           @media (max-width: 1100px) {
             .sds-login-stage {
-              width: 100%;
-              height: calc(100vh - 36px);
               grid-template-columns: 0.95fr 1.05fr;
             }
 
@@ -731,8 +735,7 @@ export default function Login({ onLogin }) {
             }
 
             .sds-login-stage {
-              height: auto;
-              min-height: calc(100vh - 36px);
+              min-height: calc(100vh - 44px);
               grid-template-columns: 1fr;
             }
 
@@ -765,7 +768,7 @@ export default function Login({ onLogin }) {
             }
 
             .sds-login-card {
-              padding: 20px;
+              padding: 21px;
             }
 
             .sds-topbar,
@@ -779,20 +782,32 @@ export default function Login({ onLogin }) {
             }
 
             .sds-hero-copy h1 {
-              font-size: 36px;
+              font-size: 37px;
             }
 
             .sds-hero-copy p {
               font-size: 14px;
             }
 
-            .sds-module-orbit,
-            .sds-demo-grid {
+            .sds-module-orbit {
               grid-template-columns: 1fr;
             }
 
             .sds-live-pill {
               display: none;
+            }
+
+            .sds-mini-row {
+              grid-template-columns: 1fr;
+            }
+
+            .sds-mini-bar {
+              width: 100%;
+            }
+
+            .sds-role-badge {
+              width: 100%;
+              text-align: left;
             }
           }
 
@@ -802,7 +817,7 @@ export default function Login({ onLogin }) {
             }
 
             .sds-login-stage {
-              height: calc(100vh - 24px);
+              min-height: calc(100vh - 24px);
             }
 
             .sds-command-panel {
@@ -814,7 +829,7 @@ export default function Login({ onLogin }) {
             }
 
             .sds-login-card {
-              padding: 22px;
+              padding: 23px;
             }
 
             .sds-hero-copy {
@@ -835,8 +850,13 @@ export default function Login({ onLogin }) {
               line-height: 1.5;
             }
 
+            .sds-testing-note {
+              margin-top: 16px;
+              padding: 12px;
+            }
+
             .sds-module-orbit {
-              margin-top: 20px;
+              margin-top: 18px;
             }
 
             .sds-module-card {
@@ -864,7 +884,7 @@ export default function Login({ onLogin }) {
             }
 
             .sds-card-head h2 {
-              font-size: 28px;
+              font-size: 29px;
               margin-top: 8px;
             }
 
@@ -877,26 +897,19 @@ export default function Login({ onLogin }) {
             }
 
             .sds-input-box input {
-              height: 44px;
+              height: 45px;
               border-radius: 15px;
             }
 
             .sds-login-btn {
-              height: 46px;
+              height: 47px;
               border-radius: 16px;
             }
 
-            .sds-demo-strip {
+            .sds-login-meta {
               margin-top: 12px;
-            }
-
-            .sds-demo-grid {
-              gap: 6px;
-            }
-
-            .sds-demo-card {
-              padding: 8px 10px;
-              border-radius: 13px;
+              padding: 12px;
+              gap: 8px;
             }
 
             .sds-security-note {
@@ -906,6 +919,7 @@ export default function Login({ onLogin }) {
         `}
       </style>
 
+      <div className="sds-orb one" />
       <div className="sds-orb two" />
       <div className="sds-orb three" />
 
@@ -923,37 +937,49 @@ export default function Login({ onLogin }) {
 
               <div className="sds-live-pill">
                 <i className="sds-live-dot" />
-                Secure Login
+                Secure Access
               </div>
             </div>
 
             <div className="sds-hero-copy">
               <span className="sds-eyebrow">Workforce Command Centre</span>
-              <h1>Your people operations, inside one intelligent workspace.</h1>
+              <h1>One workspace for people, attendance and approvals.</h1>
               <p>
-                Track attendance, approvals, employee records, payroll workflows,
-                performance reviews and reports through role-based dashboards built
-                for SDS operations.
+                Manage attendance, leave, employee records, performance, projects,
+                support tickets and reporting through secure role-based dashboards
+                designed for SDS operations.
               </p>
+
+              <div className="sds-testing-note">
+                <span>⚠</span>
+                <div>
+                  <b>Testing phase notice</b>
+                  <small>
+                    This HRMS is currently in the testing phase. If you find any
+                    bug, wrong data, login issue or workflow problem, please inform
+                    the IT team immediately.
+                  </small>
+                </div>
+              </div>
             </div>
 
             <div className="sds-module-orbit">
               <div className="sds-module-card">
                 <span>⏱</span>
                 <b>Attendance</b>
-                <small>Office and field mode tracking with verification.</small>
+                <small>Office, work from home and field attendance workflows.</small>
               </div>
 
               <div className="sds-module-card">
                 <span>🧾</span>
                 <b>Approvals</b>
-                <small>Leave, expense, tickets and internal workflows.</small>
+                <small>Leave, expenses, tickets and internal approval tracking.</small>
               </div>
 
               <div className="sds-module-card">
                 <span>📈</span>
                 <b>Performance</b>
-                <small>Weekly ratings with monthly and yearly analytics.</small>
+                <small>Team visibility, project progress and employee review data.</small>
               </div>
             </div>
           </div>
@@ -972,7 +998,7 @@ export default function Login({ onLogin }) {
             <div className="sds-mini-row">
               <div>
                 <strong>HR Workflows</strong>
-                <span>Approvals, reports and real-time admin control.</span>
+                <span>Approvals, reports and real-time administrative control.</span>
               </div>
               <div className="sds-mini-bar">
                 <i style={{ width: '72%' }} />
@@ -998,13 +1024,14 @@ export default function Login({ onLogin }) {
                 <small>Access Portal</small>
                 <h2>Sign in</h2>
                 <p>
-                  Enter your credentials to open your assigned HRMS dashboard.
+                  Enter your official credentials to open your assigned HRMS
+                  dashboard.
                 </p>
               </div>
 
               <div className="sds-role-badge">
-                <span>Mode</span>
-                <b>{selectedDemo.tone}</b>
+                <span>Status</span>
+                <b>Testing</b>
               </div>
             </div>
 
@@ -1070,24 +1097,23 @@ export default function Login({ onLogin }) {
               </button>
             </form>
 
-            <div className="sds-demo-strip">
-              <div className="sds-demo-strip-head">
-                <b>Quick login presets</b>
-                <span>Click to fill credentials</span>
+            <div className="sds-login-meta">
+              <div className="sds-login-meta-row">
+                <i>🔐</i>
+                <div>
+                  <b>Secure role-based login</b>
+                  Your dashboard access depends on your assigned HRMS role and
+                  permissions.
+                </div>
               </div>
 
-              <div className="sds-demo-grid">
-                {demoLogins.map((item) => (
-                  <button
-                    type="button"
-                    key={item.email}
-                    className={`sds-demo-card ${form.email === item.email ? 'active' : ''}`}
-                    onClick={() => chooseDemo(item)}
-                  >
-                    <strong>{item.label}</strong>
-                    <span>{item.email}</span>
-                  </button>
-                ))}
+              <div className="sds-login-meta-row">
+                <i>🧪</i>
+                <div>
+                  <b>Testing phase</b>
+                  Please report bugs, incorrect records or workflow issues to the IT
+                  team for correction.
+                </div>
               </div>
             </div>
 

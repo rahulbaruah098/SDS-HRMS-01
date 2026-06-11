@@ -1,4 +1,4 @@
-export default function Stat({ label, value, note = 'Live MongoDB data' }) {
+export default function Stat({ label, value, note = "" }) {
   function formatValue(input) {
     if (input === null || input === undefined || input === '') {
       return 0;
@@ -19,7 +19,7 @@ export default function Stat({ label, value, note = 'Live MongoDB data' }) {
     <div className="stat-card">
       <span>{label}</span>
       <strong>{formatValue(value)}</strong>
-      <small>{note}</small>
+      {note ? <small>{note}</small> : null}
     </div>
   );
 }

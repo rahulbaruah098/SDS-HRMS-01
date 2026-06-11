@@ -203,12 +203,7 @@ export const ATTENDANCE_MANAGER_ROLES = [
   ...CAPABILITY_ROLES,
 ];
 
-export const REPORT_ROLES = [
-  ...HR_ROLES,
-  'finance',
-  'accounts_finance',
-  ...CAPABILITY_ROLES,
-];
+export const REPORT_ROLES = HR_ROLES;
 
 export const LEAVE_BALANCE_MANAGER_ROLES = HR_ROLES;
 

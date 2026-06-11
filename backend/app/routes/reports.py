@@ -45,11 +45,6 @@ REPORT_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
-    "accounts_finance",
-    "finance",
-    "team_leader",
-    "reporting_officer",
-    "employee",
 )
 
 
