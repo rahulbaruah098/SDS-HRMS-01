@@ -92,11 +92,29 @@ function isTeamLeaderOrReportingOfficer(user = {}, dashboardData = null) {
   return hasRoleCapability || hasEmployeeCapability;
 }
 
+function isAdminUser(user = {}) {
+  const roles = normalizeRoles(user);
+
+  return roles.some((role) => ['super_admin', 'admin'].includes(role));
+}
+
 function sameDepartment(employee = {}, department = '') {
   if (!department) return false;
 
   return String(employee.department || '').trim().toLowerCase() ===
     String(department || '').trim().toLowerCase();
+}
+
+function filterEmployeesByDepartment(items = [], department = '') {
+  const selectedDepartment = String(department || '').trim().toLowerCase();
+
+  if (!selectedDepartment) {
+    return [];
+  }
+
+  return items.filter((employee) =>
+    String(employee.department || '').trim().toLowerCase() === selectedDepartment,
+  );
 }
 
 function uniqueEmployees(items = []) {
@@ -1266,15 +1284,30 @@ export default function Projects() {
     return [...new Set(values)].sort();
   }, [employees]);
 
+
+  const createFormEmployees = useMemo(() => {
+    if (!form.department) {
+      return [];
+    }
+
+    const filtered = filterEmployeesByDepartment(employees, form.department);
+
+    return uniqueEmployees(filtered)
+      .map(normalizeEmployeeOption)
+      .filter(Boolean);
+  }, [employees, form.department]);
+
   const backendCanManage =
     Boolean(permissionState.can_create_assign_collaborate) ||
     Boolean(permissionState.can_create_projects) ||
     Boolean(permissionState.can_assign_projects) ||
     Boolean(permissionState.can_add_collaborators);
 
+  const adminFullAccess = isAdminUser(user);
+
   const capabilityCanManage = isTeamLeaderOrReportingOfficer(user, dashboard);
 
-  const canManageProjectSetup = backendCanManage || capabilityCanManage;
+  const canManageProjectSetup = backendCanManage || capabilityCanManage || adminFullAccess;
 
   async function loadData() {
     setLoading(true);
@@ -1340,10 +1373,21 @@ export default function Projects() {
   }, []);
 
   function updateForm(key, value) {
-    setForm((previous) => ({
-      ...previous,
-      [key]: value,
-    }));
+    setForm((previous) => {
+      if (key === 'department') {
+        return {
+          ...previous,
+          department: value,
+          assigned_employee_ids: [],
+          collaborator_ids: [],
+        };
+      }
+
+      return {
+        ...previous,
+        [key]: value,
+      };
+    });
   }
 
   function assignSelfInCreateForm() {
@@ -1376,8 +1420,8 @@ export default function Projects() {
       return;
     }
 
-    if (!form.name.trim()) {
-      setError('Project name is required.');
+    if (!form.department) {
+      setError('Please select a department before creating a project.');
       return;
     }
 
@@ -2761,7 +2805,7 @@ async function handleAssign(projectId, payload) {
 
       {canManageProjectSetup ? (
         <form className="project-form" onSubmit={handleCreateProject}>
-          <h2 className="project-section-title">Create New Project</h2>
+           <h2 className="project-section-title">Create Department Project</h2>
 
           <div className="project-form-grid">
             <div className="project-field">
@@ -2779,13 +2823,16 @@ async function handleAssign(projectId, payload) {
                 value={form.department}
                 onChange={(event) => updateForm('department', event.target.value)}
               >
-                <option value="">Select department</option>
+                <option value="">Select department first</option>
                 {departments.map((department) => (
                   <option value={department} key={department}>
                     {department}
                   </option>
                 ))}
               </select>
+              <p className="project-helper">
+                After selecting a department, only employees from that department will appear below.
+              </p>
             </div>
 
             <div className="project-field project-field-full">
@@ -2821,17 +2868,27 @@ async function handleAssign(projectId, payload) {
             <MultiSelect
               label="Assign Team Members"
               value={form.assigned_employee_ids}
-              options={employees}
+              options={createFormEmployees}
               onChange={(value) => updateForm('assigned_employee_ids', value)}
-              helper="Mapped team/reporting members are shown here. Your own name is also available."
+              disabled={!form.department}
+              helper={
+                form.department
+                  ? `Showing employees from ${form.department} only.`
+                  : 'Select a department first to show employees.'
+              }
             />
 
             <MultiSelect
               label="Add Collaborators"
               value={form.collaborator_ids}
-              options={employees}
+              options={createFormEmployees}
               onChange={(value) => updateForm('collaborator_ids', value)}
-              helper="Collaborators can support and update project progress. You can add yourself too."
+              disabled={!form.department}
+              helper={
+                form.department
+                  ? `Showing collaborators from ${form.department} only.`
+                  : 'Select a department first to show collaborators.'
+              }
             />
           </div>
 
@@ -2846,7 +2903,7 @@ async function handleAssign(projectId, payload) {
           <h2 className="project-section-title">Project Creation Restricted</h2>
           <p className="project-muted">
             Project creation, team assignment, and collaborator updates are available only
-            for Team Leaders and Reporting Officers. You can still update progress/status
+            for Admin, Team Leaders and Reporting Officers. You can still update progress/status
             on projects where you are assigned or added as a collaborator.
           </p>
         </section>

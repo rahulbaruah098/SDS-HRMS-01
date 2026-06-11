@@ -12,16 +12,17 @@ projects_bp = Blueprint("projects", __name__)
 
 ADMIN_VIEW_ROLES = {
     "super_admin",
+    "admin",
 }
 
 HR_PROJECT_BLOCKED_ROLES = {
-    "admin",
     "hr_admin",
     "hr_manager",
     "hr",
 }
 
 PROJECT_CREATOR_ROLES = {
+    "admin",
     "team_leader",
     "reporting_officer",
 }
@@ -369,17 +370,21 @@ def is_hr_project_blocked_user():
 
 def hr_project_access_denied_response():
     return jsonify({
-        "message": "HR/Admin users cannot access the Project module. Projects are limited to Team Leaders, Reporting Officers and assigned employees."
+        "message": "HR users cannot access the Project module. Projects are available to Admin, Team Leaders, Reporting Officers and assigned employees."
     }), 403
 
 
 def can_create_assign_or_collaborate_projects(db):
     """
     Rule:
-    Only Team Leader and Reporting Officer capability users can create projects,
-    assign team members, or add collaborators.
+    Admin / Managing Director can manage all projects.
+    Team Leader and Reporting Officer capability users can manage scoped projects.
     """
     roles = current_user_roles()
+
+    if roles.intersection(ADMIN_VIEW_ROLES):
+        return True
+
     employee = get_current_employee(db)
 
     return bool(
