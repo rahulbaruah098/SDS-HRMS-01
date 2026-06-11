@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, g
-from datetime import datetime, time, date, timedelta
+from datetime import datetime, time, date, timedelta, timezone
 from bson import ObjectId
 
 from app.extensions import get_db
@@ -137,6 +137,63 @@ def today_local():
 
 def now_local():
     return datetime.now()
+
+def parse_client_datetime(value):
+    value = normalize_text(value)
+
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        if parsed.tzinfo:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+
+        return parsed
+    except Exception:
+        return None
+
+
+def offline_attendance_context(data):
+    created_offline = truthy(data.get("created_offline"))
+    client_attendance_id = normalize_text(data.get("client_attendance_id"))
+    offline_marked_at = parse_client_datetime(data.get("offline_marked_at"))
+
+    server_received_at = now_local()
+
+    attendance_time = (
+        offline_marked_at
+        if created_offline and offline_marked_at
+        else server_received_at
+    )
+
+    return {
+        "created_offline": created_offline,
+        "client_attendance_id": client_attendance_id,
+        "offline_marked_at": offline_marked_at,
+        "server_received_at": server_received_at,
+        "attendance_time": attendance_time,
+    }
+
+
+def client_id_matches(row, client_attendance_id):
+    client_attendance_id = normalize_text(client_attendance_id)
+
+    if not row or not client_attendance_id:
+        return False
+
+    known_ids = row.get("client_attendance_ids") or []
+
+    if not isinstance(known_ids, list):
+        known_ids = []
+
+    return (
+        row.get("client_attendance_id") == client_attendance_id
+        or row.get("client_check_in_id") == client_attendance_id
+        or row.get("client_check_out_id") == client_attendance_id
+        or client_attendance_id in known_ids
+    )    
 
 
 def parse_date(value):
@@ -1292,6 +1349,14 @@ def check_in():
 
     data = request.get_json(silent=True) or {}
 
+    offline_ctx = offline_attendance_context(data)
+
+    now = offline_ctx["attendance_time"]
+    server_received_at = offline_ctx["server_received_at"]
+    created_offline = offline_ctx["created_offline"]
+    offline_marked_at = offline_ctx["offline_marked_at"]
+    client_attendance_id = offline_ctx["client_attendance_id"]
+
     mode = normalize_mode(data.get("mode") or "office")
     late_reason = normalize_text(data.get("late_reason"))
     field_location = normalize_text(
@@ -1311,7 +1376,6 @@ def check_in():
     )
     location = extract_location(data)
 
-    now = now_local()
     today_date = now.date()
     today = today_date.isoformat()
     tenant_id = e.get("tenant_id") or current_tenant_id()
@@ -1358,6 +1422,13 @@ def check_in():
     })
 
     if old and old.get("check_in"):
+        if created_offline or client_id_matches(old, client_attendance_id):
+            return jsonify({
+                "message": "Check-in already synced",
+                "attendance": clean_doc(old),
+                "holiday": holiday_info,
+            })
+
         return jsonify({
             "message": "Already checked in today",
             "attendance": clean_doc(old),
@@ -1369,6 +1440,11 @@ def check_in():
         status = "holiday_work"
     elif is_late:
         status = "late"
+
+    client_attendance_ids = []
+
+    if client_attendance_id:
+        client_attendance_ids.append(client_attendance_id)
 
     doc = {
         "tenant_id": tenant_id,
@@ -1389,21 +1465,26 @@ def check_in():
         "team_leader_name": e.get("team_leader_name", ""),
         "reporting_officer_id": e.get("reporting_officer_id", ""),
         "reporting_officer_name": e.get("reporting_officer_name", ""),
+
         "date": today,
         "check_in": now,
         "check_out": None,
+
         "office_start": "09:30",
         "late_cutoff": "09:50",
         "office_end": "18:00",
+
         "mode": mode,
         "field_location": field_location,
         "field_photo": field_photo,
         "field_photo_url": field_photo if isinstance(field_photo, str) else "",
         "late_reason": late_reason,
         "early_checkout_reason": "",
+
         "check_in_location": location,
         "check_out_location": None,
         "location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
+
         "is_late": is_late,
         "is_early_checkout": False,
         "is_holiday_work": bool(holiday_info.get("is_holiday")),
@@ -1413,6 +1494,17 @@ def check_in():
         "holiday_work_request_id": str(holiday_work_request.get("_id")) if holiday_work_request else "",
         "status": status,
         "verified_by_ro": False,
+
+        "created_offline": created_offline,
+        "check_in_created_offline": created_offline,
+        "offline_marked_at": offline_marked_at,
+        "check_in_offline_marked_at": offline_marked_at,
+        "client_attendance_id": client_attendance_id,
+        "client_check_in_id": client_attendance_id,
+        "client_attendance_ids": client_attendance_ids,
+        "synced_at": server_received_at if created_offline else None,
+        "sync_source": "mobile_offline" if created_offline else "mobile_online",
+
         "timeline": [
             {
                 "type": "check_in",
@@ -1420,10 +1512,15 @@ def check_in():
                 "note": f"{mode.upper()} check-in",
                 "location": location,
                 "field_location": field_location,
+                "created_offline": created_offline,
+                "offline_marked_at": offline_marked_at,
+                "synced_at": server_received_at if created_offline else None,
+                "client_attendance_id": client_attendance_id,
             }
         ],
-        "created_at": now,
-        "updated_at": now,
+
+        "created_at": server_received_at,
+        "updated_at": server_received_at,
     }
 
     res = db.attendance_logs.insert_one(doc)
@@ -1457,6 +1554,8 @@ def check_in():
         "mode": mode,
         "late": is_late,
         "holiday_work": bool(holiday_info.get("is_holiday")),
+        "created_offline": created_offline,
+        "client_attendance_id": client_attendance_id,
     })
 
     return jsonify({
@@ -1477,12 +1576,24 @@ def check_out():
 
     data = request.get_json(silent=True) or {}
 
-    now = now_local()
+    offline_ctx = offline_attendance_context(data)
+
+    now = offline_ctx["attendance_time"]
+    server_received_at = offline_ctx["server_received_at"]
+    created_offline = offline_ctx["created_offline"]
+    offline_marked_at = offline_ctx["offline_marked_at"]
+    client_attendance_id = offline_ctx["client_attendance_id"]
+
     today_date = now.date()
     today = today_date.isoformat()
     tenant_id = e.get("tenant_id") or current_tenant_id()
 
-    early_checkout_reason = normalize_text(data.get("early_checkout_reason"))
+    early_checkout_reason = normalize_text(
+        data.get("early_checkout_reason")
+        or data.get("reason")
+        or data.get("remarks")
+    )
+
     location = extract_location(data)
 
     rec = db.attendance_logs.find_one({
@@ -1496,6 +1607,13 @@ def check_out():
         return jsonify({"message": "Please check in first"}), 400
 
     if rec.get("check_out"):
+        if created_offline or client_id_matches(rec, client_attendance_id):
+            return jsonify({
+                "message": "Check-out already synced",
+                "attendance": clean_doc(rec),
+                "compoff": None,
+            })
+
         return jsonify({
             "message": "Already checked out",
             "attendance": clean_doc(rec),
@@ -1515,25 +1633,42 @@ def check_out():
         "checkout_location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
         "is_early_checkout": is_early_checkout,
         "early_checkout_reason": early_checkout_reason,
-        "updated_at": now,
+        "updated_at": server_received_at,
+
+        "check_out_created_offline": created_offline,
+        "check_out_offline_marked_at": offline_marked_at,
+        "client_check_out_id": client_attendance_id,
+        "synced_at": server_received_at if created_offline else rec.get("synced_at"),
+        "sync_source": "mobile_offline" if created_offline else rec.get("sync_source", "mobile_online"),
     }
 
     if rec.get("status") == "present" and is_early_checkout:
         set_data["status"] = "early_checkout"
 
+    update_doc = {
+        "$set": set_data,
+        "$push": {
+            "timeline": {
+                "type": "check_out",
+                "time": now,
+                "note": "Day closed",
+                "location": location,
+                "created_offline": created_offline,
+                "offline_marked_at": offline_marked_at,
+                "synced_at": server_received_at if created_offline else None,
+                "client_attendance_id": client_attendance_id,
+            }
+        },
+    }
+
+    if client_attendance_id:
+        update_doc["$addToSet"] = {
+            "client_attendance_ids": client_attendance_id,
+        }
+
     db.attendance_logs.update_one(
         {"_id": rec["_id"]},
-        {
-            "$set": set_data,
-            "$push": {
-                "timeline": {
-                    "type": "check_out",
-                    "time": now,
-                    "note": "Day closed",
-                    "location": location,
-                }
-            },
-        },
+        update_doc,
     )
 
     updated = db.attendance_logs.find_one({"_id": rec["_id"]})
@@ -1546,6 +1681,8 @@ def check_out():
     audit("check_out", "attendance_logs", rec["_id"], {
         "early_checkout": is_early_checkout,
         "holiday_work": bool(updated.get("is_holiday_work")) if updated else False,
+        "created_offline": created_offline,
+        "client_attendance_id": client_attendance_id,
     })
 
     return jsonify({
