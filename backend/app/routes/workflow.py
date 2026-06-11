@@ -18,6 +18,18 @@ ADMIN_HR_ROLES = {
     "hr",
 }
 
+ADMIN_APPROVER_ROLES = {
+    "super_admin",
+    "admin",
+}
+
+HR_APPROVER_ROLES = {
+    "hr_admin",
+    "hr_manager",
+    "hr",
+}
+
+
 TEAM_APPROVAL_ROLES = {
     "team_leader",
     "reporting_officer",
@@ -1130,6 +1142,7 @@ def leave_stage_label(stage):
     labels = {
         "team_leader": "Team Leader",
         "reporting_officer": "Reporting Officer",
+        "admin": "Admin",
         "hr": "HR",
         "final": "Final Approval",
         "approved": "Approved",
@@ -1359,14 +1372,33 @@ def calculate_leave_days(data):
 
 
 
+def applicant_is_admin_or_hr():
+    roles = current_user_roles()
+
+    return bool(roles.intersection(ADMIN_APPROVER_ROLES | HR_APPROVER_ROLES))
+
+
 def build_initial_leave_stage(employee):
     """
-    Correct leave approval entry stage:
+    Leave approval entry stage:
 
-    - Team Leader's own leave should never go back to Team Leader stage.
-    - If no Team Leader is mapped, send directly to Reporting Officer.
-    - If no Reporting Officer is mapped, send to HR.
+    Normal employees:
+    - Team Leader -> Reporting Officer -> Final
+    - If no Team Leader, Reporting Officer -> Final
+    - If no TL/RO, HR -> Final
+
+    HR/Admin special rule:
+    - HR leave goes to Admin
+    - Admin leave goes to HR
     """
+
+    roles = current_user_roles()
+
+    if roles.intersection(HR_APPROVER_ROLES) and not roles.intersection(ADMIN_APPROVER_ROLES):
+        return "admin"
+
+    if roles.intersection(ADMIN_APPROVER_ROLES):
+        return "hr"
 
     applicant_is_team_leader = employee_is_team_leader(employee)
 
@@ -1412,6 +1444,9 @@ def next_leave_stage(employee, current_stage, leave_doc=None):
     if current_stage == "reporting_officer":
         return "final"
 
+    if current_stage == "admin":
+        return "final"
+
     if current_stage == "hr":
         return "final"
 
@@ -1422,7 +1457,13 @@ def reviewer_can_decide_leave(db, leave_doc):
     roles = current_user_roles()
     stage = leave_doc.get("approval_stage") or "hr"
 
+    if stage == "admin":
+        return bool(roles.intersection(ADMIN_APPROVER_ROLES))
+
     if stage == "hr":
+        if leave_doc.get("admin_hr_cross_approval"):
+            return bool(roles.intersection(HR_APPROVER_ROLES))
+
         return bool(roles.intersection(ADMIN_HR_ROLES))
 
     reviewer_emp = current_employee(db)
@@ -2018,8 +2059,13 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         user_ids.append(employee_user_id(db, team_leader_id, tenant_id))
     elif stage == "reporting_officer":
         user_ids.append(employee_user_id(db, reporting_officer_id, tenant_id))
+    elif stage == "admin":
+        user_ids.extend(users_for_roles(db, ADMIN_APPROVER_ROLES, tenant_id))
     elif stage == "hr":
-        user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
+        if leave_doc.get("admin_hr_cross_approval"):
+            user_ids.extend(users_for_roles(db, HR_APPROVER_ROLES, tenant_id))
+        else:
+            user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
 
     if not user_ids:
         return
@@ -2193,6 +2239,7 @@ def leave_stage_status_fields(initial_stage):
     return {
         "team_leader_status": "pending" if initial_stage == "team_leader" else "not_applicable",
         "reporting_officer_status": "pending" if initial_stage == "reporting_officer" else "not_applicable",
+        "admin_status": "pending" if initial_stage == "admin" else "view_only",
         "hr_status": "pending" if initial_stage == "hr" else "view_only",
         "hr_notified_status": "not_notified",
         "hr_notified_at": "",
@@ -2207,6 +2254,7 @@ def approval_stage_update_fields(stage, status, note):
     prefix_map = {
         "team_leader": "team_leader",
         "reporting_officer": "reporting_officer",
+        "admin": "admin",
         "hr": "hr",
     }
 
@@ -3210,6 +3258,12 @@ def apply_leave_request():
     from_date = parse_date(data.get("from_date"))
     to_date = parse_date(data.get("to_date") or data.get("upto_date")) or from_date
     reason = normalize_text(data.get("reason"))
+    work_project_name = normalize_text(
+        data.get("work_project_name")
+        or data.get("manual_project_name")
+        or data.get("project_work_name")
+        or data.get("work_details")
+    )
     tenant_id = employee.get("tenant_id") or current_tenant_id()
 
     leave_days = calculate_leave_days({
@@ -3306,6 +3360,7 @@ def apply_leave_request():
             }), 400
 
     initial_stage = build_initial_leave_stage(employee)
+    is_admin_hr_leave = applicant_is_admin_or_hr()
     now = datetime.utcnow()
 
     doc = {
@@ -3356,6 +3411,9 @@ def apply_leave_request():
         ) if selected_compoff else "",
         "upto_date": to_date.isoformat(),
         "reason": reason,
+        "work_project_name": work_project_name,
+        "manual_project_name": work_project_name,
+        "admin_hr_cross_approval": is_admin_hr_leave,
         **handover_data,
         **project_data,
         "status": "pending",

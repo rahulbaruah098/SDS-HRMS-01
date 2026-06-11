@@ -639,6 +639,23 @@ def add_common_filters(q):
     state = normalize_text(request.args.get("state"))
     employee_id = normalize_text(request.args.get("employee_id"))
 
+    if status:
+        q["status"] = status
+
+    if department:
+        q["department"] = department
+
+    if mode:
+        q["mode"] = mode
+
+    if state:
+        q["state"] = normalize_state(state)
+
+    if employee_id:
+        q["employee_id"] = employee_id
+
+    return q
+
 def add_holiday_work_filters(q):
     status = normalize_text(request.args.get("status"))
     date_value = normalize_text(request.args.get("date"))
@@ -674,13 +691,19 @@ def attendance_location_text(row, key="check_in_location"):
     lng = location.get("longitude") or location.get("lng")
     accuracy = location.get("accuracy")
 
-    if not lat or not lng:
+    if lat in [None, ""] or lng in [None, ""]:
         return "—"
 
     text = f"{lat}, {lng}"
 
-    if accuracy:
-        text = f"{text} ±{round(float(accuracy))}m"
+    try:
+        if accuracy not in [None, ""]:
+            accuracy_value = float(accuracy)
+
+            if accuracy_value >= 0:
+                text = f"{text} ±{round(accuracy_value)}m"
+    except (TypeError, ValueError):
+        pass
 
     return text
 
@@ -791,23 +814,6 @@ def enrich_compoff_report_row(row):
     row["leave_request_id"] = row.get("leave_request_id") or ""
 
     return row
-
-    if status:
-        q["status"] = status
-
-    if department:
-        q["department"] = department
-
-    if mode:
-        q["mode"] = mode
-
-    if state:
-        q["state"] = normalize_state(state)
-
-    if employee_id:
-        q["employee_id"] = employee_id
-
-    return q
 
 
 def with_not_deleted(q):
