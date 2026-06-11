@@ -22,6 +22,7 @@ import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
 import Leave from './pages/Leave';
+import ApplyLeave from './pages/ApplyLeave';
 import Projects from './pages/Projects';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
@@ -33,6 +34,7 @@ import ITSupport from './pages/ITSupport';
 import ManagementGroup from './pages/ManagementGroup';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
 import AiAssistantWidget from "./components/AiAssistantWidget";
+import HolidayWorkRequests from './pages/HolidayWorkRequests';
 
 
 import './styles.css';
@@ -105,6 +107,19 @@ const PAGE_ALIASES = {
 
   leave_deductions: 'reports',
   leave_records: 'reports',
+
+  holiday_work_requests: 'holiday_work_requests',
+  holiday_work_request: 'holiday_work_requests',
+  holiday_work: 'holiday_work_requests',
+  holiday_work_approval: 'holiday_work_requests',
+  holiday_work_approvals: 'holiday_work_requests',
+  holiday_work_request_approval: 'holiday_work_requests',
+  holiday_work_request_approvals: 'holiday_work_requests',
+  'holiday-work-requests': 'holiday_work_requests',
+  'holiday-work-request': 'holiday_work_requests',
+  'holiday-work': 'holiday_work_requests',
+  'holiday-work-approval': 'holiday_work_requests',
+  'holiday-work-approvals': 'holiday_work_requests',
 
   leave_approval: 'team_approvals',
   leave_approvals: 'team_approvals',
@@ -544,6 +559,10 @@ function PageRouter({ page, user, setPage }) {
     return <Leave setPage={setPage} user={safeUser} />;
   }
 
+  if (normalizedPage === 'leave_requests') {
+    return <ApplyLeave setPage={setPage} user={safeUser} />;
+  }
+
   if (normalizedPage === 'reports') {
     return <Reports setPage={setPage} user={safeUser} />;
   }
@@ -558,6 +577,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'holiday_calendar') {
     return <HolidayCalendar setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'holiday_work_requests') {
+    return <HolidayWorkRequests setPage={setPage} user={safeUser} />;
   }
 
   return <ModuleCrud collection={normalizedPage} setPage={setPage} user={safeUser} />;
