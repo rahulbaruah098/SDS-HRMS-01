@@ -20,6 +20,7 @@ REPORT_COLLECTIONS = [
     "employees",
     "attendance_logs",
     "attendance_mode_requests",
+    "holiday_work_requests",
     "holiday_calendar",
     "compoff_credits",
     "leave_balances",
@@ -79,6 +80,7 @@ TEAM_CAPABILITY_ROLES = {
 SELF_REPORT_COLLECTIONS = {
     "attendance_logs",
     "attendance_mode_requests",
+    "holiday_work_requests",
     "compoff_credits",
     "leave_balances",
     "leave_requests",
@@ -641,6 +643,159 @@ def add_common_filters(q):
     mode = normalize_text(request.args.get("mode"))
     state = normalize_text(request.args.get("state"))
     employee_id = normalize_text(request.args.get("employee_id"))
+
+def add_holiday_work_filters(q):
+    status = normalize_text(request.args.get("status"))
+    date_value = normalize_text(request.args.get("date"))
+    employee_id = normalize_text(request.args.get("employee_id"))
+    department = normalize_text(request.args.get("department"))
+    state = normalize_text(request.args.get("state"))
+
+    if status:
+        q["status"] = status
+
+    if date_value:
+        q["date"] = date_value
+
+    if employee_id:
+        q["employee_id"] = employee_id
+
+    if department:
+        q["department"] = department
+
+    if state:
+        q["state"] = normalize_state(state)
+
+    return q
+
+
+def attendance_location_text(row, key="check_in_location"):
+    location = row.get(key) or row.get("location") or {}
+
+    if not isinstance(location, dict):
+        return "—"
+
+    lat = location.get("latitude") or location.get("lat")
+    lng = location.get("longitude") or location.get("lng")
+    accuracy = location.get("accuracy")
+
+    if not lat or not lng:
+        return "—"
+
+    text = f"{lat}, {lng}"
+
+    if accuracy:
+        text = f"{text} ±{round(float(accuracy))}m"
+
+    return text
+
+
+def attendance_map_url(row, key="check_in_location"):
+    location = row.get(key) or row.get("location") or {}
+
+    if not isinstance(location, dict):
+        return ""
+
+    lat = location.get("latitude") or location.get("lat")
+    lng = location.get("longitude") or location.get("lng")
+
+    if not lat or not lng:
+        return ""
+
+    return f"https://www.google.com/maps?q={lat},{lng}"
+
+
+def enrich_attendance_report_row(row):
+    row = dict(row or {})
+
+    row["field_photo_url"] = (
+        row.get("field_photo")
+        or row.get("proof_photo")
+        or row.get("photo")
+        or ""
+    )
+
+    row["check_in_location_text"] = attendance_location_text(row, "check_in_location")
+    row["check_out_location_text"] = attendance_location_text(row, "check_out_location")
+    row["check_in_map_url"] = attendance_map_url(row, "check_in_location")
+    row["check_out_map_url"] = attendance_map_url(row, "check_out_location")
+
+    row["holiday_work_approval_status"] = (
+        row.get("holiday_work_status")
+        or row.get("holiday_work_approval_status")
+        or ("approved" if row.get("holiday_work_request_id") else "")
+    )
+
+    row["holiday_title"] = row.get("holiday_title") or row.get("holiday_name") or ""
+    row["holiday_type"] = row.get("holiday_type") or ""
+
+    row["verified_by"] = (
+        row.get("approved_by_name")
+        or row.get("verified_by_name")
+        or row.get("decided_by_name")
+        or ""
+    )
+
+    return row
+
+
+def enrich_holiday_work_request_report_row(row):
+    row = dict(row or {})
+
+    location = row.get("location") or row.get("check_in_location") or {}
+
+    if isinstance(location, dict):
+        lat = location.get("latitude") or location.get("lat")
+        lng = location.get("longitude") or location.get("lng")
+
+        if lat and lng:
+            row["location_text"] = f"{lat}, {lng}"
+            row["map_url"] = f"https://www.google.com/maps?q={lat},{lng}"
+        else:
+            row["location_text"] = "—"
+            row["map_url"] = ""
+    else:
+        row["location_text"] = "—"
+        row["map_url"] = ""
+
+    row["proof_photo_url"] = (
+        row.get("proof_photo")
+        or row.get("field_photo")
+        or row.get("photo")
+        or ""
+    )
+
+    row["live_status"] = leave_live_status(row)
+
+    row["decided_by"] = (
+        row.get("decided_by_name")
+        or row.get("approved_by_name")
+        or row.get("rejected_by_name")
+        or ""
+    )
+
+    row["decided_at"] = (
+        row.get("decided_at")
+        or row.get("approved_at")
+        or row.get("rejected_at")
+        or ""
+    )
+
+    return row
+
+
+def enrich_compoff_report_row(row):
+    row = dict(row or {})
+
+    row["holiday_work_request_id"] = row.get("holiday_work_request_id") or ""
+    row["attendance_log_id"] = row.get("attendance_log_id") or ""
+    row["holiday_title"] = row.get("holiday_title") or row.get("holiday_name") or ""
+    row["claim_from_date"] = row.get("claim_from_date") or row.get("available_from") or ""
+    row["expiry_date"] = row.get("expiry_date") or row.get("valid_until") or ""
+    row["claim_date"] = row.get("claim_date") or row.get("claimed_at") or ""
+    row["leave_request_id"] = row.get("leave_request_id") or ""
+
+    return row
 
     if status:
         q["status"] = status
@@ -1208,6 +1363,11 @@ def summary():
         "pending",
     )
 
+    holiday_work_pending_query = build_status_query(
+        apply_employee_scope(db, dict(base_q), "employee_id"),
+        "pending",
+    )
+
     compoff_available_query = build_status_query(
         apply_employee_scope(db, dict(base_q), "employee_id"),
         "available",
@@ -1306,6 +1466,7 @@ def summary():
         "pending": {
             "leave_requests": db.leave_requests.count_documents(leave_pending_query),
             "wfh_field_requests": db.attendance_mode_requests.count_documents(mode_pending_query),
+            "holiday_work_requests": db.holiday_work_requests.count_documents(holiday_work_pending_query),
             "expenses": db.expenses.count_documents({
                 **apply_employee_scope(db, dict(base_q), "employee_id"),
                 "status": "pending",
@@ -1534,6 +1695,34 @@ def attendance_register_excel_export():
 
     holidays = list(db.holiday_calendar.find(holiday_q))
 
+    holiday_work_q = excel_safe_query_and(
+        {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "date": date_q,
+        },
+        employee_attendance_match_query(employee_identifiers),
+    )
+
+    holiday_work_requests = list(db.holiday_work_requests.find(holiday_work_q))
+
+    compoff_q = excel_safe_query_and(
+        {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"earned_date": date_q},
+                {"claim_from_date": date_q},
+                {"expiry_date": date_q},
+                {"valid_until": date_q},
+                {"claim_date": date_q},
+            ],
+        },
+        employee_attendance_match_query(employee_identifiers),
+    )
+
+    compoff_credits = list(db.compoff_credits.find(compoff_q))
+
     organisation_display = selected_organisation_display(db, tenant_id)
 
     if employees and not organisation_display.get("code"):
@@ -1558,6 +1747,8 @@ def attendance_register_excel_export():
         attendance_logs=attendance_logs,
         leave_requests=leave_requests,
         holidays=holidays,
+        holiday_work_requests=holiday_work_requests,
+        compoff_credits=compoff_credits,
         period=period,
         year=year,
         month=month,
@@ -1619,8 +1810,33 @@ def attendance_report():
         .limit(1000)
     )
 
+    items = [enrich_attendance_report_row(item) for item in items]
+
     return jsonify({"items": clean_doc(items)})
 
+
+@reports_bp.get("/field-attendance")
+@roles_required(*REPORT_ROLES)
+def field_attendance_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_common_filters(q)
+    q = add_date_filter(q, "date")
+    q["mode"] = "field"
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    items = list(
+        db.attendance_logs
+        .find(q)
+        .sort([("date", -1), ("created_at", -1)])
+        .limit(1000)
+    )
+
+    items = [enrich_attendance_report_row(item) for item in items]
+
+    return jsonify({"items": clean_doc(items)})
 
 @reports_bp.get("/attendance-mode-requests")
 @roles_required(*REPORT_ROLES)
@@ -1642,6 +1858,27 @@ def attendance_mode_requests_report():
 
     return jsonify({"items": clean_doc(items)})
 
+@reports_bp.get("/holiday-work-requests")
+@roles_required(*REPORT_ROLES)
+def holiday_work_requests_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_holiday_work_filters(q)
+    q = add_date_filter(q, "date")
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    items = list(
+        db.holiday_work_requests
+        .find(q)
+        .sort([("date", -1), ("created_at", -1)])
+        .limit(1000)
+    )
+
+    items = [enrich_holiday_work_request_report_row(item) for item in items]
+
+    return jsonify({"items": clean_doc(items)})
 
 @reports_bp.get("/holidays")
 @roles_required(*REPORT_ROLES)
@@ -1694,6 +1931,55 @@ def compoff_report():
         .sort("earned_date", -1)
         .limit(1000)
     )
+
+    items = [enrich_compoff_report_row(item) for item in items]
+
+    return jsonify({"items": clean_doc(items)})
+
+@reports_bp.get("/compoff-claims")
+@roles_required(*REPORT_ROLES)
+def compoff_claims_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_common_filters(q)
+    q["status"] = {"$in": ["claimed", "used", "approved"]}
+    q = add_date_filter(q, "claim_date")
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    items = list(
+        db.compoff_credits
+        .find(q)
+        .sort([("claim_date", -1), ("claimed_at", -1)])
+        .limit(1000)
+    )
+
+    items = [enrich_compoff_report_row(item) for item in items]
+
+    return jsonify({"items": clean_doc(items)})
+
+
+@reports_bp.get("/expired-compoffs")
+@roles_required(*REPORT_ROLES)
+def expired_compoffs_report():
+    db = get_db()
+
+    q = build_report_query()
+    q = add_common_filters(q)
+    q["status"] = "expired"
+    q = add_date_filter(q, "expiry_date")
+    q = apply_employee_scope(db, q, "employee_id")
+    q = with_not_deleted(q)
+
+    items = list(
+        db.compoff_credits
+        .find(q)
+        .sort("expiry_date", -1)
+        .limit(1000)
+    )
+
+    items = [enrich_compoff_report_row(item) for item in items]
 
     return jsonify({"items": clean_doc(items)})
 

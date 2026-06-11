@@ -68,6 +68,8 @@ ABSENT_FILL = PatternFill("solid", fgColor="F4CCCC")
 LEAVE_FILL = PatternFill("solid", fgColor="DDEBF7")
 PRESENT_FILL = PatternFill("solid", fgColor="FFFFFF")
 SECTION_FILL = PatternFill("solid", fgColor="E2F0D9")
+DETAIL_TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
+DETAIL_HEADER_FILL = PatternFill("solid", fgColor="D9EAF7")
 
 
 def normalize_text(value):
@@ -682,6 +684,343 @@ def style_status_cell(cell, value):
     apply_cell_style(cell, fill=fill)
 
 
+def clean_excel_value(value):
+    if isinstance(value, datetime):
+        return value.strftime("%d-%m-%Y %I:%M %p")
+
+    if isinstance(value, date):
+        return value.strftime("%d-%m-%Y")
+
+    if value is None:
+        return ""
+
+    return str(value)
+
+
+def location_text(row, key="check_in_location"):
+    location = row.get(key) or row.get("location") or {}
+
+    if not isinstance(location, dict):
+        return ""
+
+    lat = location.get("latitude") or location.get("lat")
+    lng = location.get("longitude") or location.get("lng")
+    accuracy = location.get("accuracy")
+
+    if not lat or not lng:
+        return ""
+
+    text = f"{lat}, {lng}"
+
+    if accuracy:
+        try:
+            text = f"{text} ±{round(float(accuracy))}m"
+        except Exception:
+            text = f"{text} ±{accuracy}m"
+
+    return text
+
+
+def location_map_url(row, key="check_in_location"):
+    location = row.get(key) or row.get("location") or {}
+
+    if not isinstance(location, dict):
+        return ""
+
+    lat = location.get("latitude") or location.get("lat")
+    lng = location.get("longitude") or location.get("lng")
+
+    if not lat or not lng:
+        return ""
+
+    return f"https://www.google.com/maps?q={lat},{lng}"
+
+
+def add_detail_sheet(wb, title, columns, rows):
+    ws = wb.create_sheet(safe_sheet_title(title))
+
+    final_col = len(columns)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=final_col)
+    ws.cell(1, 1).value = title
+    ws.cell(1, 1).font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+    ws.cell(1, 1).fill = DETAIL_TITLE_FILL
+    ws.cell(1, 1).alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(1, 1).border = THIN_BORDER
+
+    for col in range(1, final_col + 1):
+        cell = ws.cell(1, col)
+        cell.fill = DETAIL_TITLE_FILL
+        cell.border = THIN_BORDER
+
+    for col_index, (label, _) in enumerate(columns, start=1):
+        cell = ws.cell(3, col_index)
+        cell.value = label
+        apply_cell_style(cell, fill=DETAIL_HEADER_FILL, bold=True)
+
+    start_row = 4
+
+    if not rows:
+        ws.cell(start_row, 1).value = "No records found."
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=final_col)
+        apply_cell_style(ws.cell(start_row, 1), align="center", bold=True)
+    else:
+        for row_index, row in enumerate(rows, start=start_row):
+            for col_index, (_, key) in enumerate(columns, start=1):
+                cell = ws.cell(row_index, col_index)
+                cell.value = clean_excel_value(row.get(key))
+                apply_cell_style(cell, align="left")
+
+    for col_index, (label, key) in enumerate(columns, start=1):
+        max_len = len(label)
+
+        for row in rows or []:
+            max_len = max(max_len, len(clean_excel_value(row.get(key))))
+
+        ws.column_dimensions[get_column_letter(col_index)].width = min(max(max_len + 3, 14), 45)
+
+    ws.freeze_panes = "A4"
+    ws.auto_filter.ref = f"A3:{get_column_letter(final_col)}{max(start_row, start_row + len(rows or []) - 1)}"
+
+    page_setup = ws.page_setup
+    page_setup.orientation = "landscape"
+    page_setup.fitToWidth = 1
+    page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    return ws
+
+def field_attendance_detail_rows(attendance_logs):
+    rows = []
+
+    for index, row in enumerate(attendance_logs or [], start=1):
+        mode = normalize_text(row.get("mode")).lower()
+
+        if mode not in {"field", "tour", "travel", "official_tour", "official tour"}:
+            continue
+
+        rows.append({
+            "sl_no": index,
+            "employee_name": (
+                normalize_text(row.get("employee_name"))
+                or normalize_text(row.get("name"))
+                or "Employee"
+            ),
+            "employee_code": (
+                normalize_text(row.get("employee_code"))
+                or normalize_text(row.get("emp_code"))
+                or normalize_text(row.get("employee_id"))
+            ),
+            "department": normalize_text(row.get("department")),
+            "designation": normalize_text(row.get("designation")),
+            "team_leader": normalize_text(row.get("team_leader_name")),
+            "reporting_officer": normalize_text(row.get("reporting_officer_name")),
+            "date": normalize_text(row.get("date")),
+            "mode": normalize_text(row.get("mode")),
+            "field_location": normalize_text(row.get("field_location")),
+            "field_photo_url": (
+                normalize_text(row.get("field_photo"))
+                or normalize_text(row.get("proof_photo"))
+                or normalize_text(row.get("photo"))
+            ),
+            "check_in": clean_excel_value(row.get("check_in")),
+            "check_out": clean_excel_value(row.get("check_out")),
+            "check_in_location": location_text(row, "check_in_location"),
+            "check_in_map_url": location_map_url(row, "check_in_location"),
+            "check_out_location": location_text(row, "check_out_location"),
+            "check_out_map_url": location_map_url(row, "check_out_location"),
+            "holiday_work_approval": (
+                normalize_text(row.get("holiday_work_approval_status"))
+                or normalize_text(row.get("holiday_work_status"))
+                or ("approved" if row.get("holiday_work_request_id") else "")
+            ),
+            "holiday_title": normalize_text(row.get("holiday_title") or row.get("holiday_name")),
+            "verified_by": (
+                normalize_text(row.get("verified_by_name"))
+                or normalize_text(row.get("approved_by_name"))
+                or normalize_text(row.get("decided_by_name"))
+            ),
+            "status": normalize_text(row.get("status")),
+        })
+
+    return rows
+
+
+def holiday_work_detail_rows(holiday_work_requests):
+    rows = []
+
+    for index, row in enumerate(holiday_work_requests or [], start=1):
+        rows.append({
+            "sl_no": index,
+            "employee_name": (
+                normalize_text(row.get("employee_name"))
+                or normalize_text(row.get("name"))
+                or "Employee"
+            ),
+            "employee_code": (
+                normalize_text(row.get("employee_code"))
+                or normalize_text(row.get("emp_code"))
+                or normalize_text(row.get("employee_id"))
+            ),
+            "department": normalize_text(row.get("department")),
+            "designation": normalize_text(row.get("designation")),
+            "team_leader": normalize_text(row.get("team_leader_name")),
+            "reporting_officer": normalize_text(row.get("reporting_officer_name")),
+            "date": normalize_text(row.get("date")),
+            "holiday_title": normalize_text(row.get("holiday_title") or row.get("holiday_name")),
+            "holiday_type": normalize_text(row.get("holiday_type")),
+            "reason": normalize_text(row.get("reason")),
+            "work_location": normalize_text(row.get("work_location") or row.get("field_location")),
+            "proof_photo_url": (
+                normalize_text(row.get("proof_photo"))
+                or normalize_text(row.get("field_photo"))
+                or normalize_text(row.get("photo"))
+            ),
+            "location": location_text(row, "location"),
+            "map_url": location_map_url(row, "location"),
+            "approval_stage": normalize_text(row.get("approval_stage")),
+            "status": normalize_text(row.get("status")),
+            "decided_by": (
+                normalize_text(row.get("decided_by_name"))
+                or normalize_text(row.get("approved_by_name"))
+                or normalize_text(row.get("rejected_by_name"))
+            ),
+            "decided_at": clean_excel_value(
+                row.get("decided_at")
+                or row.get("approved_at")
+                or row.get("rejected_at")
+            ),
+            "created_at": clean_excel_value(row.get("created_at")),
+        })
+
+    return rows
+
+def compoff_detail_rows(compoff_credits):
+    rows = []
+
+    for index, row in enumerate(compoff_credits or [], start=1):
+        rows.append({
+            "sl_no": index,
+            "employee_name": (
+                normalize_text(row.get("employee_name"))
+                or normalize_text(row.get("name"))
+                or "Employee"
+            ),
+            "employee_code": (
+                normalize_text(row.get("employee_code"))
+                or normalize_text(row.get("emp_code"))
+                or normalize_text(row.get("employee_id"))
+            ),
+            "department": normalize_text(row.get("department")),
+            "designation": normalize_text(row.get("designation")),
+            "team_leader": normalize_text(row.get("team_leader_name")),
+            "reporting_officer": normalize_text(row.get("reporting_officer_name")),
+            "earned_date": normalize_text(row.get("earned_date")),
+            "claim_from_date": normalize_text(row.get("claim_from_date") or row.get("available_from")),
+            "expiry_date": normalize_text(row.get("expiry_date") or row.get("valid_until")),
+            "claim_date": normalize_text(row.get("claim_date") or row.get("claimed_date")),
+            "holiday_title": normalize_text(row.get("holiday_title") or row.get("holiday_name")),
+            "holiday_work_request_id": normalize_text(row.get("holiday_work_request_id")),
+            "attendance_log_id": normalize_text(row.get("attendance_log_id")),
+            "leave_request_id": normalize_text(row.get("leave_request_id")),
+            "status": normalize_text(row.get("status")),
+        })
+
+    return rows
+
+def create_field_attendance_detail_sheet(wb, attendance_logs):
+    columns = [
+        ("Sl No", "sl_no"),
+        ("Employee Name", "employee_name"),
+        ("Emp Code", "employee_code"),
+        ("Department", "department"),
+        ("Designation", "designation"),
+        ("Team Leader", "team_leader"),
+        ("Reporting Officer", "reporting_officer"),
+        ("Date", "date"),
+        ("Mode", "mode"),
+        ("Field Place", "field_location"),
+        ("Field Photo URL", "field_photo_url"),
+        ("Check In", "check_in"),
+        ("Check Out", "check_out"),
+        ("Check-In Location", "check_in_location"),
+        ("Check-In Map Link", "check_in_map_url"),
+        ("Check-Out Location", "check_out_location"),
+        ("Check-Out Map Link", "check_out_map_url"),
+        ("Holiday Work Approval", "holiday_work_approval"),
+        ("Holiday Title", "holiday_title"),
+        ("Verified By", "verified_by"),
+        ("Status", "status"),
+    ]
+
+    return add_detail_sheet(
+        wb,
+        "Field Attendance Details",
+        columns,
+        field_attendance_detail_rows(attendance_logs),
+    )
+
+
+def create_holiday_work_detail_sheet(wb, holiday_work_requests):
+    columns = [
+        ("Sl No", "sl_no"),
+        ("Employee Name", "employee_name"),
+        ("Emp Code", "employee_code"),
+        ("Department", "department"),
+        ("Designation", "designation"),
+        ("Team Leader", "team_leader"),
+        ("Reporting Officer", "reporting_officer"),
+        ("Holiday Date", "date"),
+        ("Holiday Title", "holiday_title"),
+        ("Holiday Type", "holiday_type"),
+        ("Reason", "reason"),
+        ("Work Location", "work_location"),
+        ("Proof Photo URL", "proof_photo_url"),
+        ("Location", "location"),
+        ("Map Link", "map_url"),
+        ("Approval Stage", "approval_stage"),
+        ("Status", "status"),
+        ("Decided By", "decided_by"),
+        ("Decided At", "decided_at"),
+        ("Created At", "created_at"),
+    ]
+
+    return add_detail_sheet(
+        wb,
+        "Holiday Work Requests",
+        columns,
+        holiday_work_detail_rows(holiday_work_requests),
+    )
+
+
+def create_compoff_detail_sheet(wb, compoff_credits):
+    columns = [
+        ("Sl No", "sl_no"),
+        ("Employee Name", "employee_name"),
+        ("Emp Code", "employee_code"),
+        ("Department", "department"),
+        ("Designation", "designation"),
+        ("Team Leader", "team_leader"),
+        ("Reporting Officer", "reporting_officer"),
+        ("Earned Date", "earned_date"),
+        ("Claim From Date", "claim_from_date"),
+        ("Expiry Date", "expiry_date"),
+        ("Claim Date", "claim_date"),
+        ("Holiday Title", "holiday_title"),
+        ("Holiday Work Request ID", "holiday_work_request_id"),
+        ("Attendance Log ID", "attendance_log_id"),
+        ("Leave Request ID", "leave_request_id"),
+        ("Status", "status"),
+    ]
+
+    return add_detail_sheet(
+        wb,
+        "Comp-Off Details",
+        columns,
+        compoff_detail_rows(compoff_credits),
+    )
+
+
 def create_guidelines_sheet(wb):
     ws = wb.active
     ws.title = "Guidelines"
@@ -900,6 +1239,8 @@ def build_attendance_workbook(
     attendance_logs=None,
     leave_requests=None,
     holidays=None,
+    holiday_work_requests=None,
+    compoff_credits=None,
     period="month",
     year=None,
     month=None,
@@ -948,6 +1289,10 @@ def build_attendance_workbook(
         period_label=period_label,
     )
 
+    create_field_attendance_detail_sheet(wb, attendance_logs or [])
+    create_holiday_work_detail_sheet(wb, holiday_work_requests or [])
+    create_compoff_detail_sheet(wb, compoff_credits or [])
+
     return wb
 
 
@@ -963,6 +1308,8 @@ def build_attendance_excel_file(
     attendance_logs=None,
     leave_requests=None,
     holidays=None,
+    holiday_work_requests=None,
+    compoff_credits=None,
     period="month",
     year=None,
     month=None,
@@ -978,6 +1325,8 @@ def build_attendance_excel_file(
         attendance_logs=attendance_logs,
         leave_requests=leave_requests,
         holidays=holidays,
+        holiday_work_requests=holiday_work_requests,
+        compoff_credits=compoff_credits,
         period=period,
         year=year,
         month=month,

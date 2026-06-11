@@ -40,6 +40,12 @@ const LEAVE_COLUMNS = [
   ['to_date', 'To Date'],
   ['leave_days', 'Leave Days'],
   ['lwp_days', 'LWP Days'],
+  ['compoff_holiday_title', 'Comp-Off Holiday'],
+  ['compoff_earned_date', 'Comp-Off Earned Date'],
+  ['compoff_available_from', 'Comp-Off Claim From'],
+  ['compoff_valid_until', 'Comp-Off Valid Until'],
+  ['holiday_work_request_id', 'Holiday Work Request ID'],
+  ['attendance_log_id', 'Attendance Log ID'],
   ['live_status', 'Current Status'],
   ['approval_stage_label', 'Approval Stage'],
   ['reason', 'Reason'],
@@ -100,13 +106,43 @@ function statusLabel(value) {
 function leaveTypeLabel(value) {
   const normalized = String(value || '').trim().toUpperCase();
 
-  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') return 'Casual Leave';
-  if (normalized === 'EL' || normalized === 'EARNED LEAVE') return 'Earned Leave';
-  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') return 'Comp-Off';
-  if (normalized === 'HALF-DAY' || normalized === 'HALF DAY' || normalized === 'HALFDAY') return 'Half Day';
-  if (normalized === 'LWP' || normalized === 'LEAVE WITHOUT PAY') return 'Leave Without Pay';
+  if (normalized === 'CL' || normalized === 'CASUAL LEAVE') {
+    return 'Casual Leave';
+  }
+
+  if (normalized === 'EL' || normalized === 'EARNED LEAVE') {
+    return 'Earned Leave';
+  }
+
+  if (normalized === 'COMP-OFF' || normalized === 'COMPOFF') {
+    return 'Comp-Off';
+  }
+
+  if (
+    normalized === 'HALF-DAY' ||
+    normalized === 'HALF DAY' ||
+    normalized === 'HALFDAY'
+  ) {
+    return 'Half Day';
+  }
+
+  if (normalized === 'LWP' || normalized === 'LEAVE WITHOUT PAY') {
+    return 'Leave Without Pay';
+  }
 
   return value || 'Leave';
+}
+
+function isCompOffLeave(row = {}) {
+  const leaveType = String(
+    row.leave_type ||
+      row.requested_leave_type ||
+      row.leave_type_label ||
+      row.requested_leave_type_label ||
+      '',
+  ).toUpperCase();
+
+  return leaveType === 'COMP-OFF' || leaveType === 'COMPOFF';
 }
 
 function employeeOptionLabel(employee = {}) {
@@ -174,6 +210,15 @@ function normalizeLeaveRow(row = {}) {
     lwp_days: Number(row.lwp_days || 0),
     leave_days: row.leave_days ?? '—',
     reason: row.reason || '—',
+
+    is_compoff_leave: isCompOffLeave(row),
+    compoff_id: row.compoff_id || row.compoff_credit_id || '',
+    compoff_holiday_title: row.compoff_holiday_title || row.holiday_title || '—',
+    compoff_earned_date: formatDate(row.compoff_earned_date),
+    compoff_available_from: formatDate(row.compoff_available_from),
+    compoff_valid_until: formatDate(row.compoff_valid_until),
+    holiday_work_request_id: row.holiday_work_request_id || '—',
+    attendance_log_id: row.attendance_log_id || '—',
   };
 }
 
@@ -342,16 +387,22 @@ export default function Leave() {
     await loadLeaves(cleared);
   }
 
-  function handleCsvExport() {
-    const exportRows = normalizedRows.map((row) => ({
-      ...row,
-      from_date: row.from_date_display,
-      to_date: row.to_date_display,
-      created_at: row.created_at_display,
-    }));
+function handleCsvExport() {
+  const exportRows = normalizedRows.map((row) => ({
+    ...row,
+    from_date: row.from_date_display,
+    to_date: row.to_date_display,
+    created_at: row.created_at_display,
+    compoff_holiday_title: row.is_compoff_leave ? row.compoff_holiday_title : '',
+    compoff_earned_date: row.is_compoff_leave ? row.compoff_earned_date : '',
+    compoff_available_from: row.is_compoff_leave ? row.compoff_available_from : '',
+    compoff_valid_until: row.is_compoff_leave ? row.compoff_valid_until : '',
+    holiday_work_request_id: row.is_compoff_leave ? row.holiday_work_request_id : '',
+    attendance_log_id: row.is_compoff_leave ? row.attendance_log_id : '',
+  }));
 
-    downloadCsv('hr-leave-management.csv', exportRows, LEAVE_COLUMNS);
-  }
+  downloadCsv('hr-leave-management.csv', exportRows, LEAVE_COLUMNS);
+}
 
   return (
     <div className="page-grid leave-management-page">
@@ -359,11 +410,11 @@ export default function Leave() {
         <div>
           <span className="kicker">HR Leave Management</span>
           <h1>Leave Records & Daily Availability</h1>
-          <p>
-            Review today&apos;s leave records by default, track approval status,
-            and filter historical leave records by employee, leave type, date
-            range, status, and approval stage.
-          </p>
+      <p>
+        Review today&apos;s leave records by default, track approval status,
+        comp-off claims, holiday work references, and filter historical leave
+        records by employee, leave type, date range, status, and approval stage.
+      </p>
         </div>
 
         <button
@@ -655,12 +706,37 @@ export default function Leave() {
                     <small>LWP Days</small>
                     <strong>{row.lwp_days || '—'}</strong>
                   </span>
+
+                  {row.is_compoff_leave && (
+                    <>
+                      <span>
+                        <small>Comp-Off Holiday</small>
+                        <strong>{row.compoff_holiday_title}</strong>
+                      </span>
+
+                      <span>
+                        <small>Claim Window</small>
+                        <strong>
+                          {row.compoff_available_from} to {row.compoff_valid_until}
+                        </strong>
+                      </span>
+                    </>
+                  )}
+
                 </div>
 
                 <div className="leave-card-footer">
                   <div>
                     <small>Reason</small>
                     <p>{row.reason}</p>
+
+                    {row.is_compoff_leave && (
+                      <p>
+                        Comp-Off Credit: {row.compoff_id || '—'} <br />
+                        Holiday Work Request: {row.holiday_work_request_id} <br />
+                        Attendance Log: {row.attendance_log_id}
+                      </p>
+                    )}
                   </div>
 
                   <div className="leave-meta-row">

@@ -32,6 +32,8 @@ ATTENDANCE_MANAGER_ROLES = (
     "hr",
     "team_leader",
     "reporting_officer",
+    "ro",
+    "manager",
 )
 
 HOLIDAY_MANAGER_ROLES = (
@@ -67,6 +69,8 @@ TEAM_SCOPE_ROLES = {
 
 REPORTING_SCOPE_ROLES = {
     "reporting_officer",
+    "ro",
+    "manager",
 }
 
 
@@ -487,6 +491,62 @@ def enrich_attendance_log(db, row):
 
     return row
 
+def enrich_field_attendance_log(db, row):
+    row = enrich_attendance_log(db, row)
+
+    field_photo = (
+        row.get("field_photo")
+        or row.get("field_photo_url")
+        or row.get("proof_photo")
+        or row.get("photo")
+        or row.get("check_in_photo")
+        or ""
+    )
+
+    row["field_photo"] = field_photo
+    row["field_photo_url"] = field_photo
+    row["photo_url"] = field_photo
+    row["field_photo_available"] = bool(field_photo)
+
+    location = (
+        row.get("check_in_location")
+        or row.get("location")
+        or row.get("geo_location")
+        or {}
+    )
+
+    latitude = (
+        location.get("latitude")
+        or location.get("lat")
+        or row.get("latitude")
+        or row.get("lat")
+    )
+
+    longitude = (
+        location.get("longitude")
+        or location.get("lng")
+        or row.get("longitude")
+        or row.get("lng")
+    )
+
+    if latitude and longitude:
+        row["map_url"] = f"https://www.google.com/maps?q={latitude},{longitude}"
+        row["latitude"] = latitude
+        row["longitude"] = longitude
+    else:
+        row["map_url"] = row.get("map_url", "")
+
+    row["field_location"] = (
+        row.get("field_location")
+        or row.get("work_location")
+        or row.get("visit_place")
+        or row.get("place")
+        or ""
+    )
+
+    return row
+
+
 def employee_identifier_values(employee):
     employee = employee or {}
     values = []
@@ -747,29 +807,17 @@ def holiday_info_for_employee(db, employee, check_date):
 
 
 def approved_mode_for_date(db, employee, attendance_date, mode):
-    if mode == "office":
-        return True
+    """WFH and Field no longer need pre-approval.
 
-    req = db.attendance_mode_requests.find_one({
-        "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-        "employee_id": str(employee["_id"]),
-        "mode": mode,
-        "date": date_to_str(attendance_date),
-        "status": "approved",
-        "is_deleted": {"$ne": True},
-    })
-
-    return bool(req)
+    The previous flow used attendance_mode_requests for WFH/Field approval.
+    New HRMS flow allows office, WFH and field attendance directly.
+    Holiday attendance is controlled separately through holiday_work_requests.
+    """
+    return normalize_mode(mode) in ATTENDANCE_MODES
 
 
 def available_modes_for_employee(db, employee, attendance_date):
-    modes = ["office"]
-
-    for mode in ["wfh", "field"]:
-        if approved_mode_for_date(db, employee, attendance_date, mode):
-            modes.append(mode)
-
-    return modes
+    return list(ATTENDANCE_MODES)
 
 
 def extract_location(data):
@@ -806,6 +854,103 @@ def has_required_location(location):
         location.get("latitude") is not None
         and location.get("longitude") is not None
     )
+
+
+def get_upload_value(data, *keys):
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            return value
+    return ""
+
+
+def add_working_days(start_date, working_days, db=None, employee=None):
+    """Return the date after adding N working days.
+
+    Weekly holidays are Sunday plus second/fourth Saturday. Manual HR holidays
+    are also skipped when db and employee are available.
+    """
+    cursor = start_date
+    added = 0
+
+    while added < working_days:
+        if not weekly_holiday_reason(cursor):
+            manual = None
+            if db is not None and employee is not None:
+                manual = manual_holiday_for_date(
+                    db,
+                    employee.get("tenant_id") or current_tenant_id(),
+                    employee_state(employee),
+                    cursor,
+                )
+
+            if not manual:
+                added += 1
+
+        if added < working_days:
+            cursor = cursor + timedelta(days=1)
+
+    return cursor
+
+
+def next_working_day(start_date, db=None, employee=None):
+    cursor = start_date + timedelta(days=1)
+
+    while True:
+        if weekly_holiday_reason(cursor):
+            cursor += timedelta(days=1)
+            continue
+
+        if db is not None and employee is not None:
+            manual = manual_holiday_for_date(
+                db,
+                employee.get("tenant_id") or current_tenant_id(),
+                employee_state(employee),
+                cursor,
+            )
+
+            if manual:
+                cursor += timedelta(days=1)
+                continue
+
+        return cursor
+
+
+def approved_holiday_work_request(db, employee, attendance_date):
+    return db.holiday_work_requests.find_one({
+        "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+        "employee_id": str(employee["_id"]),
+        "date": date_to_str(attendance_date),
+        "status": "approved",
+        "is_deleted": {"$ne": True},
+    })
+
+
+def pending_holiday_work_request(db, employee, attendance_date):
+    return db.holiday_work_requests.find_one({
+        "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+        "employee_id": str(employee["_id"]),
+        "date": date_to_str(attendance_date),
+        "status": "pending",
+        "is_deleted": {"$ne": True},
+    })
+
+
+def can_decide_holiday_work_request(db, request_doc):
+    return can_decide_mode_request(db, request_doc)
+
+
+def notify_attendance_stakeholders(db, employee, title, body, meta=None, include_employee=False):
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    user_ids = []
+
+    if include_employee and employee.get("user_id"):
+        user_ids.append(str(employee.get("user_id")))
+
+    user_ids.extend(approval_target_user_ids(db, employee))
+    user_ids.extend(users_for_roles(db, FULL_TENANT_REPORT_ROLES, tenant_id))
+
+    notify_users(db, user_ids, title, body, meta or {}, tenant_id=tenant_id)
 
 
 def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
@@ -941,8 +1086,9 @@ def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
         return existing
 
     now = datetime.utcnow()
-    earned_date = attendance_doc.get("date")
-    valid_until_date = today_local() + timedelta(days=90)
+    earned_date = parse_date(attendance_doc.get("date")) or today_local()
+    available_from = next_working_day(earned_date, db, employee)
+    valid_until_date = add_working_days(available_from, 7, db, employee)
 
     compoff_doc = {
         "tenant_id": tenant_id,
@@ -957,12 +1103,16 @@ def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
         "reporting_officer_id": employee.get("reporting_officer_id", ""),
         "reporting_officer_name": employee.get("reporting_officer_name", ""),
         "source_attendance_id": str(attendance_doc["_id"]),
-        "earned_date": earned_date,
+        "source_holiday_work_request_id": attendance_doc.get("holiday_work_request_id", ""),
+        "earned_date": earned_date.isoformat(),
+        "available_from": available_from.isoformat(),
         "valid_until": valid_until_date.isoformat(),
         "leave_days": 1.0,
         "status": "available",
         "holiday_title": holiday_info.get("title", ""),
+        "holiday_type": holiday_info.get("holiday_type", ""),
         "holiday_message": holiday_info.get("message", ""),
+        "claim_window_working_days": 7,
         "created_at": now,
         "updated_at": now,
     }
@@ -970,22 +1120,25 @@ def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
     res = db.compoff_credits.insert_one(compoff_doc)
     compoff_doc["_id"] = res.inserted_id
 
-    notify_users(
+    notify_attendance_stakeholders(
         db,
-        approval_target_user_ids(db, employee),
+        employee,
         "Comp-Off Earned",
-        f"{employee_display_name(employee)} worked on holiday and earned 1 comp-off.",
+        f"{employee_display_name(employee)} worked on holiday and earned 1 comp-off. It can be claimed from {available_from.isoformat()} to {valid_until_date.isoformat()}.",
         {
             "employee_id": str(employee["_id"]),
             "attendance_id": str(attendance_doc["_id"]),
             "compoff_id": str(res.inserted_id),
+            "available_from": available_from.isoformat(),
+            "valid_until": valid_until_date.isoformat(),
         },
-        tenant_id=tenant_id,
+        include_employee=True,
     )
 
     audit("create_compoff", "compoff_credits", res.inserted_id, {
         "employee_id": str(employee["_id"]),
         "attendance_id": str(attendance_doc["_id"]),
+        "valid_until": valid_until_date.isoformat(),
     })
 
     return compoff_doc
@@ -1078,6 +1231,8 @@ def attendance_status():
 
     holiday_info = holiday_info_for_employee(db, e, check_date)
     modes = available_modes_for_employee(db, e, check_date)
+    approved_holiday_request = approved_holiday_work_request(db, e, check_date)
+    pending_holiday_request = pending_holiday_work_request(db, e, check_date)
 
     pending_mode_requests = list(
         db.attendance_mode_requests
@@ -1117,6 +1272,9 @@ def attendance_status():
         "reporting_officer_name": e.get("reporting_officer_name", ""),
         "holiday": holiday_info,
         "available_modes": modes,
+        "holiday_work_request": clean_doc(approved_holiday_request or pending_holiday_request),
+        "holiday_work_approved": bool(approved_holiday_request),
+        "holiday_check_in_blocked": bool(holiday_info.get("is_holiday") and not approved_holiday_request),
         "attendance": clean_doc(rec),
         "pending_mode_requests": clean_doc(pending_mode_requests),
         "compoffs": clean_doc(compoffs),
@@ -1136,7 +1294,21 @@ def check_in():
 
     mode = normalize_mode(data.get("mode") or "office")
     late_reason = normalize_text(data.get("late_reason"))
-    field_location = normalize_text(data.get("field_location"))
+    field_location = normalize_text(
+        data.get("field_location")
+        or data.get("field_place")
+        or data.get("place")
+        or data.get("work_place")
+    )
+    field_photo = get_upload_value(
+        data,
+        "field_photo",
+        "field_photo_url",
+        "photo",
+        "photo_url",
+        "image",
+        "image_url",
+    )
     location = extract_location(data)
 
     now = now_local()
@@ -1147,22 +1319,30 @@ def check_in():
     if mode not in ATTENDANCE_MODES:
         return jsonify({"message": "Invalid attendance mode"}), 400
 
-    if not approved_mode_for_date(db, e, today_date, mode):
-        return jsonify({
-            "message": f"{mode.upper()} check-in is not approved for today"
-        }), 403
-
-    if not has_required_location(location):
-        return jsonify({
-            "message": "Latitude and longitude are required for attendance"
-        }), 400
-
     if mode == "field" and not field_location:
         return jsonify({
-            "message": "Field location / visit place is required for field mode"
+            "message": "Field location / visit place is required for field attendance"
+        }), 400
+
+    if mode == "field" and not field_photo:
+        return jsonify({
+            "message": "Field attendance photo is required"
         }), 400
 
     holiday_info = holiday_info_for_employee(db, e, today_date)
+    holiday_work_request = None
+
+    if holiday_info.get("is_holiday"):
+        holiday_work_request = approved_holiday_work_request(db, e, today_date)
+
+        if not holiday_work_request:
+            pending_request = pending_holiday_work_request(db, e, today_date)
+            return jsonify({
+                "message": "Holiday attendance requires approved holiday work request",
+                "holiday": holiday_info,
+                "pending_holiday_work_request": clean_doc(pending_request),
+            }), 403
+
     is_late = now.time() >= LATE_CUTOFF and not holiday_info.get("is_holiday")
 
     if is_late and not late_reason:
@@ -1217,15 +1397,20 @@ def check_in():
         "office_end": "18:00",
         "mode": mode,
         "field_location": field_location,
+        "field_photo": field_photo,
+        "field_photo_url": field_photo if isinstance(field_photo, str) else "",
         "late_reason": late_reason,
         "early_checkout_reason": "",
         "check_in_location": location,
         "check_out_location": None,
+        "location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
         "is_late": is_late,
         "is_early_checkout": False,
         "is_holiday_work": bool(holiday_info.get("is_holiday")),
         "holiday_title": holiday_info.get("title", ""),
+        "holiday_type": holiday_info.get("holiday_type", ""),
         "holiday_message": holiday_info.get("message", ""),
+        "holiday_work_request_id": str(holiday_work_request.get("_id")) if holiday_work_request else "",
         "status": status,
         "verified_by_ro": False,
         "timeline": [
@@ -1234,6 +1419,7 @@ def check_in():
                 "time": now,
                 "note": f"{mode.upper()} check-in",
                 "location": location,
+                "field_location": field_location,
             }
         ],
         "created_at": now,
@@ -1242,6 +1428,30 @@ def check_in():
 
     res = db.attendance_logs.insert_one(doc)
     doc["_id"] = res.inserted_id
+
+    if mode == "field":
+        map_url = ""
+
+        if location.get("latitude") and location.get("longitude"):
+            map_url = f"https://www.google.com/maps?q={location.get('latitude')},{location.get('longitude')}"
+
+        notify_attendance_stakeholders(
+            db,
+            e,
+            "Field Attendance Marked",
+            f"{employee_display_name(e)} marked field attendance at {field_location}.",
+            {
+                "employee_id": str(e["_id"]),
+                "attendance_id": str(res.inserted_id),
+                "field_attendance_id": str(res.inserted_id),
+                "field_location": field_location,
+                "field_photo_available": bool(field_photo),
+                "field_photo_url": field_photo if isinstance(field_photo, str) else "",
+                "map_url": map_url,
+                "date": today,
+                "mode": mode,
+            },
+        )
 
     audit("check_in", "attendance_logs", res.inserted_id, {
         "mode": mode,
@@ -1275,11 +1485,6 @@ def check_out():
     early_checkout_reason = normalize_text(data.get("early_checkout_reason"))
     location = extract_location(data)
 
-    if not has_required_location(location):
-        return jsonify({
-            "message": "Latitude and longitude are required for checkout"
-        }), 400
-
     rec = db.attendance_logs.find_one({
         "tenant_id": tenant_id,
         "employee_id": str(e["_id"]),
@@ -1307,6 +1512,7 @@ def check_out():
     set_data = {
         "check_out": now,
         "check_out_location": location,
+        "checkout_location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
         "is_early_checkout": is_early_checkout,
         "early_checkout_reason": early_checkout_reason,
         "updated_at": now,
@@ -1775,6 +1981,387 @@ def delete_holiday(holiday_id):
     return jsonify({"message": "Holiday deleted"})
 
 
+@attendance_bp.post("/holiday-work-requests")
+@current_user_required
+def create_holiday_work_request():
+    db = get_db()
+    e = emp(db)
+
+    if not e:
+        return jsonify({"message": "Employee profile not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    request_date = parse_date(data.get("date")) or today_local()
+    reason = normalize_text(data.get("reason"))
+    work_location = normalize_text(
+        data.get("work_location")
+        or data.get("field_location")
+        or data.get("place")
+        or data.get("location")
+    )
+    proof_photo = get_upload_value(data, "photo", "proof_photo", "field_photo", "image", "photo_url")
+    location = extract_location(data)
+    tenant_id = e.get("tenant_id") or current_tenant_id()
+    holiday_info = holiday_info_for_employee(db, e, request_date)
+
+    if not holiday_info.get("is_holiday"):
+        return jsonify({"message": "Holiday work request can be raised only for holiday dates"}), 400
+
+    if request_date < today_local():
+        return jsonify({"message": "Holiday work request cannot be raised for past dates"}), 400
+
+    if not reason:
+        return jsonify({"message": "Reason is required"}), 400
+
+    existing = db.holiday_work_requests.find_one({
+        "tenant_id": tenant_id,
+        "employee_id": str(e["_id"]),
+        "date": request_date.isoformat(),
+        "status": {"$in": ["pending", "approved"]},
+        "is_deleted": {"$ne": True},
+    })
+
+    if existing:
+        return jsonify({
+            "message": "Holiday work request already exists for this date",
+            "item": clean_doc(existing),
+        }), 409
+
+    now = datetime.utcnow()
+    approval_stage, approval_stage_label = first_approval_stage(e)
+
+    doc = {
+        "tenant_id": tenant_id,
+        "employee_id": str(e["_id"]),
+        "employee_code": employee_code(e),
+        "emp_code": e.get("emp_code", ""),
+        "employee_name": employee_display_name(e),
+        "department": e.get("department", ""),
+        "designation": e.get("designation", ""),
+        "state": employee_state(e),
+        "team_leader_id": e.get("team_leader_id", ""),
+        "team_leader_name": e.get("team_leader_name", ""),
+        "reporting_officer_id": e.get("reporting_officer_id", ""),
+        "reporting_officer_name": e.get("reporting_officer_name", ""),
+        "date": request_date.isoformat(),
+        "reason": reason,
+        "work_location": work_location,
+        "proof_photo": proof_photo,
+        "location": location,
+        "holiday_title": holiday_info.get("title", ""),
+        "holiday_type": holiday_info.get("holiday_type", ""),
+        "holiday_message": holiday_info.get("message", ""),
+        "status": "pending",
+        "approval_stage": approval_stage,
+        "approval_stage_label": approval_stage_label,
+        "approval_history": [],
+        "created_at": now,
+        "updated_at": now,
+        "created_by": str(g.current_user["_id"]),
+    }
+
+    res = db.holiday_work_requests.insert_one(doc)
+    doc["_id"] = res.inserted_id
+
+    notify_users(
+        db,
+        approval_target_user_ids(db, e),
+        "Holiday Work Request",
+        f"{employee_display_name(e)} requested holiday work approval for {request_date.isoformat()}.",
+        {
+            "request_id": str(res.inserted_id),
+            "employee_id": str(e["_id"]),
+            "date": request_date.isoformat(),
+            "approval_stage": approval_stage,
+        },
+        tenant_id=tenant_id,
+    )
+
+    audit("create", "holiday_work_requests", res.inserted_id, {
+        "employee_id": str(e["_id"]),
+        "date": request_date.isoformat(),
+    })
+
+    return jsonify({"message": "Holiday work request submitted", "item": clean_doc(doc)}), 201
+
+
+@attendance_bp.get("/my-holiday-work-requests")
+@current_user_required
+def my_holiday_work_requests():
+    db = get_db()
+    e = emp(db)
+
+    if not e:
+        return jsonify({"items": []})
+
+    items = list(
+        db.holiday_work_requests
+        .find({
+            "tenant_id": e.get("tenant_id") or current_tenant_id(),
+            "employee_id": str(e["_id"]),
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(100)
+    )
+
+    return jsonify({"items": clean_doc(items)})
+
+
+@attendance_bp.get("/holiday-work-requests")
+@roles_required(*ATTENDANCE_MANAGER_ROLES)
+def list_holiday_work_requests():
+    db = get_db()
+    roles = current_user_roles()
+    q = {"is_deleted": {"$ne": True}}
+
+    if "super_admin" not in roles:
+        q["tenant_id"] = current_tenant_id()
+
+    status = normalize_text(request.args.get("status"))
+    if status:
+        q["status"] = status
+
+    date_value = normalize_text(request.args.get("date"))
+    if date_value:
+        q["date"] = date_value
+
+    scoped_employee_ids = scoped_employee_ids_for_manager(db)
+    if scoped_employee_ids is not None:
+        q["employee_id"] = {"$in": scoped_employee_ids}
+
+        reviewer = emp(db)
+        reviewer_identifier_values = employee_identifier_values(reviewer) if reviewer else []
+        pending_scope = []
+
+        if reviewer and ("team_leader" in roles or employee_is_team_leader(reviewer)):
+            pending_scope.append({
+                "approval_stage": "team_leader",
+                "team_leader_id": {"$in": reviewer_identifier_values},
+            })
+
+        if reviewer and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer)):
+            pending_scope.append({
+                "approval_stage": "reporting_officer",
+                "reporting_officer_id": {"$in": reviewer_identifier_values},
+            })
+
+        if pending_scope and status == "pending":
+            q["$or"] = pending_scope
+
+    items = list(
+        db.holiday_work_requests
+        .find(q)
+        .sort("created_at", -1)
+        .limit(500)
+    )
+
+    return jsonify({"items": clean_doc(items)})
+
+
+@attendance_bp.patch("/holiday-work-requests/<request_id>/decision")
+@roles_required(*ATTENDANCE_MANAGER_ROLES)
+def decide_holiday_work_request(request_id):
+    request_obj_id = safe_object_id(request_id)
+
+    if not request_obj_id:
+        return jsonify({"message": "Invalid request id"}), 400
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    roles = current_user_roles()
+
+    status = normalize_text(data.get("status")).lower()
+    decision_note = normalize_text(data.get("decision_note") or data.get("note"))
+
+    if status not in ["approved", "rejected"]:
+        return jsonify({"message": "Status must be approved or rejected"}), 400
+
+    q = {"_id": request_obj_id, "is_deleted": {"$ne": True}}
+    if "super_admin" not in roles:
+        q["tenant_id"] = current_tenant_id()
+
+    request_doc = db.holiday_work_requests.find_one(q)
+
+    if not request_doc:
+        return jsonify({"message": "Request not found"}), 404
+
+    if request_doc.get("status") != "pending":
+        return jsonify({"message": "Only pending requests can be decided"}), 400
+
+    if not can_decide_holiday_work_request(db, request_doc):
+        return jsonify({"message": "Request is not in your approval scope"}), 403
+
+    now = datetime.utcnow()
+
+    history_entry = {
+        "stage": request_doc.get("approval_stage") or "",
+        "stage_label": request_doc.get("approval_stage_label") or "",
+        "status": status,
+        "decision_note": decision_note,
+        "decided_at": now,
+        "decided_by": str(g.current_user["_id"]),
+        "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+    }
+
+    set_data = {
+        "decision_note": decision_note,
+        "last_decided_at": now,
+        "last_decided_by": str(g.current_user["_id"]),
+        "last_decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "updated_at": now,
+    }
+
+    if status == "rejected":
+        set_data.update({
+            "status": "rejected",
+            "approval_stage": "rejected",
+            "approval_stage_label": "Rejected",
+            "decided_at": now,
+            "decided_by": str(g.current_user["_id"]),
+            "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        })
+    else:
+        if request_doc.get("approval_stage") == "team_leader":
+            next_stage, next_stage_label = next_approval_stage_after_team_leader(request_doc)
+
+            if next_stage == "approved":
+                set_data.update({
+                    "status": "approved",
+                    "approval_stage": "approved",
+                    "approval_stage_label": "Approved",
+                    "decided_at": now,
+                    "decided_by": str(g.current_user["_id"]),
+                    "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+                })
+            else:
+                set_data.update({
+                    "status": "pending",
+                    "approval_stage": next_stage,
+                    "approval_stage_label": next_stage_label,
+                })
+
+                reporting_user_id = employee_user_id(
+                    db,
+                    request_doc.get("reporting_officer_id"),
+                    request_doc.get("tenant_id") or current_tenant_id(),
+                )
+
+                notify_users(
+                    db,
+                    [reporting_user_id],
+                    "Holiday Work Request",
+                    f"{request_doc.get('employee_name', 'Employee')} holiday work request is pending for Reporting Officer approval.",
+                    {
+                        "request_id": str(request_obj_id),
+                        "employee_id": request_doc.get("employee_id"),
+                        "date": request_doc.get("date"),
+                        "approval_stage": next_stage,
+                    },
+                    tenant_id=request_doc.get("tenant_id") or current_tenant_id(),
+                )
+        else:
+            set_data.update({
+                "status": "approved",
+                "approval_stage": "approved",
+                "approval_stage_label": "Approved",
+                "decided_at": now,
+                "decided_by": str(g.current_user["_id"]),
+                "decided_by_name": g.current_user.get("name") or g.current_user.get("email"),
+            })
+
+    db.holiday_work_requests.update_one(
+        {"_id": request_obj_id},
+        {"$set": set_data, "$push": {"approval_history": history_entry}},
+    )
+
+    updated_doc = db.holiday_work_requests.find_one({"_id": request_obj_id})
+    employee_user = employee_user_id(
+        db,
+        request_doc.get("employee_id"),
+        request_doc.get("tenant_id") or current_tenant_id(),
+    )
+
+    notify_users(
+        db,
+        [employee_user],
+        "Holiday Work Request Updated",
+        f"Your holiday work request for {request_doc.get('date')} is {updated_doc.get('status')}.",
+        {"request_id": str(request_obj_id), "status": updated_doc.get("status")},
+        tenant_id=request_doc.get("tenant_id") or current_tenant_id(),
+    )
+
+    audit(status, "holiday_work_requests", request_id, {
+        "decision_note": decision_note,
+        "approval_stage": request_doc.get("approval_stage"),
+    })
+
+    return jsonify({
+        "message": f"Request {updated_doc.get('status') if updated_doc else status}",
+        "item": clean_doc(updated_doc),
+    })
+
+
+@attendance_bp.get("/team-field-attendance")
+@roles_required(*ATTENDANCE_MANAGER_ROLES)
+def team_field_attendance():
+    db = get_db()
+    roles = current_user_roles()
+
+    q = manager_scope_query(db)
+    q["mode"] = "field"
+    q["is_deleted"] = {"$ne": True}
+
+    start = normalize_text(
+        request.args.get("start")
+        or request.args.get("from")
+        or request.args.get("date_from")
+    )
+    end = normalize_text(
+        request.args.get("end")
+        or request.args.get("to")
+        or request.args.get("date_to")
+    )
+
+    if start or end:
+        date_q = {}
+
+        if start:
+            date_q["$gte"] = start
+
+        if end:
+            date_q["$lte"] = end
+
+        q["date"] = date_q
+
+    else:
+        # By default show recent field logs. Do not force only today's date,
+        # because TL/RO may open the panel after employee already checked in earlier.
+        pass
+
+    try:
+        limit = int(request.args.get("limit") or 100)
+    except Exception:
+        limit = 100
+
+    limit = max(1, min(limit, 500))
+
+    items = list(
+        db.attendance_logs
+        .find(q)
+        .sort([("date", -1), ("check_in", -1), ("created_at", -1)])
+        .limit(limit)
+    )
+
+    items = [enrich_field_attendance_log(db, row) for row in items]
+
+    return jsonify({
+        "items": clean_doc(items),
+        "scope": "tenant" if roles.intersection(FULL_TENANT_REPORT_ROLES) else "mapped_team",
+        "total": len(items),
+    })
+
+
 @attendance_bp.post("/mode-requests")
 @current_user_required
 def create_mode_request():
@@ -2212,6 +2799,29 @@ def claim_compoff(compoff_id):
         return jsonify({
             "message": "Available comp-off not found"
         }), 404
+
+    available_from = parse_date(compoff.get("available_from"))
+    valid_until = parse_date(compoff.get("valid_until"))
+    today = today_local()
+
+    if available_from and today < available_from:
+        return jsonify({
+            "message": f"This comp-off can be claimed from {available_from.isoformat()}"
+        }), 400
+
+    if valid_until and today > valid_until:
+        db.compoff_credits.update_one(
+            {"_id": compoff_obj_id},
+            {"$set": {"status": "expired", "updated_at": datetime.utcnow()}},
+        )
+        return jsonify({
+            "message": "This comp-off has expired. It can be claimed within 7 working days only."
+        }), 400
+
+    if valid_until and claim_date > valid_until:
+        return jsonify({
+            "message": f"Claim date must be on or before {valid_until.isoformat()}"
+        }), 400
 
     existing_leave = db.leave_requests.find_one({
         "tenant_id": tenant_id,

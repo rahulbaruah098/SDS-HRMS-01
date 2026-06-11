@@ -45,11 +45,14 @@ const EMPTY_HOLIDAY_FORM = {
   message: '',
 };
 
-const EMPTY_MODE_REQUEST_FORM = {
-  mode: 'wfh',
+const EMPTY_HOLIDAY_WORK_FILTERS = {
+  status: '',
   date: '',
-  reason: '',
-  field_location: '',
+};
+
+const EMPTY_TEAM_FIELD_FILTERS = {
+  start: '',
+  end: '',
 };
 
 const EMPTY_COMPOFF_FORM = {
@@ -105,6 +108,121 @@ function formatDateTime(value) {
     return value;
   }
 }
+
+function fieldPhotoValue(row = {}) {
+  return (
+    row.field_photo ||
+    row.field_photo_url ||
+    row.photo_url ||
+    row.proof_photo ||
+    row.photo ||
+    row.check_in_photo ||
+    ''
+  );
+}
+
+function normalizeImageSrc(value = '') {
+  const photo = String(value || '').trim();
+
+  if (!photo) {
+    return '';
+  }
+
+  if (
+    photo.startsWith('data:image/') ||
+    photo.startsWith('http://') ||
+    photo.startsWith('https://') ||
+    photo.startsWith('/uploads/')
+  ) {
+    return photo;
+  }
+
+  if (photo.startsWith('uploads/')) {
+    return `/${photo}`;
+  }
+
+  // If backend stored only raw base64 without data:image prefix
+  if (photo.length > 100 && !photo.includes(' ')) {
+    return `data:image/jpeg;base64,${photo}`;
+  }
+
+  return photo;
+}
+
+
+function openImagePreview(photoSrc = '') {
+  if (!photoSrc) {
+    return;
+  }
+
+  const win = window.open('', '_blank');
+
+  if (!win) {
+    return;
+  }
+
+  win.document.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <title>Field Attendance Photo</title>
+        <style>
+          body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #111827;
+            font-family: Arial, sans-serif;
+          }
+
+          img {
+            max-width: 96vw;
+            max-height: 96vh;
+            object-fit: contain;
+            border-radius: 12px;
+            background: #ffffff;
+            box-shadow: 0 20px 60px rgba(0,0,0,.45);
+          }
+        </style>
+      </head>
+      <body>
+        <img src="${photoSrc}" alt="Field Attendance Photo" />
+      </body>
+    </html>
+  `);
+
+  win.document.close();
+}
+
+function FieldPhotoPreview({ row }) {
+  const photoSrc = normalizeImageSrc(fieldPhotoValue(row));
+
+  if (!photoSrc) {
+    return <span>—</span>;
+  }
+
+  return (
+    <div className="field-photo-preview">
+      <img
+        src={photoSrc}
+        alt="Field attendance"
+        onError={(event) => {
+          event.currentTarget.style.display = 'none';
+        }}
+      />
+
+      <button
+        type="button"
+        className="field-photo-open-button"
+        onClick={() => openImagePreview(photoSrc)}
+      >
+        Open Photo
+      </button>
+    </div>
+  );
+}
+
 
 function modeLabel(mode) {
   if (mode === 'wfh') return 'Work From Home';
@@ -214,6 +332,7 @@ function normalizeAttendanceRows(rows = []) {
       date: formatDate(row.date),
       raw_date: row.date || '',
       mode: modeLabel(row.mode),
+      raw_mode: row.mode || '',
       status: statusLabel(row.status),
       raw_status: row.status || '',
       check_in: formatDateTime(row.check_in),
@@ -224,8 +343,32 @@ function normalizeAttendanceRows(rows = []) {
       check_out_location_text: locationText(row.check_out_location),
       check_in_map_url: locationMapUrl(row.check_in_location),
       check_out_map_url: locationMapUrl(row.check_out_location),
-      field_location: row.field_location || '—',
-      late_reason: row.late_reason || '—',
+field_location: row.field_location || row.work_location || '—',
+field_photo:
+  row.field_photo ||
+  row.field_photo_url ||
+  row.photo_url ||
+  row.proof_photo ||
+  row.photo ||
+  row.check_in_photo ||
+  '',
+field_photo_url:
+  row.field_photo_url ||
+  row.field_photo ||
+  row.photo_url ||
+  row.proof_photo ||
+  row.photo ||
+  row.check_in_photo ||
+  '',
+photo_url:
+  row.photo_url ||
+  row.field_photo_url ||
+  row.field_photo ||
+  row.proof_photo ||
+  row.photo ||
+  row.check_in_photo ||
+  '',
+late_reason: row.late_reason || '—',
       early_checkout_reason: row.early_checkout_reason || '—',
       holiday: row.holiday_title || '—',
       verified: row.verified_by_ro ? 'Yes' : 'No',
@@ -235,18 +378,24 @@ function normalizeAttendanceRows(rows = []) {
   });
 }
 
-function normalizeModeRequestRows(rows = []) {
+function normalizeHolidayWorkRequestRows(rows = []) {
   return rows.map((row) => ({
     employee_name: row.employee_name || '—',
     employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
     department: row.department || '—',
     designation: row.designation || '—',
+    state: row.state || '—',
     team_leader: row.team_leader_name || '—',
     reporting_officer: row.reporting_officer_name || '—',
-    mode: modeLabel(row.mode),
     date: formatDate(row.date),
+    raw_date: row.date || '',
+    holiday: row.holiday_title || '—',
+    holiday_type: statusLabel(row.holiday_type),
     reason: row.reason || '—',
-    field_location: row.field_location || '—',
+    work_location: row.work_location || row.field_location || '—',
+    proof_photo: row.proof_photo || '',
+    location_text: locationText(row.location),
+    map_url: locationMapUrl(row.location),
     current_stage: requestLiveStatus(row),
     status: statusLabel(row.status),
     decided_by: row.decided_by_name || row.approved_by_name || row.rejected_by_name || '—',
@@ -423,12 +572,15 @@ function AttendanceReportList({ rows = [], loading = false }) {
               </div>
             </div>
           </div>
-
           <div className="attendance-record-footer">
-            <div>
-              <span>Field Location</span>
-              <strong>{cleanText(row.field_location)}</strong>
-            </div>
+            {String(row.raw_mode || '').toLowerCase() === 'field' && (
+              <div>
+                <span>Field Location</span>
+                <strong>{cleanText(row.field_location)}</strong>
+
+                <FieldPhotoPreview row={row} />
+              </div>
+            )}
 
             <div className="attendance-record-action">
               {row.action}
@@ -443,8 +595,9 @@ function AttendanceReportList({ rows = [], loading = false }) {
 export default function Attendance() {
   const [myAttendance, setMyAttendance] = useState([]);
   const [report, setReport] = useState([]);
-  const [modeRequests, setModeRequests] = useState([]);
-  const [myModeRequests, setMyModeRequests] = useState([]);
+  const [holidayWorkRequests, setHolidayWorkRequests] = useState([]);
+  const [myHolidayWorkRequests, setMyHolidayWorkRequests] = useState([]);
+  const [teamFieldAttendance, setTeamFieldAttendance] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [myCompOffs, setMyCompOffs] = useState([]);
 
@@ -452,15 +605,19 @@ export default function Attendance() {
   const [loadingPage, setLoadingPage] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
   const [savingHoliday, setSavingHoliday] = useState(false);
-  const [submittingModeRequest, setSubmittingModeRequest] = useState(false);
-  const [decidingRequestId, setDecidingRequestId] = useState('');
+  const [decidingHolidayWorkId, setDecidingHolidayWorkId] = useState('');
+  const [loadingTeamField, setLoadingTeamField] = useState(false);
   const [verifyingId, setVerifyingId] = useState('');
   const [claimingCompOff, setClaimingCompOff] = useState(false);
 
   const [filters, setFilters] = useState({ ...EMPTY_REPORT_FILTERS });
   const [holidayForm, setHolidayForm] = useState({ ...EMPTY_HOLIDAY_FORM });
-  const [modeRequestForm, setModeRequestForm] = useState({
-    ...EMPTY_MODE_REQUEST_FORM,
+  const [holidayWorkFilters, setHolidayWorkFilters] = useState({
+    ...EMPTY_HOLIDAY_WORK_FILTERS,
+  });
+
+  const [teamFieldFilters, setTeamFieldFilters] = useState({
+    ...EMPTY_TEAM_FIELD_FILTERS,
   });
   const [compOffForm, setCompOffForm] = useState({ ...EMPTY_COMPOFF_FORM });
 
@@ -523,21 +680,34 @@ export default function Attendance() {
     }
   }
 
-  async function loadModeRequests() {
+  async function loadHolidayWorkRequests(nextFilters = holidayWorkFilters) {
     if (!canViewReport) return;
 
-    const data = await api('/attendance/mode-requests');
-    setModeRequests(normalizeModeRequestRows(data.items || []));
+    const data = await api(`/attendance/holiday-work-requests${buildQuery(nextFilters)}`);
+    setHolidayWorkRequests(normalizeHolidayWorkRequestRows(data.items || []));
   }
 
-  async function loadMyModeRequests() {
+  async function loadMyHolidayWorkRequests() {
     if (!showEmployeeSelfAttendancePanel) {
-      setMyModeRequests([]);
+      setMyHolidayWorkRequests([]);
       return;
     }
 
-    const data = await api('/attendance/my-mode-requests');
-    setMyModeRequests(normalizeModeRequestRows(data.items || []));
+    const data = await api('/attendance/my-holiday-work-requests');
+    setMyHolidayWorkRequests(normalizeHolidayWorkRequestRows(data.items || []));
+  }
+
+  async function loadTeamFieldAttendance(nextFilters = teamFieldFilters) {
+    if (!canViewReport) return;
+
+    setLoadingTeamField(true);
+
+    try {
+      const data = await api(`/attendance/team-field-attendance${buildQuery(nextFilters)}`);
+      setTeamFieldAttendance(normalizeAttendanceRows(data.items || []));
+    } finally {
+      setLoadingTeamField(false);
+    }
   }
 
   async function loadHolidays() {
@@ -564,10 +734,11 @@ export default function Attendance() {
 
       await Promise.all([
         loadMyAttendance(),
-        loadMyModeRequests(),
+        loadMyHolidayWorkRequests(),
         loadMyCompOffs(),
         canViewReport ? loadReport(filters) : Promise.resolve(),
-        canViewReport ? loadModeRequests() : Promise.resolve(),
+        canViewReport ? loadHolidayWorkRequests(holidayWorkFilters) : Promise.resolve(),
+        canViewReport ? loadTeamFieldAttendance(teamFieldFilters) : Promise.resolve(),
         canManageHoliday ? loadHolidays() : Promise.resolve(),
       ]);
     } catch (error) {
@@ -662,50 +833,8 @@ export default function Attendance() {
     }
   }
 
-  async function submitModeRequest(event) {
-    event.preventDefault();
 
-    if (!modeRequestForm.date || !modeRequestForm.reason.trim()) {
-      setMessage('Date and reason are required for WFH / Field request');
-      return;
-    }
-
-    if (
-      modeRequestForm.mode === 'field' &&
-      !modeRequestForm.field_location.trim()
-    ) {
-      setMessage('Field location is required for field request');
-      return;
-    }
-
-    try {
-      setMessage('');
-      setSubmittingModeRequest(true);
-
-      const data = await api('/attendance/mode-requests', {
-        method: 'POST',
-        body: JSON.stringify(modeRequestForm),
-      });
-
-      setMessage(
-        data.message ||
-          'Your WFH / Field request has been sent for approval.',
-      );
-
-      setModeRequestForm({ ...EMPTY_MODE_REQUEST_FORM });
-
-      await Promise.all([
-        loadMyModeRequests(),
-        canViewReport ? loadModeRequests() : Promise.resolve(),
-      ]);
-    } catch (error) {
-      setMessage(error.message || 'Unable to submit request');
-    } finally {
-      setSubmittingModeRequest(false);
-    }
-  }
-
-  async function decideModeRequest(row, status) {
+  async function decideHolidayWorkRequest(row, status) {
     const requestId = row?._id;
 
     if (!requestId) {
@@ -713,30 +842,31 @@ export default function Attendance() {
       return;
     }
 
-    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+    const ok = window.confirm(`${statusLabel(status)} this holiday work request?`);
 
     if (!ok) return;
 
     try {
       setMessage('');
-      setDecidingRequestId(requestId);
+      setDecidingHolidayWorkId(requestId);
 
-      const data = await api(`/attendance/mode-requests/${requestId}/decision`, {
+      const data = await api(`/attendance/holiday-work-requests/${requestId}/decision`, {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       });
 
-      setMessage(data.message || `Request ${status}`);
+      setMessage(data.message || `Holiday work request ${status}`);
 
       await Promise.all([
-        loadModeRequests(),
-        loadMyModeRequests(),
+        loadHolidayWorkRequests(holidayWorkFilters),
+        loadMyHolidayWorkRequests(),
         loadReport(filters),
+        loadTeamFieldAttendance(teamFieldFilters),
       ]);
     } catch (error) {
-      setMessage(error.message || 'Unable to update request');
+      setMessage(error.message || 'Unable to update holiday work request');
     } finally {
-      setDecidingRequestId('');
+      setDecidingHolidayWorkId('');
     }
   }
 
@@ -786,31 +916,45 @@ export default function Attendance() {
     ),
   }));
 
-  const pendingModeRequestCount = modeRequests.filter(
+  const pendingHolidayWorkRequestCount = holidayWorkRequests.filter(
     (row) => row.raw_status === 'pending',
   ).length;
 
-  const modeRequestRows = modeRequests.map((row) => ({
+  const holidayWorkRequestRows = holidayWorkRequests.map((row) => ({
     ...row,
+    proof: row.proof_photo ? (
+      <a href={row.proof_photo} target="_blank" rel="noreferrer">
+        View photo
+      </a>
+    ) : (
+      '—'
+    ),
+    map: row.map_url ? (
+      <a href={row.map_url} target="_blank" rel="noreferrer">
+        Open map
+      </a>
+    ) : (
+      '—'
+    ),
     action:
       row.raw_status === 'pending' ? (
         <div className="row-actions">
           <button
             type="button"
             className="secondary"
-            onClick={() => decideModeRequest(row, 'approved')}
-            disabled={decidingRequestId === row._id}
+            onClick={() => decideHolidayWorkRequest(row, 'approved')}
+            disabled={decidingHolidayWorkId === row._id}
           >
-            {decidingRequestId === row._id ? 'Approving...' : 'Approve'}
+            {decidingHolidayWorkId === row._id ? 'Approving...' : 'Approve'}
           </button>
 
           <button
             type="button"
             className="danger"
-            onClick={() => decideModeRequest(row, 'rejected')}
-            disabled={decidingRequestId === row._id}
+            onClick={() => decideHolidayWorkRequest(row, 'rejected')}
+            disabled={decidingHolidayWorkId === row._id}
           >
-            {decidingRequestId === row._id ? 'Rejecting...' : 'Reject'}
+            {decidingHolidayWorkId === row._id ? 'Rejecting...' : 'Reject'}
           </button>
         </div>
       ) : (
@@ -818,12 +962,80 @@ export default function Attendance() {
       ),
   }));
 
+  const myHolidayWorkRequestRows = myHolidayWorkRequests.map((row) => ({
+    ...row,
+    proof: row.proof_photo ? (
+      <a href={row.proof_photo} target="_blank" rel="noreferrer">
+        View photo
+      </a>
+    ) : (
+      '—'
+    ),
+    map: row.map_url ? (
+      <a href={row.map_url} target="_blank" rel="noreferrer">
+        Open map
+      </a>
+    ) : (
+      '—'
+    ),
+  }));
+
+const teamFieldRows = teamFieldAttendance.map((row) => ({
+  ...row,
+  field_photo_link: <FieldPhotoPreview row={row} />,
+  check_in_map: row.check_in_map_url ? (
+      <a href={row.check_in_map_url} target="_blank" rel="noreferrer">
+        Open map
+      </a>
+    ) : (
+      '—'
+    ),
+  }));
+
   const availableCompOffs = myCompOffs.filter(
     (item) => item.raw_status === 'available',
   );
 
-  return (
-    <div className="page-grid">
+return (
+  <div className="page-grid">
+    <style>{`
+      .field-photo-preview {
+        display: grid;
+        gap: 8px;
+        max-width: 220px;
+        margin-top: 8px;
+      }
+
+      .field-photo-preview img {
+        width: 180px;
+        height: 120px;
+        object-fit: cover;
+        border-radius: 14px;
+        border: 1px solid #dbe4f0;
+        background: #f8fafc;
+        display: block;
+      }
+
+        .field-photo-open-button {
+          border: 0;
+          background: transparent;
+          color: #4f46e5;
+          font-weight: 900;
+          font-size: 13px;
+          text-decoration: underline;
+          cursor: pointer;
+          padding: 0;
+          text-align: left;
+        }
+
+      @media (max-width: 640px) {
+        .field-photo-preview img {
+          width: 100%;
+          max-width: 220px;
+          height: 130px;
+        }
+      }
+    `}</style>
       <section className="hero compact">
         <div>
           <span className="kicker">
@@ -832,8 +1044,8 @@ export default function Attendance() {
           <h1>Attendance Management</h1>
           <p>
             {isHrAdminAttendanceView
-              ? 'Monitor daily attendance records, employee locations, late reasons, WFH/Field approvals, and holiday attendance from one HR control panel.'
-              : 'Press and hold for attendance, capture exact latitude and longitude, manage late entry reasons after 09:50 AM, early checkout reasons, holiday work, WFH/Field approvals and comp-off claims.'}
+              ? 'Monitor daily attendance records, field locations, employee photos, holiday work approvals, and comp-off records from one HR control panel.'
+              : 'Mark Office, WFH, or Field attendance directly. Field attendance captures visit place, photo, and location. Holiday work requires approval before attendance and creates claimable comp-off after checkout.'}
           </p>
 
           <div className="hero-actions">
@@ -856,102 +1068,36 @@ export default function Attendance() {
 
       {message && <div className="inline-message">{message}</div>}
 
-              {showEmployeeSelfAttendancePanel && (
-      <section className="two-col">
-        <div className="panel">
-          <h3>Request Work From Home / Field</h3>
-          <p>
-            WFH and Field check-in buttons will appear only after approval for
-            the selected date. Approval follows your mapped Team Leader /
-            Reporting Officer workflow.
-          </p>
 
-          <form className="dynamic-form" onSubmit={submitModeRequest}>
-            <label>
-              Mode
-              <select
-                value={modeRequestForm.mode}
-                onChange={(e) =>
-                  setModeRequestForm({
-                    ...modeRequestForm,
-                    mode: e.target.value,
-                  })
-                }
-                disabled={submittingModeRequest}
-              >
-                <option value="wfh">Work From Home</option>
-                <option value="field">Field</option>
-              </select>
-            </label>
-
-            <label>
-              Date
-              <input
-                type="date"
-                value={modeRequestForm.date}
-                onChange={(e) =>
-                  setModeRequestForm({
-                    ...modeRequestForm,
-                    date: e.target.value,
-                  })
-                }
-                disabled={submittingModeRequest}
-              />
-            </label>
-
-            {modeRequestForm.mode === 'field' && (
-              <label>
-                Field Location
-                <input
-                  value={modeRequestForm.field_location}
-                  onChange={(e) =>
-                    setModeRequestForm({
-                      ...modeRequestForm,
-                      field_location: e.target.value,
-                    })
-                  }
-                  placeholder="Visit place / client location"
-                  disabled={submittingModeRequest}
-                />
-              </label>
-            )}
-
-            <label>
-              Reason
-              <textarea
-                value={modeRequestForm.reason}
-                onChange={(e) =>
-                  setModeRequestForm({
-                    ...modeRequestForm,
-                    reason: e.target.value,
-                  })
-                }
-                placeholder="Reason for WFH / Field attendance"
-                disabled={submittingModeRequest}
-              />
-            </label>
-
-            <button
-              type="submit"
-              className="primary"
-              disabled={submittingModeRequest}
-            >
-              {submittingModeRequest ? 'Submitting...' : 'Submit Request'}
-            </button>
-          </form>
-        </div>
-
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>My WFH / Field Requests</h3>
-              <p>Track whether your request is pending, approved, or rejected.</p>
+      {showEmployeeSelfAttendancePanel && (
+        <section className="two-col">
+          <div className="panel">
+            <div className="toolbar">
+              <div>
+                <h3>My Holiday Work Requests</h3>
+                <p>
+                  Holiday attendance is allowed only after approval. After approved
+                  holiday attendance and checkout, one comp-off credit will be created.
+                </p>
+              </div>
             </div>
+
+            <Table rows={myHolidayWorkRequestRows} maxColumns={12} />
           </div>
 
-          <Table rows={myModeRequests} maxColumns={10} />
-        </div>
-      </section>
+          <div className="panel">
+            <h3>Holiday Work Rule</h3>
+            <p>
+              For Sunday, second Saturday, fourth Saturday, and HR-created holidays,
+              you must raise a holiday work request first. Approval will go to your
+              Team Leader, then Reporting Officer, or HR fallback.
+            </p>
+            <p>
+              Comp-off can be claimed from the next working day and only within
+              7 working days. After that, the credit expires automatically.
+            </p>
+          </div>
+        </section>
       )}
 
       {showEmployeeSelfAttendancePanel && (
@@ -963,6 +1109,10 @@ export default function Attendance() {
 
         <div className="panel">
           <h3>My Comp-Off Credits</h3>
+          <p>
+            Comp-off is available only after approved holiday work attendance and
+            checkout. It can be claimed from the next working day within 7 working days.
+          </p>
 
           <form className="dynamic-form" onSubmit={claimCompOff}>
             <label>
@@ -1223,21 +1373,159 @@ export default function Attendance() {
         <section className="panel">
           <div className="toolbar">
             <div>
-              <h3>WFH / Field Approval Requests</h3>
+              <h3>Holiday Work Approval Requests</h3>
               <p>
-                Approval access is based on HR/Admin permission or employee
-                mapping as Team Leader / Reporting Officer.
+                Approve holiday work before the employee can mark attendance on a
+                holiday. Access follows Team Leader, Reporting Officer, and HR scope.
               </p>
             </div>
 
             <span className="employee-role-pill">
-              Pending Requests: {pendingModeRequestCount}
+              Pending Requests: {pendingHolidayWorkRequestCount}
             </span>
           </div>
 
-          <Table rows={modeRequestRows} maxColumns={12} />
+          <form
+            className="attendance-filter-card"
+            onSubmit={(event) => {
+              event.preventDefault();
+              loadHolidayWorkRequests(holidayWorkFilters);
+            }}
+          >
+            <div className="attendance-filter-grid">
+              <label>
+                Status
+                <select
+                  value={holidayWorkFilters.status}
+                  onChange={(e) =>
+                    setHolidayWorkFilters({
+                      ...holidayWorkFilters,
+                      status: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">All Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+
+              <label>
+                Date
+                <input
+                  type="date"
+                  value={holidayWorkFilters.date}
+                  onChange={(e) =>
+                    setHolidayWorkFilters({
+                      ...holidayWorkFilters,
+                      date: e.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="attendance-filter-actions">
+              <button type="submit" className="primary">
+                Search Holiday Requests
+              </button>
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const cleared = { ...EMPTY_HOLIDAY_WORK_FILTERS };
+                  setHolidayWorkFilters(cleared);
+                  loadHolidayWorkRequests(cleared);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+
+          <Table rows={holidayWorkRequestRows} maxColumns={14} />
         </section>
       )}
+
+      {canViewReport && (
+        <section className="panel">
+          <div className="toolbar">
+            <div>
+              <h3>Team Field Attendance</h3>
+              <p>
+                Team Leaders can see their mapped team members. Reporting Officers
+                can see their mapped employees. HR/Admin can see all field attendance.
+              </p>
+            </div>
+
+            <span className="employee-role-pill">
+              Field Records: {teamFieldAttendance.length}
+            </span>
+          </div>
+
+          <form
+            className="attendance-filter-card"
+            onSubmit={(event) => {
+              event.preventDefault();
+              loadTeamFieldAttendance(teamFieldFilters);
+            }}
+          >
+            <div className="attendance-filter-grid">
+              <label>
+                Date From
+                <input
+                  type="date"
+                  value={teamFieldFilters.start}
+                  onChange={(e) =>
+                    setTeamFieldFilters({
+                      ...teamFieldFilters,
+                      start: e.target.value,
+                    })
+                  }
+                />
+              </label>
+
+              <label>
+                Date To
+                <input
+                  type="date"
+                  value={teamFieldFilters.end}
+                  onChange={(e) =>
+                    setTeamFieldFilters({
+                      ...teamFieldFilters,
+                      end: e.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="attendance-filter-actions">
+              <button type="submit" className="primary" disabled={loadingTeamField}>
+                {loadingTeamField ? 'Loading...' : 'Search Field Attendance'}
+              </button>
+
+              <button
+                type="button"
+                className="secondary"
+                disabled={loadingTeamField}
+                onClick={() => {
+                  const cleared = { ...EMPTY_TEAM_FIELD_FILTERS };
+                  setTeamFieldFilters(cleared);
+                  loadTeamFieldAttendance(cleared);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+
+          <Table rows={teamFieldRows} maxColumns={14} />
+        </section>
+      )}
+
 
       {canManageHoliday && (
         <section className="panel">

@@ -16,9 +16,14 @@ const REPORT_TABS = [
     endpoint: '/reports/attendance',
   },
   {
-    key: 'attendance-mode-requests',
-    title: 'WFH / Field Requests',
-    endpoint: '/reports/attendance-mode-requests',
+    key: 'field-attendance',
+    title: 'Field Attendance',
+    endpoint: '/reports/field-attendance',
+  },
+  {
+    key: 'holiday-work-requests',
+    title: 'Holiday Work',
+    endpoint: '/reports/holiday-work-requests',
   },
   {
     key: 'holidays',
@@ -27,8 +32,18 @@ const REPORT_TABS = [
   },
   {
     key: 'compoffs',
-    title: 'Comp-Off Report',
+    title: 'Comp-Off Credits',
     endpoint: '/reports/compoffs',
+  },
+  {
+    key: 'compoff-claims',
+    title: 'Comp-Off Claims',
+    endpoint: '/reports/compoff-claims',
+  },
+  {
+    key: 'expired-compoffs',
+    title: 'Expired Comp-Off',
+    endpoint: '/reports/expired-compoffs',
   },
   {
     key: 'leave-balances',
@@ -264,6 +279,19 @@ function yesNo(value) {
   return value ? 'Yes' : 'No';
 }
 
+function safeLink(url, label = 'Open') {
+  if (!url) return '—';
+
+  return (
+    <a href={url} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  );
+}
+
+function cleanText(value) {
+  return value || '—';
+}
 
 function organisationOptionLabel(organisation = {}) {
   const name =
@@ -313,36 +341,58 @@ function employeeOptionLabel(employee = {}) {
 }
 
 function normalizeRows(tab, rows = []) {
-  if (tab === 'attendance') {
+  if (tab === 'attendance' || tab === 'field-attendance') {
     return rows.map((row) => ({
+      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
       state: row.state || '—',
+      team_leader: row.team_leader_name || '—',
+      reporting_officer: row.reporting_officer_name || '—',
       date: formatDate(row.date),
       mode: modeLabel(row.mode),
       status: statusLabel(row.status),
+      field_location: cleanText(row.field_location),
+      field_photo: safeLink(row.field_photo_url || row.field_photo, 'View photo'),
       check_in: formatDateTime(row.check_in),
       check_out: formatDateTime(row.check_out),
+      check_in_location: row.check_in_location_text || '—',
+      check_in_map: safeLink(row.check_in_map_url, 'Open map'),
+      check_out_location: row.check_out_location_text || '—',
+      check_out_map: safeLink(row.check_out_map_url, 'Open map'),
       late_reason: row.late_reason || '—',
       early_checkout_reason: row.early_checkout_reason || '—',
       holiday: row.holiday_title || '—',
+      holiday_type: statusLabel(row.holiday_type),
+      holiday_work_approval: statusLabel(row.holiday_work_approval_status),
+      verified_by: row.verified_by || '—',
       verified: row.verified_by_ro ? 'Yes' : 'No',
     }));
   }
 
-  if (tab === 'attendance-mode-requests') {
+  if (tab === 'holiday-work-requests') {
     return rows.map((row) => ({
+      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
-      mode: modeLabel(row.mode),
+      state: row.state || '—',
+      team_leader: row.team_leader_name || '—',
+      reporting_officer: row.reporting_officer_name || '—',
       date: formatDate(row.date),
+      holiday: row.holiday_title || '—',
+      holiday_type: statusLabel(row.holiday_type),
       reason: row.reason || '—',
-      field_location: row.field_location || '—',
+      work_location: row.work_location || row.field_location || '—',
+      proof_photo: safeLink(row.proof_photo_url || row.proof_photo, 'View photo'),
+      location: row.location_text || '—',
+      map: safeLink(row.map_url, 'Open map'),
+      current_stage: row.live_status || statusLabel(row.approval_stage),
       status: statusLabel(row.status),
-      decided_by: row.decided_by_name || '—',
+      decided_by: row.decided_by || row.decided_by_name || '—',
       decided_at: formatDateTime(row.decided_at),
+      created_at: formatDateTime(row.created_at),
     }));
   }
 
@@ -357,15 +407,27 @@ function normalizeRows(tab, rows = []) {
     }));
   }
 
-  if (tab === 'compoffs') {
+  if (
+    tab === 'compoffs' ||
+    tab === 'compoff-claims' ||
+    tab === 'expired-compoffs'
+  ) {
     return rows.map((row) => ({
+      employee_id: row.employee_code || row.emp_code || row.employee_id || '—',
       employee_name: row.employee_name || '—',
       department: row.department || '—',
       designation: row.designation || '—',
+      team_leader: row.team_leader_name || '—',
+      reporting_officer: row.reporting_officer_name || '—',
       earned_date: formatDate(row.earned_date),
-      valid_until: formatDate(row.valid_until),
-      claimed_date: formatDate(row.claimed_date),
+      claim_from_date: formatDate(row.claim_from_date || row.available_from),
+      expiry_date: formatDate(row.expiry_date || row.valid_until),
+      valid_until: formatDate(row.valid_until || row.expiry_date),
+      claim_date: formatDate(row.claim_date || row.claimed_date),
       holiday: row.holiday_title || '—',
+      holiday_work_request_id: row.holiday_work_request_id || '—',
+      attendance_log_id: row.attendance_log_id || '—',
+      leave_request_id: row.leave_request_id || '—',
       status: statusLabel(row.status),
     }));
   }
@@ -512,11 +574,18 @@ export default function Reports() {
       delete payload.balance_deducted;
     }
 
-    if (!['attendance', 'attendance-mode-requests'].includes(tabKey)) {
+    if (!['attendance', 'field-attendance'].includes(tabKey)) {
       delete payload.mode;
     }
 
-    if (!['attendance', 'attendance-mode-requests', 'holidays'].includes(tabKey)) {
+    if (
+      ![
+        'attendance',
+        'field-attendance',
+        'holiday-work-requests',
+        'holidays',
+      ].includes(tabKey)
+    ) {
       delete payload.state;
     }
 
@@ -769,7 +838,7 @@ export default function Reports() {
   const statItems = [
     ['Employees', counts.employees || 0],
     ['Attendance Logs', counts.attendance_logs || 0],
-    ['WFH / Field Requests', counts.attendance_mode_requests || 0],
+    ['Holiday Work Requests', counts.holiday_work_requests || 0],
     ['Holiday Calendar', counts.holiday_calendar || 0],
     ['Comp-Off Credits', counts.compoff_credits || 0],
     ['Leave Balances', counts.leave_balances || 0],
@@ -786,9 +855,10 @@ export default function Reports() {
           <span className="kicker">Reports</span>
           <h1>HRMS Reports Center</h1>
           <p>
-            View attendance, WFH/Field requests, holidays, comp-off, leave
-            balances, leave workflow approvals, leave deductions, and audit logs
-            from one reporting screen.
+            View attendance, field attendance with location/photo, holiday work
+            approvals, comp-off credits, comp-off claims, expired comp-off,
+            leave workflow approvals, leave deductions, and audit logs from one
+            reporting screen.
           </p>
         </div>
 
@@ -832,8 +902,8 @@ export default function Reports() {
             </span>
 
             <span>
-              <strong>Holiday Work Today</strong>
-              <small>{extra?.attendance?.holiday_work_today || 0}</small>
+              <strong>Pending Holiday Work</strong>
+              <small>{extra?.pending?.holiday_work_requests || 0}</small>
             </span>
           </div>
         </div>
@@ -1079,8 +1149,9 @@ export default function Reports() {
           <div>
             <h3>Report Filters</h3>
             <p>
-              Use filters according to the active report. Leave workflow reports
-              support approval stage, live status, deduction status, and period filters.
+              Use filters according to the active report. Attendance reports support
+              date, mode, state, department, and employee filters. Holiday work and
+              leave workflow reports support approval status and stage filters.
             </p>
           </div>
 
@@ -1142,21 +1213,25 @@ export default function Reports() {
               <option value="holiday_work">Holiday Work</option>
               <option value="available">Available</option>
               <option value="claimed">Claimed</option>
+              <option value="used">Used</option>
+              <option value="expired">Expired</option>
             </select>
           </label>
 
-          <label>
-            Mode
-            <select
-              value={filters.mode}
-              onChange={(e) => updateFilter('mode', e.target.value)}
-            >
-              <option value="">All Modes</option>
-              <option value="office">Office</option>
-              <option value="wfh">Work From Home</option>
-              <option value="field">Field</option>
-            </select>
-          </label>
+          {['attendance', 'field-attendance'].includes(activeTab) && (
+            <label>
+              Mode
+              <select
+                value={filters.mode}
+                onChange={(e) => updateFilter('mode', e.target.value)}
+              >
+                <option value="">All Modes</option>
+                <option value="office">Office</option>
+                <option value="wfh">Work From Home</option>
+                <option value="field">Field</option>
+              </select>
+            </label>
+          )}
 
           <label>
             State

@@ -214,9 +214,12 @@ function moduleGroup(key) {
     [
       'attendance',
       'attendance_logs',
+      'holiday_work_requests',
+      'team_field_attendance',
       'attendance_mode_requests',
       'holiday_calendar',
       'compoff_credits',
+      'compoff_records',
       'team_approvals',
       'leave_requests',
       'leave',
@@ -358,6 +361,16 @@ function notificationTarget(meta = {}) {
       'pending-approvals',
       'pending_leave_approvals',
       'pending-leave-approvals',
+      'holiday_work_approval',
+      'holiday-work-approval',
+      'holiday_work_approvals',
+      'holiday-work-approvals',
+      'holiday_approval',
+      'holiday-approval',
+      'holiday_approvals',
+      'holiday-approvals',
+      'holiday_work_requests',
+      'holiday-work-requests',
       'tl_approvals',
       'team_leader_approvals',
       'ro_approvals',
@@ -406,6 +419,28 @@ function notificationTarget(meta = {}) {
 
     return 'application_status';
   }
+
+    if (
+    [
+      'attendance',
+      'attendance_logs',
+      'attendance-log',
+      'attendance-log',
+      'field_attendance',
+      'field-attendance',
+      'team_field_attendance',
+      'team-field-attendance',
+      'holiday_work',
+      'holiday-work',
+      'compoff',
+      'comp-off',
+      'compoff_credits',
+      'comp-off-credits',
+    ].includes(target)
+  ) {
+    return 'attendance';
+  }
+
 
   if (
     [
@@ -466,6 +501,29 @@ function notificationTarget(meta = {}) {
     return 'performance_reviews';
   }
 
+  if (meta.holiday_work_request_id) {
+    const notificationType = String(
+      meta.notification_type || meta.type || '',
+    ).toLowerCase();
+
+    const stage = String(meta.approval_stage || '').toLowerCase();
+    const approverRole = String(meta.pending_approver_role || '').toLowerCase();
+
+    if (
+      notificationType.includes('approval') ||
+      stage === 'team_leader' ||
+      stage === 'reporting_officer' ||
+      stage === 'hr' ||
+      approverRole === 'team_leader' ||
+      approverRole === 'reporting_officer' ||
+      approverRole === 'hr'
+    ) {
+      return 'team_approvals';
+    }
+
+    return 'application_status';
+  }
+
   if (meta.attendance_mode_request_id) {
     return 'application_status';
   }
@@ -476,6 +534,10 @@ function notificationTarget(meta = {}) {
 
   if (meta.ticket_id) {
     return 'application_status';
+  }
+
+  if (meta.field_attendance_id || meta.attendance_log_id) {
+    return 'attendance';
   }
 
   if (meta.compoff_id || meta.compoff_credit_id) {

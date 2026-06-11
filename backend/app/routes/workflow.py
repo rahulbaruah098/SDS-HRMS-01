@@ -1783,7 +1783,12 @@ def rollback_compoff_claim_if_needed(db, leave_doc):
     if normalize_leave_type(leave_doc.get("leave_type")) != "COMP-OFF":
         return
 
-    compoff_id = leave_doc.get("compoff_id")
+    compoff_id = (
+        leave_doc.get("compoff_id")
+        or leave_doc.get("compoff_credit_id")
+        or leave_doc.get("source_compoff_id")
+    )
+
     compoff_obj_id = safe_object_id(compoff_id)
 
     if not compoff_obj_id:
@@ -1798,9 +1803,165 @@ def rollback_compoff_claim_if_needed(db, leave_doc):
         {
             "$set": {
                 "status": "available",
+                "claim_date": "",
                 "claimed_date": "",
+                "claimed_at": "",
                 "leave_request_id": "",
                 "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+def expire_unclaimed_compoffs_for_employee(db, employee):
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    today_value = date.today().isoformat()
+
+    db.compoff_credits.update_many(
+        {
+            "tenant_id": tenant_id,
+            "employee_id": str(employee["_id"]),
+            "status": "available",
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"valid_until": {"$lt": today_value}},
+                {"expiry_date": {"$lt": today_value}},
+            ],
+        },
+        {
+            "$set": {
+                "status": "expired",
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+
+def compoff_claim_window_dates(compoff):
+    claim_from = (
+        parse_date(compoff.get("claim_from_date"))
+        or parse_date(compoff.get("available_from"))
+        or parse_date(compoff.get("earned_date"))
+    )
+
+    expiry = (
+        parse_date(compoff.get("expiry_date"))
+        or parse_date(compoff.get("valid_until"))
+    )
+
+    return claim_from, expiry
+
+
+def resolve_claimable_compoff_credit(db, employee, requested_compoff_id=""):
+    expire_unclaimed_compoffs_for_employee(db, employee)
+
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    requested_compoff_id = normalize_text(requested_compoff_id)
+
+    q = {
+        "tenant_id": tenant_id,
+        "employee_id": str(employee["_id"]),
+        "status": "available",
+        "is_deleted": {"$ne": True},
+    }
+
+    if requested_compoff_id:
+        compoff_obj_id = safe_object_id(requested_compoff_id)
+
+        if not compoff_obj_id:
+            raise ValueError("Invalid comp-off credit selected")
+
+        q["_id"] = compoff_obj_id
+
+    compoff = db.compoff_credits.find_one(
+        q,
+        sort=[
+            ("available_from", 1),
+            ("claim_from_date", 1),
+            ("earned_date", 1),
+            ("created_at", 1),
+        ],
+    )
+
+    if not compoff:
+        raise ValueError("No available comp-off credit found")
+
+    claim_from, expiry = compoff_claim_window_dates(compoff)
+    today_value = date.today()
+
+    if claim_from and today_value < claim_from:
+        raise ValueError(
+            f"This comp-off can be claimed from {claim_from.isoformat()}"
+        )
+
+    if expiry and today_value > expiry:
+        db.compoff_credits.update_one(
+            {"_id": compoff["_id"]},
+            {
+                "$set": {
+                    "status": "expired",
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+        )
+
+        raise ValueError("This comp-off credit has expired")
+
+    return compoff
+
+
+def reserve_compoff_credit_for_leave(db, compoff, leave_doc):
+    now = datetime.utcnow()
+    today_value = date.today().isoformat()
+
+    db.compoff_credits.update_one(
+        {
+            "_id": compoff["_id"],
+            "status": "available",
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "status": "claimed",
+                "claim_date": today_value,
+                "claimed_date": today_value,
+                "claimed_at": now,
+                "leave_request_id": str(leave_doc["_id"]),
+                "updated_at": now,
+            }
+        },
+    )
+
+
+def mark_compoff_used_if_needed(db, leave_doc):
+    if normalize_leave_type(leave_doc.get("leave_type")) != "COMP-OFF":
+        return
+
+    compoff_id = (
+        leave_doc.get("compoff_id")
+        or leave_doc.get("compoff_credit_id")
+        or leave_doc.get("source_compoff_id")
+    )
+
+    compoff_obj_id = safe_object_id(compoff_id)
+
+    if not compoff_obj_id:
+        return
+
+    now = datetime.utcnow()
+
+    db.compoff_credits.update_one(
+        {
+            "_id": compoff_obj_id,
+            "tenant_id": leave_doc.get("tenant_id") or current_tenant_id(),
+            "leave_request_id": str(leave_doc.get("_id")),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "status": "used",
+                "used_at": now,
+                "approved_leave_request_id": str(leave_doc.get("_id")),
+                "updated_at": now,
             }
         },
     )
@@ -3107,13 +3268,42 @@ def apply_leave_request():
             "message": "A pending or approved leave already exists in this date range"
         }), 409
 
-    sufficient, balance = has_sufficient_leave_balance(db, employee, leave_type, leave_days)
+    selected_compoff = None
 
-    if not sufficient:
-        return jsonify({
-            "message": f"Insufficient {leave_type_label(leave_type)} balance",
-            "available": float(balance.get("available", 0) or 0) if balance else 0,
-        }), 400
+    if leave_type == "COMP-OFF":
+        if leave_days != 1:
+            return jsonify({
+                "message": "One comp-off credit can be claimed for one full working day only"
+            }), 400
+
+        if from_date != to_date:
+            return jsonify({
+                "message": "Comp-off leave must be applied for one date only"
+            }), 400
+
+        try:
+            selected_compoff = resolve_claimable_compoff_credit(
+                db,
+                employee,
+                data.get("compoff_id")
+                or data.get("compoff_credit_id")
+                or data.get("source_compoff_id"),
+            )
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+    else:
+        sufficient, balance = has_sufficient_leave_balance(
+            db,
+            employee,
+            leave_type,
+            leave_days,
+        )
+
+        if not sufficient:
+            return jsonify({
+                "message": f"Insufficient {leave_type_label(leave_type)} balance",
+                "available": float(balance.get("available", 0) or 0) if balance else 0,
+            }), 400
 
     initial_stage = build_initial_leave_stage(employee)
     now = datetime.utcnow()
@@ -3140,6 +3330,30 @@ def apply_leave_request():
         "leave_days": leave_days,
         "from_date": from_date.isoformat(),
         "to_date": to_date.isoformat(),
+        "compoff_id": str(selected_compoff["_id"]) if selected_compoff else "",
+        "compoff_credit_id": str(selected_compoff["_id"]) if selected_compoff else "",
+        "compoff_earned_date": selected_compoff.get("earned_date", "") if selected_compoff else "",
+        "compoff_available_from": (
+            selected_compoff.get("available_from")
+            or selected_compoff.get("claim_from_date")
+            or ""
+        ) if selected_compoff else "",
+        "compoff_valid_until": (
+            selected_compoff.get("valid_until")
+            or selected_compoff.get("expiry_date")
+            or ""
+        ) if selected_compoff else "",
+        "compoff_holiday_title": selected_compoff.get("holiday_title", "") if selected_compoff else "",
+        "holiday_work_request_id": (
+            selected_compoff.get("source_holiday_work_request_id")
+            or selected_compoff.get("holiday_work_request_id")
+            or ""
+        ) if selected_compoff else "",
+        "attendance_log_id": (
+            selected_compoff.get("source_attendance_id")
+            or selected_compoff.get("attendance_log_id")
+            or ""
+        ) if selected_compoff else "",
         "upto_date": to_date.isoformat(),
         "reason": reason,
         **handover_data,
@@ -3157,6 +3371,9 @@ def apply_leave_request():
 
     res = db.leave_requests.insert_one(doc)
     doc["_id"] = res.inserted_id
+
+    if selected_compoff:
+        reserve_compoff_credit_for_leave(db, selected_compoff, doc)
 
     notify_next_leave_approvers(db, employee, doc, initial_stage)
 
@@ -3355,7 +3572,12 @@ def leave_decision(req_id):
 
         deduct_leave_balance(db, employee, existing)
         balance_deducted = True
-
+    
+    elif leave_type == "COMP-OFF":
+        balance_deducted = False
+        deducted_leave_type = "COMP-OFF"
+        deducted_leave_type_label = leave_type_label("COMP-OFF")
+        
     update_set = {
         "status": "approved",
         "approval_stage": "approved",
@@ -3368,6 +3590,7 @@ def leave_decision(req_id):
         "deducted_leave_type_label": deducted_leave_type_label,
         "lwp_days": lwp_days,
         "balance_deducted": balance_deducted,
+        "compoff_status": "used" if leave_type == "COMP-OFF" else existing.get("compoff_status", ""),
         "updated_at": now,
         **current_stage_fields,
     }
@@ -3381,6 +3604,10 @@ def leave_decision(req_id):
             },
         },
     )
+    updated = db.leave_requests.find_one({"_id": leave_obj_id})
+
+    mark_compoff_used_if_needed(db, updated)
+
     updated = db.leave_requests.find_one({"_id": leave_obj_id})
 
     notify_employee_leave_decision(db, employee, updated, "approved")

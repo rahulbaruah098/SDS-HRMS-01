@@ -12,6 +12,7 @@ import {
   getInitials,
   getProfilePhotoUrl,
   normalizeLeaveApprovalList,
+  getMyHolidayWorkRequests,
 } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
@@ -272,16 +273,18 @@ function normalizeLeaveRows(rows = []) {
   }));
 }
 
-function normalizeAttendanceModeRows(rows = []) {
+function normalizeHolidayWorkRows(rows = []) {
   return rows.map((row) => ({
-    mode: modeLabel(row.mode),
+    holiday: row.holiday_title || row.holiday_name || 'Holiday Work',
     date: formatDate(row.date),
     reason: row.reason || '—',
-    field_location: row.field_location || '—',
+    work_location: row.work_location || row.field_location || '—',
     current_stage: liveStatus(row),
+    approval_stage: row.approval_stage_label || statusLabel(row.approval_stage),
     final_status: statusLabel(row.status),
     decided_by: row.decided_by_name || row.approved_by_name || row.rejected_by_name || '—',
     decided_at: formatDateTime(row.decided_at || row.approved_at || row.rejected_at),
+    created_at: formatDateTime(row.created_at),
   }));
 }
 
@@ -308,10 +311,12 @@ function normalizeTicketRows(rows = []) {
 
 function normalizeCompOffRows(rows = []) {
   return rows.map((row) => ({
-    holiday: row.holiday_title || 'Comp-Off',
+    holiday: row.holiday_title || row.holiday_name || 'Comp-Off',
     earned_date: formatDate(row.earned_date),
-    valid_until: formatDate(row.valid_until),
-    claimed_date: formatDate(row.claimed_date),
+    claim_from_date: formatDate(row.claim_from_date || row.available_from),
+    expiry_date: formatDate(row.expiry_date || row.valid_until),
+    claimed_date: formatDate(row.claim_date || row.claimed_date),
+    leave_request_id: row.leave_request_id || '—',
     status: statusLabel(row.status),
   }));
 }
@@ -552,8 +557,10 @@ function LeaveStatusCard({ row }) {
 
 export default function ApplicationStatus() {
   const [data, setData] = useState(null);
+  const [holidayWorkRequests, setHolidayWorkRequests] = useState([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingHolidayWork, setLoadingHolidayWork] = useState(false);
 
   async function loadStatus() {
     try {
@@ -569,9 +576,31 @@ export default function ApplicationStatus() {
     }
   }
 
+  async function loadHolidayWorkRequests() {
+    try {
+      setLoadingHolidayWork(true);
+
+      const res = await getMyHolidayWorkRequests();
+      setHolidayWorkRequests(res.items || res.requests || []);
+    } catch {
+      setHolidayWorkRequests([]);
+    } finally {
+      setLoadingHolidayWork(false);
+    }
+  }
+
   useEffect(() => {
     loadStatus();
+    loadHolidayWorkRequests();
   }, []);
+
+  async function refreshAllStatus() {
+    await Promise.all([
+      loadStatus(),
+      loadHolidayWorkRequests(),
+    ]);
+  }
+
 
   const summary = data?.summary || {};
 
@@ -590,9 +619,9 @@ export default function ApplicationStatus() {
     [data],
   );
 
-  const attendanceModeRows = useMemo(
-    () => normalizeAttendanceModeRows(data?.attendance_mode_requests || []),
-    [data],
+  const holidayWorkRows = useMemo(
+    () => normalizeHolidayWorkRows(holidayWorkRequests),
+    [holidayWorkRequests],
   );
 
   const passwordRows = useMemo(
@@ -942,21 +971,21 @@ export default function ApplicationStatus() {
 
           <h1>Application Status</h1>
 
-          <p>
-            Track all your submitted requests in one place, including leave,
-            WFH/Field, password change, tickets, and comp-off status.
-          </p>
+            <p>
+              Track all your submitted requests in one place, including leave,
+              holiday work approvals, password change, tickets, and comp-off status.
+            </p>
         </div>
 
-        <button
-          type="button"
-          className="secondary"
-          onClick={loadStatus}
-          disabled={loading}
-        >
-          <RefreshCcw size={16} />
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={refreshAllStatus}
+            disabled={loading || loadingHolidayWork}
+          >
+            <RefreshCcw size={16} />
+            {loading || loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
+          </button>
       </section>
 
       {message && <div className="inline-message">{message}</div>}
@@ -1028,19 +1057,28 @@ export default function ApplicationStatus() {
         <Table rows={leaveRows} maxColumns={14} />
       </section>
 
-      <section className="panel">
-        <div className="toolbar">
-          <div>
-            <h3>WFH / Field Requests</h3>
-            <p>
-              Shows approval status of Work From Home and Field attendance
-              requests.
-            </p>
-          </div>
-        </div>
+<section className="panel">
+  <div className="toolbar">
+    <div>
+      <h3>Holiday Work Requests</h3>
+      <p>
+        Shows holiday work approval status before marking attendance on
+        Sunday, second Saturday, fourth Saturday, or HR-created holidays.
+      </p>
+    </div>
 
-        <Table rows={attendanceModeRows} maxColumns={10} />
-      </section>
+    <button
+      type="button"
+      className="secondary"
+      onClick={loadHolidayWorkRequests}
+      disabled={loadingHolidayWork}
+    >
+      {loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
+    </button>
+  </div>
+
+  <Table rows={holidayWorkRows} maxColumns={10} />
+</section>
 
       <section className="two-col">
         <div className="panel">
@@ -1071,7 +1109,10 @@ export default function ApplicationStatus() {
           <div className="toolbar">
             <div>
               <h3>Comp-Off Status</h3>
-              <p>Shows available, claimed, and expired comp-off records.</p>
+              <p>
+                Shows available, claimed, used, and expired comp-off records with claim
+                window and linked leave request.
+              </p>
             </div>
           </div>
 

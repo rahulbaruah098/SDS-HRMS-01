@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createAttendanceModeRequest,
+  buildAttendancePayload,
+  createHolidayWorkRequest,
   getAttendanceStatus,
   submitCheckIn,
   submitCheckOut,
 } from '../api/client';
 
 const HOLD_DURATION = 1600;
-const LOCATION_TARGET_ACCURACY_METERS = 30;
-const LOCATION_MAX_ACCEPTED_ACCURACY_METERS = 100;
-const LOCATION_TIMEOUT_MS = 30000;
+
 
 function formatTodayLabel() {
   return new Date().toLocaleDateString('en-IN', {
@@ -65,118 +64,19 @@ function formatTime(value) {
   }
 }
 
-function getCurrentLocation() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error('Location permission is not supported on this device/browser'));
-      return;
-    }
-
-    let bestPosition = null;
-    let settled = false;
-    let watchId = null;
-    let timeoutId = null;
-
-    const stopWatching = () => {
-      if (watchId !== null) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-
-    const resolveWithPosition = (position) => {
-      if (settled) return;
-
-      settled = true;
-      stopWatching();
-
-      resolve({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        address: '',
-      });
-    };
-
-    const rejectWithMessage = (message) => {
-      if (settled) return;
-
-      settled = true;
-      stopWatching();
-      reject(new Error(message));
-    };
-
-    watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        const accuracy = Number(position.coords.accuracy || 999999);
-
-        if (
-          !bestPosition ||
-          accuracy < Number(bestPosition.coords.accuracy || 999999)
-        ) {
-          bestPosition = position;
-        }
-
-        if (accuracy <= LOCATION_TARGET_ACCURACY_METERS) {
-          resolveWithPosition(position);
-        }
-      },
-      (error) => {
-        if (bestPosition) {
-          const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
-
-          if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
-            resolveWithPosition(bestPosition);
-            return;
-          }
-        }
-
-        if (error.code === error.PERMISSION_DENIED) {
-          rejectWithMessage('Location permission is required for attendance');
-          return;
-        }
-
-        if (error.code === error.POSITION_UNAVAILABLE) {
-          rejectWithMessage('Unable to fetch accurate location. Please enable precise GPS/location services and try again.');
-          return;
-        }
-
-        if (error.code === error.TIMEOUT) {
-          rejectWithMessage('Location request timed out. Please move near an open area/window and try again.');
-          return;
-        }
-
-        rejectWithMessage('Unable to fetch current location');
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: LOCATION_TIMEOUT_MS,
-        maximumAge: 0,
-      },
-    );
-
-    timeoutId = setTimeout(() => {
-      if (bestPosition) {
-        const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
-
-        if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
-          resolveWithPosition(bestPosition);
-          return;
-        }
-
-        rejectWithMessage(
-          `Location accuracy is too low: ±${Math.round(bestAccuracy)}m. Please enable precise location/GPS, move near an open area/window and try again.`,
-        );
-        return;
-      }
-
-      rejectWithMessage('Unable to fetch current location. Please enable precise location/GPS and try again.');
-    }, LOCATION_TIMEOUT_MS);
-  });
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
+
+function previewFile(file, setter) {
+  if (!file) {
+    setter('');
+    return;
+  }
+
+  setter(URL.createObjectURL(file));
+}
+
 
 function HoldButton({
   type = 'button',
@@ -301,22 +201,29 @@ function HoldButton({
 export default function AttendanceWidget({ onSuccess }) {
   const [mode, setMode] = useState('office');
   const [fieldLocation, setFieldLocation] = useState('');
+  const [fieldPhotoFile, setFieldPhotoFile] = useState(null);
+  const [fieldPhotoPreview, setFieldPhotoPreview] = useState('');
   const [lateReason, setLateReason] = useState('');
   const [earlyCheckoutReason, setEarlyCheckoutReason] = useState('');
-  const [requestMode, setRequestMode] = useState('wfh');
-  const [requestDate, setRequestDate] = useState('');
-  const [requestReason, setRequestReason] = useState('');
-  const [requestFieldLocation, setRequestFieldLocation] = useState('');
+
+  const [holidayRequestDate, setHolidayRequestDate] = useState(todayISO());
+  const [holidayReason, setHolidayReason] = useState('');
+  const [holidayWorkLocation, setHolidayWorkLocation] = useState('');
+  const [holidayPhotoFile, setHolidayPhotoFile] = useState(null);
+  const [holidayPhotoPreview, setHolidayPhotoPreview] = useState('');
+  const [showHolidayRequestForm, setShowHolidayRequestForm] = useState(false);
+
   const [statusData, setStatusData] = useState(null);
   const [message, setMessage] = useState('');
   const [loadingType, setLoadingType] = useState('');
   const [loadingStatus, setLoadingStatus] = useState(false);
-  const [showRequestForm, setShowRequestForm] = useState(false);
 
   const attendance = statusData?.attendance || null;
   const holiday = statusData?.holiday || {};
-  const availableModes = statusData?.available_modes || ['office'];
-  const pendingRequests = statusData?.pending_mode_requests || [];
+  const availableModes = statusData?.available_modes || ['office', 'wfh', 'field'];
+  const holidayWorkRequest = statusData?.holiday_work_request || null;
+  const holidayWorkApproved = Boolean(statusData?.holiday_work_approved);
+  const holidayCheckInBlocked = Boolean(statusData?.holiday_check_in_blocked);
   const compOffs = statusData?.compoffs || [];
   const employee = statusData?.employee || statusData?.employee_summary || {};
 
@@ -385,13 +292,24 @@ export default function AttendanceWidget({ onSuccess }) {
     setMessage('');
 
     if (type === 'check-in') {
+      if (holidayCheckInBlocked) {
+        setMessage('Today is a holiday. Please submit a Holiday Work Request and wait for approval before check-in.');
+        setShowHolidayRequestForm(true);
+        return;
+      }
+
       if (!availableModes.includes(mode)) {
-        setMessage(`${modeLabel(mode)} check-in is not approved for today`);
+        setMessage(`${modeLabel(mode)} check-in is not available for today`);
         return;
       }
 
       if (mode === 'field' && !fieldLocation.trim()) {
         setMessage('Field location / visit place is required for field check-in');
+        return;
+      }
+
+      if (mode === 'field' && !fieldPhotoFile) {
+        setMessage('Field photo is required for field check-in');
         return;
       }
 
@@ -410,32 +328,29 @@ export default function AttendanceWidget({ onSuccess }) {
 
     try {
       setLoadingType(type);
-      setMessage('Fetching exact location...');
-
-      const location = await getCurrentLocation();
+      setMessage('Preparing attendance details...');
 
       if (type === 'check-in') {
-        const data = await submitCheckIn({
+        const payload = await buildAttendancePayload({
           mode,
           field_location: fieldLocation.trim(),
+          field_photo_file: fieldPhotoFile,
           late_reason: lateReason.trim(),
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          address: location.address,
         });
+
+        const data = await submitCheckIn(payload);
 
         setMessage(data.message || 'Check-in successful');
         setFieldLocation('');
+        setFieldPhotoFile(null);
+        setFieldPhotoPreview('');
         setLateReason('');
       } else {
-        const data = await submitCheckOut({
+        const payload = await buildAttendancePayload({
           early_checkout_reason: earlyCheckoutReason.trim(),
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          address: location.address,
         });
+
+        const data = await submitCheckOut(payload);
 
         setMessage(data.message || 'Check-out successful');
         setEarlyCheckoutReason('');
@@ -449,44 +364,49 @@ export default function AttendanceWidget({ onSuccess }) {
     }
   }
 
-  async function submitModeRequest(event) {
+  async function submitHolidayWorkRequest(event) {
     event.preventDefault();
     setMessage('');
 
-    if (!requestDate) {
-      setMessage('Please select request date');
+    if (!holidayRequestDate) {
+      setMessage('Please select holiday work date');
       return;
     }
 
-    if (!requestReason.trim()) {
-      setMessage('Please enter request reason');
+    if (!holidayReason.trim()) {
+      setMessage('Please enter holiday work reason');
       return;
     }
 
-    if (requestMode === 'field' && !requestFieldLocation.trim()) {
-      setMessage('Field visit place is required');
+    if (!holidayWorkLocation.trim()) {
+      setMessage('Please enter work location / place');
       return;
     }
 
     try {
-      setLoadingType('mode-request');
+      setLoadingType('holiday-work-request');
 
-      const data = await createAttendanceModeRequest({
-        mode: requestMode,
-        date: requestDate,
-        reason: requestReason.trim(),
-        field_location: requestFieldLocation.trim(),
+      const payload = await buildAttendancePayload({
+        date: holidayRequestDate,
+        reason: holidayReason.trim(),
+        work_location: holidayWorkLocation.trim(),
+        field_location: holidayWorkLocation.trim(),
+        field_photo_file: holidayPhotoFile,
       });
 
-      setMessage(data.message || 'Request submitted');
-      setRequestDate('');
-      setRequestReason('');
-      setRequestFieldLocation('');
-      setShowRequestForm(false);
+      const data = await createHolidayWorkRequest(payload);
+
+      setMessage(data.message || 'Holiday work request submitted');
+      setHolidayRequestDate(todayISO());
+      setHolidayReason('');
+      setHolidayWorkLocation('');
+      setHolidayPhotoFile(null);
+      setHolidayPhotoPreview('');
+      setShowHolidayRequestForm(false);
 
       await refreshAfterSuccess();
     } catch (error) {
-      setMessage(error.message || 'Request submission failed');
+      setMessage(error.message || 'Holiday work request submission failed');
     } finally {
       setLoadingType('');
     }
@@ -500,8 +420,8 @@ export default function AttendanceWidget({ onSuccess }) {
           <h3>{todayLabel}</h3>
           <p className="attendance-subtext">
             Office timing: 09:30 AM to 06:00 PM. Late entry starts from 09:50 AM.
-            Exact latitude and longitude are required for every check-in and
-            check-out.
+            Office, WFH, and Field attendance can be marked directly. Field
+            attendance requires visit place and photo.
           </p>
         </div>
 
@@ -521,6 +441,25 @@ export default function AttendanceWidget({ onSuccess }) {
           <div>
             <strong>{holiday.title || 'Holiday'}</strong>
             <p>{holiday.message || 'Today is marked as a holiday.'}</p>
+
+            {holidayCheckInBlocked && (
+              <p>
+                Holiday attendance requires approval from your Team Leader,
+                Reporting Officer, or HR before check-in.
+              </p>
+            )}
+
+            {holidayWorkApproved && (
+              <p>
+                Holiday work request approved. You can mark attendance today.
+              </p>
+            )}
+
+            {holidayWorkRequest && !holidayWorkApproved && (
+              <p>
+                Current request status: {statusLabel(holidayWorkRequest.status)}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -561,20 +500,46 @@ export default function AttendanceWidget({ onSuccess }) {
         ))}
       </div>
 
-      {!availableModes.includes('wfh') && !availableModes.includes('field') && (
-        <div className="mode-note">
-          WFH and Field buttons will appear only after approval from mapped
-          Team Leader, Reporting Officer, or HR fallback.
-        </div>
-      )}
+
 
       {mode === 'field' && !checkedIn && (
-        <input
-          placeholder="Field location / visit place"
-          value={fieldLocation}
-          onChange={(e) => setFieldLocation(e.target.value)}
-          disabled={loadingType !== ''}
-        />
+        <div className="attendance-request-box">
+          <input
+            placeholder="Field location / visit place"
+            value={fieldLocation}
+            onChange={(e) => setFieldLocation(e.target.value)}
+            disabled={loadingType !== ''}
+          />
+
+          <label>
+            Field Photo
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null;
+                setFieldPhotoFile(file);
+                previewFile(file, setFieldPhotoPreview);
+              }}
+              disabled={loadingType !== ''}
+            />
+          </label>
+
+          {fieldPhotoPreview && (
+            <img
+              src={fieldPhotoPreview}
+              alt="Field preview"
+              style={{
+                width: 120,
+                height: 90,
+                objectFit: 'cover',
+                borderRadius: 12,
+                border: '1px solid #e2e8f0',
+              }}
+            />
+          )}
+        </div>
       )}
 
       {lateNow && !holiday?.is_holiday && !checkedIn && (
@@ -597,12 +562,18 @@ export default function AttendanceWidget({ onSuccess }) {
 
       <div className="attendance-hold-grid">
         <HoldButton
-          label={checkedIn ? 'Already Checked In' : 'Press & Hold to Check In'}
+          label={
+            holidayCheckInBlocked
+              ? 'Holiday Approval Required'
+              : checkedIn
+                ? 'Already Checked In'
+                : 'Press & Hold to Check In'
+          }
           loadingLabel={
             loadingType === 'check-in' ? 'Checking In...' : 'Processing...'
           }
           loading={loadingType === 'check-in'}
-          disabled={loadingType !== '' || checkedIn}
+          disabled={loadingType !== '' || checkedIn || holidayCheckInBlocked}
           onComplete={() => submitAttendance('check-in')}
           variant="primary"
         />
@@ -626,14 +597,16 @@ export default function AttendanceWidget({ onSuccess }) {
       </div>
 
       <div className="attendance-extra-grid">
-        <button
-          type="button"
-          className="mini-action-btn"
-          onClick={() => setShowRequestForm((value) => !value)}
-          disabled={loadingType !== ''}
-        >
-          {showRequestForm ? 'Close Request Form' : 'Request WFH / Field'}
-        </button>
+        {holiday?.is_holiday && (
+          <button
+            type="button"
+            className="mini-action-btn"
+            onClick={() => setShowHolidayRequestForm((value) => !value)}
+            disabled={loadingType !== '' || holidayWorkApproved}
+          >
+            {showHolidayRequestForm ? 'Close Holiday Request' : 'Request Holiday Work'}
+          </button>
+        )}
 
         {availableCompOffCount > 0 && (
           <div className="compoff-pill">
@@ -642,47 +615,65 @@ export default function AttendanceWidget({ onSuccess }) {
         )}
       </div>
 
-      {showRequestForm && (
-        <form className="attendance-request-box" onSubmit={submitModeRequest}>
+      {showHolidayRequestForm && (
+        <form className="attendance-request-box" onSubmit={submitHolidayWorkRequest}>
           <div className="form-grid">
             <label>
-              Request Type
-              <select
-                value={requestMode}
-                onChange={(e) => setRequestMode(e.target.value)}
+              Holiday Work Date
+              <input
+                type="date"
+                value={holidayRequestDate}
+                onChange={(e) => setHolidayRequestDate(e.target.value)}
                 disabled={loadingType !== ''}
-              >
-                <option value="wfh">Work From Home</option>
-                <option value="field">Field</option>
-              </select>
+              />
             </label>
 
             <label>
-              Date
+              Work Location / Place
               <input
-                type="date"
-                value={requestDate}
-                onChange={(e) => setRequestDate(e.target.value)}
+                placeholder="Example: Udalguri Field Visit"
+                value={holidayWorkLocation}
+                onChange={(e) => setHolidayWorkLocation(e.target.value)}
                 disabled={loadingType !== ''}
               />
             </label>
           </div>
 
-          {requestMode === 'field' && (
-            <input
-              placeholder="Field visit place"
-              value={requestFieldLocation}
-              onChange={(e) => setRequestFieldLocation(e.target.value)}
-              disabled={loadingType !== ''}
-            />
-          )}
-
           <textarea
-            placeholder="Reason for request"
-            value={requestReason}
-            onChange={(e) => setRequestReason(e.target.value)}
+            placeholder="Reason for working on holiday"
+            value={holidayReason}
+            onChange={(e) => setHolidayReason(e.target.value)}
             disabled={loadingType !== ''}
           />
+
+          <label>
+            Supporting Photo
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null;
+                setHolidayPhotoFile(file);
+                previewFile(file, setHolidayPhotoPreview);
+              }}
+              disabled={loadingType !== ''}
+            />
+          </label>
+
+          {holidayPhotoPreview && (
+            <img
+              src={holidayPhotoPreview}
+              alt="Holiday work preview"
+              style={{
+                width: 120,
+                height: 90,
+                objectFit: 'cover',
+                borderRadius: 12,
+                border: '1px solid #e2e8f0',
+              }}
+            />
+          )}
 
           <div className="mode-note">
             {approverText}
@@ -693,23 +684,23 @@ export default function AttendanceWidget({ onSuccess }) {
             className="primary"
             disabled={loadingType !== ''}
           >
-            {loadingType === 'mode-request' ? 'Submitting...' : 'Submit Request'}
+            {loadingType === 'holiday-work-request'
+              ? 'Submitting...'
+              : 'Submit Holiday Work Request'}
           </button>
         </form>
       )}
 
-      {pendingRequests.length > 0 && (
+      {holidayWorkRequest && (
         <div className="pending-request-list">
-          <strong>Pending Requests</strong>
+          <strong>Holiday Work Request</strong>
 
-          {pendingRequests.map((item) => (
-            <div key={item._id} className="pending-request-item">
-              <span>
-                {modeLabel(item.mode)} • {item.date}
-              </span>
-              <em>{statusLabel(item.status)}</em>
-            </div>
-          ))}
+          <div className="pending-request-item">
+            <span>
+              {holidayWorkRequest.date} • {holidayWorkRequest.work_location || 'Holiday Work'}
+            </span>
+            <em>{statusLabel(holidayWorkRequest.status)}</em>
+          </div>
         </div>
       )}
 

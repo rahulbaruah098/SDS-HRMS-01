@@ -1,7 +1,10 @@
 import math
 import os
 
-from google import genai
+try:
+    from google import genai
+except Exception:
+    genai = None
 
 from app.extensions import get_db
 from app.ai_knowledge.hrms_workflows import HRMS_WORKFLOWS
@@ -19,7 +22,13 @@ GEMINI_EMBEDDING_MODEL = os.getenv(
     "gemini-embedding-001"
 )
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = None
+
+if genai is not None and GEMINI_API_KEY:
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        client = None
 
 
 def cosine_similarity(vector_a, vector_b):
@@ -39,6 +48,12 @@ def cosine_similarity(vector_a, vector_b):
 def create_embedding(text):
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is missing in backend .env")
+
+    if genai is None:
+        raise RuntimeError("google-genai package is not installed")
+
+    if client is None:
+        raise RuntimeError("Gemini client is not available")
 
     response = client.models.embed_content(
         model=GEMINI_EMBEDDING_MODEL,
@@ -441,7 +456,7 @@ def generate_ai_answer(question, user_context=None, history=None):
             "I have started the guided action flow. Please continue with the requested details."
         )
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or genai is None or client is None:
         return local_fallback_answer(clean_question)
 
     

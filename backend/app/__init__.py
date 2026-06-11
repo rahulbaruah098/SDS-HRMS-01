@@ -121,8 +121,9 @@ def create_app():
     app.register_blueprint(dashboard_bp, url_prefix="/api/v1/dashboard")
 
     # Attendance module APIs:
-    # check-in, check-out, status, attendance reports, WFH/Field requests,
-    # state-wise holiday calendar, comp-off generation and comp-off claim.
+    # direct Office/WFH/Field check-in, check-out, status, field photo/location,
+    # holiday work approval requests, team field tracking, holiday calendar,
+    # comp-off generation and comp-off claim.
     app.register_blueprint(attendance_bp, url_prefix="/api/v1/attendance")
 
     # Dedicated Project APIs:
@@ -209,14 +210,13 @@ def create_app():
     # Generic CRUD APIs:
     # employees, masters, projects fallback, leave_balances fallback,
     # leave_requests list fallback, holiday_calendar, attendance_logs,
-    # attendance_mode_requests, compoff_credits, notifications fallback, etc.
-    #
-    # Employee Master creates every staff profile as Employee.
-    # Team Leader / Reporting Officer are stored as employee capability mappings.
+    # legacy attendance_mode_requests, holiday_work_requests, compoff_credits,
+    # notifications fallback, etc.
     app.register_blueprint(crud_bp, url_prefix="/api/v1")
 
     # Report APIs:
-    # attendance, WFH/Field, holidays, comp-off, leave balances,
+    # attendance, field attendance, holiday work approvals, holidays,
+    # comp-off credits, comp-off claims, expired comp-off, leave balances,
     # leave requests, leave approvals, leave deductions, leave records and audit.
     app.register_blueprint(reports_bp, url_prefix="/api/v1/reports")
 
@@ -247,18 +247,23 @@ def create_app():
                 "team_leader": "Team Leader is an employee capability, not a separate login identity.",
                 "reporting_officer": "Reporting Officer is an employee capability, not a separate login identity.",
                 "leave_approval": "Team Leader -> Reporting Officer -> Final approval; HR fallback when no approver mapping exists.",
-                "leave_types": ["Casual Leave", "Earned Leave"],
+                "holiday_work_approval": "Holiday work on Sunday, second Saturday, fourth Saturday or HR-created holiday requires approval before attendance.",
+                "attendance_modes": "Office, WFH and Field attendance are directly available. Field attendance requires place, photo and location metadata.",
+                "leave_types": ["Casual Leave", "Earned Leave", "Half Day", "Comp-Off"],
                 "leave_balance": "Casual Leave and Earned Leave balances are managed together by HR/Admin/Super Admin.",
-                "notifications": "Leave workflow notifications are available through the notification bell APIs.",
+                "comp_off": "Approved holiday work attendance creates comp-off credit after checkout. Credit is claimable from next working day within 7 working days.",
+                "notifications": "Leave, holiday work, attendance and comp-off workflow notifications are available through the notification bell APIs.",
             },
             "modules": [
                 "Authentication",
                 "Dashboard",
                 "Employee Master",
                 "Attendance",
-                "WFH / Field Requests",
+                "Direct Office/WFH/Field Attendance",
+                "Holiday Work Requests",
+                "Team Field Tracking",
                 "Holiday Calendar",
-                "Comp-Off",
+                "Comp-Off Credits",
                 "Leave Management",
                 "Leave Balances",
                 "Projects",
@@ -286,6 +291,11 @@ def create_app():
                 "allowed_origins": allowed_origins,
             },
             "attendance_module": True,
+            "direct_attendance_modes": ["office", "wfh", "field"],
+            "field_attendance_requires": ["field_location", "field_photo", "location_metadata"],
+            "holiday_work_requests": True,
+            "team_field_tracking": True,
+            "comp_off_claim_window": "Next working day through 7 working days after approved holiday work attendance",
             "leave_module": True,
             "leave_balance_module": True,
             "notification_module": True,
@@ -307,6 +317,8 @@ def create_app():
             "leave_types": {
                 "casual_leave": "CL",
                 "earned_leave": "EL",
+                "half_day": "HALF-DAY",
+                "comp_off": "COMP-OFF",
             },
             "leave_approval_flow": [
                 "Team Leader",
@@ -320,6 +332,12 @@ def create_app():
                 "projects",
                 "grievances",
                 "it_support",
+                "management_groups",
+                "assets",
+                "ai_assistant",
+                "policies",
+                "profile_photos",
+                "celebrations",
                 "workflow",
                 "crud",
                 "reports",

@@ -2377,6 +2377,36 @@ export function decideAttendanceModeRequest(requestId, payload = {}) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Holiday Work Request APIs                                                  */
+/* -------------------------------------------------------------------------- */
+
+export function createHolidayWorkRequest(payload = {}) {
+  return api('/attendance/holiday-work-requests', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getMyHolidayWorkRequests(params = {}) {
+  return api(`/attendance/my-holiday-work-requests${buildQuery(params)}`);
+}
+
+export function getHolidayWorkRequests(params = {}) {
+  return api(`/attendance/holiday-work-requests${buildQuery(params)}`);
+}
+
+export function decideHolidayWorkRequest(requestId, payload = {}) {
+  return api(`/attendance/holiday-work-requests/${requestId}/decision`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getTeamFieldAttendance(params = {}) {
+  return api(`/attendance/team-field-attendance${buildQuery(params)}`);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Holiday Calendar APIs                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -4160,8 +4190,8 @@ export function decidePasswordRequest(requestId, payload = {}) {
 /* -------------------------------------------------------------------------- */
 
 const LOCATION_TARGET_ACCURACY_METERS = 30;
-const LOCATION_MAX_ACCEPTED_ACCURACY_METERS = 100;
 const LOCATION_TIMEOUT_MS = 30000;
+const LOCATION_LOW_ACCURACY_WARNING_METERS = 100;
 
 export function hasLocationInPayload(payload = {}) {
   return (
@@ -4203,18 +4233,28 @@ export function getCurrentLocation(options = {}) {
       }
     };
 
+    const normalizePosition = (position) => {
+      const accuracy = Number(position?.coords?.accuracy || 0);
+      const lowAccuracy = accuracy > LOCATION_LOW_ACCURACY_WARNING_METERS;
+
+      return {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy,
+        address: '',
+        location_accuracy_warning: lowAccuracy,
+        location_warning: lowAccuracy
+          ? `Location accuracy is low: ±${Math.round(accuracy)}m. Attendance will still be submitted.`
+          : '',
+      };
+    };
+
     const resolveWithPosition = (position) => {
       if (settled) return;
 
       settled = true;
       stopWatching();
-
-      resolve({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        address: '',
-      });
+      resolve(normalizePosition(position));
     };
 
     const rejectWithMessage = (message) => {
@@ -4242,26 +4282,22 @@ export function getCurrentLocation(options = {}) {
       },
       (error) => {
         if (bestPosition) {
-          const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
-
-          if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
-            resolveWithPosition(bestPosition);
-            return;
-          }
+          resolveWithPosition(bestPosition);
+          return;
         }
 
         let message = 'Unable to fetch current location.';
 
         if (error.code === 1) {
-          message = 'Location permission denied. Please allow precise location access.';
+          message = 'Location permission denied. Attendance can still continue if the page allows manual place entry.';
         }
 
         if (error.code === 2) {
-          message = 'Location unavailable. Please enable GPS/location accuracy and try again.';
+          message = 'Location unavailable. Attendance can still continue with manual place entry where required.';
         }
 
         if (error.code === 3) {
-          message = 'Location request timed out. Please move near an open area/window and try again.';
+          message = 'Location request timed out. Attendance can still continue with manual place entry where required.';
         }
 
         rejectWithMessage(message);
@@ -4271,20 +4307,13 @@ export function getCurrentLocation(options = {}) {
 
     timeoutId = setTimeout(() => {
       if (bestPosition) {
-        const bestAccuracy = Number(bestPosition.coords.accuracy || 999999);
-
-        if (bestAccuracy <= LOCATION_MAX_ACCEPTED_ACCURACY_METERS) {
-          resolveWithPosition(bestPosition);
-          return;
-        }
-
-        rejectWithMessage(
-          `Location accuracy is too low: ±${Math.round(bestAccuracy)}m. Please enable precise location/GPS, move near an open area/window and try again.`,
-        );
+        resolveWithPosition(bestPosition);
         return;
       }
 
-      rejectWithMessage('Unable to fetch current location. Please enable precise location/GPS and try again.');
+      rejectWithMessage(
+        'Unable to fetch current location. Attendance can still continue with manual place entry where required.',
+      );
     }, LOCATION_TIMEOUT_MS);
   });
 }
@@ -4293,20 +4322,65 @@ export function getCurrentLocation(options = {}) {
 /* Attendance Payload Helpers                                                 */
 /* -------------------------------------------------------------------------- */
 
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve('');
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve(String(reader.result || ''));
+    };
+
+    reader.onerror = () => {
+      reject(new Error('Unable to read selected file.'));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+
 export async function buildAttendancePayload(extraPayload = {}) {
-  if (hasLocationInPayload(extraPayload)) {
-    return extraPayload;
+  const payload = { ...extraPayload };
+
+  if (payload.field_photo_file && !payload.field_photo) {
+    payload.field_photo = await fileToBase64(payload.field_photo_file);
   }
 
-  const location = await getCurrentLocation();
+  delete payload.field_photo_file;
 
-  return {
-    ...extraPayload,
-    latitude: location.latitude,
-    longitude: location.longitude,
-    accuracy: location.accuracy,
-    address: location.address || '',
-  };
+  if (hasLocationInPayload(payload)) {
+    return payload;
+  }
+
+  try {
+    const location = await getCurrentLocation();
+
+    return {
+      ...payload,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracy: location.accuracy,
+      address: location.address || '',
+      location_accuracy_warning: location.location_accuracy_warning || false,
+      location_warning: location.location_warning || '',
+    };
+  } catch (error) {
+    return {
+      ...payload,
+      latitude: payload.latitude || '',
+      longitude: payload.longitude || '',
+      accuracy: payload.accuracy || '',
+      address: payload.address || '',
+      location_unavailable: true,
+      location_warning:
+        error?.message || 'Location unavailable. Attendance submitted with manual details.',
+    };
+  }
 }
 
 export async function submitCheckIn(payload = {}) {

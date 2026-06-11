@@ -12,9 +12,12 @@ import {
 import {
   approveTeamLeaveRequest,
   currentUser,
+  decideHolidayWorkRequest,
+  getHolidayWorkRequests,
   getInitials,
   getProfilePhotoUrl,
   getTeamApprovals,
+  getTeamFieldAttendance,
   normalizeLeaveApprovalList,
   rejectTeamLeaveRequest,
 } from '../api/client';
@@ -145,6 +148,60 @@ function getRequestId(row = {}) {
   return row._id || row.id || row.request_id || row.leave_request_id || '';
 }
 
+function fieldPhotoUrl(row = {}) {
+  return (
+    row.field_photo ||
+    row.proof_photo ||
+    row.photo ||
+    row.check_in_photo ||
+    ''
+  );
+}
+
+function fieldMapUrl(row = {}) {
+  if (row.map_url) {
+    return row.map_url;
+  }
+
+  const location =
+    row.check_in_location ||
+    row.location ||
+    row.geo_location ||
+    {};
+
+  const lat =
+    location.latitude ||
+    location.lat ||
+    row.latitude ||
+    row.lat;
+
+  const lng =
+    location.longitude ||
+    location.lng ||
+    row.longitude ||
+    row.lng;
+
+  if (!lat || !lng) {
+    return '';
+  }
+
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+
+function requestType(row = {}) {
+  return row.request_type || row.type || 'leave';
+}
+
+function isHolidayWorkRequest(row = {}) {
+  return requestType(row) === 'holiday_work';
+}
+
+function isLeaveRequest(row = {}) {
+  return requestType(row) === 'leave';
+}
+
+
 function employeeName(row = {}) {
   return (
     row.employee_name ||
@@ -227,6 +284,28 @@ function isApprovedRecord(row = {}) {
     String(row.team_leader_status || '').toLowerCase() === 'approved' ||
     String(row.reporting_officer_status || '').toLowerCase() === 'approved'
   );
+}
+
+
+function normalizeHolidayWorkApprovalList(rows = []) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    request_type: 'holiday_work',
+    _id: row._id || row.id || '',
+    employee_name: row.employee_name || row.name || 'Employee',
+    employee_code: row.employee_code || row.emp_code || row.employee_id || '—',
+    designation: row.designation || row.designation_name || '—',
+    department: row.department || row.department_name || '—',
+    holiday_title: row.holiday_title || row.holiday_name || 'Holiday Work',
+    work_location: row.work_location || row.field_location || '—',
+    approval_stage_label:
+      row.approval_stage_label ||
+      statusLabel(row.approval_stage || row.pending_approver_role),
+  }));
 }
 
 function isRejectedRecord(row = {}) {
@@ -438,50 +517,109 @@ function RequestCard({ row, onApprove, onReject, savingId, capabilities }) {
         </div>
       </div>
 
-      <div className="ta-details-grid">
-          <div>
-            <span>Leave Type</span>
-            <strong>{leaveRequestTypeLabel(row)}</strong>
-          </div>
-
-        <div>
-          <span>From Date</span>
-          <strong>{formatDate(row.from_date)}</strong>
-        </div>
-
-        <div>
-          <span>Upto Date</span>
-          <strong>{formatDate(row.upto_date || row.to_date)}</strong>
-        </div>
-
-            <div>
-              <span>Leave Days</span>
-              <strong>{row.leave_days ?? '—'}</strong>
-            </div>
-
-            <div>
-              <span>Deducted From</span>
-              <strong>{deductedLeaveTypeLabel(row)}</strong>
-            </div>
-
-            <div>
-              <span>LWP Days</span>
-              <strong>{lwpDaysLabel(row)}</strong>
-            </div>
-
-            <div>
-              <span>Task Handover</span>
-              <strong>{row.task_handover_to_name || '—'}</strong>
-            </div>
-        <div>
-          <span>Project Handover</span>
-          <strong>{row.project_handover_name || '—'}</strong>
-        </div>
+<div className="ta-details-grid">
+  {isHolidayWorkRequest(row) ? (
+    <>
+      <div>
+        <span>Request Type</span>
+        <strong>Holiday Work</strong>
       </div>
+
+      <div>
+        <span>Holiday Date</span>
+        <strong>{formatDate(row.date)}</strong>
+      </div>
+
+      <div>
+        <span>Holiday</span>
+        <strong>{row.holiday_title || row.holiday_name || 'Holiday Work'}</strong>
+      </div>
+
+      <div>
+        <span>Holiday Type</span>
+        <strong>{statusLabel(row.holiday_type)}</strong>
+      </div>
+
+      <div>
+        <span>Work Location</span>
+        <strong>{row.work_location || row.field_location || '—'}</strong>
+      </div>
+
+      <div>
+        <span>Team Leader</span>
+        <strong>{row.team_leader_name || '—'}</strong>
+      </div>
+
+      <div>
+        <span>Reporting Officer</span>
+        <strong>{row.reporting_officer_name || '—'}</strong>
+      </div>
+
+      <div>
+        <span>Submitted On</span>
+        <strong>{formatDateTime(row.created_at)}</strong>
+      </div>
+    </>
+  ) : (
+    <>
+      <div>
+        <span>Leave Type</span>
+        <strong>{leaveRequestTypeLabel(row)}</strong>
+      </div>
+
+      <div>
+        <span>From Date</span>
+        <strong>{formatDate(row.from_date)}</strong>
+      </div>
+
+      <div>
+        <span>Upto Date</span>
+        <strong>{formatDate(row.upto_date || row.to_date)}</strong>
+      </div>
+
+      <div>
+        <span>Leave Days</span>
+        <strong>{row.leave_days ?? '—'}</strong>
+      </div>
+
+      <div>
+        <span>Deducted From</span>
+        <strong>{deductedLeaveTypeLabel(row)}</strong>
+      </div>
+
+      <div>
+        <span>LWP Days</span>
+        <strong>{lwpDaysLabel(row)}</strong>
+      </div>
+
+      <div>
+        <span>Task Handover</span>
+        <strong>{row.task_handover_to_name || '—'}</strong>
+      </div>
+
+      <div>
+        <span>Project Handover</span>
+        <strong>{row.project_handover_name || '—'}</strong>
+      </div>
+    </>
+  )}
+</div>
 
       <div className="ta-reason">
         <span>Reason</span>
         <p>{row.reason || 'No reason added.'}</p>
+
+        {isHolidayWorkRequest(row) && (row.proof_photo || row.field_photo || row.photo) && (
+          <p>
+            <a
+              href={row.proof_photo || row.field_photo || row.photo}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View supporting photo
+            </a>
+          </p>
+        )}
       </div>
 
       <ApprovalFlags row={row} />
@@ -530,11 +668,13 @@ export default function TeamApprovals({ setPage }) {
   const isHrPanel = Boolean(capabilities.isHrAdmin);
 
   const [rows, setRows] = useState([]);
+  const [teamFieldRows, setTeamFieldRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('pending');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingTeamField, setLoadingTeamField] = useState(false);
   const [savingId, setSavingId] = useState('');
 
   const filteredRows = useMemo(() => {
@@ -545,31 +685,36 @@ export default function TeamApprovals({ setPage }) {
         return true;
       }
 
-      return [
-        employeeName(row),
-        row.employee_code,
-        row.emp_code,
-        row.employee_id,
-        row.department,
-        row.designation,
-        row.leave_type,
-        row.leave_type_label,
-        row.requested_leave_type,
-        row.requested_leave_type_label,
-        row.deducted_leave_type,
-        row.deducted_leave_type_label,
-        row.lwp_days,
-        row.reason,
-        row.task_handover_to_name,
-        row.project_handover_name,
-        row.team_leader_name,
-        row.reporting_officer_name,
-        row.approved_by_team_leader_name,
-        row.approved_by_reporting_officer_name,
-        row.team_leader_decision_by_name,
-        row.reporting_officer_decision_by_name,
-        liveStatus(row),
-      ]
+return [
+  employeeName(row),
+  row.employee_code,
+  row.emp_code,
+  row.employee_id,
+  row.department,
+  row.designation,
+  row.leave_type,
+  row.leave_type_label,
+  row.requested_leave_type,
+  row.requested_leave_type_label,
+  row.deducted_leave_type,
+  row.deducted_leave_type_label,
+  row.holiday_title,
+  row.holiday_name,
+  row.work_location,
+  row.field_location,
+  row.holiday_type,
+  row.lwp_days,
+  row.reason,
+  row.task_handover_to_name,
+  row.project_handover_name,
+  row.team_leader_name,
+  row.reporting_officer_name,
+  row.approved_by_team_leader_name,
+  row.approved_by_reporting_officer_name,
+  row.team_leader_decision_by_name,
+  row.reporting_officer_decision_by_name,
+  liveStatus(row),
+]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
@@ -581,36 +726,79 @@ export default function TeamApprovals({ setPage }) {
   const approvedCount = rows.filter(isApprovedRecord).length;
   const rejectedCount = rows.filter(isRejectedRecord).length;
 
-  async function loadData(nextFilter = filter) {
-    try {
-      setLoading(true);
-      setMessage('');
+async function loadData(nextFilter = filter) {
+  try {
+    setLoading(true);
+    setMessage('');
 
-      const data = await getTeamApprovals({
-        status: nextFilter === 'all' ? '' : nextFilter,
-      });
+    const status = nextFilter === 'all' ? '' : nextFilter;
 
-      const items = normalizeLeaveApprovalList(
-        data.items ||
-          data.leave_requests ||
-          data.pending_leave_approvals ||
-          data.my_pending_leave_approvals ||
-          [],
-      );
+    const [leaveData, holidayData] = await Promise.all([
+      getTeamApprovals({ status }),
+      getHolidayWorkRequests({ status }),
+    ]);
 
-      setRows(items);
-      setSummary(data.summary || {});
-    } catch (error) {
-      setMessage(error.message || 'Unable to load team approvals.');
-    } finally {
-      setLoading(false);
-    }
+    const leaveItems = normalizeLeaveApprovalList(
+      leaveData.items ||
+        leaveData.leave_requests ||
+        leaveData.pending_leave_approvals ||
+        leaveData.my_pending_leave_approvals ||
+        [],
+    ).map((item) => ({
+      ...item,
+      request_type: 'leave',
+    }));
+
+    const holidayItems = normalizeHolidayWorkApprovalList(
+      holidayData.items ||
+        holidayData.requests ||
+        holidayData.holiday_work_requests ||
+        [],
+    );
+
+    const mergedItems = [...holidayItems, ...leaveItems];
+
+    setRows(mergedItems);
+
+    setSummary({
+      ...(leaveData.summary || {}),
+      leave_total: leaveItems.length,
+      holiday_work_total: holidayItems.length,
+      total: mergedItems.length,
+      pending: mergedItems.filter(isPending).length,
+      approved: mergedItems.filter(isApprovedRecord).length,
+      rejected: mergedItems.filter(isRejectedRecord).length,
+    });
+  } catch (error) {
+    setMessage(error.message || 'Unable to load team approvals.');
+  } finally {
+    setLoading(false);
   }
+}
 
   useEffect(() => {
     loadData(filter);
+    loadTeamFieldAttendance();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  async function loadTeamFieldAttendance() {
+    try {
+      setLoadingTeamField(true);
+
+      const data = await getTeamFieldAttendance({
+        limit: 50,
+      });
+
+      setTeamFieldRows(data.items || data.logs || data.attendance_logs || []);
+    } catch (error) {
+      console.warn('Unable to load team field attendance:', error);
+      setTeamFieldRows([]);
+    } finally {
+      setLoadingTeamField(false);
+    }
+  }
+
 
   async function approveRequest(row) {
     const requestId = getRequestId(row);
@@ -620,7 +808,11 @@ export default function TeamApprovals({ setPage }) {
       return;
     }
 
-    const ok = window.confirm('Approve this leave request?');
+const ok = window.confirm(
+  isHolidayWorkRequest(row)
+    ? 'Approve this holiday work request?'
+    : 'Approve this leave request?',
+);
 
     if (!ok) return;
 
@@ -628,23 +820,41 @@ export default function TeamApprovals({ setPage }) {
       setSavingId(requestId);
       setMessage('');
 
-      const data = await approveTeamLeaveRequest(requestId);
+let data;
 
-      const updatedStage = String(data?.item?.approval_stage || '').toLowerCase();
-      const updatedStatus = String(data?.item?.status || '').toLowerCase();
+if (isHolidayWorkRequest(row)) {
+  data = await decideHolidayWorkRequest(requestId, {
+    status: 'approved',
+  });
+} else {
+  data = await approveTeamLeaveRequest(requestId);
+}
 
-      if (updatedStage === 'reporting_officer' && updatedStatus === 'pending') {
-        setMessage(
-          data.message ||
-            'Approved by Team Leader. The request has now been sent to the Reporting Officer.',
-        );
-      } else {
-        setMessage(data.message || 'Leave request approved successfully.');
-      }
+const updatedStage = String(data?.item?.approval_stage || '').toLowerCase();
+const updatedStatus = String(data?.item?.status || '').toLowerCase();
+
+if (updatedStage === 'reporting_officer' && updatedStatus === 'pending') {
+  setMessage(
+    data.message ||
+      'Approved by Team Leader. The request has now been sent to the Reporting Officer.',
+  );
+} else {
+  setMessage(
+    data.message ||
+      (isHolidayWorkRequest(row)
+        ? 'Holiday work request approved successfully.'
+        : 'Leave request approved successfully.'),
+  );
+}
 
       await loadData(filter);
     } catch (error) {
-      setMessage(error.message || 'Unable to approve leave request.');
+      setMessage(
+  error.message ||
+    (isHolidayWorkRequest(row)
+      ? 'Unable to approve holiday work request.'
+      : 'Unable to approve leave request.'),
+);
     } finally {
       setSavingId('');
     }
@@ -658,7 +868,11 @@ export default function TeamApprovals({ setPage }) {
       return;
     }
 
-    const reason = window.prompt('Enter rejection reason:');
+    const reason = window.prompt(
+  isHolidayWorkRequest(row)
+    ? 'Enter holiday work rejection reason:'
+    : 'Enter rejection reason:',
+);
 
     if (reason === null) return;
 
@@ -666,12 +880,33 @@ export default function TeamApprovals({ setPage }) {
       setSavingId(requestId);
       setMessage('');
 
-      const data = await rejectTeamLeaveRequest(requestId, reason || '');
+let data;
 
-      setMessage(data.message || 'Leave request rejected successfully.');
-      await loadData(filter);
+if (isHolidayWorkRequest(row)) {
+  data = await decideHolidayWorkRequest(requestId, {
+    status: 'rejected',
+    reason: reason || '',
+    note: reason || '',
+  });
+} else {
+  data = await rejectTeamLeaveRequest(requestId, reason || '');
+}
+
+setMessage(
+  data.message ||
+    (isHolidayWorkRequest(row)
+      ? 'Holiday work request rejected successfully.'
+      : 'Leave request rejected successfully.'),
+);
+
+await loadData(filter);
     } catch (error) {
-      setMessage(error.message || 'Unable to reject leave request.');
+      setMessage(
+  error.message ||
+    (isHolidayWorkRequest(row)
+      ? 'Unable to reject holiday work request.'
+      : 'Unable to reject leave request.'),
+);
     } finally {
       setSavingId('');
     }
@@ -1118,6 +1353,70 @@ export default function TeamApprovals({ setPage }) {
           font-weight: 800;
         }
 
+        .ta-field-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .ta-field-card {
+          border: 1px solid var(--ta-line);
+          border-radius: 22px;
+          background: #ffffff;
+          padding: 14px;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, .06);
+        }
+
+        .ta-field-card h3 {
+          margin: 0;
+          color: var(--ta-ink);
+          font-size: 16px;
+        }
+
+        .ta-field-card p {
+          margin: 6px 0 0;
+          color: var(--ta-muted);
+          font-size: 13px;
+          line-height: 1.5;
+          font-weight: 700;
+        }
+
+        .ta-field-photo {
+          margin-top: 12px;
+          width: 100%;
+          height: 180px;
+          border-radius: 18px;
+          overflow: hidden;
+          border: 1px solid var(--ta-line);
+          background: #f8fafc;
+        }
+
+        .ta-field-photo img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .ta-field-actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+        }
+
+        .ta-field-actions a {
+          border: 1px solid var(--ta-line);
+          border-radius: 999px;
+          padding: 8px 11px;
+          color: var(--ta-primary);
+          background: #eef2ff;
+          font-weight: 900;
+          font-size: 12px;
+          text-decoration: none;
+        }
+
+
         @media (max-width: 1180px) {
           .ta-kpis {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1133,6 +1432,9 @@ export default function TeamApprovals({ setPage }) {
             grid-template-columns: 1fr;
             border-radius: 22px;
             padding: 18px;
+        .ta-field-grid {
+            grid-template-columns: 1fr;
+            }   
           }
 
           .ta-hero-icon {
@@ -1186,8 +1488,8 @@ export default function TeamApprovals({ setPage }) {
 
           <p>
             {isHrPanel
-              ? 'Review final leave records, HR notifications, approval history, and pending HR-stage leave requests. HR/Admin can use this page as the record panel when notifications are received.'
-              : 'Review leave requests assigned to you as Team Leader or Reporting Officer. Requests first move to Team Leader, then Reporting Officer. If no Team Leader is mapped, the request directly comes to Reporting Officer.'}
+            ? 'Review final leave records, holiday work approvals, HR notifications, approval history, and pending HR-stage requests. HR/Admin can use this page as the record panel when notifications are received.'
+            : 'Review leave and holiday work requests assigned to you as Team Leader or Reporting Officer. Holiday work must be approved before employees can mark attendance on a holiday.'}
           </p>
 
           <div className="ta-role-pill">
@@ -1198,15 +1500,18 @@ export default function TeamApprovals({ setPage }) {
           </div>
 
           <div className="hero-actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => loadData(filter)}
-              disabled={loading}
-            >
-              <RefreshCcw size={16} />
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  loadData(filter);
+                  loadTeamFieldAttendance();
+                }}
+                disabled={loading || loadingTeamField}
+              >
+                <RefreshCcw size={16} />
+                {loading || loadingTeamField ? 'Refreshing...' : 'Refresh'}
+              </button>
 
             <button
               type="button"
@@ -1243,7 +1548,7 @@ export default function TeamApprovals({ setPage }) {
         <div className="ta-kpi">
           <span>Approved / Stage Approved</span>
           <strong>{summary.approved ?? approvedCount}</strong>
-          <small>Includes Team Leader approved pending RO</small>
+          <small>Includes leave and holiday work stage approvals</small>
         </div>
 
         <div className="ta-kpi">
@@ -1255,7 +1560,7 @@ export default function TeamApprovals({ setPage }) {
         <div className="ta-kpi">
           <span>Total Loaded</span>
           <strong>{summary.total ?? rows.length}</strong>
-          <small>Based on selected filter</small>
+          <small>Leave + holiday work requests</small>
         </div>
       </section>
 
@@ -1265,7 +1570,7 @@ export default function TeamApprovals({ setPage }) {
           <input
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="Search employee, leave type, approver, department, reason..."
+            placeholder="Search employee, leave type, holiday, work location, approver, department, reason..."
           />
         </div>
 
@@ -1287,6 +1592,99 @@ export default function TeamApprovals({ setPage }) {
           ))}
         </div>
       </section>
+
+<section className="panel">
+  <div className="toolbar">
+    <div>
+      <h3>Team Field Attendance</h3>
+      <p>
+        Shows field check-ins from your mapped team members with visit place,
+        submitted photo and location map.
+      </p>
+    </div>
+
+    <button
+      type="button"
+      className="secondary"
+      onClick={loadTeamFieldAttendance}
+      disabled={loadingTeamField}
+    >
+      {loadingTeamField ? 'Refreshing...' : 'Refresh Field Logs'}
+    </button>
+  </div>
+
+  {loadingTeamField && (
+    <div className="ta-empty">
+      <Clock3 size={28} />
+      <p>Loading team field attendance...</p>
+    </div>
+  )}
+
+  {!loadingTeamField && !teamFieldRows.length && (
+    <div className="ta-empty">
+      <FileText size={28} />
+      <p>No field attendance found for your mapped team.</p>
+    </div>
+  )}
+
+  {!loadingTeamField && !!teamFieldRows.length && (
+    <div className="ta-field-grid">
+      {teamFieldRows.map((row) => {
+        const photoUrl = fieldPhotoUrl(row);
+        const mapUrl = fieldMapUrl(row);
+
+        return (
+          <article
+            key={row._id || row.id || `${row.employee_id}-${row.date}-${row.check_in}`}
+            className="ta-field-card"
+          >
+            <h3>{employeeName(row)}</h3>
+
+            <p>
+              {row.employee_code || row.emp_code || 'Employee'} •{' '}
+              {row.department || 'Department'} • {formatDate(row.date)}
+            </p>
+
+            <p>
+              <strong>Place:</strong>{' '}
+              {row.field_location || row.work_location || '—'}
+            </p>
+
+            <p>
+              <strong>Check-in:</strong>{' '}
+              {formatDateTime(row.check_in || row.check_in_at)}
+            </p>
+
+            {photoUrl ? (
+              <div className="ta-field-photo">
+                <img src={photoUrl} alt={`${employeeName(row)} field attendance`} />
+              </div>
+            ) : (
+              <div className="ta-empty-line">
+                No field photo submitted.
+              </div>
+            )}
+
+            <div className="ta-field-actions">
+              {photoUrl && (
+                <a href={photoUrl} target="_blank" rel="noreferrer">
+                  Open Photo
+                </a>
+              )}
+
+              {mapUrl && (
+                <a href={mapUrl} target="_blank" rel="noreferrer">
+                  Open Location
+                </a>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  )}
+</section>
+
 
       <section className="ta-list">
         {loading && (
@@ -1311,7 +1709,7 @@ export default function TeamApprovals({ setPage }) {
         {!loading && !filteredRows.length && (
           <div className="ta-empty">
             <FileText size={28} />
-            <p>No leave approval request found for this filter.</p>
+            <p>No leave or holiday work approval request found for this filter.</p>
           </div>
         )}
       </section>

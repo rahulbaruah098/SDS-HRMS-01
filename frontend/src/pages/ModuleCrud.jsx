@@ -50,6 +50,9 @@ const DATE_FIELDS = new Set([
   'upto_date',
   'claim_date',
   'earned_date',
+  'claim_from_date',
+  'available_from',
+  'expiry_date',
   'valid_until',
   'joining_date',
   'date_of_birth',
@@ -91,6 +94,7 @@ const HIDDEN_TABLE_KEYS = new Set([
 
 const SIMPLE_LEAVE_CREATE_FIELDS = [
   'leave_type',
+  'compoff_credit_id',
   'reason',
   'from_date',
   'upto_date',
@@ -297,6 +301,70 @@ function leaveTypeLabel(value) {
   return value || '—';
 }
 
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatCompOffDate(value) {
+  if (!value) return '—';
+
+  try {
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return value;
+  }
+}
+
+function isCompOffLeaveType(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  return normalized === 'COMP-OFF' || normalized === 'COMPOFF';
+}
+
+function isCompOffClaimable(credit = {}) {
+  const status = String(credit.status || '').toLowerCase();
+
+  if (status !== 'available') {
+    return false;
+  }
+
+  const today = todayISO();
+  const claimFrom = credit.claim_from_date || credit.available_from || credit.earned_date;
+  const expiry = credit.expiry_date || credit.valid_until;
+
+  if (claimFrom && today < claimFrom) {
+    return false;
+  }
+
+  if (expiry && today > expiry) {
+    return false;
+  }
+
+  return true;
+}
+
+function compOffOptionLabel(credit = {}) {
+  const holiday = credit.holiday_title || credit.holiday_name || 'Holiday Work';
+  const earnedDate = formatCompOffDate(credit.earned_date);
+  const claimFrom = formatCompOffDate(
+    credit.claim_from_date || credit.available_from,
+  );
+  const expiry = formatCompOffDate(credit.expiry_date || credit.valid_until);
+  const status = statusLabel(credit.status);
+
+  return `${holiday} • Earned: ${earnedDate} • Claim: ${claimFrom} to ${expiry} • ${status}`;
+}
+
 function leaveLiveStatus(row = {}) {
   if (row.live_status || row.status_text || row.status_display) {
     return row.live_status || row.status_text || row.status_display;
@@ -344,6 +412,17 @@ function normalizeLeavePayload(payload) {
 
   if (nextPayload.to_date && !nextPayload.upto_date) {
     nextPayload.upto_date = nextPayload.to_date;
+  }
+
+
+  if (isCompOffLeaveType(nextPayload.leave_type)) {
+    nextPayload.compoff_id =
+      nextPayload.compoff_id || nextPayload.compoff_credit_id || '';
+    nextPayload.compoff_credit_id =
+      nextPayload.compoff_credit_id || nextPayload.compoff_id || '';
+  } else {
+    delete nextPayload.compoff_id;
+    delete nextPayload.compoff_credit_id;
   }
 
   delete nextPayload.employee_id;
@@ -744,9 +823,10 @@ const hiddenFieldSet = useMemo(() => new Set(hiddenFields || []), [hiddenFields]
   const [departmentOptions, setDepartmentOptions] = useState([]);
   const [projectOptions, setProjectOptions] = useState([]);
   const [taskHandoverOptions, setTaskHandoverOptions] = useState([]);
+  const [availableCompOffs, setAvailableCompOffs] = useState([]);
+  const [loadingCompOffs, setLoadingCompOffs] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-
   const isSystemGenerated = SYSTEM_GENERATED_COLLECTIONS.has(collection);
   const leaveBalanceAllowed = collection !== 'leave_balances' || canManageLeaveBalances();
 
@@ -892,6 +972,30 @@ const editFields = useMemo(() => {
     }
   }
 
+  async function loadAvailableCompOffs() {
+    if (collection !== 'leave_requests') {
+      setAvailableCompOffs([]);
+      return [];
+    }
+
+    try {
+      setLoadingCompOffs(true);
+
+      const data = await api('/attendance/my-compoffs');
+      const items = data.items || data.compoffs || [];
+
+      setAvailableCompOffs(items);
+      return items;
+    } catch (error) {
+      console.warn('Unable to load comp-off credits:', error);
+      setAvailableCompOffs([]);
+      return [];
+    } finally {
+      setLoadingCompOffs(false);
+    }
+  }
+
+
   async function reloadEmployeeHelpers(nextTenant = tenant) {
     if (!EMPLOYEE_OPTION_COLLECTIONS.has(collection)) {
       if (collection === 'projects') {
@@ -910,12 +1014,22 @@ const editFields = useMemo(() => {
 
     if (collection === 'leave_requests') {
       await loadLeaveOptions();
+      await loadAvailableCompOffs();
     }
   }
 
   function resetForm() {
     if (collection === 'leave_balances') {
       setForm(emptyLeaveBalanceForm(template));
+      return;
+    }
+
+    if (collection === 'leave_requests') {
+      setForm({
+        ...template,
+        compoff_credit_id: '',
+        compoff_id: '',
+      });
       return;
     }
 
@@ -946,6 +1060,7 @@ const editFields = useMemo(() => {
     setDepartmentOptions([]);
     setProjectOptions([]);
     setTaskHandoverOptions([]);
+    setAvailableCompOffs([]);
 
     if (collection === 'leave_balances' && !canManageLeaveBalances()) {
       setLoading(false);
@@ -998,6 +1113,31 @@ const editFields = useMemo(() => {
 
       if (collection === 'leave_requests') {
         payload = normalizeLeavePayload(payload);
+
+        if (isCompOffLeaveType(payload.leave_type)) {
+          if (!payload.compoff_credit_id && !payload.compoff_id) {
+            setMessage('Please select an available comp-off credit.');
+            setSaving(false);
+            return;
+          }
+
+          const selectedCredit = availableCompOffs.find(
+            (item) =>
+              String(item._id) === String(payload.compoff_credit_id || payload.compoff_id),
+          );
+
+          if (!selectedCredit || !isCompOffClaimable(selectedCredit)) {
+            setMessage('Selected comp-off credit is not available or has expired.');
+            setSaving(false);
+            return;
+          }
+
+          if (payload.from_date !== payload.upto_date && payload.from_date !== payload.to_date) {
+            setMessage('Comp-off leave can be applied for one day only.');
+            setSaving(false);
+            return;
+          }
+        }
       }
 
       if (collection === 'leave_balances') {
@@ -1036,6 +1176,10 @@ setMessage(
 );
       await load();
       await reloadEmployeeHelpers();
+
+      if (collection === 'leave_requests') {
+        await loadAvailableCompOffs();
+      }
     } catch (error) {
       setMessage(error.message || 'Unable to create record');
     } finally {
@@ -1600,6 +1744,9 @@ setMessage(
       labelText = 'Project Handover';
     }
 
+    if (key === 'compoff_credit_id') {
+      labelText = 'Available Comp-Off Credit';
+    }
     const isRequiredField =
       requiredFieldSet.has(key) ||
       (
@@ -1638,6 +1785,64 @@ setMessage(
     if (collection === 'employees' && isEditMode && key === 'password_mode') {
       return null;
     }
+
+        if (collection === 'leave_requests' && key === 'compoff_credit_id') {
+      const selectedLeaveType = String(state.leave_type || '').toUpperCase();
+
+      if (!isCompOffLeaveType(selectedLeaveType)) {
+        return null;
+      }
+
+      return (
+        <label key={key} className="compoff-claim-box">
+          {finalLabel}
+
+          <select
+            value={state.compoff_credit_id || state.compoff_id || ''}
+            onChange={(event) =>
+              setState({
+                ...state,
+                compoff_credit_id: event.target.value,
+                compoff_id: event.target.value,
+              })
+            }
+            disabled={loadingCompOffs}
+            required
+          >
+            <option value="">
+              {loadingCompOffs
+                ? 'Loading comp-off credits...'
+                : 'Select comp-off credit'}
+            </option>
+
+            {availableCompOffs.map((credit) => {
+              const claimable = isCompOffClaimable(credit);
+
+              return (
+                <option
+                  key={credit._id}
+                  value={credit._id}
+                  disabled={!claimable}
+                >
+                  {compOffOptionLabel(credit)}
+                  {!claimable ? ' • Not claimable' : ''}
+                </option>
+              );
+            })}
+          </select>
+
+          <small>
+            Comp-off can be claimed from the next working day and only within
+            7 working days. Expired, used, or already claimed credits cannot be selected.
+          </small>
+
+          {!loadingCompOffs && availableCompOffs.length === 0 && (
+            <small>No available comp-off credit found.</small>
+          )}
+        </label>
+      );
+    }
+
 
     if (collection === 'leave_requests' && key === 'task_handover_to_id') {
       return renderTaskHandoverSelect(state, setState, key, finalLabel);
@@ -1751,6 +1956,8 @@ if (collection === 'leave_requests' && key === 'leave_type') {
           );
           const isHalfDay = selectedValue === 'HALF-DAY';
 
+          const isCompOff = isCompOffLeaveType(selectedValue);
+
           const nextState = {
             ...state,
             leave_type: selectedValue,
@@ -1760,9 +1967,11 @@ if (collection === 'leave_requests' && key === 'leave_type') {
             is_half_day: isHalfDay,
             day_type: isHalfDay ? 'half_day' : 'full_day',
             leave_days: isHalfDay ? 0.5 : 1,
+            compoff_credit_id: isCompOff ? state.compoff_credit_id || '' : '',
+            compoff_id: isCompOff ? state.compoff_id || '' : '',
           };
 
-          if (isHalfDay && nextState.from_date) {
+          if ((isHalfDay || isCompOff) && nextState.from_date) {
             nextState.to_date = nextState.from_date;
             nextState.upto_date = nextState.from_date;
           }
@@ -2108,7 +2317,12 @@ if (
 
 if (DATE_FIELDS.has(key)) {
   const isHalfDayLeave =
-    collection === 'leave_requests' && String(state.leave_type || '').toUpperCase() === 'HALF-DAY';
+    collection === 'leave_requests' &&
+    String(state.leave_type || '').toUpperCase() === 'HALF-DAY';
+
+  const isCompOffLeave =
+    collection === 'leave_requests' &&
+    isCompOffLeaveType(state.leave_type);
 
   return (
     <label key={key}>
@@ -2116,16 +2330,29 @@ if (DATE_FIELDS.has(key)) {
       <input
         type="date"
         value={state[key] ?? ''}
-        readOnly={isHalfDayLeave && ['upto_date', 'to_date'].includes(key)}
+        readOnly={(isHalfDayLeave || isCompOffLeave) && ['upto_date', 'to_date'].includes(key)}
         onChange={(event) => {
           const nextState = { ...state, [key]: event.target.value };
 
-          if (collection === 'leave_requests' && key === 'from_date' && isHalfDayLeave) {
+          if (
+            collection === 'leave_requests' &&
+            key === 'from_date' &&
+            (isHalfDayLeave || isCompOffLeave)
+          ) {
             nextState.to_date = event.target.value;
             nextState.upto_date = event.target.value;
-            nextState.leave_days = 0.5;
-            nextState.is_half_day = true;
-            nextState.day_type = 'half_day';
+
+            if (isHalfDayLeave) {
+              nextState.leave_days = 0.5;
+              nextState.is_half_day = true;
+              nextState.day_type = 'half_day';
+            }
+
+            if (isCompOffLeave) {
+              nextState.leave_days = 1;
+              nextState.is_half_day = false;
+              nextState.day_type = 'full_day';
+            }
           }
 
           if (collection === 'leave_requests' && key === 'upto_date') {
@@ -2654,9 +2881,10 @@ if (key === 'lwp_days') {
 
             {collection === 'leave_requests' && (
               <p>
-                Apply for CL, EL or Half Day leave. Hand over your task or active
-                project to a team member before submission. After applying, the request
-                goes first to the Team Leader and then to the Reporting Officer.
+                Apply for CL, EL, Half Day, or Comp-Off leave. Comp-Off can be claimed
+                only from an available approved holiday-work credit within 7 working days.
+                After applying, the request goes first to the Team Leader and then to the
+                Reporting Officer.
               </p>
             )}
 

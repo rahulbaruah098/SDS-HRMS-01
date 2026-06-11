@@ -64,6 +64,15 @@ export const ALL_SYSTEM_ROLES = [
   ...EMPLOYEE_BASE_ROLES,
 ];
 
+
+function normalizeRoleValue(role = '') {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replace(/\s+/g, '_');
+}
+
 export function normalizeRoles(input) {
   const userRoles = Array.isArray(input)
     ? input
@@ -73,14 +82,14 @@ export function normalizeRoles(input) {
 
   if (Array.isArray(userRoles)) {
     return userRoles
-      .map((role) => String(role || '').trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
   if (typeof userRoles === 'string') {
     return userRoles
       .split(',')
-      .map((role) => role.trim())
+      .map((role) => normalizeRoleValue(role))
       .filter(Boolean);
   }
 
@@ -100,22 +109,82 @@ export function employeeProfile() {
   return currentEmployee();
 }
 
+
+export function employeeCapabilityRoles() {
+  const employee = employeeProfile() || {};
+  const capabilityRoles = [];
+
+  if (
+    truthy(employee?.is_team_leader) ||
+    truthy(employee?.team_leader_capability) ||
+    truthy(employee?.can_act_as_team_leader) ||
+    truthy(employee?.capabilities?.team_leader) ||
+    truthy(employee?.permissions?.team_leader)
+  ) {
+    capabilityRoles.push('team_leader');
+  }
+
+  if (
+    truthy(employee?.is_reporting_officer) ||
+    truthy(employee?.reporting_officer_capability) ||
+    truthy(employee?.can_act_as_reporting_officer) ||
+    truthy(employee?.capabilities?.reporting_officer) ||
+    truthy(employee?.permissions?.reporting_officer)
+  ) {
+    capabilityRoles.push('reporting_officer');
+  }
+
+  const rawCapabilities = [
+    employee?.role,
+    employee?.employee_role,
+    employee?.capability,
+    employee?.capability_role,
+    employee?.access_role,
+    employee?.mapped_role,
+    ...(Array.isArray(employee?.roles) ? employee.roles : []),
+    ...(Array.isArray(employee?.capabilities) ? employee.capabilities : []),
+    ...(Array.isArray(employee?.permissions) ? employee.permissions : []),
+  ];
+
+  rawCapabilities.forEach((item) => {
+    const normalized = normalizeRoleValue(item);
+
+    if (EMPLOYEE_CAPABILITY_ROLES.includes(normalized)) {
+      capabilityRoles.push(normalized);
+    }
+  });
+
+  return [...new Set(capabilityRoles)];
+}
+
+export function effectiveRoles() {
+  return [...new Set([...roles(), ...employeeCapabilityRoles()])];
+}
+
 export function hasRole(role) {
-  return roles().includes(role);
+  return effectiveRoles().includes(normalizeRoleValue(role));
 }
 
 export function hasAnyRole(allowedRoles = []) {
-  const userRoles = roles();
-  return allowedRoles.some((role) => userRoles.includes(role));
+  const userRoles = effectiveRoles();
+
+  return allowedRoles
+    .map((role) => normalizeRoleValue(role))
+    .some((role) => userRoles.includes(role));
 }
 
 export function hasAllRoles(requiredRoles = []) {
-  const userRoles = roles();
-  return requiredRoles.every((role) => userRoles.includes(role));
+  const userRoles = effectiveRoles();
+
+  return requiredRoles
+    .map((role) => normalizeRoleValue(role))
+    .every((role) => userRoles.includes(role));
 }
 
 export function hasCapabilityRole(role) {
-  return EMPLOYEE_CAPABILITY_ROLES.includes(role) && hasRole(role);
+  const normalized = normalizeRoleValue(role);
+
+  return EMPLOYEE_CAPABILITY_ROLES.includes(normalized) && hasRole(normalized);
 }
 
 export function isSuperAdmin() {
@@ -143,25 +212,14 @@ export function isEmployeePortalUser() {
 }
 
 export function isTeamAuthority() {
-  return isEmployeeUser() && hasAnyRole(TEAM_AUTHORITY_ROLES);
+  return hasAnyRole(TEAM_AUTHORITY_ROLES);
 }
-
 export function isTeamLeader() {
-  const employee = employeeProfile();
-
-  return (
-    hasRole('team_leader') ||
-    truthy(employee?.is_team_leader)
-  );
+  return hasRole('team_leader');
 }
 
 export function isReportingOfficer() {
-  const employee = employeeProfile();
-
-  return (
-    hasAnyRole(['reporting_officer', 'manager', 'ro']) ||
-    truthy(employee?.is_reporting_officer)
-  );
+  return hasAnyRole(['reporting_officer', 'manager', 'ro']);
 }
 
 export function canManageEmployees() {
@@ -208,6 +266,18 @@ export function canApproveAttendanceMode() {
   return hasAnyRole(ATTENDANCE_MANAGER_ROLES);
 }
 
+export function canRequestHolidayWork() {
+  return isEmployeeUser();
+}
+
+export function canApproveHolidayWork() {
+  return hasAnyRole(ATTENDANCE_MANAGER_ROLES);
+}
+
+export function canViewTeamFieldAttendance() {
+  return hasAnyRole(ATTENDANCE_MANAGER_ROLES);
+}
+
 export function canManageHolidayCalendar() {
   return hasAnyRole(HR_ADMIN_ROLES);
 }
@@ -248,7 +318,7 @@ export function canViewLeaveBalances() {
   capability should still be treated as an employee self-service dashboard user.
 */
 export function isEmployeeOnly() {
-  const userRoles = roles();
+  const userRoles = effectiveRoles();
 
   return (
     userRoles.some((role) =>
@@ -307,7 +377,7 @@ export function roleLabel(role = '') {
 }
 
 export function currentRoleLabel() {
-  const userRoles = roles();
+    const userRoles = effectiveRoles();
 
   if (!userRoles.length) {
     return 'User';
