@@ -2198,7 +2198,7 @@ def resolve_handover_employee(db, tenant_id, employee, raw_employee_id):
     }
 
 
-def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name=""):
+def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name="", employee=None):
     project_id = normalize_text(raw_project_id)
     project_name = normalize_text(raw_project_name)
 
@@ -2214,15 +2214,22 @@ def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name="")
         if not project_obj_id:
             raise ValueError("Invalid project handover selection")
 
-        project = db.projects.find_one({
+        project_query = {
             "_id": project_obj_id,
             "tenant_id": tenant_id,
             "is_deleted": {"$ne": True},
             "status": "active",
-        })
+        }
+
+        employee_department = normalize_text(employee.get("department")) if employee else ""
+
+        if employee_department:
+            project_query["department"] = employee_department
+
+        project = db.projects.find_one(project_query)
 
         if not project:
-            raise ValueError("Selected project was not found or is already completed")
+            raise ValueError("Selected project must be an active project of your department")
 
         return {
             "project_handover_id": str(project["_id"]),
@@ -2233,7 +2240,6 @@ def resolve_project_handover(db, tenant_id, raw_project_id, raw_project_name="")
         "project_handover_id": "",
         "project_handover_name": project_name,
     }
-
 
 def leave_stage_status_fields(initial_stage):
     return {
@@ -3141,12 +3147,12 @@ def leave_request_options():
         "status": "active",
     }
 
-    if employee.get("department"):
-        project_query["$or"] = [
-            {"department": employee.get("department")},
-            {"department": ""},
-            {"department": {"$exists": False}},
-        ]
+    employee_department = normalize_text(employee.get("department"))
+
+    if employee_department:
+        project_query["department"] = employee_department
+    else:
+        project_query["_id"] = {"$exists": False}
 
     projects = list(
         db.projects
@@ -3304,6 +3310,7 @@ def apply_leave_request():
             tenant_id,
             data.get("project_handover_id") or data.get("project_id"),
             data.get("project_handover_name") or data.get("project_name") or data.get("project"),
+            employee,
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400

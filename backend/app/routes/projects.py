@@ -362,10 +362,13 @@ def is_admin_view_user():
 def is_hr_project_blocked_user():
     roles = current_user_roles()
 
-    return bool(
-        "super_admin" not in roles
-        and roles.intersection(HR_PROJECT_BLOCKED_ROLES)
-    )
+    # Admin and Super Admin must always have Project module access,
+    # even if the user also has HR Manager / HR role.
+    if roles.intersection(ADMIN_VIEW_ROLES):
+        return False
+
+    # Block only pure HR users.
+    return bool(roles.intersection(HR_PROJECT_BLOCKED_ROLES))
 
 
 def hr_project_access_denied_response():
@@ -697,9 +700,48 @@ def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member",
     return resolved_ids, members
 
 
+def same_department_value(left, right):
+    return normalize_text(left).lower() == normalize_text(right).lower()
+
+
+def find_department_team_leader(db, tenant_id, department):
+    department = normalize_text(department)
+
+    if not department:
+        return None
+
+    employees = list(db.employees.find({
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+        "department": department,
+    }))
+
+    for employee in employees:
+        if employee_is_team_leader(employee):
+            return employee
+
+    # Fallback for case-insensitive department match
+    employees = list(db.employees.find({
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }))
+
+    for employee in employees:
+        if (
+            employee_is_team_leader(employee)
+            and same_department_value(employee.get("department"), department)
+        ):
+            return employee
+
+    return None
+
+
 def resolve_team_leader_for_project(db, tenant_id, data, creator_employee):
     raw_team_leader_id = normalize_text(data.get("team_leader_id"))
 
+    # Keep backward compatibility if old frontend sends team_leader_id.
     if raw_team_leader_id:
         team_leader = resolve_employee(db, raw_team_leader_id, tenant_id)
 
@@ -711,11 +753,59 @@ def resolve_team_leader_for_project(db, tenant_id, data, creator_employee):
 
         return team_leader
 
-    if creator_employee and employee_is_team_leader(creator_employee):
+    project_department = normalize_text(
+        data.get("department")
+        or creator_employee.get("department")
+        if creator_employee
+        else ""
+    )
+
+    # First priority:
+    # If selected assigned members already have a mapped Team Leader,
+    # use that mapped Team Leader.
+    assigned_source = data.get("assigned_employee_ids") or data.get("assigned_members") or []
+
+    for employee_id in normalize_employee_id_list(assigned_source):
+        assigned_employee = resolve_employee(db, employee_id, tenant_id)
+
+        if not assigned_employee:
+            continue
+
+        mapped_tl_id = normalize_text(assigned_employee.get("team_leader_id"))
+
+        if mapped_tl_id:
+            mapped_tl = resolve_employee(db, mapped_tl_id, tenant_id)
+
+            if (
+                mapped_tl
+                and employee_is_team_leader(mapped_tl)
+                and (
+                    not project_department
+                    or same_department_value(mapped_tl.get("department"), project_department)
+                )
+            ):
+                return mapped_tl
+
+    # Second priority:
+    # If creator is a Team Leader of the selected department, use creator.
+    if (
+        creator_employee
+        and employee_is_team_leader(creator_employee)
+        and (
+            not project_department
+            or same_department_value(creator_employee.get("department"), project_department)
+        )
+    ):
         return creator_employee
 
-    return None
+    # Third priority:
+    # Pick the Team Leader assigned for the selected department.
+    department_team_leader = find_department_team_leader(db, tenant_id, project_department)
 
+    if department_team_leader:
+        return department_team_leader
+
+    return None
 
 def resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader=None):
     raw_reporting_officer_id = normalize_text(data.get("reporting_officer_id"))
@@ -731,20 +821,27 @@ def resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee,
 
         return reporting_officer
 
-    if creator_employee and employee_is_reporting_officer(creator_employee):
-        return creator_employee
-
+    # If project has a Team Leader, use the Team Leader's mapped Reporting Officer.
     if team_leader:
         mapped_ro_id = normalize_text(team_leader.get("reporting_officer_id"))
+
         if mapped_ro_id:
             reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
+
             if reporting_officer:
                 return reporting_officer
 
+    # If creator is Reporting Officer, use creator.
+    if creator_employee and employee_is_reporting_officer(creator_employee):
+        return creator_employee
+
+    # Fallback: creator's mapped Reporting Officer.
     if creator_employee:
         mapped_ro_id = normalize_text(creator_employee.get("reporting_officer_id"))
+
         if mapped_ro_id:
             reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
+
             if reporting_officer:
                 return reporting_officer
 

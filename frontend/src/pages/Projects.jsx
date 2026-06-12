@@ -1242,15 +1242,16 @@ export default function Projects() {
     can_create_assign_collaborate: false,
   });
   const [filter, setFilter] = useState('active');
+  const [listDepartmentFilter, setListDepartmentFilter] = useState('');
 
-  const [form, setForm] = useState({
-    name: '',
-    description: '',
-    department: '',
-    status: 'active',
-    assigned_employee_ids: [],
-    collaborator_ids: [],
-  });
+const [form, setForm] = useState({
+  name: '',
+  description: '',
+  department: '',
+  status: 'active',
+  assigned_employee_ids: [],
+  collaborator_ids: [],
+});
 
   const user = currentUser();
 
@@ -1269,33 +1270,33 @@ export default function Projects() {
     [projects],
   );
 
-  const visibleProjects = useMemo(() => {
-    if (filter === 'completed') return completedProjects;
-    if (filter === 'on_hold') return onHoldProjects;
-    if (filter === 'all') return projects;
-    return activeProjects;
-  }, [activeProjects, completedProjects, filter, onHoldProjects, projects]);
+const visibleProjects = useMemo(() => {
+  if (filter === 'completed') return completedProjects;
+  if (filter === 'on_hold') return onHoldProjects;
+  if (filter === 'all') return projects;
 
-  const departments = useMemo(() => {
-    const values = employees
-      .map((employee) => employee.department)
-      .filter(Boolean);
+  return activeProjects;
+}, [activeProjects, completedProjects, filter, onHoldProjects, projects]);
 
-    return [...new Set(values)].sort();
-  }, [employees]);
+const departments = useMemo(() => {
+  const values = employees
+    .map((employee) => employee.department)
+    .filter(Boolean);
 
+  return [...new Set(values)].sort();
+}, [employees]);
 
-  const createFormEmployees = useMemo(() => {
-    if (!form.department) {
-      return [];
-    }
+const createFormEmployees = useMemo(() => {
+  if (!form.department) {
+    return [];
+  }
 
-    const filtered = filterEmployeesByDepartment(employees, form.department);
+  const filtered = filterEmployeesByDepartment(employees, form.department);
 
-    return uniqueEmployees(filtered)
-      .map(normalizeEmployeeOption)
-      .filter(Boolean);
-  }, [employees, form.department]);
+  return uniqueEmployees(filtered)
+    .map(normalizeEmployeeOption)
+    .filter(Boolean);
+}, [employees, form.department]);
 
   const backendCanManage =
     Boolean(permissionState.can_create_assign_collaborate) ||
@@ -1321,7 +1322,12 @@ export default function Projects() {
         employeeResponse,
         dashboardResponse,
       ] = await Promise.all([
-        getProjects({ limit: 300, sort_by: 'created_at', sort_dir: 'desc' }),
+        getProjects({
+          limit: 300,
+          sort_by: 'created_at',
+          sort_dir: 'desc',
+          ...(listDepartmentFilter ? { department: listDepartmentFilter } : {}),
+        }),
         getProjectOptions().catch(() => null),
         listCollection('employees', { limit: 500, sort_by: 'name', sort_dir: 'asc' }).catch(() => ({ items: [] })),
         getEmployeeDashboard().catch(() => null),
@@ -1367,21 +1373,21 @@ export default function Projects() {
     }
   }
 
-  useEffect(() => {
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+useEffect(() => {
+  loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [listDepartmentFilter]);
 
   function updateForm(key, value) {
     setForm((previous) => {
-      if (key === 'department') {
-        return {
-          ...previous,
-          department: value,
-          assigned_employee_ids: [],
-          collaborator_ids: [],
-        };
-      }
+if (key === 'department') {
+  return {
+    ...previous,
+    department: value,
+    assigned_employee_ids: [],
+    collaborator_ids: [],
+  };
+}
 
       return {
         ...previous,
@@ -1420,10 +1426,10 @@ export default function Projects() {
       return;
     }
 
-    if (!form.department) {
-      setError('Please select a department before creating a project.');
-      return;
-    }
+if (!form.department) {
+  setError('Please select a department before creating a project.');
+  return;
+}
 
     setSaving(true);
     setError('');
@@ -1438,14 +1444,14 @@ export default function Projects() {
       });
 
       setMessage('Project created successfully.');
-      setForm({
-        name: '',
-        description: '',
-        department: '',
-        status: 'active',
-        assigned_employee_ids: [],
-        collaborator_ids: [],
-      });
+setForm({
+  name: '',
+  description: '',
+  department: '',
+  status: 'active',
+  assigned_employee_ids: [],
+  collaborator_ids: [],
+});
 
       await loadData();
     } catch (err) {
@@ -2757,6 +2763,22 @@ async function handleAssign(projectId, payload) {
             width: 100%;
           }
         }
+          .project-department-filter {
+            min-height: 42px;
+            border: 1px solid #cbd5e1;
+            border-radius: 14px;
+            padding: 0 14px;
+            background: #ffffff;
+            color: #0f172a;
+            font-size: 13px;
+            font-weight: 800;
+            outline: none;
+          }
+
+          .project-department-filter:focus {
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, .12);
+          }
       `}</style>
 
       <section className="projects-hero">
@@ -2835,16 +2857,6 @@ async function handleAssign(projectId, payload) {
               </p>
             </div>
 
-            <div className="project-field project-field-full">
-              <label>Description</label>
-              <textarea
-                value={form.description}
-                onChange={(event) => updateForm('description', event.target.value)}
-                placeholder="Short project details"
-                rows={3}
-              />
-            </div>
-
             <div className="project-self-actions project-field-full">
               <div>
                 <strong>Assign this new project to yourself</strong>
@@ -2910,12 +2922,27 @@ async function handleAssign(projectId, payload) {
       )}
 
       <section className="project-list">
-        <div className="project-toolbar">
-          <h2 className="project-section-title" style={{ margin: 0 }}>
-            Project List
-          </h2>
+<div className="project-toolbar">
+  <h2 className="project-section-title" style={{ margin: 0 }}>
+    Project List
+  </h2>
 
-          <div className="project-tabs">
+  {adminFullAccess && (
+    <select
+      className="project-department-filter"
+      value={listDepartmentFilter}
+      onChange={(event) => setListDepartmentFilter(event.target.value)}
+    >
+      <option value="">All Departments</option>
+      {departments.map((department) => (
+        <option value={department} key={department}>
+          {department}
+        </option>
+      ))}
+    </select>
+  )}
+
+  <div className="project-tabs">
             <button
               type="button"
               className={`project-tab ${filter === 'active' ? 'is-active' : ''}`}
