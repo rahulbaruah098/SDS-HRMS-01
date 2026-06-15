@@ -1722,7 +1722,7 @@ def my():
 def report():
     db = get_db()
 
-    q = manager_scope_query(db)
+    base_scope_q = manager_scope_query(db)
 
     employee_id = normalize_text(request.args.get("employee_id"))
     employee_name = normalize_text(
@@ -1733,7 +1733,7 @@ def report():
     )
     department = normalize_text(request.args.get("department"))
     mode = normalize_mode(request.args.get("mode"))
-    status = normalize_text(request.args.get("status"))
+    status = normalize_text(request.args.get("status")).lower()
     state = normalize_text(request.args.get("state"))
     organisation = normalize_text(
         request.args.get("organisation")
@@ -1755,14 +1755,30 @@ def report():
     date_from = normalize_text(request.args.get("date_from"))
     date_to = normalize_text(request.args.get("date_to"))
 
-    tenant_id = q.get("tenant_id") if isinstance(q.get("tenant_id"), str) else current_tenant_id()
+    tenant_id = (
+        base_scope_q.get("tenant_id")
+        if isinstance(base_scope_q.get("tenant_id"), str)
+        else current_tenant_id()
+    )
+
+    # Absent report is meaningful only for a single day.
+    selected_date = exact_date or today_local().isoformat()
+
+    # ------------------------------------------------------------------
+    # 1. Build attendance log query
+    # ------------------------------------------------------------------
+    attendance_q = dict(base_scope_q)
+    attendance_q["is_deleted"] = {"$ne": True}
 
     if employee_id:
-        if isinstance(q.get("employee_id"), dict) and "$in" in q["employee_id"]:
-            if employee_id not in q["employee_id"]["$in"]:
-                return jsonify({"items": []})
+        if isinstance(attendance_q.get("employee_id"), dict) and "$in" in attendance_q["employee_id"]:
+            if employee_id not in attendance_q["employee_id"]["$in"]:
+                return jsonify({
+                    "items": [],
+                    "default_date": selected_date,
+                })
 
-        q["employee_id"] = employee_id
+        attendance_q["employee_id"] = employee_id
 
     if employee_name or state or organisation:
         matched_employee_ids = employee_filter_ids(
@@ -1773,51 +1789,247 @@ def report():
             organisation=organisation,
         )
 
-        apply_employee_id_filter(q, matched_employee_ids)
+        apply_employee_id_filter(attendance_q, matched_employee_ids)
 
     if department:
-        q["department"] = {"$regex": department, "$options": "i"}
+        attendance_q["department"] = {"$regex": department, "$options": "i"}
 
-    if mode:
-        q["mode"] = mode
+    if mode and mode != "all":
+        if mode == "offline":
+            attendance_q["created_offline"] = True
+        else:
+            attendance_q["mode"] = mode
 
-    if status:
-        q["status"] = status
+    # Do not apply status here for "absent".
+    # Absent employees do not exist in attendance_logs.
+    if status and status not in ["all", "absent"]:
+        attendance_q["status"] = status
 
     if exact_date:
-        q["date"] = exact_date
+        attendance_q["date"] = exact_date
     elif date_from or date_to:
-        q["date"] = {}
+        attendance_q["date"] = {}
 
         if date_from:
-            q["date"]["$gte"] = date_from
+            attendance_q["date"]["$gte"] = date_from
 
         if date_to:
-            q["date"]["$lte"] = date_to
+            attendance_q["date"]["$lte"] = date_to
     else:
-        # Default HR/Admin report should show daily attendance only.
-        # Past records will appear only when date/date_from/date_to is selected.
-        q["date"] = today_local().isoformat()
+        attendance_q["date"] = selected_date
 
-    q["is_deleted"] = {"$ne": True}
-
-    items = list(
+    attendance_items = list(
         db.attendance_logs
-        .find(q)
+        .find(attendance_q)
         .sort([("date", -1), ("check_in", -1), ("created_at", -1)])
         .limit(500)
     )
 
-    enriched_items = [
+    enriched_attendance_items = [
         enrich_attendance_log(db, item)
-        for item in items
+        for item in attendance_items
     ]
 
-    return jsonify({
-        "items": clean_doc(enriched_items),
-        "default_date": q.get("date") if isinstance(q.get("date"), str) else "",
-    })
+    # For date range reports, return only actual attendance logs.
+    # Absent rows are generated only for single-date report.
+    if date_from or date_to:
+        return jsonify({
+            "items": clean_doc(enriched_attendance_items),
+            "default_date": "",
+        })
 
+    # ------------------------------------------------------------------
+    # 2. Build active employee query for absent calculation
+    # ------------------------------------------------------------------
+    employee_q = active_employee_base_query(tenant_id)
+
+    scoped_employee_ids = None
+
+    if isinstance(base_scope_q.get("employee_id"), dict):
+        scoped_employee_ids = base_scope_q["employee_id"].get("$in")
+
+    elif isinstance(base_scope_q.get("employee_id"), str):
+        scoped_employee_ids = [base_scope_q["employee_id"]]
+
+    if scoped_employee_ids is not None:
+        object_ids = []
+        text_ids = []
+
+        for value in scoped_employee_ids:
+            text_value = normalize_text(value)
+
+            if not text_value:
+                continue
+
+            text_ids.append(text_value)
+
+            obj_id = safe_object_id(text_value)
+
+            if obj_id:
+                object_ids.append(obj_id)
+
+        employee_q["$or"] = [
+            {"_id": {"$in": object_ids}},
+            {"employee_id": {"$in": text_ids}},
+            {"employee_code": {"$in": text_ids}},
+            {"emp_code": {"$in": text_ids}},
+            {"code": {"$in": text_ids}},
+            {"user_id": {"$in": text_ids}},
+            {"employee_ref_id": {"$in": text_ids}},
+        ]
+
+    if employee_id:
+        employee_obj_id = safe_object_id(employee_id)
+
+        employee_id_or = [
+            {"employee_id": employee_id},
+            {"employee_code": employee_id},
+            {"emp_code": employee_id},
+            {"code": employee_id},
+            {"user_id": employee_id},
+            {"employee_ref_id": employee_id},
+        ]
+
+        if employee_obj_id:
+            employee_id_or.insert(0, {"_id": employee_obj_id})
+
+        employee_q["$and"] = employee_q.get("$and", [])
+        employee_q["$and"].append({"$or": employee_id_or})
+
+    if employee_name:
+        employee_q["$and"] = employee_q.get("$and", [])
+        employee_q["$and"].append({
+            "$or": [
+                {"name": {"$regex": employee_name, "$options": "i"}},
+                {"employee_name": {"$regex": employee_name, "$options": "i"}},
+                {"full_name": {"$regex": employee_name, "$options": "i"}},
+                {"email": {"$regex": employee_name, "$options": "i"}},
+                {"official_email": {"$regex": employee_name, "$options": "i"}},
+                {"employee_id": {"$regex": employee_name, "$options": "i"}},
+                {"employee_code": {"$regex": employee_name, "$options": "i"}},
+                {"emp_code": {"$regex": employee_name, "$options": "i"}},
+                {"code": {"$regex": employee_name, "$options": "i"}},
+            ]
+        })
+
+    if department:
+        employee_q["$and"] = employee_q.get("$and", [])
+        employee_q["$and"].append({
+            "$or": [
+                {"department": {"$regex": department, "$options": "i"}},
+                {"department_name": {"$regex": department, "$options": "i"}},
+            ]
+        })
+
+    if state:
+        employee_q["$and"] = employee_q.get("$and", [])
+        employee_q["$and"].append({
+            "$or": [
+                {"state": {"$regex": state, "$options": "i"}},
+                {"office_state": {"$regex": state, "$options": "i"}},
+                {"current_state": {"$regex": state, "$options": "i"}},
+                {"branch": {"$regex": state, "$options": "i"}},
+                {"work_state": {"$regex": state, "$options": "i"}},
+            ]
+        })
+
+    if organisation:
+        employee_q["$and"] = employee_q.get("$and", [])
+        employee_q["$and"].append({
+            "$or": [
+                {"organisation": {"$regex": organisation, "$options": "i"}},
+                {"organization": {"$regex": organisation, "$options": "i"}},
+                {"organisation_name": {"$regex": organisation, "$options": "i"}},
+                {"organization_name": {"$regex": organisation, "$options": "i"}},
+                {"organisation_code": {"$regex": organisation, "$options": "i"}},
+                {"organization_code": {"$regex": organisation, "$options": "i"}},
+                {"organisation_id": organisation},
+                {"organization_id": organisation},
+            ]
+        })
+
+    # Mode filter should not show absent rows for office/wfh/field/offline.
+    # Absent means no attendance entry, so mode is not applicable.
+    include_absent = status in ["", "all", "absent"] and mode in ["", "all"]
+
+    absent_items = []
+
+    if include_absent:
+        attended_employee_ids = set()
+
+        for item in attendance_items:
+            current_employee_id = normalize_text(item.get("employee_id"))
+
+            if current_employee_id:
+                attended_employee_ids.add(current_employee_id)
+
+        employees = list(
+            db.employees
+            .find(employee_q)
+            .sort([("employee_name", 1), ("name", 1)])
+            .limit(1000)
+        )
+
+        for employee in employees:
+            current_employee_id = str(employee.get("_id"))
+
+            if current_employee_id in attended_employee_ids:
+                continue
+
+            absent_items.append({
+                "_id": f"absent_{current_employee_id}_{selected_date}",
+                "id": f"absent_{current_employee_id}_{selected_date}",
+                "tenant_id": employee.get("tenant_id") or tenant_id,
+                "employee_id": current_employee_id,
+                "employee_code": employee_code(employee),
+                "emp_code": employee.get("emp_code", ""),
+                "employee_name": employee_display_name(employee),
+                "department": employee.get("department", ""),
+                "designation": employee.get("designation", ""),
+                "organisation": employee_organisation_name(employee),
+                "organization": employee_organisation_name(employee),
+                "organisation_name": employee_organisation_name(employee),
+                "organization_name": employee_organisation_name(employee),
+                "organisation_code": employee_organisation_code(employee),
+                "organization_code": employee_organisation_code(employee),
+                "state": employee_state(employee),
+                "team_leader_id": employee.get("team_leader_id", ""),
+                "team_leader_name": employee.get("team_leader_name", ""),
+                "reporting_officer_id": employee.get("reporting_officer_id", ""),
+                "reporting_officer_name": employee.get("reporting_officer_name", ""),
+                "date": selected_date,
+                "check_in": None,
+                "check_out": None,
+                "mode": "",
+                "status": "absent",
+                "is_absent": True,
+                "verified_by_ro": False,
+                "created_offline": False,
+                "check_in_created_offline": False,
+                "check_out_created_offline": False,
+                "sync_source": "",
+                "synced_at": None,
+                "late_reason": "",
+                "early_checkout_reason": "",
+                "location": "",
+                "check_in_location": {},
+                "check_out_location": {},
+            })
+
+    # ------------------------------------------------------------------
+    # 3. Final list according to filter
+    # ------------------------------------------------------------------
+    if status == "absent":
+        final_items = absent_items
+    elif status in ["", "all"]:
+        final_items = enriched_attendance_items + absent_items
+    else:
+        final_items = enriched_attendance_items
+
+    return jsonify({
+        "items": clean_doc(final_items),
+        "default_date": selected_date,
+    })
 
 @attendance_bp.patch("/<attendance_id>/verify")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
