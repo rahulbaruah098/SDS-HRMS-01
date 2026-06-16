@@ -4189,9 +4189,9 @@ export function decidePasswordRequest(requestId, payload = {}) {
 /* Location Helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
-const LOCATION_TARGET_ACCURACY_METERS = 30;
-const LOCATION_TIMEOUT_MS = 30000;
-const LOCATION_LOW_ACCURACY_WARNING_METERS = 100;
+const LOCATION_TARGET_ACCURACY_METERS = 80;
+const LOCATION_FAST_TIMEOUT_MS = 5000;
+const LOCATION_WATCH_INTERVAL_MS = 500;
 
 export function hasLocationInPayload(payload = {}) {
   return (
@@ -4204,10 +4204,27 @@ export function hasLocationInPayload(payload = {}) {
   );
 }
 
+function normalizeGeoPosition(position) {
+  const accuracy = Number(position?.coords?.accuracy || 999999);
+
+  return {
+    latitude: position.coords.latitude,
+    longitude: position.coords.longitude,
+    accuracy,
+    address: '',
+    location_accuracy_warning: accuracy > LOCATION_TARGET_ACCURACY_METERS,
+    location_warning:
+      accuracy > LOCATION_TARGET_ACCURACY_METERS
+        ? `Location accuracy is ±${Math.round(accuracy)}m. Move to an open area and try again if attendance is blocked.`
+        : '',
+  };
+}
+
+
 export function getCurrentLocation(options = {}) {
   const geoOptions = {
     enableHighAccuracy: true,
-    timeout: LOCATION_TIMEOUT_MS,
+    timeout: LOCATION_FAST_TIMEOUT_MS,
     maximumAge: 0,
     ...options,
   };
@@ -4223,7 +4240,7 @@ export function getCurrentLocation(options = {}) {
     let watchId = null;
     let timeoutId = null;
 
-    const stopWatching = () => {
+    const stop = () => {
       if (watchId !== null) {
         navigator.geolocation.clearWatch(watchId);
       }
@@ -4233,88 +4250,83 @@ export function getCurrentLocation(options = {}) {
       }
     };
 
-    const normalizePosition = (position) => {
-      const accuracy = Number(position?.coords?.accuracy || 0);
-      const lowAccuracy = accuracy > LOCATION_LOW_ACCURACY_WARNING_METERS;
-
-      return {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy,
-        address: '',
-        location_accuracy_warning: lowAccuracy,
-        location_warning: lowAccuracy
-          ? `Location accuracy is low: ±${Math.round(accuracy)}m. Attendance will still be submitted.`
-          : '',
-      };
-    };
-
-    const resolveWithPosition = (position) => {
+    const finish = (position) => {
       if (settled) return;
 
       settled = true;
-      stopWatching();
-      resolve(normalizePosition(position));
+      stop();
+      resolve(normalizeGeoPosition(position));
     };
 
-    const rejectWithMessage = (message) => {
+    const fail = (message) => {
       if (settled) return;
 
       settled = true;
-      stopWatching();
+      stop();
       reject(new Error(message));
     };
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        bestPosition = position;
+
+        const accuracy = Number(position.coords.accuracy || 999999);
+
+        if (accuracy <= LOCATION_TARGET_ACCURACY_METERS) {
+          finish(position);
+        }
+      },
+      () => {},
+      geoOptions,
+    );
 
     watchId = navigator.geolocation.watchPosition(
       (position) => {
         const accuracy = Number(position.coords.accuracy || 999999);
+        const bestAccuracy = Number(bestPosition?.coords?.accuracy || 999999);
 
-        if (
-          !bestPosition ||
-          accuracy < Number(bestPosition.coords.accuracy || 999999)
-        ) {
+        if (!bestPosition || accuracy < bestAccuracy) {
           bestPosition = position;
         }
 
         if (accuracy <= LOCATION_TARGET_ACCURACY_METERS) {
-          resolveWithPosition(position);
+          finish(position);
         }
       },
       (error) => {
         if (bestPosition) {
-          resolveWithPosition(bestPosition);
+          finish(bestPosition);
           return;
         }
 
-        let message = 'Unable to fetch current location.';
-
         if (error.code === 1) {
-          message = 'Location permission denied. Attendance can still continue if the page allows manual place entry.';
+          fail('Location permission denied. Please allow location access to mark attendance.');
+          return;
         }
 
         if (error.code === 2) {
-          message = 'Location unavailable. Attendance can still continue with manual place entry where required.';
+          fail('Location unavailable. Please turn on GPS/location and try again.');
+          return;
         }
 
         if (error.code === 3) {
-          message = 'Location request timed out. Attendance can still continue with manual place entry where required.';
+          fail('Location request timed out. Please try again.');
+          return;
         }
 
-        rejectWithMessage(message);
+        fail('Unable to fetch current location. Please try again.');
       },
       geoOptions,
     );
 
     timeoutId = setTimeout(() => {
       if (bestPosition) {
-        resolveWithPosition(bestPosition);
+        finish(bestPosition);
         return;
       }
 
-      rejectWithMessage(
-        'Unable to fetch current location. Attendance can still continue with manual place entry where required.',
-      );
-    }, LOCATION_TIMEOUT_MS);
+      fail('Unable to fetch location. Please enable GPS/location and try again.');
+    }, LOCATION_FAST_TIMEOUT_MS + LOCATION_WATCH_INTERVAL_MS);
   });
 }
 
@@ -4347,40 +4359,34 @@ export function fileToBase64(file) {
 export async function buildAttendancePayload(extraPayload = {}) {
   const payload = { ...extraPayload };
 
-  if (payload.field_photo_file && !payload.field_photo) {
-    payload.field_photo = await fileToBase64(payload.field_photo_file);
-  }
-
-  delete payload.field_photo_file;
-
   if (hasLocationInPayload(payload)) {
+    if (payload.field_photo_file && !payload.field_photo) {
+      payload.field_photo = await fileToBase64(payload.field_photo_file);
+    }
+
+    delete payload.field_photo_file;
     return payload;
   }
 
-  try {
-    const location = await getCurrentLocation();
+  const location = await getCurrentLocation();
 
-    return {
-      ...payload,
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.accuracy,
-      address: location.address || '',
-      location_accuracy_warning: location.location_accuracy_warning || false,
-      location_warning: location.location_warning || '',
-    };
-  } catch (error) {
-    return {
-      ...payload,
-      latitude: payload.latitude || '',
-      longitude: payload.longitude || '',
-      accuracy: payload.accuracy || '',
-      address: payload.address || '',
-      location_unavailable: true,
-      location_warning:
-        error?.message || 'Location unavailable. Attendance submitted with manual details.',
-    };
+  const nextPayload = {
+    ...payload,
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.accuracy,
+    address: location.address || '',
+    location_accuracy_warning: location.location_accuracy_warning || false,
+    location_warning: location.location_warning || '',
+  };
+
+  if (nextPayload.field_photo_file && !nextPayload.field_photo) {
+    nextPayload.field_photo = await fileToBase64(nextPayload.field_photo_file);
   }
+
+  delete nextPayload.field_photo_file;
+
+  return nextPayload;
 }
 
 export async function submitCheckIn(payload = {}) {

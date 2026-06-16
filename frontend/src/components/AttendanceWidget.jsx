@@ -3,6 +3,7 @@ import {
   buildAttendancePayload,
   createHolidayWorkRequest,
   getAttendanceStatus,
+  getCurrentLocation,
   submitCheckIn,
   submitCheckOut,
 } from '../api/client';
@@ -45,6 +46,26 @@ function statusLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function attendanceErrorMessage(error) {
+  const rawMessage = String(error?.message || '').trim();
+
+  if (!rawMessage) {
+    return 'Attendance update failed. Please try again.';
+  }
+
+  const lowerMessage = rawMessage.toLowerCase();
+
+  if (
+    lowerMessage.includes('location') ||
+    lowerMessage.includes('gps')
+  ) {
+    return `${rawMessage} Please allow browser location permission and try again.`;
+  }
+
+  return rawMessage;
+}
+
+
 function formatTime(value) {
   if (!value) return '--';
 
@@ -66,6 +87,20 @@ function formatTime(value) {
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function gpsStatusText(location) {
+  if (!location?.latitude || !location?.longitude) {
+    return '';
+  }
+
+  const accuracy = Number(location.accuracy || 0);
+
+  if (accuracy > 0) {
+    return `GPS ready • Accuracy ±${Math.round(accuracy)}m`;
+  }
+
+  return 'GPS ready';
 }
 
 function previewFile(file, setter) {
@@ -214,9 +249,10 @@ export default function AttendanceWidget({ onSuccess }) {
   const [showHolidayRequestForm, setShowHolidayRequestForm] = useState(false);
 
   const [statusData, setStatusData] = useState(null);
-  const [message, setMessage] = useState('');
+ const [message, setMessage] = useState('');
   const [loadingType, setLoadingType] = useState('');
   const [loadingStatus, setLoadingStatus] = useState(false);
+  const [currentGps, setCurrentGps] = useState(null);
 
   const attendance = statusData?.attendance || null;
   const holiday = statusData?.holiday || {};
@@ -288,6 +324,39 @@ export default function AttendanceWidget({ onSuccess }) {
     }
   }
 
+async function refreshGps() {
+  try {
+    setLoadingType('gps-refresh');
+    setMessage('Refreshing GPS location. Please wait...');
+
+    const location = await getCurrentLocation();
+
+    setCurrentGps(location);
+    setMessage(gpsStatusText(location) || 'GPS location refreshed.');
+  } catch (error) {
+    setCurrentGps(null);
+    setMessage(attendanceErrorMessage(error));
+  } finally {
+    setLoadingType('');
+  }
+}
+
+function savedGpsPayload() {
+  if (!currentGps?.latitude || !currentGps?.longitude) {
+    return {};
+  }
+
+  return {
+    latitude: currentGps.latitude,
+    longitude: currentGps.longitude,
+    accuracy: currentGps.accuracy || '',
+    address: currentGps.address || '',
+    location_accuracy_warning: currentGps.location_accuracy_warning || false,
+    location_warning: currentGps.location_warning || '',
+  };
+}
+
+
   async function submitAttendance(type) {
     setMessage('');
 
@@ -328,10 +397,11 @@ export default function AttendanceWidget({ onSuccess }) {
 
     try {
       setLoadingType(type);
-      setMessage('Preparing attendance details...');
+      setMessage('Capturing GPS location. Please wait...');
 
       if (type === 'check-in') {
         const payload = await buildAttendancePayload({
+          ...savedGpsPayload(),
           mode,
           field_location: fieldLocation.trim(),
           field_photo_file: fieldPhotoFile,
@@ -347,6 +417,7 @@ export default function AttendanceWidget({ onSuccess }) {
         setLateReason('');
       } else {
         const payload = await buildAttendancePayload({
+          ...savedGpsPayload(),
           early_checkout_reason: earlyCheckoutReason.trim(),
         });
 
@@ -357,11 +428,11 @@ export default function AttendanceWidget({ onSuccess }) {
       }
 
       await refreshAfterSuccess();
-    } catch (error) {
-      setMessage(error.message || 'Attendance update failed');
-    } finally {
-      setLoadingType('');
-    }
+      } catch (error) {
+        setMessage(attendanceErrorMessage(error));
+      } finally {
+        setLoadingType('');
+      }
   }
 
   async function submitHolidayWorkRequest(event) {
@@ -385,14 +456,16 @@ export default function AttendanceWidget({ onSuccess }) {
 
     try {
       setLoadingType('holiday-work-request');
+      setMessage('Capturing GPS location. Please wait...');
 
-      const payload = await buildAttendancePayload({
-        date: holidayRequestDate,
-        reason: holidayReason.trim(),
-        work_location: holidayWorkLocation.trim(),
-        field_location: holidayWorkLocation.trim(),
-        field_photo_file: holidayPhotoFile,
-      });
+        const payload = await buildAttendancePayload({
+          ...savedGpsPayload(),
+          date: holidayRequestDate,
+          reason: holidayReason.trim(),
+          work_location: holidayWorkLocation.trim(),
+          field_location: holidayWorkLocation.trim(),
+          field_photo_file: holidayPhotoFile,
+        });
 
       const data = await createHolidayWorkRequest(payload);
 
@@ -405,11 +478,11 @@ export default function AttendanceWidget({ onSuccess }) {
       setShowHolidayRequestForm(false);
 
       await refreshAfterSuccess();
-    } catch (error) {
-      setMessage(error.message || 'Holiday work request submission failed');
-    } finally {
-      setLoadingType('');
-    }
+} catch (error) {
+  setMessage(attendanceErrorMessage(error));
+} finally {
+  setLoadingType('');
+}
   }
 
   return (
@@ -569,9 +642,9 @@ export default function AttendanceWidget({ onSuccess }) {
                 ? 'Already Checked In'
                 : 'Press & Hold to Check In'
           }
-          loadingLabel={
-            loadingType === 'check-in' ? 'Checking In...' : 'Processing...'
-          }
+            loadingLabel={
+              loadingType === 'check-in' ? 'Checking In...' : 'Processing...'
+            }
           loading={loadingType === 'check-in'}
           disabled={loadingType !== '' || checkedIn || holidayCheckInBlocked}
           onComplete={() => submitAttendance('check-in')}
@@ -596,24 +669,39 @@ export default function AttendanceWidget({ onSuccess }) {
         />
       </div>
 
-      <div className="attendance-extra-grid">
-        {holiday?.is_holiday && (
-          <button
-            type="button"
-            className="mini-action-btn"
-            onClick={() => setShowHolidayRequestForm((value) => !value)}
-            disabled={loadingType !== '' || holidayWorkApproved}
-          >
-            {showHolidayRequestForm ? 'Close Holiday Request' : 'Request Holiday Work'}
-          </button>
-        )}
+          <div className="attendance-extra-grid">
+            <button
+              type="button"
+              className="mini-action-btn"
+              onClick={refreshGps}
+              disabled={loadingType !== ''}
+            >
+              {loadingType === 'gps-refresh' ? 'Refreshing GPS...' : 'Refresh GPS'}
+            </button>
 
-        {availableCompOffCount > 0 && (
-          <div className="compoff-pill">
-            Available Comp-Off: {availableCompOffCount}
+            {currentGps?.latitude && currentGps?.longitude && (
+              <div className="compoff-pill">
+                {gpsStatusText(currentGps)}
+              </div>
+            )}
+
+            {holiday?.is_holiday && (
+              <button
+                type="button"
+                className="mini-action-btn"
+                onClick={() => setShowHolidayRequestForm((value) => !value)}
+                disabled={loadingType !== '' || holidayWorkApproved}
+              >
+                {showHolidayRequestForm ? 'Close Holiday Request' : 'Request Holiday Work'}
+              </button>
+            )}
+
+            {availableCompOffCount > 0 && (
+              <div className="compoff-pill">
+                Available Comp-Off: {availableCompOffCount}
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
       {showHolidayRequestForm && (
         <form className="attendance-request-box" onSubmit={submitHolidayWorkRequest}>

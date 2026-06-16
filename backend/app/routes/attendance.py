@@ -1,3 +1,5 @@
+import os
+
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime, time, date, timedelta, timezone
 from bson import ObjectId
@@ -12,6 +14,15 @@ attendance_bp = Blueprint("attendance", __name__)
 OFFICE_START_TIME = time(9, 30)
 LATE_CUTOFF = time(9, 50)
 OFFICE_END_TIME = time(18, 0)
+
+ATTENDANCE_MAX_GPS_ACCURACY_METERS = int(
+    os.getenv("ATTENDANCE_MAX_GPS_ACCURACY_METERS", "60")
+)
+
+# Global office geofence is disabled because SDS HRMS has field workers
+# and employees working from multiple states/branches.
+# Current rule: require accurate GPS, but do not block by one fixed office location.
+ATTENDANCE_GEOFENCE_ENABLED = False
 
 DEFAULT_STATE = "Assam(HO)"
 
@@ -913,6 +924,22 @@ def has_required_location(location):
     )
 
 
+
+def validate_attendance_location(location, mode="office", action="check-in"):
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+
+    if latitude is None or longitude is None:
+        return (
+            False,
+            {
+                "message": f"GPS location is required for attendance {action}. Please enable location permission and try again.",
+                "location_required": True,
+            },
+        )
+
+    return True, {}
+
 def get_upload_value(data, *keys):
     for key in keys:
         value = data.get(key)
@@ -1376,6 +1403,15 @@ def check_in():
     )
     location = extract_location(data)
 
+    location_ok, location_error = validate_attendance_location(
+        location,
+        mode=mode,
+        action="check-in",
+    )
+
+    if not location_ok:
+        return jsonify(location_error), 400
+
     today_date = now.date()
     today = today_date.isoformat()
     tenant_id = e.get("tenant_id") or current_tenant_id()
@@ -1483,7 +1519,10 @@ def check_in():
 
         "check_in_location": location,
         "check_out_location": None,
-        "location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
+        "location_accuracy_warning": bool(
+            location.get("accuracy")
+            and float(location.get("accuracy")) > ATTENDANCE_MAX_GPS_ACCURACY_METERS
+        ),
 
         "is_late": is_late,
         "is_early_checkout": False,
@@ -1606,6 +1645,17 @@ def check_out():
     if not rec:
         return jsonify({"message": "Please check in first"}), 400
 
+    check_out_mode = normalize_mode(data.get("mode") or rec.get("mode") or "office")
+
+    location_ok, location_error = validate_attendance_location(
+        location,
+        mode=check_out_mode,
+        action="check-out",
+    )
+
+    if not location_ok:
+        return jsonify(location_error), 400
+
     if rec.get("check_out"):
         if created_offline or client_id_matches(rec, client_attendance_id):
             return jsonify({
@@ -1630,7 +1680,10 @@ def check_out():
     set_data = {
         "check_out": now,
         "check_out_location": location,
-        "checkout_location_accuracy_warning": bool(location.get("accuracy") and location.get("accuracy") > 100),
+        "checkout_location_accuracy_warning": bool(
+            location.get("accuracy")
+            and float(location.get("accuracy")) > ATTENDANCE_MAX_GPS_ACCURACY_METERS
+        ),
         "is_early_checkout": is_early_checkout,
         "early_checkout_reason": early_checkout_reason,
         "updated_at": server_received_at,
