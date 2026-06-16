@@ -148,11 +148,21 @@ export default function AiAssistantWidget() {
   const recognitionRef = useRef(null);
   const finalTranscriptRef = useRef("");
 
-  const actionMode = useMemo(() => detectActionMode(messages), [messages]);
-  const quickReplies = useMemo(
-    () => buildQuickReplies(messages, loading),
-    [messages, loading]
-  );
+const hasStartedChat = useMemo(
+  () => messages.some((item) => item.role === "user"),
+  [messages]
+);
+
+const visibleMessages = useMemo(
+  () => (hasStartedChat ? messages.filter((_, index) => index > 0) : []),
+  [hasStartedChat, messages]
+);
+
+const actionMode = useMemo(() => detectActionMode(messages), [messages]);
+const quickReplies = useMemo(
+  () => buildQuickReplies(messages, loading),
+  [messages, loading]
+);
 
   useEffect(() => {
     if (!open) return;
@@ -398,7 +408,7 @@ export default function AiAssistantWidget() {
       )}
 
       {open && (
-        <div className="ai-assistant-panel ai-glass-phone">
+        <div className={`ai-assistant-panel ai-glass-phone ${hasStartedChat ? "has-chat" : "is-home"}`}>
           <div className="ai-top-bar">
             <button
               type="button"
@@ -423,6 +433,7 @@ export default function AiAssistantWidget() {
             </button>
           </div>
 
+          {!hasStartedChat && (
           <div className="ai-hero-zone">
             <div className="ai-soft-grid" />
 
@@ -471,14 +482,16 @@ export default function AiAssistantWidget() {
               )}
             </div>
           </div>
+        )}
 
-          {actionMode && (
-            <div className="ai-action-mode-strip">
-              <span>{actionMode}</span>
-              <small>Guided action is active</small>
-            </div>
-          )}
+        {hasStartedChat && actionMode && (
+          <div className="ai-action-mode-strip">
+            <span>{actionMode}</span>
+            <small>Guided action is active</small>
+          </div>
+        )}
 
+        {!hasStartedChat && (
           <div className="ai-assistant-quick-row">
             {QUICK_QUESTIONS.map((question) => (
               <button
@@ -491,10 +504,12 @@ export default function AiAssistantWidget() {
               </button>
             ))}
           </div>
+        )}
 
-          <div className="ai-response-area">
-            <div className="ai-assistant-messages">
-              {messages.map((item, index) => {
+          {hasStartedChat && (
+            <div className="ai-response-area">
+              <div className="ai-assistant-messages">
+                {visibleMessages.map((item, index) => {
                 const isUser = item.role === "user";
 
                 return (
@@ -551,9 +566,9 @@ export default function AiAssistantWidget() {
               <div ref={messagesEndRef} />
             </div>
           </div>
-
-          {quickReplies.length > 0 && (
-            <div className="ai-guided-replies">
+        )}
+            {hasStartedChat && quickReplies.length > 0 && (
+              <div className="ai-guided-replies">
               {quickReplies.map((reply) => (
                 <button
                   key={reply}
@@ -1021,6 +1036,19 @@ export default function AiAssistantWidget() {
           box-shadow: 0 18px 46px rgba(15,23,42,.06);
           overflow: hidden;
         }
+
+        .ai-glass-phone.has-chat .ai-response-area {
+          margin-top: 8px;
+        }
+
+        .ai-glass-phone.has-chat .ai-assistant-input-area {
+          padding-top: 12px;
+        }
+
+        .ai-glass-phone.has-chat .ai-top-bar {
+          padding-bottom: 12px;
+        }
+
 
         .ai-assistant-messages {
           height: 100%;
