@@ -3667,6 +3667,34 @@ export function updateSuperAdminTenantUserStatus(userId, payload = {}) {
   });
 }
 
+
+export function getPrivateAttendanceCorrectionTenants() {
+  return api('/superadmin/private-attendance-corrections/tenants').then((data = {}) => ({
+    ...data,
+    items: data.items || data.tenants || [],
+    tenants: data.tenants || data.items || [],
+  }));
+}
+
+export function getPrivateAttendanceCorrectionEmployees(params = {}) {
+  return api(`/superadmin/private-attendance-corrections/employees${buildQuery(params)}`).then((data = {}) => ({
+    ...data,
+    items: data.items || data.employees || [],
+    employees: data.employees || data.items || [],
+  }));
+}
+
+export function getPrivateAttendanceCorrectionRecord(params = {}) {
+  return api(`/superadmin/private-attendance-corrections/record${buildQuery(params)}`);
+}
+
+export function savePrivateAttendanceCorrection(payload = {}) {
+  return api('/superadmin/private-attendance-corrections/update', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function deleteSuperAdminTenantUser(userId) {
   return api(`/superadmin/tenant-users/${userId}`, {
     method: 'DELETE',

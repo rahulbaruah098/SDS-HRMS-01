@@ -600,7 +600,7 @@ export const coreModules = [
   'Holiday Work Requests',
   Clock,
   'Request and approve holiday work before employees mark attendance on Sunday, second Saturday, fourth Saturday or HR-created holidays.',
-  ATTENDANCE_MANAGER_ROLES,
+   ALL_COMMON_ROLES,,
 ],
 
 [

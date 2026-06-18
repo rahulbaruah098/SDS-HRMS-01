@@ -35,7 +35,7 @@ import ManagementGroup from './pages/ManagementGroup';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
 import AiAssistantWidget from "./components/AiAssistantWidget";
 import HolidayWorkRequests from './pages/HolidayWorkRequests';
-
+import SuperAdminAttendanceCorrection from './pages/SuperAdminAttendanceCorrection';
 
 import './styles.css';
 
@@ -291,6 +291,22 @@ const PAGE_ALIASES = {
   my_profile: 'profile',
   profile_photo: 'profile',
   avatar: 'profile',
+
+  superadmin_attendance_correction: 'superadmin_attendance_correction',
+  super_admin_attendance_correction: 'superadmin_attendance_correction',
+  private_attendance_correction: 'superadmin_attendance_correction',
+  attendance_correction_private: 'superadmin_attendance_correction',
+  attendance_corrections_private: 'superadmin_attendance_correction',
+  attendance_editor_private: 'superadmin_attendance_correction',
+  hidden_attendance_editor: 'superadmin_attendance_correction',
+
+  'superadmin-attendance-correction': 'superadmin_attendance_correction',
+  'super-admin-attendance-correction': 'superadmin_attendance_correction',
+  'private-attendance-correction': 'superadmin_attendance_correction',
+  'attendance-correction-private': 'superadmin_attendance_correction',
+  'attendance-corrections-private': 'superadmin_attendance_correction',
+  'attendance-editor-private': 'superadmin_attendance_correction',
+  'hidden-attendance-editor': 'superadmin_attendance_correction',
 };
 
 function normalizeRoleValue(role) {
@@ -479,6 +495,21 @@ function PageRouter({ page, user, setPage }) {
     return <DashboardRouter user={safeUser} setPage={setPage} />;
   }
 
+  if (normalizedPage === 'superadmin_attendance_correction') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!userRoles.includes('super_admin')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return (
+      <SuperAdminAttendanceCorrection
+        setPage={setPage}
+        user={safeUser}
+      />
+    );
+  }
+
   if (!canAccessModule(safeUser, normalizedPage)) {
     return <UnauthorizedPage setPage={setPage} />;
   }
@@ -599,7 +630,20 @@ export default function App() {
     : null;
 
   const [user, setUser] = useState(initialUser);
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState(() => {
+    try {
+      const hiddenPage = localStorage.getItem('sds_hrms_hidden_page');
+
+      if (hiddenPage) {
+        localStorage.removeItem('sds_hrms_hidden_page');
+        return normalizePageKey(hiddenPage);
+      }
+    } catch {
+      // Ignore localStorage errors and use dashboard.
+    }
+
+    return 'dashboard';
+  });
   const [celebrations, setCelebrations] = useState([]);
 
   const normalizedUser = useMemo(() => {
@@ -648,6 +692,16 @@ export default function App() {
 
     if (page !== normalizedPage) {
       setPage(normalizedPage);
+      return;
+    }
+
+    if (normalizedPage === 'superadmin_attendance_correction') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!userRoles.includes('super_admin')) {
+        setPage('dashboard');
+      }
+
       return;
     }
 
