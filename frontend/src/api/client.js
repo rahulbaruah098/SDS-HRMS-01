@@ -629,12 +629,19 @@ export function normalizeTeamHierarchyTree(tree = {}) {
   };
 
   if (!normalized.all_people.length) {
+    const hasTeamLeaderRoot = Boolean(
+      normalized.team_leader?._id ||
+      normalized.team_leader?.employee_id ||
+      normalized.team_leader?.user_id ||
+      normalized.team_leader?.email
+    );
+
     normalized.all_people = normalizePeopleList([
       normalized.reporting_officer,
       normalized.team_leader,
       normalized.self,
       ...normalized.team_members,
-      ...normalized.reporting_members,
+      ...(hasTeamLeaderRoot ? [] : normalized.reporting_members),
     ]);
   }
 

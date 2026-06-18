@@ -109,7 +109,19 @@ function getEmployeeProfile(user = {}) {
     ),
     department: firstNonEmpty(employee.department, user.department),
     designation: firstNonEmpty(employee.designation, user.designation),
+    team_leader_id: firstNonEmpty(
+      employee.team_leader_id,
+      employee.team_leader_employee_id,
+      user.team_leader_id,
+      user.team_leader_employee_id,
+    ),
     team_leader_name: firstNonEmpty(employee.team_leader_name, user.team_leader_name),
+    reporting_officer_id: firstNonEmpty(
+      employee.reporting_officer_id,
+      employee.reporting_officer_employee_id,
+      user.reporting_officer_id,
+      user.reporting_officer_employee_id,
+    ),
     reporting_officer_name: firstNonEmpty(
       employee.reporting_officer_name,
       user.reporting_officer_name,
@@ -183,12 +195,38 @@ export default function ApplyLeave({ user }) {
     if (isHrUser) return 'This leave request will be sent to Admin for approval.';
     if (isAdminUser) return 'This leave request will be sent to HR for approval.';
 
-    if (employeeProfile.team_leader_name) {
-      return 'This leave request will be sent to your Team Leader first.';
+    const teamLeaderName = employeeProfile.team_leader_name;
+    const reportingOfficerName = employeeProfile.reporting_officer_name;
+    const teamLeaderId = String(employeeProfile.team_leader_id || '').trim();
+    const reportingOfficerId = String(employeeProfile.reporting_officer_id || '').trim();
+
+    const sameTeamLeaderAndReportingOfficer = Boolean(
+      teamLeaderName &&
+      reportingOfficerName &&
+      (
+        (
+          teamLeaderId &&
+          reportingOfficerId &&
+          teamLeaderId === reportingOfficerId
+        ) ||
+        teamLeaderName.trim().toLowerCase() === reportingOfficerName.trim().toLowerCase()
+      )
+    );
+
+    if (sameTeamLeaderAndReportingOfficer) {
+      return `This leave request will be sent to ${teamLeaderName} for approval.`;
     }
 
-    if (employeeProfile.reporting_officer_name) {
-      return 'This leave request will be sent to your Reporting Officer.';
+    if (teamLeaderName && reportingOfficerName) {
+      return `This leave request will be sent to ${teamLeaderName} first, then ${reportingOfficerName}.`;
+    }
+
+    if (teamLeaderName) {
+      return `This leave request will be sent to ${teamLeaderName} for approval.`;
+    }
+
+    if (reportingOfficerName) {
+      return `This leave request will be sent to ${reportingOfficerName} for approval.`;
     }
 
     return 'This leave request will be sent to HR.';

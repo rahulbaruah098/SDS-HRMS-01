@@ -792,7 +792,7 @@ function EmployeeForm({
               onSearchChange={setTeamLeaderSearch}
               onChange={handleChange}
               options={teamLeaders}
-              placeholder="Search team leader by name, code, department..."
+              placeholder="Search any active Team Leader by name, code, department, organization..."
             />
             <SearchableEmployeeSelect
               label="Reporting Officer"
@@ -802,8 +802,11 @@ function EmployeeForm({
               onSearchChange={setReportingOfficerSearch}
               onChange={handleChange}
               options={reportingOfficers}
-              placeholder="Search manager, director, managing director, CEO..."
+              placeholder="Search any active Reporting Officer / Manager / Director / CEO..."
             />
+         <div className="hrms-form-note" style={{ gridColumn: '1 / -1' }}>
+              Team Leader and Reporting Officer mapping is employee-based. The selected person can belong to another department or organization.
+            </div>
           </FormSection>
 
           <div className="hrms-checkbox-grid">

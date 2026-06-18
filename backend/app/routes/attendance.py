@@ -9,7 +9,12 @@ from app.utils.auth import current_user_required, roles_required, audit
 from app.utils.serializers import clean_doc
 
 
+
 attendance_bp = Blueprint("attendance", __name__)
+
+ATTENDANCE_LOCAL_TIMEZONE = timezone(
+    timedelta(minutes=int(os.getenv("ATTENDANCE_TIMEZONE_OFFSET_MINUTES", "330")))
+)
 
 OFFICE_START_TIME = time(9, 30)
 LATE_CUTOFF = time(9, 50)
@@ -142,12 +147,12 @@ def normalize_state(value):
     return state
 
 
-def today_local():
-    return datetime.now().date()
-
-
 def now_local():
-    return datetime.now()
+    return datetime.now(ATTENDANCE_LOCAL_TIMEZONE).replace(tzinfo=None)
+
+
+def today_local():
+    return now_local().date()
 
 def parse_client_datetime(value):
     value = normalize_text(value)
@@ -159,7 +164,7 @@ def parse_client_datetime(value):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
 
         if parsed.tzinfo:
-            parsed = parsed.astimezone().replace(tzinfo=None)
+            parsed = parsed.astimezone(ATTENDANCE_LOCAL_TIMEZONE).replace(tzinfo=None)
 
         return parsed
     except Exception:
@@ -1147,7 +1152,10 @@ def first_approval_stage(employee):
 
 
 def next_approval_stage_after_team_leader(request_doc):
-    if request_doc.get("reporting_officer_id"):
+    team_leader_id = normalize_text(request_doc.get("team_leader_id"))
+    reporting_officer_id = normalize_text(request_doc.get("reporting_officer_id"))
+
+    if reporting_officer_id and reporting_officer_id != team_leader_id:
         return "reporting_officer", "Reporting Officer"
 
     return "approved", "Approved"

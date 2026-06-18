@@ -3277,26 +3277,6 @@ def employee_dashboard():
             .find(employee_mapping_query("reporting_officer_id", emp, tenant_id))
             .sort("name", 1)
         )
-    elif emp.get("reporting_officer_id"):
-        reporting_officer = employee_by_id(db, tenant_id, emp.get("reporting_officer_id"))
-
-        if reporting_officer:
-            reporting_members = list(
-                db.employees
-                .find(employee_mapping_query("reporting_officer_id", reporting_officer, tenant_id))
-                .sort("name", 1)
-            )
-        else:
-            reporting_members = list(
-                db.employees
-                .find({
-                    "tenant_id": tenant_id,
-                    "reporting_officer_id": emp.get("reporting_officer_id"),
-                    "status": {"$ne": "Inactive"},
-                    "is_deleted": {"$ne": True},
-                })
-                .sort("name", 1)
-            )
 
     for member in team_members:
         apply_profile_photo_aliases(member, employee_photo(member))

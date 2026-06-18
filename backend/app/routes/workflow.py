@@ -1418,20 +1418,26 @@ def next_leave_stage(employee, current_stage, leave_doc=None):
     """
     Decide the next leave approval stage.
 
-    Important two-step rule:
-    - If the current stage is Team Leader and a Reporting Officer is mapped,
-      the leave must remain pending and move to Reporting Officer.
-    - If no Reporting Officer is mapped, move to HR.
-    - Reporting Officer approval is final approval.
-    - HR approval is final approval only when the leave directly reached HR.
-
-    We check both the employee master and the leave document because older
-    records may have the Reporting Officer saved on the leave request even if
-    the employee master was later changed.
+    Rules:
+    - Normal employee with Team Leader and different Reporting Officer:
+      Team Leader -> Reporting Officer -> Final.
+    - Normal employee with same Team Leader and Reporting Officer:
+      Team Leader -> Final.
+    - Employee without Team Leader but with Reporting Officer:
+      Reporting Officer -> Final.
+    - Team Leader's own leave:
+      Reporting Officer -> Final.
+    - HR/Admin special stages:
+      Admin/HR -> Final.
     """
 
     leave_doc = leave_doc or {}
     current_stage = normalize_text(current_stage)
+
+    team_leader_id = (
+        normalize_text(leave_doc.get("team_leader_id"))
+        or normalize_text(employee.get("team_leader_id") if employee else "")
+    )
 
     reporting_officer_id = (
         normalize_text(leave_doc.get("reporting_officer_id"))
@@ -1439,7 +1445,10 @@ def next_leave_stage(employee, current_stage, leave_doc=None):
     )
 
     if current_stage == "team_leader":
-        return "reporting_officer" if reporting_officer_id else "hr"
+        if reporting_officer_id and reporting_officer_id != team_leader_id:
+            return "reporting_officer"
+
+        return "final"
 
     if current_stage == "reporting_officer":
         return "final"
@@ -2170,23 +2179,76 @@ def resolve_handover_employee(db, tenant_id, employee, raw_employee_id):
     if not handover_obj_id:
         raise ValueError("Invalid task handover employee")
 
-    q = {
+    handover_employee = db.employees.find_one({
         "_id": handover_obj_id,
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "status": {"$ne": "Inactive"},
-    }
-
-    if employee.get("department"):
-        q["department"] = employee.get("department")
-
-    handover_employee = db.employees.find_one(q)
+    })
 
     if not handover_employee:
-        raise ValueError("Task handover employee must be an active member of the same department")
+        raise ValueError("Task handover employee must be an active employee")
 
     if str(handover_employee.get("_id")) == str(employee.get("_id")):
         raise ValueError("Task handover cannot be assigned to yourself")
+
+    def normalize_id_values(*values):
+        normalized = []
+
+        for value in values:
+            text_value = normalize_text(value)
+
+            if not text_value:
+                continue
+
+            if text_value not in normalized:
+                normalized.append(text_value)
+
+            try:
+                object_value = ObjectId(text_value)
+                if object_value not in normalized:
+                    normalized.append(object_value)
+            except Exception:
+                pass
+
+        return normalized
+
+    employee_team_leader_values = normalize_id_values(
+        employee.get("team_leader_id"),
+        employee.get("team_leader_employee_id"),
+    )
+
+    handover_identity_values = normalize_id_values(
+        handover_employee.get("_id"),
+        handover_employee.get("employee_id"),
+        handover_employee.get("employee_code"),
+        handover_employee.get("emp_code"),
+        handover_employee.get("code"),
+        handover_employee.get("user_id"),
+        handover_employee.get("email"),
+    )
+
+    handover_team_leader_values = normalize_id_values(
+        handover_employee.get("team_leader_id"),
+        handover_employee.get("team_leader_employee_id"),
+    )
+
+    same_team = False
+
+    # Case 1: selected handover employee is the current employee's Team Leader.
+    if employee_team_leader_values and any(
+        value in handover_identity_values for value in employee_team_leader_values
+    ):
+        same_team = True
+
+    # Case 2: selected handover employee is another member under the same Team Leader.
+    if employee_team_leader_values and any(
+        value in handover_team_leader_values for value in employee_team_leader_values
+    ):
+        same_team = True
+
+    if not same_team:
+        raise ValueError("Task handover employee must be an active member of your same team")
 
     handover_code = employee_code(handover_employee)
 
@@ -3101,7 +3163,6 @@ def set_leave_balance(employee_id):
         "updated_items": clean_doc(updated_items),
     })
 
-
 @workflow_bp.get("/leave_requests/options")
 @current_user_required
 def leave_request_options():
@@ -3117,15 +3178,105 @@ def leave_request_options():
 
     tenant_id = employee.get("tenant_id") or current_tenant_id()
 
+    def normalize_id_values(*values):
+        normalized = []
+
+        for value in values:
+            text_value = normalize_text(value)
+
+            if not text_value:
+                continue
+
+            if text_value not in normalized:
+                normalized.append(text_value)
+
+            try:
+                object_value = ObjectId(text_value)
+                if object_value not in normalized:
+                    normalized.append(object_value)
+            except Exception:
+                pass
+
+        return normalized
+
+    def employee_self_exclusion_query():
+        self_values = normalize_id_values(
+            employee.get("_id"),
+            employee.get("employee_id"),
+            employee.get("employee_code"),
+            employee.get("emp_code"),
+            employee.get("code"),
+            employee.get("user_id"),
+            employee.get("email"),
+        )
+
+        return {
+            "$and": [
+                {"_id": {"$ne": employee.get("_id")}},
+                {"employee_id": {"$nin": self_values}},
+                {"employee_code": {"$nin": self_values}},
+                {"emp_code": {"$nin": self_values}},
+                {"code": {"$nin": self_values}},
+                {"user_id": {"$nin": self_values}},
+                {"email": {"$nin": self_values}},
+            ]
+        }
+
+    team_leader_values = normalize_id_values(
+        employee.get("team_leader_id"),
+        employee.get("team_leader_employee_id"),
+    )
+
+    reporting_officer_values = normalize_id_values(
+        employee.get("reporting_officer_id"),
+        employee.get("reporting_officer_employee_id"),
+    )
+
+    member_or_filters = []
+
+    # 1. Add the employee's own Team Leader.
+    if team_leader_values:
+        member_or_filters.extend([
+            {"_id": {"$in": team_leader_values}},
+            {"employee_id": {"$in": team_leader_values}},
+            {"employee_code": {"$in": team_leader_values}},
+            {"emp_code": {"$in": team_leader_values}},
+            {"code": {"$in": team_leader_values}},
+            {"user_id": {"$in": team_leader_values}},
+            {"email": {"$in": team_leader_values}},
+        ])
+
+        # 2. Add all other employees mapped under the same Team Leader.
+        member_or_filters.append({
+            "team_leader_id": {"$in": team_leader_values}
+        })
+
+    # 3. Add Reporting Officer also, only as approval/handover option.
+    if reporting_officer_values:
+        member_or_filters.extend([
+            {"_id": {"$in": reporting_officer_values}},
+            {"employee_id": {"$in": reporting_officer_values}},
+            {"employee_code": {"$in": reporting_officer_values}},
+            {"emp_code": {"$in": reporting_officer_values}},
+            {"code": {"$in": reporting_officer_values}},
+            {"user_id": {"$in": reporting_officer_values}},
+            {"email": {"$in": reporting_officer_values}},
+        ])
+
     member_query = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "status": {"$ne": "Inactive"},
-        "_id": {"$ne": employee["_id"]},
     }
 
-    if employee.get("department"):
+    if member_or_filters:
+        member_query["$or"] = member_or_filters
+        member_query.update(employee_self_exclusion_query())
+    elif employee.get("department"):
+        member_query.update(employee_self_exclusion_query())
         member_query["department"] = employee.get("department")
+    else:
+        member_query["_id"] = {"$exists": False}
 
     members = list(
         db.employees
@@ -3133,9 +3284,17 @@ def leave_request_options():
             "name": 1,
             "employee_name": 1,
             "employee_id": 1,
+            "employee_code": 1,
             "emp_code": 1,
+            "code": 1,
+            "user_id": 1,
+            "email": 1,
             "department": 1,
             "designation": 1,
+            "team_leader_id": 1,
+            "reporting_officer_id": 1,
+            "is_team_leader": 1,
+            "is_reporting_officer": 1,
         })
         .sort("name", 1)
         .limit(500)

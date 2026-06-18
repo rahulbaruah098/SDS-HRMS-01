@@ -1073,6 +1073,10 @@ def reporting_officer_designation_allowed(employee):
 def employee_reporting_officer_designation_query():
     return {
         "$or": [
+            {"is_reporting_officer": True},
+            {"is_reporting_officer": "true"},
+            {"role": re.compile(r"reporting[_ -]?officer|ro", re.IGNORECASE)},
+            {"roles": re.compile(r"reporting[_ -]?officer|ro", re.IGNORECASE)},
             {"designation": REPORTING_OFFICER_DESIGNATION_REGEX},
             {"designation_name": REPORTING_OFFICER_DESIGNATION_REGEX},
             {"title": REPORTING_OFFICER_DESIGNATION_REGEX},
@@ -1161,8 +1165,8 @@ def normalize_employee_reporting_mapping(db, payload, tenant_id, existing=None):
             if not reporting_officer:
                 return "Selected Reporting Officer was not found"
 
-            if not reporting_officer_designation_allowed(reporting_officer):
-                return "Reporting Officer must have Manager, Managing Director, Director, CEO, or Chief Executive Officer designation"
+            if not employee_is_reporting_officer(reporting_officer) and not reporting_officer_designation_allowed(reporting_officer):
+                return "Selected Reporting Officer must be marked as Reporting Officer or must have Manager, Managing Director, Director, CEO, or Chief Executive Officer designation"
 
             payload["reporting_officer_id"] = str(reporting_officer["_id"])
             payload["reporting_officer_name"] = employee_display_name(reporting_officer)
@@ -1171,15 +1175,7 @@ def normalize_employee_reporting_mapping(db, payload, tenant_id, existing=None):
             payload["reporting_officer_name"] = ""
 
     if truthy(payload.get("is_reporting_officer")):
-        employee_designation = {
-            "designation": payload.get("designation") or existing.get("designation"),
-            "designation_name": payload.get("designation_name") or existing.get("designation_name"),
-            "title": payload.get("title") or existing.get("title"),
-            "position": payload.get("position") or existing.get("position"),
-        }
-
-        if not reporting_officer_designation_allowed(employee_designation):
-            return "Only Manager, Managing Director, Director, CEO, or Chief Executive Officer designation employees can be marked as Reporting Officer"
+        payload["is_reporting_officer"] = True
 
     return ""
 

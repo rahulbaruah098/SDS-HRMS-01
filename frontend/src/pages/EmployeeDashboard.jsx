@@ -684,11 +684,28 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
       ? [...teamMembers, self]
       : teamMembers;
 
+  const isTeamLeaderRootMap = hasTeamLeader;
+
+  const visibleReportingScope = normalizePeopleList(
+    isTeamLeaderRootMap
+      ? [
+          teamLeader,
+          ...visibleTeamMembers,
+        ]
+      : (
+          teamLeadersUnderReporting.length
+            ? teamLeadersUnderReporting
+            : reportingMembers
+        )
+  ).filter((person, index, list) => (
+    list.findIndex((item) => samePerson(item, person)) === index
+  ));
+
   const visibleAllPeople = normalizePeopleList([
     reportingOfficer,
     teamLeader,
     ...visibleTeamMembers,
-    ...reportingMembers,
+    ...(!isTeamLeaderRootMap ? reportingMembers : []),
   ]).filter((person, index, list) => (
     list.findIndex((item) => samePerson(item, person)) === index
   ));
@@ -744,21 +761,37 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
 
           <div className="emp-root-branch reporting">
             <div className="emp-root-branch-title">
-              <span>Reporting Scope</span>
-              <strong>{reportingMembers.length}</strong>
+              <span>{isTeamLeaderRootMap ? 'Team Scope' : 'Reporting Scope'}</span>
+              <strong>{visibleReportingScope.length}</strong>
             </div>
 
             <div className="emp-root-people-list">
-              {(teamLeadersUnderReporting.length ? teamLeadersUnderReporting : reportingMembers).map((person, index) => (
+              {visibleReportingScope.map((person, index) => (
                 <PersonChip
                   compact
                   key={`${person.employee_id || person._id || person.email || index}-reporting`}
                   person={person}
-                  label={isTruthy(person.is_team_leader) ? 'Team Leader' : 'Reporting Member'}
+                  label={
+                    isTeamLeaderRootMap
+                      ? (
+                          samePerson(person, teamLeader)
+                            ? 'Team Leader'
+                            : 'Team Member'
+                        )
+                      : (
+                          isTruthy(person.is_team_leader)
+                            ? 'Team Leader'
+                            : 'Reporting Member'
+                        )
+                  }
                 />
               ))}
 
-              {!reportingMembers.length && <div className="emp-root-empty">No reporting members mapped</div>}
+              {!visibleReportingScope.length && (
+                <div className="emp-root-empty">
+                  {isTeamLeaderRootMap ? 'No team scope mapped' : 'No reporting members mapped'}
+                </div>
+              )}
             </div>
           </div>
         </div>
