@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, timezone, timedelta
 
 from bson import ObjectId
@@ -259,19 +260,42 @@ def detect_action_intent(question):
     ]):
         return "cancel"
 
-    # Start leave guided flow only when user clearly wants to submit/apply.
-    if any(word in text for word in [
+    # Start leave guided flow only when user clearly wants to apply/request leave.
+    # Do not include phrases like "please submit my leave" here, because that
+    # phrase is used later as the final confirmation inside an active leave flow.
+    leave_start_phrases = [
         "i want to apply leave",
         "i need to apply leave",
         "i want leave",
         "i need leave",
+        "need casual leave",
+        "need earned leave",
+        "need half day leave",
+        "need half leave",
+        "apply leave",
+        "apply casual leave",
+        "apply earned leave",
+        "apply half day leave",
+        "apply half leave",
         "apply for leave",
+        "request leave",
+        "request casual leave",
+        "request earned leave",
+        "request half day leave",
+        "request half leave",
         "request leave now",
         "submit leave request",
         "start leave request",
         "create leave request",
         "leave application",
-    ]):
+    ]
+
+    if any(phrase in text for phrase in leave_start_phrases):
+        return "apply_leave"
+
+    leave_action_words = ["apply", "request", "create", "start"]
+
+    if "leave" in text and any(word in text for word in leave_action_words):
         return "apply_leave"
 
     if any(word in text for word in [
@@ -1146,6 +1170,170 @@ def _parse_leave_dates(date_text):
         "date_text": text,
     }
 
+def _normalize_ai_leave_type(value):
+    text = _safe_str(value).replace("_", " ")
+    return normalize_leave_type(text)
+
+
+def _detect_leave_type_from_text(text):
+    clean = _normalize_option_text(text)
+
+    if not clean:
+        return ""
+
+    if any(phrase in clean for phrase in [
+        "half day",
+        "halfday",
+        "half leave",
+        "half",
+    ]):
+        return "HALF-DAY"
+
+    if any(phrase in clean for phrase in [
+        "casual leave",
+        "casual",
+        "cl",
+    ]):
+        return "CL"
+
+    if any(phrase in clean for phrase in [
+        "earned leave",
+        "earned",
+        "el",
+    ]):
+        return "EL"
+
+    if any(phrase in clean for phrase in [
+        "comp off",
+        "compoff",
+        "compensatory",
+    ]):
+        return "COMP-OFF"
+
+    if any(phrase in clean for phrase in [
+        "leave without pay",
+        "loss of pay",
+        "lwp",
+    ]):
+        return "LWP"
+
+    return ""
+
+
+def _leave_option_for_type(leave_type, leave_options):
+    target = _normalize_ai_leave_type(leave_type)
+
+    if not target:
+        return None
+
+    for option in leave_options or []:
+        option_type = _normalize_ai_leave_type(
+            option.get("value")
+            or option.get("name")
+            or option.get("label")
+        )
+
+        if option_type == target:
+            return option
+
+    selected = _extract_selected_option(leave_type, leave_options or [])
+
+    if selected:
+        return selected
+
+    return None
+
+
+def _extract_leave_date_text_from_command(question):
+    text = _safe_str(question)
+    lowered = _lower(text)
+
+    if not text:
+        return ""
+
+    if "day after tomorrow" in lowered or "after tomorrow" in lowered:
+        return "day after tomorrow"
+
+    if "tomorrow" in lowered or "tmrw" in lowered or "tomorow" in lowered:
+        return "tomorrow"
+
+    if "today" in lowered:
+        return "today"
+
+    month_names = (
+        "jan|january|feb|february|mar|march|apr|april|may|jun|june|"
+        "jul|july|aug|august|sep|sept|september|oct|october|"
+        "nov|november|dec|december"
+    )
+
+    iso_date = r"\d{4}-\d{1,2}-\d{1,2}"
+    dmy_date = r"\d{1,2}[/-]\d{1,2}[/-]\d{4}"
+    named_date = rf"\d{{1,2}}\s+(?:{month_names})\s+\d{{4}}"
+    date_token = rf"(?:{iso_date}|{dmy_date}|{named_date})"
+
+    pattern = rf"({date_token})(?:\s*(?:to|till|until)\s*|\s+-\s*)?({date_token})?"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+
+    if not match:
+        return ""
+
+    first_date = _safe_str(match.group(1))
+    second_date = _safe_str(match.group(2))
+
+    if first_date and second_date:
+        return f"{first_date} to {second_date}"
+
+    return first_date
+
+
+def _is_valid_leave_reason(text):
+    reason = _safe_str(text)
+    return len(reason) >= 5
+
+
+def _looks_like_leave_submit_confirmation(text):
+    clean = _normalize_option_text(text)
+
+    return clean in [
+        "confirm",
+        "yes",
+        "submit",
+        "ok",
+        "okay",
+        "please submit",
+        "submit leave",
+        "submit my leave",
+        "please submit leave",
+        "please submit my leave",
+        "submit the leave",
+        "please submit the leave",
+    ]
+
+
+def _looks_like_cancel_confirmation(text):
+    clean = _normalize_option_text(text)
+
+    return clean in [
+        "cancel",
+        "no",
+        "stop",
+        "do not submit",
+        "dont submit",
+        "don't submit",
+    ]
+
+
+def _leave_review_text(data):
+    return (
+        "Please check if all the leave details are correct before submission:\n\n"
+        f"Leave Type: {data.get('leave_type_label') or leave_type_label(data.get('leave_type'))}\n"
+        f"Date/Range: {data.get('date_range_text')}\n"
+        f"Handover Work/Project: {data.get('handover_project_name') or 'None'}\n"
+        f"Handover To: {data.get('handover_to_name') or 'Not selected'}\n"
+        f"Reason: {data.get('reason')}\n\n"
+        "If everything is correct, say: Hey Eve please submit my leave.\n"
+        "You can also reply: confirm. To stop, say: cancel."
+    )
 
 def _create_ai_audit_log(
     user_context=None,
@@ -1465,26 +1653,95 @@ def _submit_leave_request_from_ai(data, user_context=None):
         "item": enrich_leave_request_doc(leave_doc),
     }
 
-
-def _apply_leave_start(user_context=None):
+def _apply_leave_start(user_context=None, question=""):
     leave_options = get_leave_type_options(user_context)
+    data = {
+        "leave_options": leave_options,
+    }
+
+    detected_leave_type = _detect_leave_type_from_text(question)
+
+    if detected_leave_type:
+        selected_leave_type = _leave_option_for_type(detected_leave_type, leave_options)
+
+        if selected_leave_type:
+            data["leave_type"] = _normalize_ai_leave_type(
+                selected_leave_type.get("value")
+                or selected_leave_type.get("name")
+                or detected_leave_type
+            )
+            data["leave_type_label"] = selected_leave_type.get("label") or leave_type_label(data["leave_type"])
+        else:
+            data["leave_type"] = _normalize_ai_leave_type(detected_leave_type)
+            data["leave_type_label"] = leave_type_label(data["leave_type"])
+
+    detected_date_text = _extract_leave_date_text_from_command(question)
+
+    if detected_date_text:
+        parsed_dates = _parse_leave_dates(detected_date_text)
+
+        if not parsed_dates.get("invalid"):
+            data["date_range_text"] = detected_date_text
+        else:
+            data["date_error"] = parsed_dates.get("message")
+
+    if not data.get("leave_type"):
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="leave_type"
+        )
+
+        return {
+            "handled": True,
+            "answer": (
+                "Sure, I can help you apply for leave.\n\n"
+                "Please select the leave type:\n"
+                f"{_format_options(leave_options)}\n\n"
+                "Reply with the option number or leave type, for example: CL, EL, or Half Day."
+            )
+        }
+
+    if not data.get("date_range_text"):
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="date_range"
+        )
+
+        date_error = data.get("date_error")
+        date_error_text = f"\n\n{date_error}" if date_error else ""
+
+        return {
+            "handled": True,
+            "answer": (
+                f"Selected leave type: {data.get('leave_type_label')}."
+                f"{date_error_text}\n\n"
+                "Now tell me the leave date or date range.\n"
+                "Example: tomorrow, 12 June 2026, or 12-06-2026 to 13-06-2026."
+            )
+        }
+
+    project_options = get_project_handover_options(user_context)
+    data["project_options"] = project_options
 
     save_pending_action(
         user_context=user_context,
         action_type="apply_leave",
-        data={
-            "leave_options": leave_options,
-        },
-        current_step="leave_type"
+        data=data,
+        current_step="handover_projects"
     )
 
     return {
         "handled": True,
         "answer": (
-            "Sure, I can help you apply for leave.\n\n"
-            "Please select the leave type:\n"
-            f"{_format_options(leave_options)}\n\n"
-            "Reply with the option number or leave type, for example: CL or 1."
+            f"Selected leave type: {data.get('leave_type_label')}.\n"
+            f"Leave date noted: {data.get('date_range_text')}.\n\n"
+            "Which project/work do you want to hand over during your leave?\n"
+            f"{_format_options(project_options)}\n\n"
+            "Reply with the option number, project name, or type 'none'."
         )
     }
 
@@ -1499,7 +1756,14 @@ def _apply_leave_continue(pending, question, user_context=None):
         leave_options = get_leave_type_options(user_context)
         data["leave_options"] = leave_options
 
-        selected = _extract_selected_option(question, leave_options)
+        detected_leave_type = _detect_leave_type_from_text(question)
+        selected = None
+
+        if detected_leave_type:
+            selected = _leave_option_for_type(detected_leave_type, leave_options)
+
+        if not selected:
+            selected = _extract_selected_option(question, leave_options)
 
         if not selected:
             return {
@@ -1510,53 +1774,18 @@ def _apply_leave_continue(pending, question, user_context=None):
                 )
             }
 
-        data["leave_type"] = selected.get("value") or selected.get("name")
-        data["leave_type_label"] = selected.get("label")
+        data["leave_type"] = _normalize_ai_leave_type(selected.get("value") or selected.get("name"))
+        data["leave_type_label"] = selected.get("label") or leave_type_label(data["leave_type"])
 
-        save_pending_action(
-            user_context=user_context,
-            action_type="apply_leave",
-            data=data,
-            current_step="date_range"
-        )
+        date_text = _extract_leave_date_text_from_command(question)
 
-        return {
-            "handled": True,
-            "answer": (
-                f"Selected leave type: {data['leave_type_label']}.\n\n"
-                "Now tell me the leave date or date range.\n"
-                "Example: 12 June 2026 to 13 June 2026, or 12-06-2026."
-            )
-        }
+        if date_text:
+            parsed_dates = _parse_leave_dates(date_text)
 
-    if step == "date_range":
-        data["date_range_text"] = _safe_str(question)
+            if not parsed_dates.get("invalid"):
+                data["date_range_text"] = date_text
 
-        save_pending_action(
-            user_context=user_context,
-            action_type="apply_leave",
-            data=data,
-            current_step="reason"
-        )
-
-        return {
-            "handled": True,
-            "answer": (
-                f"Leave date noted: {data['date_range_text']}.\n\n"
-                "Please provide the reason for your leave."
-            )
-        }
-
-    if step == "reason":
-        data["reason"] = _safe_str(question)
-
-        handover_options = get_handover_employee_options(user_context)
-        data["handover_options"] = handover_options
-
-        if not handover_options:
-            data["handover_to_id"] = ""
-            data["handover_to_name"] = "Not selected"
-
+        if data.get("date_range_text"):
             project_options = get_project_handover_options(user_context)
             data["project_options"] = project_options
 
@@ -1570,11 +1799,106 @@ def _apply_leave_continue(pending, question, user_context=None):
             return {
                 "handled": True,
                 "answer": (
-                    "Reason noted.\n\n"
-                    "I could not find any teammate from your department for handover.\n"
-                    "Now select the project/work to hand over:\n"
+                    f"Selected leave type: {data['leave_type_label']}.\n"
+                    f"Leave date noted: {data.get('date_range_text')}.\n\n"
+                    "Which project/work do you want to hand over during your leave?\n"
                     f"{_format_options(project_options)}\n\n"
-                    "Reply with option number, project name, or type 'none'."
+                    "Reply with the option number, project name, or type 'none'."
+                )
+            }
+
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="date_range"
+        )
+
+        return {
+            "handled": True,
+            "answer": (
+                f"Selected leave type: {data['leave_type_label']}.\n\n"
+                "Now tell me the leave date or date range.\n"
+                "Example: tomorrow, 12 June 2026, or 12-06-2026 to 13-06-2026."
+            )
+        }
+
+    if step == "date_range":
+        detected_date_text = _extract_leave_date_text_from_command(question) or _safe_str(question)
+        parsed_dates = _parse_leave_dates(detected_date_text)
+
+        if parsed_dates.get("invalid"):
+            return {
+                "handled": True,
+                "answer": (
+                    f"{parsed_dates.get('message')}\n\n"
+                    "Please enter the leave date again.\n"
+                    "Example: tomorrow, 12 June 2026, or 12-06-2026 to 13-06-2026."
+                )
+            }
+
+        data["date_range_text"] = detected_date_text
+
+        project_options = get_project_handover_options(user_context)
+        data["project_options"] = project_options
+
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="handover_projects"
+        )
+
+        return {
+            "handled": True,
+            "answer": (
+                f"Leave date noted: {data['date_range_text']}.\n\n"
+                "Which project/work do you want to hand over during your leave?\n"
+                f"{_format_options(project_options)}\n\n"
+                "Reply with the option number, project name, or type 'none'."
+            )
+        }
+
+    if step == "handover_projects":
+        if _lower(question) in ["none", "no", "skip", "not required", "no project"]:
+            data["handover_project_id"] = ""
+            data["handover_project_name"] = "None"
+        else:
+            project_options = data.get("project_options") or get_project_handover_options(user_context)
+            selected = _extract_selected_option(question, project_options)
+
+            if not selected:
+                return {
+                    "handled": True,
+                    "answer": (
+                        "Please choose a valid project/work from the list, or type 'none':\n"
+                        f"{_format_options(project_options)}"
+                    )
+                }
+
+            data["handover_project_id"] = selected.get("id")
+            data["handover_project_name"] = selected.get("name") or selected.get("label")
+
+        handover_options = get_handover_employee_options(user_context)
+        data["handover_options"] = handover_options
+
+        if not handover_options:
+            data["handover_to_id"] = ""
+            data["handover_to_name"] = "Not selected"
+
+            save_pending_action(
+                user_context=user_context,
+                action_type="apply_leave",
+                data=data,
+                current_step="reason"
+            )
+
+            return {
+                "handled": True,
+                "answer": (
+                    f"Handover project/work selected: {data.get('handover_project_name')}.\n\n"
+                    "I could not find any active same-team employee for task handover.\n\n"
+                    "Now please provide a valid reason for your leave."
                 )
             }
 
@@ -1588,8 +1912,8 @@ def _apply_leave_continue(pending, question, user_context=None):
         return {
             "handled": True,
             "answer": (
-                "Reason noted.\n\n"
-                "Now select who will handle your work during leave:\n"
+                f"Handover project/work selected: {data.get('handover_project_name')}.\n\n"
+                "To whom do you want to hand over the task?\n"
                 f"{_format_options(handover_options)}\n\n"
                 "Reply with the option number or employee name."
             )
@@ -1611,71 +1935,31 @@ def _apply_leave_continue(pending, question, user_context=None):
         data["handover_to_id"] = selected.get("id")
         data["handover_to_name"] = selected.get("name") or selected.get("label")
 
-        project_options = get_project_handover_options(user_context)
-        data["project_options"] = project_options
-
-        if not project_options:
-            data["handover_project_id"] = ""
-            data["handover_project_name"] = "None"
-
-            save_pending_action(
-                user_context=user_context,
-                action_type="apply_leave",
-                data=data,
-                current_step="confirm"
-            )
-
-            return {
-                "handled": True,
-                "answer": (
-                    f"Handover person selected: {data['handover_to_name']}.\n\n"
-                    "I could not find any assigned project/work for handover.\n\n"
-                    "Please review your leave request:\n\n"
-                    f"Leave Type: {data.get('leave_type_label')}\n"
-                    f"Date/Range: {data.get('date_range_text')}\n"
-                    f"Reason: {data.get('reason')}\n"
-                    f"Handover To: {data.get('handover_to_name')}\n"
-                    f"Handover Work/Project: None\n\n"
-                    "Reply 'confirm' to submit, or 'cancel' to stop."
-                )
-            }
-
         save_pending_action(
             user_context=user_context,
             action_type="apply_leave",
             data=data,
-            current_step="handover_projects"
+            current_step="reason"
         )
 
         return {
             "handled": True,
             "answer": (
-                f"Handover person selected: {data['handover_to_name']}.\n\n"
-                "Now select the project/work to hand over:\n"
-                f"{_format_options(project_options)}\n\n"
-                "Reply with option number, project name, or type 'none'."
+                f"Task handover selected: {data['handover_to_name']}.\n\n"
+                "Now please provide a valid reason for your leave."
             )
         }
 
-    if step == "handover_projects":
-        if _lower(question) in ["none", "no", "skip"]:
-            data["handover_project_id"] = ""
-            data["handover_project_name"] = "None"
-        else:
-            project_options = data.get("project_options") or get_project_handover_options(user_context)
-            selected = _extract_selected_option(question, project_options)
+    if step == "reason":
+        reason = _safe_str(question)
 
-            if not selected:
-                return {
-                    "handled": True,
-                    "answer": (
-                        "Please choose a valid project/work from the list, or type 'none':\n"
-                        f"{_format_options(project_options)}"
-                    )
-                }
+        if not _is_valid_leave_reason(reason):
+            return {
+                "handled": True,
+                "answer": "Please provide a valid leave reason with at least 5 characters."
+            }
 
-            data["handover_project_id"] = selected.get("id")
-            data["handover_project_name"] = selected.get("name") or selected.get("label")
+        data["reason"] = reason
 
         save_pending_action(
             user_context=user_context,
@@ -1686,20 +1970,19 @@ def _apply_leave_continue(pending, question, user_context=None):
 
         return {
             "handled": True,
-            "answer": (
-                "Please review your leave request:\n\n"
-                f"Leave Type: {data.get('leave_type_label')}\n"
-                f"Date/Range: {data.get('date_range_text')}\n"
-                f"Reason: {data.get('reason')}\n"
-                f"Handover To: {data.get('handover_to_name')}\n"
-                f"Handover Work/Project: {data.get('handover_project_name')}\n\n"
-                "Reply 'confirm' to submit, or 'cancel' to stop.\n\n"
-                "Note: Actual submission will be connected in the next backend file."
-            )
+            "answer": _leave_review_text(data)
         }
 
     if step == "confirm":
-        if _lower(question) in ["confirm", "yes", "submit", "ok", "okay"]:
+        if _looks_like_cancel_confirmation(question):
+            clear_pending_action(user_context)
+
+            return {
+                "handled": True,
+                "answer": "Leave request setup cancelled."
+            }
+
+        if _looks_like_leave_submit_confirmation(question):
             try:
                 submission = _submit_leave_request_from_ai(
                     data,
@@ -1724,22 +2007,19 @@ def _apply_leave_continue(pending, question, user_context=None):
                     "answer": (
                         "I could not submit your leave request.\n\n"
                         f"Reason: {str(error)}\n\n"
-                        "Please correct the details and start again by saying: I want to apply leave."
+                        "Please correct the details and start again by saying: Hey Eve apply casual leave for tomorrow."
                     )
-                }
-
-            if _lower(question) in ["cancel", "no", "stop"]:
-                clear_pending_action(user_context)
-
-                return {
-                    "handled": True,
-                    "answer": "Leave request setup cancelled."
                 }
 
         return {
             "handled": True,
-            "answer": "I am still collecting your leave request details. Please continue with the requested information."
+            "answer": _leave_review_text(data)
         }
+
+    return {
+        "handled": True,
+        "answer": "I am still collecting your leave request details. Please continue with the requested information."
+    }
 
 
 def _get_management_group(group_id):
@@ -2302,7 +2582,21 @@ def _looks_like_new_normal_question(question):
         "where is",
     ]
 
-    return any(keyword in text for keyword in normal_question_keywords)
+    is_question_like = (
+        "?" in text
+        or text.startswith((
+            "how ",
+            "what ",
+            "when ",
+            "where ",
+            "why ",
+            "show ",
+            "list ",
+            "tell me ",
+        ))
+    )
+
+    return is_question_like and any(keyword in text for keyword in normal_question_keywords)
 
 
 def handle_guided_action(question, user_context=None):
@@ -2340,7 +2634,7 @@ def handle_guided_action(question, user_context=None):
         clear_pending_action(user_context)
 
         if intent == "apply_leave":
-            return _apply_leave_start(user_context=user_context)
+            return _apply_leave_start(user_context=user_context, question=clean_question)
 
         if intent == "schedule_management_meeting":
             return _meeting_start(user_context=user_context)
@@ -2382,7 +2676,7 @@ def handle_guided_action(question, user_context=None):
         }
 
     if intent == "apply_leave":
-        return _apply_leave_start(user_context=user_context)
+            return _apply_leave_start(user_context=user_context, question=clean_question)
 
     if intent == "schedule_management_meeting":
         return _meeting_start(user_context=user_context)

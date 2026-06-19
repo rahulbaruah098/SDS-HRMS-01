@@ -37,6 +37,147 @@ def _id_variants(value):
 
     return variants
 
+def _first_non_empty(*values):
+    for value in values:
+        text = _safe_str(value)
+        if text:
+            return text
+
+    return ""
+
+
+def _normalize_gender(value):
+    text = _safe_str(value).lower()
+
+    if text in ["male", "m", "man", "boy", "gentleman"]:
+        return "male"
+
+    if text in ["female", "f", "woman", "girl", "lady"]:
+        return "female"
+
+    return ""
+
+
+def _formal_title_from_gender(gender):
+    normalized = _normalize_gender(gender)
+
+    if normalized == "male":
+        return "sir"
+
+    if normalized == "female":
+        return "ma'am"
+
+    return ""
+
+def _display_name_from_record(record):
+    record = record or {}
+
+    composed_name = " ".join([
+        _safe_str(record.get("first_name")),
+        _safe_str(record.get("middle_name")),
+        _safe_str(record.get("last_name")),
+    ]).strip()
+
+    return _first_non_empty(
+        record.get("employee_name"),
+        record.get("full_name"),
+        record.get("display_name"),
+        record.get("name"),
+        record.get("staff_name"),
+        record.get("user_name"),
+        composed_name,
+        record.get("email"),
+        record.get("official_email"),
+        record.get("work_email"),
+        record.get("username"),
+    )
+
+
+def _gender_from_records(*records):
+    for record in records:
+        record = record or {}
+
+        gender = _normalize_gender(
+            record.get("gender")
+            or record.get("sex")
+            or record.get("gender_identity")
+            or record.get("employee_gender")
+        )
+
+        if gender:
+            return gender
+
+    return ""
+
+
+def _notification_identity_values(user_context):
+    user_context = user_context or {}
+    employee = user_context.get("employee") or {}
+
+    raw_values = [
+        user_context.get("user_id"),
+        user_context.get("_id"),
+        user_context.get("employee_id"),
+        user_context.get("email"),
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("employee_id"),
+        employee.get("user_id"),
+        employee.get("login_user_id"),
+        employee.get("account_user_id"),
+        employee.get("email"),
+        employee.get("official_email"),
+        employee.get("work_email"),
+    ]
+
+    values = []
+
+    for raw_value in raw_values:
+        for value in _id_variants(raw_value):
+            if value and value not in values:
+                values.append(value)
+
+    return values
+
+
+def _unread_notification_count(user_context):
+    user_context = user_context or {}
+    tenant_id = user_context.get("tenant_id")
+    identity_values = _notification_identity_values(user_context)
+
+    if not identity_values:
+        return 0
+
+    tenant_values = _id_variants(tenant_id)
+
+    query_parts = [
+        {"is_deleted": {"$ne": True}},
+        {"read": {"$ne": True}},
+        {
+            "$or": [
+                {"user_id": {"$in": identity_values}},
+                {"recipient_id": {"$in": identity_values}},
+                {"receiver_id": {"$in": identity_values}},
+                {"target_user_id": {"$in": identity_values}},
+                {"employee_id": {"$in": identity_values}},
+            ]
+        },
+    ]
+
+    if tenant_values:
+        query_parts.append({
+            "$or": [
+                {"tenant_id": {"$in": tenant_values}},
+                {"company_id": {"$in": tenant_values}},
+                {"tenant": {"$in": tenant_values}},
+            ]
+        })
+
+    try:
+        db = get_db()
+        return int(db.notifications.count_documents({"$and": query_parts}))
+    except Exception:
+        return 0
 
 def _safe_doc(doc):
     if not doc:
@@ -109,20 +250,70 @@ def _safe_chat_history(raw_history):
 
 def _find_employee_for_user(current_user, tenant_id):
     """
-    Flexible employee lookup because this HRMS stores employee/user links
-    using several aliases across modules.
+    Flexible employee lookup because users/employees can be linked by
+    employee_id, user_id, email, employee_code, phone, or nested employee data.
     """
 
     db = get_db()
 
     current_user = current_user or {}
 
+    nested_employee = (
+        current_user.get("employee")
+        or current_user.get("employee_data")
+        or current_user.get("profile")
+        or {}
+    )
+
+    if isinstance(nested_employee, dict):
+        nested_name = _display_name_from_record(nested_employee)
+        if nested_name and nested_name.lower() != "employee":
+            return _safe_doc(nested_employee)
+
     user_id = current_user.get("_id") or current_user.get("id")
-    email = current_user.get("email")
+
+    email = (
+        current_user.get("email")
+        or current_user.get("official_email")
+        or current_user.get("work_email")
+        or current_user.get("username")
+        or nested_employee.get("email")
+        or nested_employee.get("official_email")
+        or nested_employee.get("work_email")
+        or nested_employee.get("username")
+    )
+
     employee_id = (
         current_user.get("employee_id")
+        or current_user.get("employee_ref_id")
         or current_user.get("employee_profile_id")
         or current_user.get("employee_summary_id")
+        or current_user.get("emp_id")
+        or nested_employee.get("_id")
+        or nested_employee.get("id")
+        or nested_employee.get("employee_id")
+        or nested_employee.get("employee_ref_id")
+        or nested_employee.get("employee_profile_id")
+    )
+
+    employee_code = (
+        current_user.get("employee_code")
+        or current_user.get("emp_code")
+        or current_user.get("code")
+        or nested_employee.get("employee_code")
+        or nested_employee.get("emp_code")
+        or nested_employee.get("code")
+    )
+
+    phone = (
+        current_user.get("phone")
+        or current_user.get("mobile")
+        or current_user.get("contact")
+        or current_user.get("contact_number")
+        or nested_employee.get("phone")
+        or nested_employee.get("mobile")
+        or nested_employee.get("contact")
+        or nested_employee.get("contact_number")
     )
 
     user_values = _id_variants(user_id)
@@ -136,6 +327,9 @@ def _find_employee_for_user(current_user, tenant_id):
             {"_id": {"$in": employee_values}},
             {"id": {"$in": employee_values}},
             {"employee_id": {"$in": employee_values}},
+            {"employee_ref_id": {"$in": employee_values}},
+            {"employee_profile_id": {"$in": employee_values}},
+            {"emp_id": {"$in": employee_values}},
         ])
 
     if user_values:
@@ -144,6 +338,18 @@ def _find_employee_for_user(current_user, tenant_id):
             {"login_user_id": {"$in": user_values}},
             {"account_user_id": {"$in": user_values}},
             {"created_user_id": {"$in": user_values}},
+            {"mapped_user_id": {"$in": user_values}},
+            {"auth_user_id": {"$in": user_values}},
+            {"linked_user_id": {"$in": user_values}},
+            {"user_ref_id": {"$in": user_values}},
+            {"app_user_id": {"$in": user_values}},
+        ])
+
+    if employee_code:
+        or_parts.extend([
+            {"employee_code": employee_code},
+            {"emp_code": employee_code},
+            {"code": employee_code},
         ])
 
     if email:
@@ -151,28 +357,42 @@ def _find_employee_for_user(current_user, tenant_id):
             {"email": email},
             {"official_email": email},
             {"work_email": email},
+            {"username": email},
+        ])
+
+    if phone:
+        or_parts.extend([
+            {"phone": phone},
+            {"mobile": phone},
+            {"contact": phone},
+            {"contact_number": phone},
         ])
 
     if not or_parts:
         return {}
 
-    query = {"$or": or_parts}
+    base_query = {"$or": or_parts}
 
     if tenant_values:
-        query = {
+        query_with_tenant = {
             "$and": [
-                query,
+                base_query,
                 {
                     "$or": [
                         {"tenant_id": {"$in": tenant_values}},
                         {"company_id": {"$in": tenant_values}},
                         {"tenant": {"$in": tenant_values}},
                     ]
-                }
+                },
             ]
         }
 
-    employee = db.employees.find_one(query)
+        employee = db.employees.find_one(query_with_tenant)
+
+        if employee:
+            return _safe_doc(employee)
+
+    employee = db.employees.find_one(base_query)
 
     return _safe_doc(employee)
 
@@ -241,6 +461,14 @@ def _build_ai_user_context(current_user):
         or ""
     )
 
+    gender = _gender_from_records(employee, current_user)
+
+    employee_display_name = (
+        _display_name_from_record(employee)
+        or _display_name_from_record(current_user)
+        or "Employee"
+    )
+
     return {
         "user_id": _safe_str(current_user.get("_id") or current_user.get("id")),
         "_id": _safe_str(current_user.get("_id") or current_user.get("id")),
@@ -250,12 +478,12 @@ def _build_ai_user_context(current_user):
         "role": primary_role,
         "roles": roles,
         "email": current_user.get("email"),
-        "name": (
-            current_user.get("name")
-            or current_user.get("full_name")
-            or employee.get("name")
-            or employee.get("employee_name")
-        ),
+        "gender": gender,
+        "formal_title": _formal_title_from_gender(gender),
+        "name": employee_display_name,
+        "display_name": employee_display_name,
+        "employee_name": employee_display_name,
+
         "employee_id": _safe_str(employee_id),
         "employee": employee,
         "department": department,
@@ -312,6 +540,45 @@ def chat():
             "details": str(e)
         }), 500
 
+@ai_assistant_bp.get("/voice-context")
+@current_user_required
+def voice_context():
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+
+    employee_name = (
+        user_context.get("employee_name")
+        or user_context.get("display_name")
+        or user_context.get("name")
+        or _display_name_from_record(current_user)
+        or "Employee"
+    )
+
+    gender = (
+        user_context.get("gender")
+        or _gender_from_records(user_context.get("employee"), current_user)
+    )
+
+    unread_count = _unread_notification_count(user_context)
+
+    if unread_count == 1:
+        notification_phrase = "You have one new notification."
+    elif unread_count > 1:
+        notification_phrase = f"You have {unread_count} new notifications."
+    else:
+        notification_phrase = ""
+
+    return jsonify({
+        "success": True,
+        "wake_word": "hey eve",
+        "employee_name": employee_name,
+        "name": employee_name,
+        "display_name": employee_name,
+        "gender": gender,
+        "formal_title": _formal_title_from_gender(gender),
+        "unread_notification_count": unread_count,
+        "notification_phrase": notification_phrase,
+    }), 200
 
 @ai_assistant_bp.post("/seed")
 @roles_required(

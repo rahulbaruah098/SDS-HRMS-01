@@ -1,4 +1,4 @@
-﻿뿯붿annotated-types==0.7.0
+﻿annotated-types==0.7.0
 
 anyio==4.13.0
 

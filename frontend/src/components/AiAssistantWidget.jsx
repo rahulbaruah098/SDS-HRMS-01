@@ -11,7 +11,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { askAiAssistant } from "../api/client";
+import { askAiAssistant, getAiAssistantVoiceContext } from "../api/client";
 
 const QUICK_QUESTIONS = [
   "How to apply leave?",
@@ -21,6 +21,18 @@ const QUICK_QUESTIONS = [
   "How many assets do I have?",
   "Schedule management group meeting",
   "Remind me",
+];
+
+const PROJECT_MODULES = [
+  "Leave",
+  "Attendance",
+  "Projects",
+  "Approvals",
+  "Assets",
+  "Reports",
+  "Notifications",
+  "Policies",
+  "IT Support",
 ];
 
 const WELCOME_MESSAGE = {
@@ -34,17 +46,171 @@ function getSpeechRecognition() {
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
-function speakText(text) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
+function speakText(text, onEnd) {
+  const finish = () => {
+    if (typeof onEnd === "function") {
+      onEnd();
+    }
+  };
+
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    finish();
+    return null;
+  }
+
+  const cleanText = String(text || "").trim();
+
+  if (!cleanText) {
+    finish();
+    return null;
+  }
 
   window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(String(text || ""));
-  utterance.lang = "en-IN";
-  utterance.rate = 0.95;
-  utterance.pitch = 1;
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+  const availableVoices = window.speechSynthesis.getVoices?.() || [];
+  const preferredVoice =
+    availableVoices.find((voice) => /en-IN/i.test(voice.lang || "")) ||
+    availableVoices.find((voice) => /Google.*English/i.test(voice.name || "")) ||
+    availableVoices.find((voice) => /^en-/i.test(voice.lang || ""));
+
+  if (preferredVoice) {
+    utterance.voice = preferredVoice;
+  }
+
+  utterance.lang = preferredVoice?.lang || "en-IN";
+  utterance.rate = 0.92;
+  utterance.pitch = 1.02;
+  utterance.volume = 1;
+  utterance.onend = finish;
+  utterance.onerror = finish;
 
   window.speechSynthesis.speak(utterance);
+
+  return utterance;
+}
+
+const DEFAULT_WAKE_WORD = "hey eve";
+
+const WAKE_WORD_VARIANTS = [
+  "hey eve",
+  "hi eve",
+  "hello eve",
+  "hey eave",
+  "hi eave",
+  "hello eave",
+  "hey ev",
+  "hi ev",
+  "hello ev",
+  "hey e",
+  "hi e",
+  "hello e",
+  "hey iv",
+  "hi iv",
+  "hey if",
+  "hi if",
+  "hay eve",
+  "hai eve",
+  "hii eve",
+  "okay eve",
+  "ok eve",
+  "hey evie",
+  "hi evie",
+  "hello evie",
+  "hey eevee",
+  "hi eevee",
+  "hello eevee",
+  "hey ivy",
+  "hi ivy",
+  "hey evening",
+  "a eve",
+  "eve",
+  "eave",
+  "eevee",
+  "evie",
+  "evi",
+  "iv",
+  "heave",
+  "heavy",
+  "he is",
+  "his",
+];
+
+function normalizeVoiceText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function transcriptHasWakeWord(text, wakeWord = DEFAULT_WAKE_WORD) {
+  const normalizedText = normalizeVoiceText(text);
+  const normalizedWakeWord = normalizeVoiceText(wakeWord || DEFAULT_WAKE_WORD);
+
+  if (!normalizedText) return false;
+  if (normalizedWakeWord && normalizedText.includes(normalizedWakeWord)) return true;
+
+  return WAKE_WORD_VARIANTS.some((variant) =>
+    normalizedText.includes(normalizeVoiceText(variant))
+  );
+}
+
+function stripWakeWord(text) {
+  let cleaned = String(text || "");
+
+  const variants = [...WAKE_WORD_VARIANTS]
+    .map((variant) => normalizeVoiceText(variant))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const variant of variants) {
+    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(^|\\s)${escaped}(?=\\s|$|,|\\.|!|\\?)`, "i");
+
+    if (pattern.test(normalizeVoiceText(cleaned))) {
+      cleaned = normalizeVoiceText(cleaned).replace(pattern, " ");
+      break;
+    }
+  }
+
+  return cleaned.replace(/\s+/g, " ").trim();
+}
+
+function getTimeGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function buildWakeGreeting(context = {}) {
+  const greeting = getTimeGreeting();
+  const employeeName = String(context?.employee_name || context?.name || "Employee").trim();
+  const formalTitle = String(context?.formal_title || "").trim();
+  const notificationPhrase = String(context?.notification_phrase || "").trim();
+
+  const namePart = [employeeName, formalTitle].filter(Boolean).join(" ");
+  const greetingText = `${greeting}, ${namePart || "Employee"}.`;
+
+  if (notificationPhrase) {
+    return `${greetingText} ${notificationPhrase}`;
+  }
+
+  return greetingText;
+}
+
+function getFallbackVoiceContext() {
+  return {
+    success: false,
+    wake_word: DEFAULT_WAKE_WORD,
+    employee_name: "Employee",
+    gender: "",
+    formal_title: "",
+    unread_notification_count: 0,
+    notification_phrase: "",
+  };
 }
 
 function detectActionMode(messages) {
@@ -59,8 +225,13 @@ function detectActionMode(messages) {
   if (
     text.includes("leave type") ||
     text.includes("leave request") ||
+    text.includes("leave date") ||
+    text.includes("date/range") ||
     text.includes("handover") ||
-    text.includes("date/range")
+    text.includes("hand over") ||
+    text.includes("during your leave") ||
+    text.includes("valid reason for your leave") ||
+    text.includes("submit my leave")
   ) {
     return "Leave Assistant";
   }
@@ -82,6 +253,22 @@ function detectActionMode(messages) {
   }
 
   return "";
+}
+
+function shouldKeepVoiceConversation(messages, answer) {
+  const text = String(answer || "").toLowerCase();
+
+  if (
+    text.includes("submitted successfully") ||
+    text.includes("setup cancelled") ||
+    text.includes("request has been submitted") ||
+    text.includes("track this from the application status") ||
+    text.includes("created successfully")
+  ) {
+    return false;
+  }
+
+  return Boolean(detectActionMode(messages));
 }
 
 function buildQuickReplies(messages, loading) {
@@ -142,27 +329,69 @@ export default function AiAssistantWidget() {
   const [listening, setListening] = useState(false);
   const [voiceHint, setVoiceHint] = useState("");
   const [voiceError, setVoiceError] = useState("");
+  const [voiceContext, setVoiceContext] = useState(null);
+  const [eveActive, setEveActive] = useState(false);
+  const [autoWakeActive, setAutoWakeActive] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [manualChatOpen, setManualChatOpen] = useState(false);
+  const [siriStatus, setSiriStatus] = useState("Click once to activate Eve voice");
+  const [lastVoiceTranscript, setLastVoiceTranscript] = useState("");
+  const [voiceLevel, setVoiceLevel] = useState(0);
 
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const finalTranscriptRef = useRef("");
+  const voiceHandledRef = useRef(false);
+  const voiceContextLoadedRef = useRef(false);
+  const autoWakeModeRef = useRef(false);
+  const voiceConversationModeRef = useRef(false);
+  const suppressNextRestartRef = useRef(false);
+  const restartListenTimerRef = useRef(null);
+  const pendingGreetingRef = useRef("");
+  const isSpeakingRef = useRef(false);
+  const isStartingRecognitionRef = useRef(false);
+  const loadingRef = useRef(false);
+  const listeningRef = useRef(false);
+  const messagesRef = useRef([WELCOME_MESSAGE]);
+  const voiceContextRef = useRef(null);
+  const audioStreamRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const voiceMeterFrameRef = useRef(null);
 
-const hasStartedChat = useMemo(
-  () => messages.some((item) => item.role === "user"),
-  [messages]
-);
 
-const visibleMessages = useMemo(
-  () => (hasStartedChat ? messages.filter((_, index) => index > 0) : []),
-  [hasStartedChat, messages]
-);
+  const hasStartedChat = useMemo(
+    () => messages.some((item) => item.role === "user"),
+    [messages]
+  );
 
-const actionMode = useMemo(() => detectActionMode(messages), [messages]);
-const quickReplies = useMemo(
-  () => buildQuickReplies(messages, loading),
-  [messages, loading]
-);
+  const showChat = manualChatOpen && hasStartedChat;
+
+  const visibleMessages = useMemo(
+    () => (showChat ? messages.filter((_, index) => index > 0) : []),
+    [showChat, messages]
+  );
+  const actionMode = useMemo(() => detectActionMode(messages), [messages]);
+  const quickReplies = useMemo(
+    () => buildQuickReplies(messages, loading),
+    [messages, loading]
+  );
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    listeningRef.current = listening;
+  }, [listening]);
+
+  useEffect(() => {
+    voiceContextRef.current = voiceContext;
+  }, [voiceContext]);
 
   useEffect(() => {
     if (!open) return;
@@ -174,16 +403,48 @@ const quickReplies = useMemo(
       });
     }, 80);
 
-  return () => clearTimeout(timer);
+    return () => clearTimeout(timer);
   }, [messages, loading, open]);
 
   useEffect(() => {
+    if (voiceContextLoadedRef.current) return undefined;
+
+    let cancelled = false;
+    voiceContextLoadedRef.current = true;
+
+    getAiAssistantVoiceContext()
+      .then((context) => {
+        if (cancelled) return;
+        const nextContext = context || getFallbackVoiceContext();
+        setVoiceContext(nextContext);
+        voiceContextRef.current = nextContext;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const fallback = getFallbackVoiceContext();
+        setVoiceContext(fallback);
+        voiceContextRef.current = fallback;
+      });
+
     return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearRestartTimer();
+      autoWakeModeRef.current = false;
+      voiceConversationModeRef.current = false;
+      suppressNextRestartRef.current = true;
+
       try {
         recognitionRef.current?.stop?.();
       } catch {
         // ignore
       }
+
+      stopVoiceMeter();
 
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
@@ -191,13 +452,258 @@ const quickReplies = useMemo(
     };
   }, []);
 
-  async function sendMessage(manualMessage) {
-    const cleanMessage = String(manualMessage || message || "").trim();
+  function clearRestartTimer() {
+    if (restartListenTimerRef.current) {
+      clearTimeout(restartListenTimerRef.current);
+      restartListenTimerRef.current = null;
+    }
+  }
+
+  function setAutoWakeMode(enabled) {
+    autoWakeModeRef.current = Boolean(enabled);
+    setAutoWakeActive(Boolean(enabled));
+  }
+
+  function getCurrentVoiceContext() {
+    return voiceContextRef.current || voiceContext || getFallbackVoiceContext();
+  }
+
+  function stopRecognition({ suppressRestart = true } = {}) {
+    clearRestartTimer();
+
+    if (suppressRestart) {
+      suppressNextRestartRef.current = true;
+    }
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+
+    setListening(false);
+    listeningRef.current = false;
+    isStartingRecognitionRef.current = false;
+  }
+
+  function stopVoiceSession() {
+    clearRestartTimer();
+    setAutoWakeMode(false);
+    voiceConversationModeRef.current = false;
+    pendingGreetingRef.current = "";
+    suppressNextRestartRef.current = true;
+    isSpeakingRef.current = false;
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+
+    setListening(false);
+    listeningRef.current = false;
+    isStartingRecognitionRef.current = false;
+    setEveActive(false);
+    stopVoiceMeter();
+
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function scheduleListeningRestart(delay = 500) {
+    clearRestartTimer();
+
+    if (!autoWakeModeRef.current) return;
+    if (loadingRef.current) return;
+    if (isSpeakingRef.current) return;
+
+    restartListenTimerRef.current = setTimeout(() => {
+      restartListenTimerRef.current = null;
+      beginListening();
+    }, delay);
+  }
+
+  function speakAssistantText(text, options = {}) {
+    const { restartAfterSpeech = true, onEnd } = options;
+
+    stopRecognition({ suppressRestart: true });
+    isSpeakingRef.current = true;
+
+    speakText(text, () => {
+      isSpeakingRef.current = false;
+
+      if (typeof onEnd === "function") {
+        onEnd();
+      }
+
+      if (restartAfterSpeech) {
+        scheduleListeningRestart(450);
+      }
+    });
+  }
+
+  function appendWakeGreeting(greeting, userText = "Hey Eve") {
+    setMessages((prev) => {
+      const alreadyGreeted =
+        prev.length >= 2 &&
+        prev[prev.length - 2]?.role === "user" &&
+        normalizeVoiceText(prev[prev.length - 2]?.text) === normalizeVoiceText(userText) &&
+        prev[prev.length - 1]?.role === "assistant" &&
+        prev[prev.length - 1]?.text === greeting;
+
+      if (alreadyGreeted) {
+        return prev;
+      }
+
+      return [
+        ...prev,
+        {
+          role: "user",
+          text: userText,
+        },
+        {
+          role: "assistant",
+          text: greeting,
+        },
+      ];
+    });
+  }
+
+  async function refreshVoiceContextIfNeeded(force = false) {
+    const currentContext = getCurrentVoiceContext();
+
+    if (
+      !force &&
+      currentContext?.employee_name &&
+      currentContext.employee_name !== "Employee"
+    ) {
+      return currentContext;
+    }
+
+    try {
+      const freshContext = await getAiAssistantVoiceContext();
+      const nextContext = freshContext || currentContext || getFallbackVoiceContext();
+
+      setVoiceContext(nextContext);
+      voiceContextRef.current = nextContext;
+
+      return nextContext;
+    } catch {
+      return currentContext || getFallbackVoiceContext();
+    }
+  }
+
+  async function activateEve() {
+    setAutoWakeMode(true);
+    voiceConversationModeRef.current = false;
+    pendingGreetingRef.current = "";
+
+    setEveActive(true);
+    setOpen(true);
+    setManualChatOpen(false);
+    setMessage("");
+    setLastVoiceTranscript("");
+    setSiriStatus("Eve is active. Say “Hey Eve” anytime.");
+    setVoiceHint("Eve is active. Keep this browser tab open and say “Hey Eve” anytime.");
+    setVoiceError("");
+
+    await refreshVoiceContextIfNeeded(true);
+    await startVoiceMeter();
+
+    beginListening();
+  }
+
+  async function handleVoiceTranscript(rawText) {
+    const transcript = String(rawText || "").trim();
+
+    if (!transcript) return;
+    if (loadingRef.current || isSpeakingRef.current) return;
+
+    const context = await refreshVoiceContextIfNeeded();
+    const wakeWord = context?.wake_word || DEFAULT_WAKE_WORD;
+    const hasWakeWord = transcriptHasWakeWord(transcript, wakeWord);
+
+    if (!hasWakeWord && !voiceConversationModeRef.current) {
+      setMessage("");
+      setLastVoiceTranscript(transcript);
+      setSiriStatus('Waiting for “Hey Eve”.');
+      setVoiceHint('Listening in the background. Say "Hey Eve" to open the assistant.');
+      scheduleListeningRestart(450);
+      return;
+    }
+
+    setEveActive(true);
+    setOpen(true);
+    setManualChatOpen(false);
+    setVoiceError("");
+    setLastVoiceTranscript(transcript);
+
+    const greeting = buildWakeGreeting(context);
+    const commandText = hasWakeWord ? stripWakeWord(transcript) : transcript;
+
+    if (hasWakeWord) {
+      voiceConversationModeRef.current = true;
+      setSiriStatus(greeting);
+    }
+
+    if (!commandText) {
+      setMessage("");
+      setLastVoiceTranscript("");
+      setSiriStatus(greeting);
+      setVoiceHint("Eve is active. Speak your HRMS command now.");
+      speakAssistantText(greeting, { restartAfterSpeech: true });
+      return;
+    }
+
+    setMessage(commandText);
+    setLastVoiceTranscript(commandText);
+    setSiriStatus(`Processing: ${commandText}`);
+
+    if (hasWakeWord) {
+      setVoiceHint(`${greeting} Processing your command...`);
+      speakAssistantText(greeting, {
+        restartAfterSpeech: false,
+        onEnd: () => {
+          sendMessage(commandText, {
+            speakAnswer: true,
+            skipWakeWordCheck: true,
+            voiceInput: true,
+          });
+        },
+      });
+      return;
+    }
+
+    setVoiceHint("Processing your voice reply...");
+    stopRecognition({ suppressRestart: true });
+
+    await sendMessage(commandText, {
+      speakAnswer: true,
+      skipWakeWordCheck: true,
+      voiceInput: true,
+    });
+  }
+
+  async function sendMessage(manualMessage, options = {}) {
+    const cleanMessage = String(manualMessage ?? message ?? "").trim();
 
     if (!cleanMessage) return;
-    if (loading) return;
+    if (loadingRef.current) return;
 
-    const historyBeforeQuestion = [...messages];
+    if (!options?.voiceInput) {
+      setManualChatOpen(true);
+    }
+
+    if (
+      !options?.skipWakeWordCheck &&
+      transcriptHasWakeWord(cleanMessage, getCurrentVoiceContext()?.wake_word || DEFAULT_WAKE_WORD)
+    ) {
+      await handleVoiceTranscript(cleanMessage);
+      return;
+    }
+
+    const historyBeforeQuestion = [...messagesRef.current];
 
     setMessages((prev) => [
       ...prev,
@@ -211,6 +717,7 @@ const quickReplies = useMemo(
     setVoiceHint("");
     setVoiceError("");
     setLoading(true);
+    loadingRef.current = true;
 
     try {
       const response = await askAiAssistant(cleanMessage, historyBeforeQuestion);
@@ -220,6 +727,10 @@ const quickReplies = useMemo(
         response?.message ||
         "I could not generate a response right now. Please try again.";
 
+      if (options?.voiceInput) {
+        setSiriStatus(answer);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -227,24 +738,62 @@ const quickReplies = useMemo(
           text: answer,
         },
       ]);
+
+      if (options?.voiceInput) {
+        const projectedMessages = [
+          ...historyBeforeQuestion,
+          {
+            role: "user",
+            text: cleanMessage,
+          },
+          {
+            role: "assistant",
+            text: answer,
+          },
+        ];
+
+        voiceConversationModeRef.current = shouldKeepVoiceConversation(projectedMessages, answer);
+      }
+
+      if (options?.speakAnswer) {
+        speakAssistantText(answer, { restartAfterSpeech: true });
+      } else if (autoWakeModeRef.current) {
+        scheduleListeningRestart(450);
+      }
     } catch (error) {
+      const errorMessage =
+        error?.message ||
+        "AI Assistant could not respond. Please check backend and try again.";
+
+      if (options?.voiceInput) {
+        setSiriStatus(errorMessage);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text:
-            error?.message ||
-            "AI Assistant could not respond. Please check backend and try again.",
+          text: errorMessage,
         },
       ]);
+
+      if (options?.voiceInput) {
+        voiceConversationModeRef.current = false;
+      }
+
+      if (options?.speakAnswer) {
+        speakAssistantText(errorMessage, { restartAfterSpeech: true });
+      } else if (autoWakeModeRef.current) {
+        scheduleListeningRestart(450);
+      }
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   }
 
-  function startListening() {
+  function beginListening() {
     setVoiceError("");
-    setVoiceHint("");
 
     const SpeechRecognition = getSpeechRecognition();
 
@@ -252,66 +801,92 @@ const quickReplies = useMemo(
       setVoiceError(
         "Speech-to-text is not available in this browser. Use Google Chrome on http://localhost:5173, or type your question manually."
       );
+      setAutoWakeMode(false);
       return;
     }
 
-    if (listening) {
-      try {
-        recognitionRef.current?.stop?.();
-      } catch {
-        // ignore
-      }
-
-      setListening(false);
-      return;
+    if (!autoWakeModeRef.current) {
+      setAutoWakeMode(true);
     }
+
+    if (listeningRef.current || isStartingRecognitionRef.current) return;
+    if (isSpeakingRef.current || loadingRef.current) return;
 
     try {
+      clearRestartTimer();
       finalTranscriptRef.current = "";
+      voiceHandledRef.current = false;
+      isStartingRecognitionRef.current = true;
 
       const recognition = new SpeechRecognition();
 
       recognition.lang = "en-IN";
       recognition.interimResults = true;
-      recognition.continuous = false;
+      recognition.continuous = true;
       recognition.maxAlternatives = 3;
 
       recognition.onstart = () => {
+        isStartingRecognitionRef.current = false;
+        listeningRef.current = true;
         setListening(true);
         setVoiceError("");
-        setVoiceHint("Listening... speak clearly. Your words will appear in the input.");
+        setVoiceHint(
+          voiceConversationModeRef.current
+            ? "Listening for your voice reply..."
+            : 'Listening in the background. Say "Hey Eve" anytime.'
+        );
+
+        const pendingGreeting = pendingGreetingRef.current;
+
+        if (pendingGreeting) {
+          pendingGreetingRef.current = "";
+          speakAssistantText(pendingGreeting, { restartAfterSpeech: true });
+        }
       };
 
       recognition.onerror = (event) => {
-        setListening(false);
+        isStartingRecognitionRef.current = false;
 
-        if (event?.error === "not-allowed") {
+        const errorType = event?.error || "";
+
+        if (suppressNextRestartRef.current || isSpeakingRef.current) {
+          return;
+        }
+
+        if (errorType === "not-allowed" || errorType === "service-not-allowed") {
+          setListening(false);
+          listeningRef.current = false;
+          setAutoWakeMode(false);
           setVoiceError(
-            "Microphone permission denied. Click the lock icon in the browser address bar and allow microphone access."
+            "Microphone permission denied. Click the browser lock icon and allow microphone access."
           );
           return;
         }
 
-        if (event?.error === "no-speech") {
-          setVoiceError("No speech detected. Please click mic and try again.");
+        if (errorType === "no-speech" || errorType === "aborted") {
+          setVoiceHint('Still active. Say "Hey Eve" when you need me.');
           return;
         }
 
-        if (event?.error === "network") {
+        if (errorType === "network") {
           setVoiceError(
-            "Speech recognition network error. Please use Chrome and stable internet."
+            "Speech recognition network error. Please use Chrome and a stable internet connection."
           );
+          scheduleListeningRestart(1200);
           return;
         }
 
-        setVoiceError(`Voice input failed${event?.error ? `: ${event.error}` : ""}.`);
+        setVoiceError(`Voice input failed${errorType ? `: ${errorType}` : ""}.`);
+        scheduleListeningRestart(1200);
       };
 
       recognition.onresult = (event) => {
+        if (isSpeakingRef.current || loadingRef.current) return;
+
         let finalText = "";
         let interimText = "";
 
-        for (let index = 0; index < event.results.length; index += 1) {
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
           const result = event.results[index];
           const transcript = result[0]?.transcript || "";
 
@@ -327,39 +902,136 @@ const quickReplies = useMemo(
 
         if (cleanFinalText) {
           finalTranscriptRef.current = cleanFinalText;
+          voiceHandledRef.current = true;
           setMessage(cleanFinalText);
-          setVoiceHint("Voice captured. Review the text and press Send.");
+          handleVoiceTranscript(cleanFinalText);
           return;
         }
 
         if (cleanInterimText) {
           setMessage(cleanInterimText);
-          setVoiceHint("Listening... capturing your words.");
+          setVoiceHint(
+            voiceConversationModeRef.current
+              ? "Listening for your voice reply..."
+              : 'Listening... waiting for "Hey Eve".'
+          );
         }
       };
 
       recognition.onend = () => {
+        isStartingRecognitionRef.current = false;
+        listeningRef.current = false;
         setListening(false);
+        recognitionRef.current = null;
 
-        const capturedText = finalTranscriptRef.current.trim();
+        if (suppressNextRestartRef.current) {
+          suppressNextRestartRef.current = false;
+          return;
+        }
 
-        if (capturedText) {
-          setMessage(capturedText);
-          setVoiceHint("Voice captured. Review the text and press Send.");
-        } else {
-          setVoiceHint("Voice capture stopped. If text appeared, review and press Send.");
+        if (autoWakeModeRef.current) {
+          scheduleListeningRestart(500);
         }
       };
 
       recognitionRef.current = recognition;
       recognition.start();
     } catch (error) {
+      isStartingRecognitionRef.current = false;
+      listeningRef.current = false;
       setListening(false);
       setVoiceError(
         error?.message ||
           "Could not start microphone. Please check browser microphone permission."
       );
+      scheduleListeningRestart(1200);
     }
+  }
+
+async function startVoiceMeter() {
+  if (typeof window === "undefined") return;
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  if (audioStreamRef.current && analyserRef.current) return;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    audioStreamRef.current = stream;
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContext) return;
+
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.72;
+
+    source.connect(analyser);
+
+    audioContextRef.current = audioContext;
+    analyserRef.current = analyser;
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const updateMeter = () => {
+      if (!analyserRef.current) return;
+
+      analyserRef.current.getByteFrequencyData(dataArray);
+
+      const average =
+        dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+
+      const normalized = Math.min(1, Math.max(0, average / 120));
+
+      setVoiceLevel(normalized);
+
+      voiceMeterFrameRef.current = requestAnimationFrame(updateMeter);
+    };
+
+    updateMeter();
+  } catch {
+    setVoiceLevel(0);
+  }
+}
+
+function stopVoiceMeter() {
+  if (voiceMeterFrameRef.current) {
+    cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceMeterFrameRef.current = null;
+  }
+
+  if (audioStreamRef.current) {
+    audioStreamRef.current.getTracks().forEach((track) => track.stop());
+    audioStreamRef.current = null;
+  }
+
+  if (audioContextRef.current) {
+    audioContextRef.current.close?.();
+    audioContextRef.current = null;
+  }
+
+  analyserRef.current = null;
+  setVoiceLevel(0);
+}
+
+  function startListening() {
+    if (listeningRef.current || isStartingRecognitionRef.current) {
+      stopVoiceSession();
+      setVoiceHint("Voice listening stopped. Click mic or Eve again to reactivate.");
+      return;
+    }
+
+    setAutoWakeMode(true);
+    setEveActive(true);
+    setManualChatOpen(false);
+    setVoiceError("");
+    setSiriStatus('Listening. Say “Hey Eve” anytime.');
+    setVoiceHint('Listening in the background. Say "Hey Eve" anytime.');
+    startVoiceMeter();
+    beginListening();
   }
 
   async function copyMessage(text, index) {
@@ -376,21 +1048,17 @@ const quickReplies = useMemo(
   }
 
   function clearChat() {
+    stopVoiceSession();
+    stopVoiceMeter();
+    setManualChatOpen(false);
+    setSiriStatus("Click once to activate Eve voice");
+    setLastVoiceTranscript("");
     setMessages([WELCOME_MESSAGE]);
     setMessage("");
     setVoiceHint("");
     setVoiceError("");
     setLoading(false);
-
-    try {
-      recognitionRef.current?.stop?.();
-    } catch {
-      // ignore
-    }
-
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    loadingRef.current = false;
   }
 
   return (
@@ -398,7 +1066,7 @@ const quickReplies = useMemo(
       {!open && (
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          onClick={activateEve}
           title="Open SDS HRMS AI Assistant"
           className="ai-assistant-launcher-fixed"
         >
@@ -408,7 +1076,11 @@ const quickReplies = useMemo(
       )}
 
       {open && (
-        <div className={`ai-assistant-panel ai-glass-phone ${hasStartedChat ? "has-chat" : "is-home"}`}>
+        <div
+          className={`ai-assistant-panel ai-glass-phone ${
+            showChat ? "has-chat" : "is-home"
+          }`}
+        >
           <div className="ai-top-bar">
             <button
               type="button"
@@ -433,7 +1105,7 @@ const quickReplies = useMemo(
             </button>
           </div>
 
-          {!hasStartedChat && (
+          {!showChat && (
           <div className="ai-hero-zone">
             <div className="ai-soft-grid" />
 
@@ -444,10 +1116,21 @@ const quickReplies = useMemo(
               </h2>
             </div>
 
+            <div className="ai-project-scope-grid">
+              {PROJECT_MODULES.map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+            </div>
+
             <div
               className={`ai-orb-shell ${
                 loading ? "is-thinking" : listening ? "is-listening" : ""
               }`}
+              style={{
+                "--voice-level": voiceLevel,
+                "--voice-scale": 1 + voiceLevel * 0.22,
+                "--voice-glow": 0.18 + voiceLevel * 0.42,
+              }}
             >
               <div className="ai-orb-core">
                 <div className="ai-orb-gloss" />
@@ -456,6 +1139,13 @@ const quickReplies = useMemo(
                 <div className="ai-orb-ring two" />
                 <div className="ai-orb-ring three" />
                 <Mic size={28} className="ai-orb-mic" />
+                <div className="ai-siri-wave">
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </div>
               </div>
               <div className="ai-orb-reflection" />
             </div>
@@ -470,35 +1160,42 @@ const quickReplies = useMemo(
               ) : listening ? (
                 <>
                   <small>Voice Assistant</small>
-                  <strong>Listening...</strong>
-                  <span>Speak clearly and wait for transcript.</span>
+                  <strong>{siriStatus || "Listening..."}</strong>
+                  <span>
+                    {lastVoiceTranscript
+                      ? `Heard: ${lastVoiceTranscript}`
+                      : "Start with “Hey Eve”, then speak your command."}
+                  </span>
                 </>
               ) : (
                 <>
                   <small>Ready</small>
-                  <strong>Ask anything about HRMS</strong>
-                  <span>Leave, attendance, assets, approvals, reports and more.</span>
+                  <strong>{eveActive ? siriStatus : "Click Eve once to activate voice"}</strong>
+                  <span>Manual typing opens the full chat. Voice stays in Siri mode.</span>
                 </>
               )}
             </div>
           </div>
         )}
 
-        {hasStartedChat && actionMode && (
+        {showChat && actionMode && (
           <div className="ai-action-mode-strip">
             <span>{actionMode}</span>
             <small>Guided action is active</small>
           </div>
         )}
 
-        {!hasStartedChat && (
+        {!showChat && (
           <div className="ai-assistant-quick-row">
             {QUICK_QUESTIONS.map((question) => (
               <button
                 key={question}
                 type="button"
                 disabled={loading}
-                onClick={() => sendMessage(question)}
+                onClick={() => {
+                  setManualChatOpen(true);
+                  sendMessage(question);
+                }}
               >
                 {question}
               </button>
@@ -506,7 +1203,7 @@ const quickReplies = useMemo(
           </div>
         )}
 
-          {hasStartedChat && (
+          {showChat && (
             <div className="ai-response-area">
               <div className="ai-assistant-messages">
                 {visibleMessages.map((item, index) => {
@@ -542,7 +1239,7 @@ const quickReplies = useMemo(
 
                           <button
                             type="button"
-                            onClick={() => speakText(item.text)}
+                            onClick={() => speakAssistantText(item.text)}
                             title="Speak answer"
                           >
                             <Volume2 size={13} /> Speak
@@ -567,7 +1264,7 @@ const quickReplies = useMemo(
             </div>
           </div>
         )}
-            {hasStartedChat && quickReplies.length > 0 && (
+            {showChat && quickReplies.length > 0 && (
               <div className="ai-guided-replies">
               {quickReplies.map((reply) => (
                 <button
@@ -601,7 +1298,7 @@ const quickReplies = useMemo(
                 <div>
                   <div className="ai-voice-title">Listening...</div>
                   <div className="ai-voice-subtitle">
-                    Speak clearly and wait for the transcript.
+                    Start with “Hey Eve”, then speak your command.
                   </div>
                 </div>
 
@@ -619,6 +1316,7 @@ const quickReplies = useMemo(
             <div className="ai-input-card">
               <textarea
                 value={message}
+                onFocus={() => setManualChatOpen(true)}
                 onChange={(event) => setMessage(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -626,7 +1324,7 @@ const quickReplies = useMemo(
                     sendMessage();
                   }
                 }}
-                placeholder={listening ? "Listening..." : "Ask me anything..."}
+                placeholder={listening ? 'Say "Hey Eve"...' : 'Ask me anything or say "Hey Eve"...'}
                 rows={3}
               />
 
@@ -643,11 +1341,11 @@ const quickReplies = useMemo(
                 <button
                   type="button"
                   className="ai-voice-pill"
-                  onClick={startListening}
+                  onClick={activateEve}
                   disabled={loading}
                 >
                   <Volume2 size={16} />
-                  Voice
+                  Hey Eve
                 </button>
 
                 <button
@@ -670,7 +1368,7 @@ const quickReplies = useMemo(
             </div>
 
             <div className="ai-assistant-footer">
-              <span>{listening ? "Listening..." : "Review voice before send"}</span>
+              <span>{autoWakeActive ? 'Eve is active in this browser session' : 'Click once to activate Eve voice'}</span>
               <span>Enter to send</span>
             </div>
           </div>
@@ -829,14 +1527,41 @@ const quickReplies = useMemo(
           color: rgba(219,39,119,.42);
         }
 
+
+        .ai-project-scope-grid {
+          position: relative;
+          z-index: 1;
+          width: min(360px, 100%);
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 6px;
+          margin-top: 14px;
+        }
+
+        .ai-project-scope-grid span {
+          border: 1px solid rgba(226,232,240,.78);
+          background: rgba(255,255,255,.62);
+          color: #475569;
+          border-radius: 999px;
+          padding: 5px 9px;
+          font-size: 10px;
+          line-height: 1;
+          font-weight: 900;
+          box-shadow: 0 8px 18px rgba(15,23,42,.035);
+          backdrop-filter: blur(12px);
+        }
+
         .ai-orb-shell {
           position: relative;
           z-index: 1;
           width: 150px;
           height: 174px;
-          margin-top: 24px;
+          margin-top: 18px;
           display: grid;
           justify-items: center;
+          transform: scale(var(--voice-scale, 1));
+          transition: transform 120ms ease-out;
           animation: aiOrbFloat 3.8s ease-in-out infinite;
         }
 
@@ -866,9 +1591,11 @@ const quickReplies = useMemo(
 
         .ai-orb-shell.is-listening .ai-orb-core {
           animation-duration: 3s;
+          transform: scale(var(--voice-scale, 1));
           box-shadow:
-            0 30px 72px rgba(236,72,153,.34),
-            0 0 0 12px rgba(236,72,153,.10),
+            0 30px 72px rgba(236,72,153,var(--voice-glow, .28)),
+            0 0 0 calc(10px + (var(--voice-level, 0) * 18px)) rgba(236,72,153,.10),
+            0 0 0 calc(22px + (var(--voice-level, 0) * 24px)) rgba(34,211,238,.08),
             inset 0 5px 14px rgba(255,255,255,.72),
             inset -12px -18px 28px rgba(15,23,42,.24);
         }
@@ -924,6 +1651,53 @@ const quickReplies = useMemo(
           margin: auto;
           color: rgba(255,255,255,.38);
           filter: drop-shadow(0 2px 6px rgba(15,23,42,.18));
+        }
+
+
+        .ai-siri-wave {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          pointer-events: none;
+          opacity: .78;
+        }
+
+        .ai-siri-wave span {
+          width: 5px;
+          height: calc(15px + (var(--voice-level, 0) * 42px));
+          border-radius: 999px;
+          background: rgba(255,255,255,.72);
+          box-shadow: 0 0 18px rgba(255,255,255,.48);
+          transform-origin: center;
+          animation: aiSiriWave 780ms ease-in-out infinite alternate;
+        }
+
+        .ai-siri-wave span:nth-child(1) {
+          animation-delay: 0ms;
+          transform: scaleY(calc(.65 + var(--voice-level, 0)));
+        }
+
+        .ai-siri-wave span:nth-child(2) {
+          animation-delay: 90ms;
+          transform: scaleY(calc(.9 + var(--voice-level, 0)));
+        }
+
+        .ai-siri-wave span:nth-child(3) {
+          animation-delay: 180ms;
+          transform: scaleY(calc(1.2 + var(--voice-level, 0)));
+        }
+
+        .ai-siri-wave span:nth-child(4) {
+          animation-delay: 270ms;
+          transform: scaleY(calc(.9 + var(--voice-level, 0)));
+        }
+
+        .ai-siri-wave span:nth-child(5) {
+          animation-delay: 360ms;
+          transform: scaleY(calc(.65 + var(--voice-level, 0)));
         }
 
         .ai-orb-reflection {
@@ -1353,6 +2127,18 @@ const quickReplies = useMemo(
           font-size: 11px;
           color: #64748b;
           padding: 0 4px;
+        }
+
+        @keyframes aiSiriWave {
+          from {
+            opacity: .45;
+            filter: blur(0);
+          }
+
+          to {
+            opacity: 1;
+            filter: blur(.4px);
+          }
         }
 
         @keyframes aiAssistantSpin {

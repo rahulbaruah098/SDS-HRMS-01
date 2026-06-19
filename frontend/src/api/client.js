@@ -921,9 +921,27 @@ function compactSessionUser(user = {}, employee = {}) {
   return {
     id: user.id || user._id || '',
     _id: user._id || user.id || '',
-    name: user.name || user.full_name || employee.employee_name || '',
-    email: user.email || '',
-    role: user.role || '',
+      name:
+        user.name ||
+        user.full_name ||
+        user.display_name ||
+        employee.employee_name ||
+        employee.name ||
+        employee.full_name ||
+        '',
+      full_name: user.full_name || user.name || employee.full_name || employee.employee_name || '',
+      display_name:
+        user.display_name ||
+        user.name ||
+        user.full_name ||
+        employee.employee_name ||
+        employee.name ||
+        '',
+      employee_name: employee.employee_name || employee.name || user.name || user.full_name || '',
+      email: user.email || employee.email || employee.official_email || '',
+      gender: user.gender || user.sex || employee.gender || employee.sex || employee.employee_gender || '',
+      sex: user.sex || user.gender || employee.sex || employee.gender || employee.employee_gender || '',
+      role: user.role || '',
     roles: Array.isArray(user.roles) ? user.roles : [],
     tenant_id: user.tenant_id || employee.tenant_id || '',
     employee_id: user.employee_id || employee.id || employee._id || '',
@@ -951,10 +969,35 @@ function compactSessionEmployee(employee = {}) {
   return {
     id: employee.id || employee._id || '',
     _id: employee._id || employee.id || '',
-    employee_name: employee.employee_name || employee.name || '',
-    employee_code: employee.employee_code || '',
-    email: employee.email || '',
-    phone: employee.phone || '',
+    employee_name:
+      employee.employee_name ||
+      employee.name ||
+      employee.full_name ||
+      employee.display_name ||
+      '',
+    name:
+      employee.name ||
+      employee.employee_name ||
+      employee.full_name ||
+      employee.display_name ||
+      '',
+    full_name:
+      employee.full_name ||
+      employee.employee_name ||
+      employee.name ||
+      employee.display_name ||
+      '',
+    display_name:
+      employee.display_name ||
+      employee.employee_name ||
+      employee.name ||
+      employee.full_name ||
+      '',
+    employee_code: employee.employee_code || employee.emp_code || employee.code || '',
+    email: employee.email || employee.official_email || employee.work_email || '',
+    phone: employee.phone || employee.mobile || employee.contact || employee.contact_number || '',
+    gender: employee.gender || employee.sex || employee.employee_gender || '',
+    sex: employee.sex || employee.gender || employee.employee_gender || '',
     tenant_id: employee.tenant_id || '',
     department_id: employee.department_id || '',
     department_name: employee.department_name || '',
@@ -4434,6 +4477,127 @@ export async function submitCheckOut(payload = {}) {
   return checkOutAttendance(attendancePayload);
 }
 
+export async function getAiAssistantVoiceContext() {
+  try {
+    const response = await api("/ai-assistant/voice-context", {
+      method: "GET",
+      timeoutMs: 15000,
+    });
+
+    const localEmployee = currentEmployee();
+    const localUser = currentUser();
+
+    const unreadCount = Number(
+      response?.unread_notification_count ||
+        response?.unread_count ||
+        response?.notifications_count ||
+        0
+    );
+
+    const employeeName = firstNonEmpty(
+      localEmployee?.employee_name,
+      localEmployee?.display_name,
+      localEmployee?.full_name,
+      localEmployee?.name,
+      localUser?.employee_name,
+      localUser?.display_name,
+      localUser?.full_name,
+      localUser?.name,
+      response?.employee_name === "Employee" ? "" : response?.employee_name,
+      response?.display_name === "Employee" ? "" : response?.display_name,
+      response?.full_name === "Employee" ? "" : response?.full_name,
+      response?.name === "Employee" ? "" : response?.name,
+      response?.user_name,
+      response?.employee?.employee_name,
+      response?.employee?.full_name,
+      response?.employee?.display_name,
+      response?.employee?.name,
+      response?.email,
+      "Employee"
+    );
+
+    const gender = String(
+      firstNonEmpty(
+        response?.gender,
+        response?.sex,
+        response?.employee?.gender,
+        response?.employee?.sex,
+        response?.employee?.employee_gender,
+        localEmployee?.gender,
+        localEmployee?.sex,
+        localEmployee?.employee_gender,
+        localUser?.gender,
+        localUser?.sex,
+        ""
+      )
+    )
+      .trim()
+      .toLowerCase();
+
+    const formalTitle = firstNonEmpty(
+      response?.formal_title,
+      gender === "male" || gender === "m" ? "sir" : "",
+      gender === "female" || gender === "f" ? "ma'am" : ""
+    );
+
+    return {
+      success: Boolean(response?.success),
+      wake_word: String(response?.wake_word || "hey eve").trim().toLowerCase(),
+      employee_name: employeeName,
+      name: employeeName,
+      display_name: employeeName,
+      gender,
+      formal_title: formalTitle,
+      unread_notification_count: Number.isFinite(unreadCount) ? unreadCount : 0,
+      notification_phrase: String(response?.notification_phrase || "").trim(),
+    };
+  } catch (error) {
+    const localEmployee = currentEmployee();
+    const localUser = currentUser();
+
+    const employeeName = firstNonEmpty(
+      localEmployee?.employee_name,
+      localEmployee?.display_name,
+      localEmployee?.full_name,
+      localEmployee?.name,
+      localUser?.employee_name,
+      localUser?.display_name,
+      localUser?.full_name,
+      localUser?.name,
+      localUser?.email,
+      "Employee"
+    );
+
+    const gender = String(
+      firstNonEmpty(
+        localEmployee?.gender,
+        localEmployee?.sex,
+        localUser?.gender,
+        localUser?.sex,
+        ""
+      )
+    )
+      .trim()
+      .toLowerCase();
+
+    return {
+      success: false,
+      wake_word: "hey eve",
+      employee_name: employeeName,
+      name: employeeName,
+      display_name: employeeName,
+      gender,
+      formal_title:
+        gender === "male" || gender === "m"
+          ? "sir"
+          : gender === "female" || gender === "f"
+            ? "ma'am"
+            : "",
+      unread_notification_count: 0,
+      notification_phrase: "",
+    };
+  }
+}
 export async function askAiAssistant(message, history = []) {
   try {
     const safeHistory = Array.isArray(history)
