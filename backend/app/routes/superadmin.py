@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, time
 from werkzeug.security import generate_password_hash
 
 from app.extensions import get_db
@@ -226,6 +226,206 @@ def normalize_float(value, default=0):
         return float(value or default)
     except Exception:
         return float(default)
+
+def parse_attendance_date(value):
+    value = normalize_text(value)
+
+    if not value:
+        return None
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def parse_attendance_time(value):
+    value = normalize_text(value)
+
+    if not value:
+        return None
+
+    supported_formats = [
+        "%H:%M",
+        "%H:%M:%S",
+        "%I:%M %p",
+        "%I:%M:%S %p",
+    ]
+
+    for fmt in supported_formats:
+        try:
+            return datetime.strptime(value, fmt).time().replace(second=0, microsecond=0)
+        except Exception:
+            pass
+
+    return None
+
+
+def combine_attendance_datetime(date_value, time_value):
+    parsed_date = parse_attendance_date(date_value)
+    parsed_time = parse_attendance_time(time_value)
+
+    if not parsed_date or not parsed_time:
+        return None
+
+    return datetime.combine(parsed_date, parsed_time)
+
+
+def attendance_time_label(value):
+    if not isinstance(value, datetime):
+        return ""
+
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def attendance_date_label(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+
+    return normalize_text(value)
+
+
+def build_attendance_status(check_in_at=None, check_out_at=None):
+    if not check_in_at:
+        return "absent"
+
+    late_cutoff = time(9, 50)
+    office_end = time(18, 0)
+
+    if check_in_at.time() >= late_cutoff:
+        return "late"
+
+    if check_out_at and check_out_at.time() < office_end:
+        return "early_checkout"
+
+    return "present"
+
+
+def employee_identity_query_values(employee_doc):
+    values = []
+
+    for value in [
+        employee_doc.get("_id"),
+        str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
+        employee_doc.get("employee_id"),
+        employee_doc.get("employee_code"),
+        employee_doc.get("emp_code"),
+        employee_doc.get("code"),
+        employee_doc.get("user_id"),
+        employee_doc.get("email"),
+    ]:
+        text_value = normalize_text(value)
+
+        if text_value and text_value not in values:
+            values.append(text_value)
+
+        obj_id = safe_object_id(text_value)
+
+        if obj_id and obj_id not in values:
+            values.append(obj_id)
+
+    return values
+
+
+def superadmin_attendance_employee_payload(employee_doc):
+    employee_doc = employee_doc or {}
+
+    return {
+        "_id": str(employee_doc.get("_id", "")),
+        "tenant_id": employee_doc.get("tenant_id", ""),
+        "name": employee_display_name(employee_doc),
+        "employee_id": employee_code(employee_doc),
+        "email": normalize_email(employee_doc.get("email")),
+        "department": employee_doc.get("department", ""),
+        "designation": employee_doc.get("designation", ""),
+        "status": employee_doc.get("status", ""),
+    }
+
+def get_attendance_datetime(record_doc, key):
+    record_doc = record_doc or {}
+
+    value = record_doc.get(key)
+
+    if isinstance(value, datetime):
+        return value
+
+    alias_value = record_doc.get(f"{key}_at")
+
+    if isinstance(alias_value, datetime):
+        return alias_value
+
+    if isinstance(value, str):
+        parsed = parse_attendance_time(value)
+
+        record_date = parse_attendance_date(record_doc.get("date"))
+
+        if parsed and record_date:
+            return datetime.combine(record_date, parsed)
+
+    return None
+
+
+def parse_attendance_location_input(value):
+    value = normalize_text(value)
+
+    if not value:
+        return ""
+
+    parts = [part.strip() for part in value.split(",")]
+
+    if len(parts) >= 2:
+        try:
+            latitude = float(parts[0])
+            longitude = float(parts[1])
+
+            return {
+                "latitude": latitude,
+                "longitude": longitude,
+                "address": value,
+            }
+        except Exception:
+            pass
+
+    return value
+
+def superadmin_attendance_record_payload(record_doc):
+    if not record_doc:
+        return None
+
+    check_in = get_attendance_datetime(record_doc, "check_in")
+    check_out = get_attendance_datetime(record_doc, "check_out")
+
+    check_in_location = (
+        record_doc.get("check_in_location")
+        or record_doc.get("location")
+        or record_doc.get("geo_location")
+        or ""
+    )
+
+    check_out_location = (
+        record_doc.get("check_out_location")
+        or ""
+    )
+
+    return {
+        "_id": str(record_doc.get("_id", "")),
+        "tenant_id": record_doc.get("tenant_id", ""),
+        "employee_ref_id": normalize_text(record_doc.get("employee_ref_id")),
+        "employee_id": normalize_text(record_doc.get("employee_id")),
+        "employee_name": normalize_text(record_doc.get("employee_name")),
+        "date": attendance_date_label(record_doc.get("date")),
+        "status": normalize_text(record_doc.get("status")),
+        "mode": normalize_text(record_doc.get("mode") or record_doc.get("work_mode")),
+        "check_in": attendance_time_label(check_in),
+        "check_out": attendance_time_label(check_out),
+        "check_in_at": check_in.isoformat() if isinstance(check_in, datetime) else "",
+        "check_out_at": check_out.isoformat() if isinstance(check_out, datetime) else "",
+        "check_in_location": check_in_location,
+        "check_out_location": check_out_location,
+        "late_reason": record_doc.get("late_reason") or "",
+        "early_checkout_reason": record_doc.get("early_checkout_reason") or "",
+        "remarks": record_doc.get("remarks") or "",
+    }
 
 
 def profile_photo_value(doc):
@@ -2150,3 +2350,313 @@ def delete_tenant_user_from_control(user_id):
     audit("delete_tenant_user", "users", user_id)
 
     return jsonify({"message": "User deleted successfully"})
+
+@superadmin_bp.get("/private-attendance-corrections/tenants")
+@roles_required("super_admin")
+def private_attendance_correction_tenants():
+    db = get_db()
+
+    rows = list(
+        db.tenants
+        .find(
+            {"is_deleted": {"$ne": True}},
+            {
+                "tenant_id": 1,
+                "name": 1,
+                "company_name": 1,
+                "domain": 1,
+                "status": 1,
+            },
+        )
+        .sort("name", 1)
+        .limit(1000)
+    )
+
+    return jsonify({"items": clean_doc(rows)})
+
+
+@superadmin_bp.get("/private-attendance-corrections/employees")
+@roles_required("super_admin")
+def private_attendance_correction_employees():
+    db = get_db()
+
+    tenant_id = normalize_text(request.args.get("tenant_id"))
+    search = normalize_text(request.args.get("q"))
+
+    if not tenant_id:
+        return jsonify({"message": "Tenant is required"}), 400
+
+    query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    }
+
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"employee_name": {"$regex": search, "$options": "i"}},
+            {"employee_id": {"$regex": search, "$options": "i"}},
+            {"employee_code": {"$regex": search, "$options": "i"}},
+            {"emp_code": {"$regex": search, "$options": "i"}},
+            {"code": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+            {"department": {"$regex": search, "$options": "i"}},
+            {"designation": {"$regex": search, "$options": "i"}},
+        ]
+
+    employees = list(
+        db.employees
+        .find(
+            query,
+            {
+                "tenant_id": 1,
+                "name": 1,
+                "employee_name": 1,
+                "employee_id": 1,
+                "employee_code": 1,
+                "emp_code": 1,
+                "code": 1,
+                "email": 1,
+                "department": 1,
+                "designation": 1,
+                "status": 1,
+            },
+        )
+        .sort("name", 1)
+        .limit(100)
+    )
+
+    return jsonify({
+        "items": clean_doc([
+            superadmin_attendance_employee_payload(employee)
+            for employee in employees
+        ])
+    })
+
+
+@superadmin_bp.get("/private-attendance-corrections/record")
+@roles_required("super_admin")
+def private_attendance_correction_record():
+    db = get_db()
+
+    tenant_id = normalize_text(request.args.get("tenant_id"))
+    employee_id = normalize_text(request.args.get("employee_id"))
+    attendance_date = normalize_text(request.args.get("date"))
+
+    if not tenant_id:
+        return jsonify({"message": "Tenant is required"}), 400
+
+    if not employee_id:
+        return jsonify({"message": "Employee is required"}), 400
+
+    if not parse_attendance_date(attendance_date):
+        return jsonify({"message": "Valid attendance date is required"}), 400
+
+    employee_obj_id = safe_object_id(employee_id)
+
+    if not employee_obj_id:
+        return jsonify({"message": "Invalid employee id"}), 400
+
+    employee = db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    })
+
+    if not employee:
+        return jsonify({"message": "Employee not found"}), 404
+
+    identity_values = employee_identity_query_values(employee)
+
+    record = db.attendance_logs.find_one({
+        "tenant_id": tenant_id,
+        "date": attendance_date,
+        "$or": [
+            {"employee_ref_id": {"$in": identity_values}},
+            {"employee_id": {"$in": identity_values}},
+            {"user_id": {"$in": identity_values}},
+            {"email": {"$in": identity_values}},
+        ],
+    })
+
+    return jsonify({
+        "employee": superadmin_attendance_employee_payload(employee),
+        "record": superadmin_attendance_record_payload(record),
+    })
+
+
+@superadmin_bp.post("/private-attendance-corrections/update")
+@roles_required("super_admin")
+def private_attendance_correction_update():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    tenant_id = normalize_text(data.get("tenant_id"))
+    employee_id = normalize_text(data.get("employee_id"))
+    attendance_date = normalize_text(data.get("date"))
+
+    check_in_time = normalize_text(data.get("check_in"))
+    check_out_time = normalize_text(data.get("check_out"))
+    mode = normalize_text(data.get("mode") or "office").lower()
+    check_in_location = normalize_text(data.get("check_in_location"))
+    check_out_location = normalize_text(data.get("check_out_location"))
+    late_reason = normalize_text(data.get("late_reason"))
+    early_checkout_reason = normalize_text(data.get("early_checkout_reason"))
+    remarks = normalize_text(data.get("remarks"))
+    correction_reason = normalize_text(data.get("correction_reason"))
+
+    if not tenant_id:
+        return jsonify({"message": "Tenant is required"}), 400
+
+    if not employee_id:
+        return jsonify({"message": "Employee is required"}), 400
+
+    if not parse_attendance_date(attendance_date):
+        return jsonify({"message": "Valid attendance date is required"}), 400
+
+    if mode not in {"office", "wfh", "field"}:
+        return jsonify({"message": "Attendance mode must be office, wfh, or field"}), 400
+
+    if not check_in_time:
+        return jsonify({"message": "Check-in time is required"}), 400
+
+    check_in_at = combine_attendance_datetime(attendance_date, check_in_time)
+
+    if not check_in_at:
+        return jsonify({"message": "Valid check-in time is required"}), 400
+
+    check_out_at = None
+
+    if check_out_time:
+        check_out_at = combine_attendance_datetime(attendance_date, check_out_time)
+
+        if not check_out_at:
+            return jsonify({"message": "Valid check-out time is required"}), 400
+
+        if check_out_at < check_in_at:
+            return jsonify({"message": "Check-out time cannot be earlier than check-in time"}), 400
+
+    employee_obj_id = safe_object_id(employee_id)
+
+    if not employee_obj_id:
+        return jsonify({"message": "Invalid employee id"}), 400
+
+    employee = db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "status": {"$ne": "Inactive"},
+    })
+
+    if not employee:
+        return jsonify({"message": "Employee not found"}), 404
+
+    identity_values = employee_identity_query_values(employee)
+
+    existing = db.attendance_logs.find_one({
+        "tenant_id": tenant_id,
+        "date": attendance_date,
+        "$or": [
+            {"employee_ref_id": {"$in": identity_values}},
+            {"employee_id": {"$in": identity_values}},
+            {"user_id": {"$in": identity_values}},
+            {"email": {"$in": identity_values}},
+        ],
+    })
+
+    status = build_attendance_status(check_in_at, check_out_at)
+    employee_name = employee_display_name(employee)
+    employee_code_value = employee_code(employee)
+
+    parsed_check_in_location = parse_attendance_location_input(check_in_location)
+    parsed_check_out_location = parse_attendance_location_input(check_out_location)
+
+    update_payload = {
+        "tenant_id": tenant_id,
+        "employee_ref_id": str(employee["_id"]),
+        "employee_id": str(employee["_id"]),
+        "employee_code": employee_code_value,
+        "emp_code": employee.get("emp_code", ""),
+        "employee_name": employee_name,
+        "email": normalize_email(employee.get("email")),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "date": attendance_date,
+        "status": status,
+        "mode": mode,
+        "work_mode": mode,
+        "check_in": check_in_at,
+        "check_in_at": check_in_at,
+        "check_in_location": parsed_check_in_location,
+        "location": parsed_check_in_location,
+        "late_reason": late_reason,
+        "early_checkout_reason": early_checkout_reason,
+        "remarks": remarks,
+        "manually_corrected": True,
+        "manual_correction_source": "super_admin_private_attendance_correction",
+        "manual_correction_reason": correction_reason,
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+        "updated_by_name": g.current_user.get("name", "Super Admin"),
+    }
+
+    if check_out_at:
+        update_payload.update({
+            "check_out": check_out_at,
+            "check_out_at": check_out_at,
+            "check_out_location": parsed_check_out_location,
+        })
+    else:
+        update_payload.update({
+            "check_out": None,
+            "check_out_at": None,
+            "check_out_location": None,
+        })
+
+    old_payload = superadmin_attendance_record_payload(existing)
+
+    if existing:
+        db.attendance_logs.update_one(
+            {"_id": existing["_id"]},
+            {"$set": update_payload},
+        )
+
+        attendance_id = existing["_id"]
+        action = "updated"
+    else:
+        update_payload.update({
+            "created_at": now(),
+            "created_by": str(g.current_user["_id"]),
+        })
+
+        result = db.attendance_logs.insert_one(update_payload)
+
+        attendance_id = result.inserted_id
+        action = "created"
+
+    updated = db.attendance_logs.find_one({"_id": attendance_id})
+
+    db.attendance_private_corrections.insert_one({
+        "tenant_id": tenant_id,
+        "attendance_id": str(attendance_id),
+        "employee_ref_id": str(employee["_id"]),
+        "employee_ref_id": str(employee["_id"]),
+        "employee_id": employee_code_value,
+        "employee_name": employee_name,
+        "date": attendance_date,
+        "action": action,
+        "old_values": old_payload,
+        "new_values": superadmin_attendance_record_payload(updated),
+        "reason": correction_reason,
+        "changed_by": str(g.current_user["_id"]),
+        "changed_by_name": g.current_user.get("name", "Super Admin"),
+        "changed_by_email": normalize_email(g.current_user.get("email")),
+        "created_at": now(),
+    })
+
+    return jsonify({
+        "message": "Attendance correction saved successfully",
+        "record": superadmin_attendance_record_payload(updated),
+    })
