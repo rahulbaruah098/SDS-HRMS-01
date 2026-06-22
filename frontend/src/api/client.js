@@ -1127,6 +1127,132 @@ function getConnectionErrorMessage() {
   ].join(' ');
 }
 
+function createAiProviderError(response, data = {}, fallbackMessage = 'AI request failed.') {
+  const provider = String(
+    data?.provider ||
+      data?.chat_provider ||
+      data?.stt_provider ||
+      data?.tts_provider ||
+      data?.service ||
+      'AI provider'
+  ).trim();
+
+  const message =
+    data?.message ||
+    data?.error ||
+    data?.details ||
+    fallbackMessage ||
+    `AI request failed with API Error ${response?.status || ''}`;
+
+  const error = new Error(message);
+
+  error.status = response?.status || 500;
+  error.provider = provider;
+  error.quota_exceeded = Boolean(data?.quota_exceeded || response?.status === 429);
+  error.retry_after_seconds = Number(
+    data?.retry_after_seconds ||
+      data?.retry_after ||
+      response?.headers?.get?.('Retry-After') ||
+      90
+  );
+
+  return error;
+}
+
+
+function isAiAttendanceCommand(message = '') {
+  const text = String(message || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  if (!text) {
+    return false;
+  }
+
+  const checkInPhrases = [
+    'check in',
+    'checkin',
+    'punch in',
+    'clock in',
+    'mark attendance',
+    'mark my attendance',
+    'start attendance',
+    'office in',
+  ];
+
+  const checkOutPhrases = [
+    'check out',
+    'checkout',
+    'punch out',
+    'clock out',
+    'mark checkout',
+    'end attendance',
+    'office out',
+  ];
+
+  return [...checkInPhrases, ...checkOutPhrases].some((phrase) =>
+    text.includes(phrase)
+  );
+}
+
+function getBrowserAttendanceLocation(options = {}) {
+  const shouldSkip =
+    options?.skipLocation === true ||
+    typeof window === 'undefined' ||
+    !navigator?.geolocation;
+
+  if (shouldSkip) {
+    return Promise.resolve({
+      available: false,
+      skipped: true,
+      reason: 'geolocation_not_available',
+    });
+  }
+
+  const timeoutMs = Number(options.locationTimeoutMs || 10000);
+
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = position?.coords || {};
+
+        resolve({
+          available: true,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          accuracy: coords.accuracy,
+          altitude: coords.altitude,
+          altitude_accuracy: coords.altitudeAccuracy,
+          heading: coords.heading,
+          speed: coords.speed,
+          captured_at: new Date().toISOString(),
+          source: 'browser_geolocation',
+        });
+      },
+      (error) => {
+        resolve({
+          available: false,
+          permission_denied: error?.code === 1,
+          position_unavailable: error?.code === 2,
+          timeout: error?.code === 3,
+          code: error?.code,
+          message:
+            error?.message ||
+            'Location permission is required for AI attendance check-in/check-out.',
+          source: 'browser_geolocation',
+        });
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: timeoutMs,
+        maximumAge: 15000,
+      }
+    );
+  });
+}
+
 export async function api(path, options = {}) {
   const token = getToken();
   const isFormData = options.body instanceof FormData;
@@ -4598,81 +4724,317 @@ export async function getAiAssistantVoiceContext() {
     };
   }
 }
-export async function askAiAssistant(message, history = []) {
+export async function askAiAssistant(message, history = [], options = {}) {
+  const cleanMessage = String(message || '').trim();
+
+  if (!cleanMessage) {
+    throw new Error('Message is required.');
+  }
+
+  const safeHistory = Array.isArray(history)
+    ? history
+        .slice(-6)
+        .map((item) => ({
+          role: item?.role,
+          text: item?.text || item?.content || '',
+        }))
+        .filter((item) => item.role && item.text)
+    : [];
+
+  const needsAttendanceLocation =
+    options?.includeLocation === true || isAiAttendanceCommand(cleanMessage);
+
+  const attendanceLocation = needsAttendanceLocation
+    ? await getBrowserAttendanceLocation(options)
+    : {
+        available: false,
+        skipped: true,
+        reason: 'not_attendance_command',
+      };
+
+  const token = getToken();
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.min(Number(options.timeoutMs || 30000), 35000)
+  );
+
+  let response;
+
   try {
-    const safeHistory = Array.isArray(history)
-      ? history
-          .slice(-8)
-          .map((item) => ({
-            role: item?.role,
-            text: item?.text,
-          }))
-          .filter((item) => item.role && item.text)
-      : [];
-
-    const response = await api("/ai-assistant/chat", {
-      method: "POST",
+    response = await fetch(buildUrl('/ai-assistant/chat'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({
-        message,
+        message: cleanMessage,
         history: safeHistory,
+
+        // Used by Eve AI attendance actions.
+        // Backend can pass this into attendance check-in/check-out payload.
+        client_context: {
+          attendance_location: attendanceLocation,
+          location: attendanceLocation,
+          latitude: attendanceLocation?.latitude,
+          longitude: attendanceLocation?.longitude,
+          accuracy: attendanceLocation?.accuracy,
+          source: 'frontend_ai_assistant',
+        },
+
+        // Backward-compatible direct keys.
+        attendance_location: attendanceLocation,
+        location: attendanceLocation,
+        latitude: attendanceLocation?.latitude,
+        longitude: attendanceLocation?.longitude,
+        accuracy: attendanceLocation?.accuracy,
       }),
+      signal: controller.signal,
     });
-
-    if (!response?.success) {
-      throw new Error(
-        response?.error ||
-          response?.details ||
-          response?.message ||
-          "AI Assistant could not process this request."
-      );
-    }
-
-    return response;
   } catch (error) {
-    const rawMessage = String(error?.message || "");
-    const messageText = rawMessage.toLowerCase();
-
-    if (messageText.includes("failed to fetch")) {
-      throw new Error(
-        "AI Assistant backend is not reachable. Please check if Flask backend is running."
-      );
-    }
-
-    if (messageText.includes("401") || messageText.includes("unauthorized")) {
-      throw new Error(
-        "Your login session expired. Please logout and login again."
-      );
-    }
-
-    if (messageText.includes("403") || messageText.includes("permission")) {
-      throw new Error("You do not have permission to use AI Assistant.");
-    }
-
-    if (messageText.includes("429") || messageText.includes("quota")) {
-      throw new Error(
-        "AI provider quota is exceeded. Please try again later or check Gemini API quota."
-      );
-    }
-
-    if (
-      messageText.includes("gemini") ||
-      messageText.includes("api key") ||
-      messageText.includes("generate_content") ||
-      messageText.includes("embed_content")
-    ) {
-      throw new Error(
-        "AI provider configuration issue. Please check GEMINI_API_KEY and backend AI service configuration."
-      );
-    }
-
-    if (messageText.includes("500")) {
-      throw new Error(
-        "AI Assistant backend had a temporary issue. Please try again. If it continues, check backend terminal logs."
-      );
+    if (error?.name === 'AbortError') {
+      throw new Error('AI Assistant is taking too long to reply. Please try again.');
     }
 
     throw new Error(
-      rawMessage || "AI Assistant failed. Please try again."
+      'AI Assistant backend is not reachable. Please check if Flask backend is running.'
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  let data = {};
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Your login session expired. Please logout and login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error('You do not have permission to use AI Assistant.');
+  }
+
+  if (!response.ok || !data?.success) {
+    throw createAiProviderError(
+      response,
+      data,
+      'AI Assistant could not process this request.'
     );
   }
+
+  return data;
+}
+
+export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
+  if (!audioBlob) {
+    throw new Error('Audio recording is required.');
+  }
+
+  if (audioBlob.size && audioBlob.size < 2500) {
+    return {
+      success: true,
+      provider: 'local',
+      text: '',
+      transcript: '',
+      skipped: true,
+      reason: 'audio_too_short',
+    };
+  }
+
+  const formData = new FormData();
+
+  const filename =
+    options.filename ||
+    (audioBlob.type && audioBlob.type.includes('wav')
+      ? 'eve-audio.wav'
+      : audioBlob.type && audioBlob.type.includes('mp4')
+        ? 'eve-audio.mp4'
+        : audioBlob.type && audioBlob.type.includes('mpeg')
+          ? 'eve-audio.mp3'
+          : audioBlob.type && audioBlob.type.includes('ogg')
+            ? 'eve-audio.ogg'
+            : 'eve-audio.webm');
+
+  formData.append('audio', audioBlob, filename);
+
+  if (options.language) {
+    formData.append('language', options.language);
+  }
+
+  const token = getToken();
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.min(Number(options.timeoutMs || 20000), 30000)
+  );
+
+  let response;
+
+  try {
+    response = await fetch(buildUrl('/ai-assistant/transcribe'), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Voice understanding timed out. Please try again.');
+    }
+
+    throw new Error(getConnectionErrorMessage());
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  let data = {};
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error('You do not have permission to use Eve voice.');
+  }
+
+  if (!response.ok || !data?.success) {
+    throw createAiProviderError(
+      response,
+      data,
+      'Voice transcription failed. Please try again.'
+    );
+  }
+
+  const transcript = String(
+    data?.text ||
+      data?.transcript ||
+      ''
+  ).trim();
+
+  return {
+    ...data,
+    success: true,
+    provider: data?.provider || 'deepgram',
+    text: transcript,
+    transcript,
+  };
+}
+
+export async function speakAiAssistantText(text, options = {}) {
+  const cleanText = String(text || '').trim();
+
+  if (!cleanText) {
+    throw new Error('Text is required for Eve voice.');
+  }
+
+  const requestedVoice = String(options.voice || '').trim();
+  const sarvamVoice =
+    !requestedVoice || requestedVoice.toLowerCase() === 'kore'
+      ? 'anushka'
+      : requestedVoice;
+
+  const token = getToken();
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.min(Number(options.timeoutMs || 30000), 45000)
+  );
+
+  let response;
+
+  try {
+    response = await fetch(buildUrl('/ai-assistant/speak'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'audio/wav, audio/mpeg, audio/*, application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        text: cleanText,
+        voice: sarvamVoice,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Voice generation timed out. Please try again.');
+    }
+
+    throw new Error(getConnectionErrorMessage());
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error('You do not have permission to use Eve voice.');
+  }
+
+  if (!response.ok) {
+    let errorData = {};
+    let errorMessage = `Voice generation failed with API Error ${response.status}`;
+
+    try {
+      const contentType = response.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        errorData = await response.json();
+        errorMessage =
+          errorData?.message ||
+          errorData?.error ||
+          errorData?.details ||
+          errorMessage;
+      } else {
+        const textResponse = await response.text();
+        errorMessage = textResponse || errorMessage;
+      }
+    } catch {
+      // keep default error
+    }
+
+    throw createAiProviderError(response, errorData, errorMessage);
+  }
+
+  const audioBlob = await response.blob();
+
+  if (!audioBlob || audioBlob.size <= 0) {
+    throw new Error('Voice service returned empty audio.');
+  }
+
+  const audioUrl = URL.createObjectURL(audioBlob);
+  const provider = response.headers.get('X-AI-Provider') || response.headers.get('X-Eve-Provider') || 'sarvam';
+
+  return {
+    success: true,
+    provider,
+    blob: audioBlob,
+    audio_blob: audioBlob,
+    audio_url: audioUrl,
+    url: audioUrl,
+    mime_type: audioBlob.type || response.headers.get('content-type') || 'audio/mpeg',
+    voice: response.headers.get('X-Eve-Voice') || sarvamVoice,
+  };
 }

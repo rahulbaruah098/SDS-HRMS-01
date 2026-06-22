@@ -1,5 +1,6 @@
 import math
 import os
+import re
 
 try:
     from google import genai
@@ -13,6 +14,10 @@ from app.services.ai_capability_service import (
     check_ai_role_permission,
 )
 from app.services.ai_action_service import handle_guided_action
+from app.services.ai_provider_service import (
+    AiProviderError,
+    generate_ai_chat_response,
+)
 
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -209,6 +214,93 @@ def search_knowledge(question, tenant_id=None, limit=5):
 
     except Exception:
         return []
+
+
+def _keyword_tokens(value):
+    words = re.findall(r"[a-z0-9]+", str(value or "").lower())
+
+    stop_words = {
+        "the", "a", "an", "and", "or", "to", "of", "for", "in", "on", "is",
+        "are", "am", "i", "me", "my", "we", "our", "you", "your", "how",
+        "what", "when", "where", "why", "can", "could", "should", "would",
+        "please", "tell", "show", "give", "get", "want", "need", "do", "does",
+        "did", "with", "from", "this", "that", "it", "as", "by", "be", "about"
+    }
+
+    return [word for word in words if len(word) > 2 and word not in stop_words]
+
+
+def search_static_knowledge(question, limit=5):
+    """
+    Fast local HRMS knowledge search.
+    This avoids an extra Gemini embedding API call when AI_FAST_MODE is enabled.
+    """
+
+    question_tokens = set(_keyword_tokens(question))
+
+    if not question_tokens:
+        return []
+
+    scored_items = []
+
+    for item in HRMS_WORKFLOWS:
+        module = str(item.get("module") or "")
+        title = str(item.get("title") or "")
+        content = str(item.get("content") or "")
+        searchable_text = f"{module} {title} {content}"
+        text_tokens = set(_keyword_tokens(searchable_text))
+
+        if not text_tokens:
+            continue
+
+        overlap = question_tokens.intersection(text_tokens)
+        score = len(overlap) / max(1, len(question_tokens))
+
+        title_tokens = set(_keyword_tokens(title))
+        module_tokens = set(_keyword_tokens(module))
+
+        if question_tokens.intersection(title_tokens):
+            score += 0.20
+
+        if question_tokens.intersection(module_tokens):
+            score += 0.16
+
+        if score <= 0:
+            continue
+
+        scored_items.append({
+            "score": min(score, 1.0),
+            "doc": {
+                "module": module,
+                "title": title,
+                "content": content,
+            },
+        })
+
+    scored_items.sort(key=lambda item: item["score"], reverse=True)
+
+    return [item for item in scored_items[:limit] if item["score"] >= 0.14]
+
+
+def should_use_fast_static_knowledge():
+    fast_mode = str(os.getenv("AI_FAST_MODE", "true")).strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    use_gemini_search = str(
+        os.getenv("AI_USE_GEMINI_KNOWLEDGE_SEARCH", "")
+    ).strip().lower()
+
+    if use_gemini_search in {"1", "true", "yes", "y", "on"}:
+        return False
+
+    if use_gemini_search in {"0", "false", "no", "n", "off"}:
+        return True
+
+    chat_provider = str(
+        os.getenv("AI_CHAT_PROVIDER") or os.getenv("AI_PROVIDER") or "gemini"
+    ).strip().lower()
+
+    return fast_mode or chat_provider != "gemini"
 
 
 def build_hrms_context(matched_items):
@@ -456,16 +548,16 @@ def generate_ai_answer(question, user_context=None, history=None):
             "I have started the guided action flow. Please continue with the requested details."
         )
 
-    if not GEMINI_API_KEY or genai is None or client is None:
-        return local_fallback_answer(clean_question)
-
-    
     capability_context = build_capability_context(
         clean_question,
         user_context=user_context
     )
-    
-    matched_items = search_knowledge(clean_question, tenant_id=tenant_id)
+
+    if should_use_fast_static_knowledge():
+        matched_items = search_static_knowledge(clean_question)
+    else:
+        matched_items = search_knowledge(clean_question, tenant_id=tenant_id)
+
     hrms_context = build_hrms_context(matched_items)
 
     top_score = matched_items[0]["score"] if matched_items else 0
@@ -563,12 +655,23 @@ User question:
 """
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_CHAT_MODEL,
-            contents=prompt
+        provider_response = generate_ai_chat_response(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0.15,
+            max_tokens=int(os.getenv("AI_MAX_OUTPUT_TOKENS", "450") or 450),
+            timeout=int(os.getenv("AI_CHAT_TIMEOUT_SECONDS", "20") or 20),
         )
 
-        answer = getattr(response, "text", None)
+        answer = str(
+            provider_response.get("answer")
+            or provider_response.get("text")
+            or ""
+        ).strip()
 
         if not answer:
             if capability_context:
@@ -579,7 +682,16 @@ User question:
 
             return local_fallback_answer(clean_question)
 
-        return answer.strip()
+        return answer
+
+    except AiProviderError:
+        if capability_context:
+            return (
+                "I could not generate a full AI response right now, but I found this HRMS data:\n\n"
+                f"{capability_context}"
+            )
+
+        return local_fallback_answer(clean_question)
 
     except Exception:
         if capability_context:

@@ -2174,81 +2174,363 @@ def resolve_handover_employee(db, tenant_id, employee, raw_employee_id):
             "task_handover_to_employee_code": "",
         }
 
-    handover_obj_id = safe_object_id(handover_id)
+    def employee_record_is_active(record):
+        record = record or {}
 
-    if not handover_obj_id:
-        raise ValueError("Invalid task handover employee")
+        if record.get("is_deleted") is True:
+            return False
+
+        if record.get("is_active") is False:
+            return False
+
+        if record.get("active") is False:
+            return False
+
+        inactive_values = {
+            "inactive",
+            "in_active",
+            "disabled",
+            "resigned",
+            "resign",
+            "left",
+            "terminated",
+            "alumni",
+            "ex_employee",
+            "ex-employee",
+            "deleted",
+            "blocked",
+            "suspended",
+        }
+
+        for key in ["status", "employment_status", "employee_status"]:
+            value = normalize_text(record.get(key)).lower().replace(" ", "_")
+
+            if value and value in inactive_values:
+                return False
+
+        return True
+
+    def normalized_identity_values(record):
+        record = record or {}
+        values = []
+
+        raw_values = []
+
+        try:
+            raw_values.extend(employee_identifier_values(record))
+        except Exception:
+            pass
+
+        raw_values.extend([
+            record.get("_id"),
+            str(record.get("_id")) if record.get("_id") else "",
+            record.get("id"),
+            record.get("user_id"),
+            record.get("employee_user_id"),
+            record.get("login_user_id"),
+            record.get("account_user_id"),
+            record.get("employee_id"),
+            record.get("employee_ref_id"),
+            record.get("employee_profile_id"),
+            record.get("employee_code"),
+            record.get("emp_code"),
+            record.get("code"),
+            record.get("email"),
+            record.get("official_email"),
+            record.get("work_email"),
+            record.get("username"),
+            record.get("name"),
+            record.get("employee_name"),
+            record.get("full_name"),
+            record.get("display_name"),
+        ])
+
+        for value in raw_values:
+            text = normalize_text(value)
+
+            if not text:
+                continue
+
+            for candidate in [text, text.lower()]:
+                if candidate and candidate not in values:
+                    values.append(candidate)
+
+            obj = safe_object_id(text)
+            if obj:
+                obj_text = str(obj)
+                for candidate in [obj_text, obj_text.lower()]:
+                    if candidate and candidate not in values:
+                        values.append(candidate)
+
+        return values
+
+    def normalized_values_from_record(record, keys):
+        record = record or {}
+        values = []
+
+        for key in keys:
+            value = normalize_text(record.get(key))
+
+            if not value:
+                continue
+
+            for candidate in [value, value.lower()]:
+                if candidate and candidate not in values:
+                    values.append(candidate)
+
+            obj = safe_object_id(value)
+            if obj:
+                obj_text = str(obj)
+                for candidate in [obj_text, obj_text.lower()]:
+                    if candidate and candidate not in values:
+                        values.append(candidate)
+
+        return values
+
+    def values_overlap(left_values, right_values):
+        left_set = set([normalize_text(value).lower() for value in left_values if normalize_text(value)])
+        right_set = set([normalize_text(value).lower() for value in right_values if normalize_text(value)])
+
+        return bool(left_set.intersection(right_set))
+
+    def collect_project_values(value, output):
+        if value in [None, ""]:
+            return
+
+        if isinstance(value, ObjectId):
+            output.add(str(value).lower())
+            return
+
+        if isinstance(value, dict):
+            for nested_value in value.values():
+                collect_project_values(nested_value, output)
+            return
+
+        if isinstance(value, list):
+            for nested_value in value:
+                collect_project_values(nested_value, output)
+            return
+
+        text = normalize_text(value)
+        if text:
+            output.add(text.lower())
+
+            obj = safe_object_id(text)
+            if obj:
+                output.add(str(obj).lower())
+
+    def same_active_project_connection():
+        employee_values = set([
+            normalize_text(value).lower()
+            for value in normalized_identity_values(employee)
+            if normalize_text(value)
+        ])
+
+        handover_values = set([
+            normalize_text(value).lower()
+            for value in normalized_identity_values(handover_employee)
+            if normalize_text(value)
+        ])
+
+        if not employee_values or not handover_values:
+            return False
+
+        project_fields = [
+            "_id",
+            "status",
+            "project_name",
+            "name",
+            "title",
+            "department",
+            "department_id",
+            "department_name",
+            "team_leader_id",
+            "team_leader_user_id",
+            "team_leader_employee_id",
+            "reporting_officer_id",
+            "reporting_officer_user_id",
+            "reporting_officer_employee_id",
+            "assigned_to",
+            "assigned_to_id",
+            "assigned_to_employee_id",
+            "assigned_employee_id",
+            "assigned_member_ids",
+            "assigned_members",
+            "team_members",
+            "member_ids",
+            "members",
+            "collaborator_ids",
+            "collaborators",
+            "doing_people",
+            "project_team_tree",
+            "all_people",
+        ]
+
+        projection = {key: 1 for key in project_fields}
+        projection["is_deleted"] = 1
+        projection["tenant_id"] = 1
+
+        try:
+            projects = db.projects.find(
+                {
+                    "tenant_id": tenant_id,
+                    "is_deleted": {"$ne": True},
+                },
+                projection,
+            ).limit(1000)
+
+            for project in projects:
+                if not is_active_project(project):
+                    continue
+
+                project_values = set()
+
+                for key in project_fields:
+                    collect_project_values(project.get(key), project_values)
+
+                if employee_values.intersection(project_values) and handover_values.intersection(project_values):
+                    return True
+        except Exception:
+            return False
+
+        return False
+
+    handover_obj_id = safe_object_id(handover_id)
+    handover_lookup_or = [
+        {"id": handover_id},
+        {"user_id": handover_id},
+        {"employee_user_id": handover_id},
+        {"login_user_id": handover_id},
+        {"account_user_id": handover_id},
+        {"employee_id": handover_id},
+        {"employee_ref_id": handover_id},
+        {"employee_profile_id": handover_id},
+        {"employee_code": handover_id},
+        {"emp_code": handover_id},
+        {"code": handover_id},
+        {"email": normalize_email(handover_id)},
+        {"official_email": normalize_email(handover_id)},
+        {"work_email": normalize_email(handover_id)},
+        {"username": normalize_email(handover_id)},
+    ]
+
+    if handover_obj_id:
+        handover_lookup_or.insert(0, {"_id": handover_obj_id})
 
     handover_employee = db.employees.find_one({
-        "_id": handover_obj_id,
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        "$and": [
+            {"tenant_id": tenant_id},
+            {"is_deleted": {"$ne": True}},
+            {"is_active": {"$ne": False}},
+            {"active": {"$ne": False}},
+            {
+                "status": {
+                    "$nin": [
+                        "Inactive",
+                        "inactive",
+                        "INACTIVE",
+                        "Resigned",
+                        "resigned",
+                        "Left",
+                        "left",
+                        "Terminated",
+                        "terminated",
+                        "Alumni",
+                        "alumni",
+                    ]
+                }
+            },
+            {"$or": handover_lookup_or},
+        ]
     })
 
-    if not handover_employee:
+    if not handover_employee or not employee_record_is_active(handover_employee):
         raise ValueError("Task handover employee must be an active employee")
 
     if str(handover_employee.get("_id")) == str(employee.get("_id")):
         raise ValueError("Task handover cannot be assigned to yourself")
 
-    def normalize_id_values(*values):
-        normalized = []
+    employee_identity_values = normalized_identity_values(employee)
+    handover_identity_values = normalized_identity_values(handover_employee)
 
-        for value in values:
-            text_value = normalize_text(value)
-
-            if not text_value:
-                continue
-
-            if text_value not in normalized:
-                normalized.append(text_value)
-
-            try:
-                object_value = ObjectId(text_value)
-                if object_value not in normalized:
-                    normalized.append(object_value)
-            except Exception:
-                pass
-
-        return normalized
-
-    employee_team_leader_values = normalize_id_values(
-        employee.get("team_leader_id"),
-        employee.get("team_leader_employee_id"),
+    employee_team_owner_values = normalized_values_from_record(
+        employee,
+        [
+            "team_leader_id",
+            "team_leader_user_id",
+            "team_leader_employee_id",
+            "team_leader_ref_id",
+            "team_leader_email",
+            "tl_id",
+            "reporting_officer_id",
+            "reporting_officer_user_id",
+            "reporting_officer_employee_id",
+            "reporting_officer_ref_id",
+            "reporting_officer_email",
+            "ro_id",
+            "manager_id",
+            "manager_user_id",
+            "manager_employee_id",
+        ],
     )
 
-    handover_identity_values = normalize_id_values(
-        handover_employee.get("_id"),
-        handover_employee.get("employee_id"),
-        handover_employee.get("employee_code"),
-        handover_employee.get("emp_code"),
-        handover_employee.get("code"),
-        handover_employee.get("user_id"),
-        handover_employee.get("email"),
+    handover_team_owner_values = normalized_values_from_record(
+        handover_employee,
+        [
+            "team_leader_id",
+            "team_leader_user_id",
+            "team_leader_employee_id",
+            "team_leader_ref_id",
+            "team_leader_email",
+            "tl_id",
+            "reporting_officer_id",
+            "reporting_officer_user_id",
+            "reporting_officer_employee_id",
+            "reporting_officer_ref_id",
+            "reporting_officer_email",
+            "ro_id",
+            "manager_id",
+            "manager_user_id",
+            "manager_employee_id",
+        ],
     )
 
-    handover_team_leader_values = normalize_id_values(
-        handover_employee.get("team_leader_id"),
-        handover_employee.get("team_leader_employee_id"),
+    employee_team_values = normalized_values_from_record(
+        employee,
+        [
+            "team_id",
+            "team",
+            "team_name",
+            "group_id",
+            "group_name",
+            "management_group_id",
+            "management_group_name",
+        ],
     )
 
-    same_team = False
+    handover_team_values = normalized_values_from_record(
+        handover_employee,
+        [
+            "team_id",
+            "team",
+            "team_name",
+            "group_id",
+            "group_name",
+            "management_group_id",
+            "management_group_name",
+        ],
+    )
 
-    # Case 1: selected handover employee is the current employee's Team Leader.
-    if employee_team_leader_values and any(
-        value in handover_identity_values for value in employee_team_leader_values
-    ):
-        same_team = True
-
-    # Case 2: selected handover employee is another member under the same Team Leader.
-    if employee_team_leader_values and any(
-        value in handover_team_leader_values for value in employee_team_leader_values
-    ):
-        same_team = True
+    same_team = (
+        values_overlap(employee_team_owner_values, handover_team_owner_values)
+        or values_overlap(employee_team_owner_values, handover_identity_values)
+        or values_overlap(handover_team_owner_values, employee_identity_values)
+        or values_overlap(employee_team_values, handover_team_values)
+        or same_active_project_connection()
+    )
 
     if not same_team:
-        raise ValueError("Task handover employee must be an active member of your same team")
+        raise ValueError("Task handover employee must be an active member of your same team or active project team")
 
     handover_code = employee_code(handover_employee)
 
@@ -3224,12 +3506,31 @@ def leave_request_options():
 
     team_leader_values = normalize_id_values(
         employee.get("team_leader_id"),
+        employee.get("team_leader_user_id"),
         employee.get("team_leader_employee_id"),
+        employee.get("team_leader_email"),
+        employee.get("tl_id"),
     )
 
     reporting_officer_values = normalize_id_values(
         employee.get("reporting_officer_id"),
+        employee.get("reporting_officer_user_id"),
         employee.get("reporting_officer_employee_id"),
+        employee.get("reporting_officer_email"),
+        employee.get("ro_id"),
+    )
+
+    current_employee_values = normalize_id_values(
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+        employee.get("official_email"),
     )
 
     member_or_filters = []
@@ -3251,16 +3552,22 @@ def leave_request_options():
             "team_leader_id": {"$in": team_leader_values}
         })
 
-    # 3. Add Reporting Officer also, only as approval/handover option.
-    if reporting_officer_values:
+    # 4. If the current employee is a Team Leader / Reporting Officer,
+    # add employees mapped under the current employee.
+    # This fixes the Apply Leave handover dropdown showing only Reporting Officer.
+    if current_employee_values:
         member_or_filters.extend([
-            {"_id": {"$in": reporting_officer_values}},
-            {"employee_id": {"$in": reporting_officer_values}},
-            {"employee_code": {"$in": reporting_officer_values}},
-            {"emp_code": {"$in": reporting_officer_values}},
-            {"code": {"$in": reporting_officer_values}},
-            {"user_id": {"$in": reporting_officer_values}},
-            {"email": {"$in": reporting_officer_values}},
+            {"team_leader_id": {"$in": current_employee_values}},
+            {"team_leader_user_id": {"$in": current_employee_values}},
+            {"team_leader_employee_id": {"$in": current_employee_values}},
+            {"team_leader_email": {"$in": current_employee_values}},
+            {"tl_id": {"$in": current_employee_values}},
+
+            {"reporting_officer_id": {"$in": current_employee_values}},
+            {"reporting_officer_user_id": {"$in": current_employee_values}},
+            {"reporting_officer_employee_id": {"$in": current_employee_values}},
+            {"reporting_officer_email": {"$in": current_employee_values}},
+            {"ro_id": {"$in": current_employee_values}},
         ])
 
     member_query = {
@@ -3291,8 +3598,23 @@ def leave_request_options():
             "email": 1,
             "department": 1,
             "designation": 1,
+            "official_email": 1,
+            "full_name": 1,
+            "department_name": 1,
+            "designation_name": 1,
+
             "team_leader_id": 1,
+            "team_leader_user_id": 1,
+            "team_leader_employee_id": 1,
+            "team_leader_email": 1,
+            "tl_id": 1,
+
             "reporting_officer_id": 1,
+            "reporting_officer_user_id": 1,
+            "reporting_officer_employee_id": 1,
+            "reporting_officer_email": 1,
+            "ro_id": 1,
+
             "is_team_leader": 1,
             "is_reporting_officer": 1,
         })

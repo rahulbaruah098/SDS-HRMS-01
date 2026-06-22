@@ -11,7 +11,15 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { askAiAssistant, getAiAssistantVoiceContext } from "../api/client";
+import {
+  askAiAssistant,
+  checkInAttendance,
+  checkOutAttendance,
+  getAiAssistantVoiceContext,
+  getAttendanceStatus,
+  speakAiAssistantText,
+  transcribeAiAssistantAudio,
+} from "../api/client";
 
 const QUICK_QUESTIONS = [
   "How to apply leave?",
@@ -96,24 +104,14 @@ const WAKE_WORD_VARIANTS = [
   "hey eve",
   "hi eve",
   "hello eve",
-  "hey eave",
-  "hi eave",
-  "hello eave",
-  "hey ev",
-  "hi ev",
-  "hello ev",
-  "hey e",
-  "hi e",
-  "hello e",
-  "hey iv",
-  "hi iv",
-  "hey if",
-  "hi if",
+  "okay eve",
+  "ok eve",
   "hay eve",
   "hai eve",
   "hii eve",
-  "okay eve",
-  "ok eve",
+  "hey eave",
+  "hi eave",
+  "hello eave",
   "hey evie",
   "hi evie",
   "hello evie",
@@ -122,18 +120,7 @@ const WAKE_WORD_VARIANTS = [
   "hello eevee",
   "hey ivy",
   "hi ivy",
-  "hey evening",
-  "a eve",
-  "eve",
-  "eave",
-  "eevee",
-  "evie",
-  "evi",
-  "iv",
-  "heave",
-  "heavy",
-  "he is",
-  "his",
+  "hello ivy",
 ];
 
 function normalizeVoiceText(value) {
@@ -199,6 +186,104 @@ function buildWakeGreeting(context = {}) {
   }
 
   return greetingText;
+}
+
+function detectAttendanceVoiceAction(value = "") {
+  const text = normalizeVoiceText(value);
+
+  if (!text) {
+    return "";
+  }
+
+  const infoQuestionWords = [
+    "how to",
+    "how do i",
+    "how can i",
+    "where",
+    "show me",
+    "tell me",
+    "explain",
+    "process",
+    "steps",
+  ];
+
+  if (infoQuestionWords.some((phrase) => text.includes(phrase))) {
+    return "";
+  }
+
+  const checkInPhrases = [
+    "check in",
+    "checkin",
+    "punch in",
+    "clock in",
+    "office in",
+    "start attendance",
+    "start my attendance",
+    "mark my attendance in",
+    "mark attendance in",
+  ];
+
+  const checkOutPhrases = [
+    "check out",
+    "checkout",
+    "punch out",
+    "clock out",
+    "office out",
+    "end attendance",
+    "end my attendance",
+    "mark my checkout",
+    "mark checkout",
+    "mark attendance out",
+  ];
+
+  if (checkInPhrases.some((phrase) => text.includes(phrase))) {
+    return "check_in";
+  }
+
+  if (checkOutPhrases.some((phrase) => text.includes(phrase))) {
+    return "check_out";
+  }
+
+  if (
+    text === "mark attendance" ||
+    text === "mark my attendance" ||
+    text === "attendance mark" ||
+    text === "attendance"
+  ) {
+    return "smart";
+  }
+
+  return "";
+}
+
+function isLateCheckInReasonError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+
+  return (
+    message.includes("late reason") ||
+    message.includes("late_reason") ||
+    message.includes("09:50") ||
+    message.includes("9:50")
+  );
+}
+
+function isEarlyCheckoutReasonError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+
+  return (
+    message.includes("early checkout reason") ||
+    message.includes("early check-out reason") ||
+    message.includes("early_checkout_reason") ||
+    message.includes("06:00") ||
+    message.includes("6:00")
+  );
+}
+
+function cleanAttendanceReason(value = "") {
+  return String(value || "")
+    .replace(/\b(?:late\s+reason|reason|because|due\s+to)\b\s*(?:is|as|:)?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getFallbackVoiceContext() {
@@ -341,6 +426,7 @@ export default function AiAssistantWidget() {
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const finalTranscriptRef = useRef("");
+  const interimTranscriptRef = useRef("");
   const voiceHandledRef = useRef(false);
   const voiceContextLoadedRef = useRef(false);
   const autoWakeModeRef = useRef(false);
@@ -358,7 +444,19 @@ export default function AiAssistantWidget() {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const voiceMeterFrameRef = useRef(null);
-
+  const mediaRecorderRef = useRef(null);
+  const voiceChunkTimerRef = useRef(null);
+  const geminiLoopTimerRef = useRef(null);
+  const geminiLoopActiveRef = useRef(false);
+  const suppressGeminiStopRef = useRef(false);
+  const isTranscribingRef = useRef(false);
+  const currentAudioRef = useRef(null);
+  const currentAudioUrlRef = useRef("");
+  const lastHandledTranscriptRef = useRef("");
+  const lastHandledTranscriptAtRef = useRef(0);
+  const voiceQuotaDisabledUntilRef = useRef(0);
+  const lastVoiceActivationAtRef = useRef(0);
+  const pendingAttendanceActionRef = useRef(null);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -371,6 +469,7 @@ export default function AiAssistantWidget() {
     () => (showChat ? messages.filter((_, index) => index > 0) : []),
     [showChat, messages]
   );
+
   const actionMode = useMemo(() => detectActionMode(messages), [messages]);
   const quickReplies = useMemo(
     () => buildQuickReplies(messages, loading),
@@ -438,6 +537,9 @@ export default function AiAssistantWidget() {
       voiceConversationModeRef.current = false;
       suppressNextRestartRef.current = true;
 
+      stopGeminiRecording({ stopLoop: true });
+      cleanupCurrentAudio();
+
       try {
         recognitionRef.current?.stop?.();
       } catch {
@@ -468,6 +570,99 @@ export default function AiAssistantWidget() {
     return voiceContextRef.current || voiceContext || getFallbackVoiceContext();
   }
 
+  function getVoiceQuotaRetrySeconds(error, fallback = 90) {
+    const retryValue = Number(
+      error?.retry_after_seconds ||
+        error?.retry_after ||
+        0
+    );
+
+    if (Number.isFinite(retryValue) && retryValue > 0) {
+      return Math.min(Math.max(Math.ceil(retryValue), 30), 3600);
+    }
+
+    const message = String(error?.message || error || "");
+    const retryMatch = message.match(/retry\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*s/i);
+
+    if (retryMatch) {
+      const parsed = Number(retryMatch[1]);
+
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.min(Math.max(Math.ceil(parsed) + 5, 30), 3600);
+      }
+    }
+
+    return fallback;
+  }
+
+  function isVoiceQuotaError(error) {
+    const message = String(error?.message || error || "").toLowerCase();
+
+    return Boolean(
+      error?.quota_exceeded ||
+        error?.status === 429 ||
+        message.includes("429") ||
+        message.includes("quota") ||
+        message.includes("resource_exhausted") ||
+        message.includes("rate limit")
+    );
+  }
+
+  function getVoiceQuotaRemainingSeconds() {
+    return Math.ceil(
+      Math.max(0, voiceQuotaDisabledUntilRef.current - Date.now()) / 1000
+    );
+  }
+
+  function showVoiceQuotaCooldownHint() {
+    const remainingSeconds = getVoiceQuotaRemainingSeconds();
+
+    if (remainingSeconds <= 0) {
+      return false;
+    }
+
+    setManualChatOpen(false);
+    setVoiceHint(
+      `Voice service quota is cooling down. Try Eve voice again in ${remainingSeconds} seconds. You can still type manually.`
+    );
+
+    return true;
+  }
+
+  function pauseVoiceForQuota(error, source = "voice") {
+    const retrySeconds = getVoiceQuotaRetrySeconds(error);
+
+    voiceQuotaDisabledUntilRef.current = Date.now() + retrySeconds * 1000;
+    geminiLoopActiveRef.current = false;
+    voiceConversationModeRef.current = false;
+    pendingGreetingRef.current = "";
+    suppressNextRestartRef.current = true;
+
+    clearRestartTimer();
+    stopGeminiRecording({ stopLoop: true });
+    cleanupCurrentAudio();
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+
+    recognitionRef.current = null;
+    setAutoWakeMode(false);
+    setListening(false);
+    listeningRef.current = false;
+    isSpeakingRef.current = false;
+    isStartingRecognitionRef.current = false;
+    setEveActive(false);
+    stopVoiceMeter();
+    setManualChatOpen(false);
+    setVoiceError("");
+    setVoiceHint(
+      `Voice service ${source} quota reached. Eve voice is paused for ${retrySeconds} seconds. You can still type manually.`
+    );
+  }
+
   function stopRecognition({ suppressRestart = true } = {}) {
     clearRestartTimer();
 
@@ -481,6 +676,7 @@ export default function AiAssistantWidget() {
       // ignore
     }
 
+    recognitionRef.current = null;
     setListening(false);
     listeningRef.current = false;
     isStartingRecognitionRef.current = false;
@@ -488,6 +684,9 @@ export default function AiAssistantWidget() {
 
   function stopVoiceSession() {
     clearRestartTimer();
+    stopGeminiRecording({ stopLoop: true });
+    cleanupCurrentAudio();
+
     setAutoWakeMode(false);
     voiceConversationModeRef.current = false;
     pendingGreetingRef.current = "";
@@ -500,6 +699,7 @@ export default function AiAssistantWidget() {
       // ignore
     }
 
+    recognitionRef.current = null;
     setListening(false);
     listeningRef.current = false;
     isStartingRecognitionRef.current = false;
@@ -515,22 +715,44 @@ export default function AiAssistantWidget() {
     clearRestartTimer();
 
     if (!autoWakeModeRef.current) return;
+    if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
     if (loadingRef.current) return;
     if (isSpeakingRef.current) return;
 
     restartListenTimerRef.current = setTimeout(() => {
       restartListenTimerRef.current = null;
+
+      if (!autoWakeModeRef.current) return;
+      if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
+      if (loadingRef.current) return;
+      if (isSpeakingRef.current) return;
+
       beginListening();
     }, delay);
   }
 
   function speakAssistantText(text, options = {}) {
     const { restartAfterSpeech = true, onEnd } = options;
+    const cleanText = String(text || "").trim();
 
-    stopRecognition({ suppressRestart: true });
-    isSpeakingRef.current = true;
+    if (Date.now() < voiceQuotaDisabledUntilRef.current) {
+      setVoiceHint("Voice service quota is cooling down. You can still type manually.");
+      setManualChatOpen(false);
 
-    speakText(text, () => {
+      if (typeof onEnd === "function") {
+        onEnd();
+      }
+
+      return;
+    }
+
+    let finished = false;
+
+    const finishSpeech = () => {
+      if (finished) return;
+      finished = true;
+
+      cleanupCurrentAudio();
       isSpeakingRef.current = false;
 
       if (typeof onEnd === "function") {
@@ -540,7 +762,74 @@ export default function AiAssistantWidget() {
       if (restartAfterSpeech) {
         scheduleListeningRestart(450);
       }
-    });
+    };
+
+    if (!cleanText) {
+      finishSpeech();
+      return;
+    }
+
+    stopRecognition({ suppressRestart: true });
+    stopGeminiRecording({ stopLoop: false });
+    cleanupCurrentAudio();
+
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    isSpeakingRef.current = true;
+    setListening(false);
+    listeningRef.current = false;
+    setVoiceHint("Eve is speaking...");
+
+        speakAiAssistantText(cleanText, {
+          voice: options.voice || "anushka",
+          timeoutMs: 30000,
+        })
+      .then((voiceResponse) => {
+        const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
+
+        if (!audioUrl) {
+          setVoiceHint("Eve voice could not be generated. Please check the voice service.");
+          finishSpeech();
+          return;
+        }
+
+        playGeneratedVoice(audioUrl, finishSpeech);
+      })
+      .catch((error) => {
+        if (isVoiceQuotaError(error)) {
+          pauseVoiceForQuota(error, "TTS");
+
+          if (typeof onEnd === "function") {
+            onEnd();
+          }
+
+          return;
+        }
+
+        setVoiceHint(
+          error?.message ||
+            "Eve voice could not be generated. Please check the voice service."
+        );
+
+        stopGeminiRecording({ stopLoop: true });
+
+        isSpeakingRef.current = false;
+
+        if (typeof onEnd === "function") {
+          onEnd();
+        }
+
+        if (restartAfterSpeech) {
+          setTimeout(() => {
+            if (!loadingRef.current && Date.now() >= voiceQuotaDisabledUntilRef.current) {
+              geminiLoopActiveRef.current = true;
+              beginListening();
+            }
+          }, 1800);
+        }
+      });
   }
 
   function appendWakeGreeting(greeting, userText = "Hey Eve") {
@@ -595,6 +884,10 @@ export default function AiAssistantWidget() {
   }
 
   async function activateEve() {
+    if (showVoiceQuotaCooldownHint()) {
+      return;
+    }
+
     setAutoWakeMode(true);
     voiceConversationModeRef.current = false;
     pendingGreetingRef.current = "";
@@ -605,11 +898,14 @@ export default function AiAssistantWidget() {
     setMessage("");
     setLastVoiceTranscript("");
     setSiriStatus("Eve is active. Say “Hey Eve” anytime.");
-    setVoiceHint("Eve is active. Keep this browser tab open and say “Hey Eve” anytime.");
+    setVoiceHint('Eve is active. Say “Hey Eve” and speak your command clearly.');
     setVoiceError("");
+    lastVoiceActivationAtRef.current = Date.now();
 
     await refreshVoiceContextIfNeeded(true);
     await startVoiceMeter();
+
+    geminiLoopActiveRef.current = true;
 
     beginListening();
   }
@@ -624,12 +920,18 @@ export default function AiAssistantWidget() {
     const wakeWord = context?.wake_word || DEFAULT_WAKE_WORD;
     const hasWakeWord = transcriptHasWakeWord(transcript, wakeWord);
 
-    if (!hasWakeWord && !voiceConversationModeRef.current) {
+    const recentlyActivatedByClick =
+      Date.now() - lastVoiceActivationAtRef.current < 12000;
+
+    const waitingForOneVoiceReply =
+      Boolean(pendingAttendanceActionRef.current) || voiceConversationModeRef.current;
+
+    if (!hasWakeWord && !waitingForOneVoiceReply && !recentlyActivatedByClick) {
       setMessage("");
       setLastVoiceTranscript(transcript);
-      setSiriStatus('Waiting for “Hey Eve”.');
+      setSiriStatus(`Heard: ${transcript}`);
       setVoiceHint('Listening in the background. Say "Hey Eve" to open the assistant.');
-      scheduleListeningRestart(450);
+      scheduleListeningRestart(700);
       return;
     }
 
@@ -685,6 +987,337 @@ export default function AiAssistantWidget() {
     });
   }
 
+  function getEmployeeNameForSpeech() {
+    const context = getCurrentVoiceContext();
+
+    return String(
+      context?.employee_name ||
+        context?.name ||
+        "Employee"
+    ).trim();
+  }
+
+  function buildAttendancePayload(extra = {}) {
+    return {
+      mode: "office",
+      source: "ai_assistant_widget",
+      ...extra,
+    };
+  }
+
+  async function getBrowserAttendanceLocation() {
+    if (typeof window === "undefined" || !navigator?.geolocation) {
+      throw new Error(
+        "GPS location is required for AI attendance, but geolocation is not available in this browser."
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords = position?.coords || {};
+
+          if (
+            coords.latitude === undefined ||
+            coords.latitude === null ||
+            coords.longitude === undefined ||
+            coords.longitude === null
+          ) {
+            reject(new Error("GPS location is required for attendance. Please enable location permission and try again."));
+            return;
+          }
+
+          resolve({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            accuracy: coords.accuracy,
+            altitude: coords.altitude,
+            altitude_accuracy: coords.altitudeAccuracy,
+            heading: coords.heading,
+            speed: coords.speed,
+            location_captured_at: new Date().toISOString(),
+            location_source: "browser_geolocation",
+          });
+        },
+        (error) => {
+          if (error?.code === 1) {
+            reject(new Error("Location permission is blocked. Please allow location permission, then ask Eve to check in again."));
+            return;
+          }
+
+          if (error?.code === 3) {
+            reject(new Error("Unable to get GPS location in time. Please stand near a window or enable precise location and try again."));
+            return;
+          }
+
+          reject(new Error(error?.message || "GPS location is required for attendance. Please enable location permission and try again."));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 15000,
+        }
+      );
+    });
+  }
+
+  function notifyAttendanceUiChanged(action, response = {}) {
+    if (typeof window === "undefined") return;
+
+    const detail = {
+      action,
+      attendance: response?.attendance || null,
+      response,
+      updated_at: new Date().toISOString(),
+      source: "ai_assistant_widget",
+    };
+
+    try {
+      window.dispatchEvent(new CustomEvent("sds_hrms_attendance_updated", { detail }));
+      window.dispatchEvent(new CustomEvent("attendance-updated", { detail }));
+      window.dispatchEvent(new CustomEvent("attendanceStatusRefresh", { detail }));
+      localStorage.setItem("sds_hrms_attendance_refresh_at", String(Date.now()));
+    } catch {
+      // ignore UI refresh event failure
+    }
+  }
+
+  function buildAttendanceSuccessAnswer(action, response = {}) {
+    const employeeName = getEmployeeNameForSpeech();
+    const greeting = getTimeGreeting();
+    const attendance = response?.attendance || {};
+
+    if (action === "check_in") {
+      if (attendance?.is_late || attendance?.status === "late") {
+        return `${greeting}, ${employeeName}. Your late check-in is completed and the reason is recorded.`;
+      }
+
+      if (attendance?.is_holiday_work || attendance?.status === "holiday_work") {
+        return `${greeting}, ${employeeName}. Your holiday work check-in is completed.`;
+      }
+
+      return `${greeting}, ${employeeName}. Your check-in is completed.`;
+    }
+
+    if (attendance?.is_early_checkout || attendance?.status === "early_checkout") {
+      return `${greeting}, ${employeeName}. Your early check-out is completed and the reason is recorded.`;
+    }
+
+    return `${greeting}, ${employeeName}. Your check-out is completed.`;
+  }
+
+  async function resolveSmartAttendanceAction() {
+    try {
+      const status = await getAttendanceStatus();
+      const attendance = status?.attendance || {};
+
+      if (!attendance?.check_in) {
+        return "check_in";
+      }
+
+      if (!attendance?.check_out) {
+        return "check_out";
+      }
+
+      return "done";
+    } catch {
+      return "check_in";
+    }
+  }
+
+  function finishVoiceAfterAttendance(answer, shouldListenForReason = false) {
+    if (shouldListenForReason) {
+      voiceConversationModeRef.current = true;
+      speakAssistantText(answer, { restartAfterSpeech: true });
+      return;
+    }
+
+    voiceConversationModeRef.current = false;
+    speakAssistantText(answer, {
+      restartAfterSpeech: false,
+      onEnd: () => {
+        stopVoiceSession();
+        setSiriStatus(answer);
+      },
+    });
+  }
+
+  async function submitAttendanceAction(action, payload) {
+    if (action === "check_in") {
+      return checkInAttendance(payload);
+    }
+
+    return checkOutAttendance(payload);
+  }
+
+  async function handleAttendanceActionMessage(cleanMessage, options = {}) {
+    if (loadingRef.current) return;
+
+    const pendingAttendance = pendingAttendanceActionRef.current;
+    let action = pendingAttendance?.action || detectAttendanceVoiceAction(cleanMessage);
+
+    if (action === "smart") {
+      action = await resolveSmartAttendanceAction();
+
+      if (action === "done") {
+        const doneAnswer = "Your attendance for today is already completed.";
+
+        setMessages((prev) => [
+          ...prev,
+          { role: "user", text: cleanMessage },
+          { role: "assistant", text: doneAnswer },
+        ]);
+
+        if (options?.voiceInput || options?.speakAnswer) {
+          setSiriStatus(doneAnswer);
+          setManualChatOpen(false);
+          finishVoiceAfterAttendance(doneAnswer, false);
+        }
+
+        return;
+      }
+    }
+
+    if (!action) return;
+
+    const userText = cleanMessage;
+
+    if (!options?.voiceInput) {
+      setManualChatOpen(true);
+    }
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        text: userText,
+      },
+    ]);
+
+    setMessage("");
+    setVoiceHint("");
+    setVoiceError("");
+    setLoading(true);
+    loadingRef.current = true;
+
+    let answer = "";
+
+    try {
+      let payload = pendingAttendance?.payload || {};
+
+      if (pendingAttendance) {
+        const reason = cleanAttendanceReason(cleanMessage);
+
+        if (reason.length < 3) {
+          answer =
+            pendingAttendance.action === "check_in"
+              ? "Please tell me the late check-in reason clearly."
+              : "Please tell me the early check-out reason clearly.";
+
+          pendingAttendanceActionRef.current = pendingAttendance;
+          voiceConversationModeRef.current = true;
+        } else {
+          payload = {
+            ...payload,
+            [pendingAttendance.reasonField]: reason,
+            reason,
+            remarks: reason,
+          };
+
+          const response = await submitAttendanceAction(pendingAttendance.action, payload);
+
+          pendingAttendanceActionRef.current = null;
+          notifyAttendanceUiChanged(pendingAttendance.action, response);
+          answer = buildAttendanceSuccessAnswer(pendingAttendance.action, response);
+          voiceConversationModeRef.current = false;
+        }
+      } else {
+        const locationPayload = await getBrowserAttendanceLocation();
+
+        payload = buildAttendancePayload(locationPayload);
+
+        try {
+          const response = await submitAttendanceAction(action, payload);
+
+          pendingAttendanceActionRef.current = null;
+          notifyAttendanceUiChanged(action, response);
+          answer = buildAttendanceSuccessAnswer(action, response);
+          voiceConversationModeRef.current = false;
+        } catch (error) {
+          if (action === "check_in" && isLateCheckInReasonError(error)) {
+            pendingAttendanceActionRef.current = {
+              action: "check_in",
+              payload,
+              reasonField: "late_reason",
+              createdAt: Date.now(),
+            };
+
+            answer = "You are late today. Please tell me the late check-in reason.";
+            voiceConversationModeRef.current = true;
+          } else if (action === "check_out" && isEarlyCheckoutReasonError(error)) {
+            pendingAttendanceActionRef.current = {
+              action: "check_out",
+              payload,
+              reasonField: "early_checkout_reason",
+              createdAt: Date.now(),
+            };
+
+            answer = "You are checking out early. Please tell me the early check-out reason.";
+            voiceConversationModeRef.current = true;
+          } else {
+            pendingAttendanceActionRef.current = null;
+            voiceConversationModeRef.current = false;
+            answer =
+              error?.message ||
+              "Attendance could not be marked right now. Please try again.";
+          }
+        }
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: answer,
+        },
+      ]);
+
+      if (options?.voiceInput || options?.speakAnswer) {
+        setSiriStatus(answer);
+        setManualChatOpen(false);
+        finishVoiceAfterAttendance(answer, Boolean(pendingAttendanceActionRef.current));
+      } else if (autoWakeModeRef.current && pendingAttendanceActionRef.current) {
+        scheduleListeningRestart(450);
+      }
+    } catch (error) {
+      pendingAttendanceActionRef.current = null;
+      voiceConversationModeRef.current = false;
+
+      const errorMessage =
+        error?.message ||
+        "Attendance could not be marked. Please check location permission and try again.";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: errorMessage,
+        },
+      ]);
+
+      if (options?.voiceInput || options?.speakAnswer) {
+        setSiriStatus(errorMessage);
+        setManualChatOpen(false);
+        finishVoiceAfterAttendance(errorMessage, false);
+      } else if (autoWakeModeRef.current) {
+        scheduleListeningRestart(450);
+      }
+    } finally {
+      setLoading(false);
+      loadingRef.current = false;
+    }
+  }
+
   async function sendMessage(manualMessage, options = {}) {
     const cleanMessage = String(manualMessage ?? message ?? "").trim();
 
@@ -700,6 +1333,14 @@ export default function AiAssistantWidget() {
       transcriptHasWakeWord(cleanMessage, getCurrentVoiceContext()?.wake_word || DEFAULT_WAKE_WORD)
     ) {
       await handleVoiceTranscript(cleanMessage);
+      return;
+    }
+
+    if (
+      pendingAttendanceActionRef.current ||
+      detectAttendanceVoiceAction(cleanMessage)
+    ) {
+      await handleAttendanceActionMessage(cleanMessage, options);
       return;
     }
 
@@ -720,7 +1361,11 @@ export default function AiAssistantWidget() {
     loadingRef.current = true;
 
     try {
-      const response = await askAiAssistant(cleanMessage, historyBeforeQuestion);
+      const aiMessage = options?.voiceInput
+        ? `${cleanMessage}\n\nReply very briefly in 1-2 short sentences because this is a voice conversation.`
+        : cleanMessage;
+
+      const response = await askAiAssistant(aiMessage, historyBeforeQuestion);
 
       const answer =
         response?.answer ||
@@ -729,6 +1374,7 @@ export default function AiAssistantWidget() {
 
       if (options?.voiceInput) {
         setSiriStatus(answer);
+        setManualChatOpen(false);
       }
 
       setMessages((prev) => [
@@ -756,8 +1402,19 @@ export default function AiAssistantWidget() {
       }
 
       if (options?.speakAnswer) {
-        speakAssistantText(answer, { restartAfterSpeech: true });
-      } else if (autoWakeModeRef.current) {
+        const shouldRestartVoice = Boolean(voiceConversationModeRef.current);
+
+        setManualChatOpen(false);
+        speakAssistantText(answer, {
+          restartAfterSpeech: shouldRestartVoice,
+          onEnd: shouldRestartVoice
+            ? undefined
+            : () => {
+                stopVoiceSession();
+                setSiriStatus(answer);
+              },
+        });
+      } else if (autoWakeModeRef.current && voiceConversationModeRef.current) {
         scheduleListeningRestart(450);
       }
     } catch (error) {
@@ -767,6 +1424,7 @@ export default function AiAssistantWidget() {
 
       if (options?.voiceInput) {
         setSiriStatus(errorMessage);
+        setManualChatOpen(false);
       }
 
       setMessages((prev) => [
@@ -782,8 +1440,19 @@ export default function AiAssistantWidget() {
       }
 
       if (options?.speakAnswer) {
-        speakAssistantText(errorMessage, { restartAfterSpeech: true });
-      } else if (autoWakeModeRef.current) {
+        const shouldRestartVoice = Boolean(voiceConversationModeRef.current);
+
+        setManualChatOpen(false);
+        speakAssistantText(errorMessage, {
+          restartAfterSpeech: shouldRestartVoice,
+          onEnd: shouldRestartVoice
+            ? undefined
+            : () => {
+                stopVoiceSession();
+                setSiriStatus(errorMessage);
+              },
+        });
+      } else if (autoWakeModeRef.current && voiceConversationModeRef.current) {
         scheduleListeningRestart(450);
       }
     } finally {
@@ -792,38 +1461,31 @@ export default function AiAssistantWidget() {
     }
   }
 
-  function beginListening() {
-    setVoiceError("");
-
+  function startBrowserSpeechRecognition() {
     const SpeechRecognition = getSpeechRecognition();
 
     if (!SpeechRecognition) {
-      setVoiceError(
-        "Speech-to-text is not available in this browser. Use Google Chrome on http://localhost:5173, or type your question manually."
-      );
-      setAutoWakeMode(false);
+      startGeminiVoiceLoop();
       return;
     }
 
-    if (!autoWakeModeRef.current) {
-      setAutoWakeMode(true);
+    if (isStartingRecognitionRef.current || recognitionRef.current) {
+      return;
     }
 
-    if (listeningRef.current || isStartingRecognitionRef.current) return;
-    if (isSpeakingRef.current || loadingRef.current) return;
-
     try {
-      clearRestartTimer();
-      finalTranscriptRef.current = "";
-      voiceHandledRef.current = false;
-      isStartingRecognitionRef.current = true;
-
       const recognition = new SpeechRecognition();
 
-      recognition.lang = "en-IN";
+      recognitionRef.current = recognition;
+      isStartingRecognitionRef.current = true;
+      finalTranscriptRef.current = "";
+      interimTranscriptRef.current = "";
+      voiceHandledRef.current = false;
+
+      recognition.continuous = false;
       recognition.interimResults = true;
-      recognition.continuous = true;
-      recognition.maxAlternatives = 3;
+      recognition.lang = "en-IN";
+      recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
         isStartingRecognitionRef.current = false;
@@ -833,189 +1495,505 @@ export default function AiAssistantWidget() {
         setVoiceHint(
           voiceConversationModeRef.current
             ? "Listening for your voice reply..."
-            : 'Listening in the background. Say "Hey Eve" anytime.'
+            : 'Listening now. Say "Hey Eve", then speak your command clearly.'
         );
-
-        const pendingGreeting = pendingGreetingRef.current;
-
-        if (pendingGreeting) {
-          pendingGreetingRef.current = "";
-          speakAssistantText(pendingGreeting, { restartAfterSpeech: true });
-        }
-      };
-
-      recognition.onerror = (event) => {
-        isStartingRecognitionRef.current = false;
-
-        const errorType = event?.error || "";
-
-        if (suppressNextRestartRef.current || isSpeakingRef.current) {
-          return;
-        }
-
-        if (errorType === "not-allowed" || errorType === "service-not-allowed") {
-          setListening(false);
-          listeningRef.current = false;
-          setAutoWakeMode(false);
-          setVoiceError(
-            "Microphone permission denied. Click the browser lock icon and allow microphone access."
-          );
-          return;
-        }
-
-        if (errorType === "no-speech" || errorType === "aborted") {
-          setVoiceHint('Still active. Say "Hey Eve" when you need me.');
-          return;
-        }
-
-        if (errorType === "network") {
-          setVoiceError(
-            "Speech recognition network error. Please use Chrome and a stable internet connection."
-          );
-          scheduleListeningRestart(1200);
-          return;
-        }
-
-        setVoiceError(`Voice input failed${errorType ? `: ${errorType}` : ""}.`);
-        scheduleListeningRestart(1200);
       };
 
       recognition.onresult = (event) => {
-        if (isSpeakingRef.current || loadingRef.current) return;
-
-        let finalText = "";
-        let interimText = "";
+        let interimTranscript = "";
+        let finalTranscript = "";
 
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          const transcript = result[0]?.transcript || "";
+          const transcript = String(event.results[index][0]?.transcript || "").trim();
 
-          if (result.isFinal) {
-            finalText += `${transcript} `;
+          if (event.results[index].isFinal) {
+            finalTranscript += ` ${transcript}`;
           } else {
-            interimText += `${transcript} `;
+            interimTranscript += ` ${transcript}`;
           }
         }
 
-        const cleanFinalText = finalText.trim();
-        const cleanInterimText = interimText.trim();
+        const visibleTranscript = String(finalTranscript || interimTranscript || "").trim();
 
-        if (cleanFinalText) {
-          finalTranscriptRef.current = cleanFinalText;
-          voiceHandledRef.current = true;
-          setMessage(cleanFinalText);
-          handleVoiceTranscript(cleanFinalText);
-          return;
+        if (visibleTranscript) {
+          interimTranscriptRef.current = visibleTranscript;
+          setLastVoiceTranscript(visibleTranscript);
+          setSiriStatus(`Heard: ${visibleTranscript}`);
         }
 
-        if (cleanInterimText) {
-          setMessage(cleanInterimText);
-          setVoiceHint(
-            voiceConversationModeRef.current
-              ? "Listening for your voice reply..."
-              : 'Listening... waiting for "Hey Eve".'
-          );
+        if (finalTranscript.trim()) {
+          finalTranscriptRef.current = finalTranscript.trim();
+
+          try {
+            recognition.stop();
+          } catch {
+            // ignore
+          }
         }
       };
 
-      recognition.onend = () => {
+      recognition.onerror = () => {
+        recognitionRef.current = null;
         isStartingRecognitionRef.current = false;
         listeningRef.current = false;
         setListening(false);
-        recognitionRef.current = null;
 
-        if (suppressNextRestartRef.current) {
-          suppressNextRestartRef.current = false;
+        if (
+          autoWakeModeRef.current &&
+          Date.now() >= voiceQuotaDisabledUntilRef.current &&
+          !loadingRef.current &&
+          !isSpeakingRef.current
+        ) {
+          startGeminiVoiceLoop();
+        }
+      };
+
+      recognition.onend = async () => {
+        recognitionRef.current = null;
+        isStartingRecognitionRef.current = false;
+
+        const transcript = String(
+          finalTranscriptRef.current ||
+            interimTranscriptRef.current ||
+            ""
+        ).trim();
+
+        finalTranscriptRef.current = "";
+        interimTranscriptRef.current = "";
+
+        if (transcript && !voiceHandledRef.current) {
+          voiceHandledRef.current = true;
+          await handleVoiceTranscript(transcript);
           return;
         }
 
-        if (autoWakeModeRef.current) {
+        if (
+          autoWakeModeRef.current &&
+          Date.now() >= voiceQuotaDisabledUntilRef.current &&
+          !loadingRef.current &&
+          !isSpeakingRef.current
+        ) {
           scheduleListeningRestart(500);
         }
       };
 
-      recognitionRef.current = recognition;
       recognition.start();
-    } catch (error) {
+    } catch {
+      recognitionRef.current = null;
       isStartingRecognitionRef.current = false;
-      listeningRef.current = false;
-      setListening(false);
-      setVoiceError(
-        error?.message ||
-          "Could not start microphone. Please check browser microphone permission."
-      );
-      scheduleListeningRestart(1200);
+      startGeminiVoiceLoop();
     }
   }
 
-async function startVoiceMeter() {
-  if (typeof window === "undefined") return;
-  if (!navigator.mediaDevices?.getUserMedia) return;
-  if (audioStreamRef.current && analyserRef.current) return;
+  function beginListening() {
+    setVoiceError("");
 
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (showVoiceQuotaCooldownHint()) {
+      setAutoWakeMode(false);
+      setListening(false);
+      listeningRef.current = false;
+      geminiLoopActiveRef.current = false;
+      return;
+    }
 
-    audioStreamRef.current = stream;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError(
+        "Microphone access is not available. Please allow microphone permission and try again."
+      );
+      setAutoWakeMode(false);
+      return;
+    }
 
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!autoWakeModeRef.current) {
+      setAutoWakeMode(true);
+    }
 
-    if (!AudioContext) return;
+    if (isSpeakingRef.current || loadingRef.current) return;
 
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
+    clearRestartTimer();
 
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.72;
+    listeningRef.current = true;
+    setListening(true);
+    setVoiceError("");
+    setVoiceHint(
+      voiceConversationModeRef.current
+        ? "Listening for your voice reply..."
+        : 'Listening now. Say "Hey Eve", then speak your command clearly.'
+    );
 
-    source.connect(analyser);
+    const SpeechRecognition = getSpeechRecognition();
 
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
+    if (SpeechRecognition) {
+      startBrowserSpeechRecognition();
+      return;
+    }
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    if (typeof window === "undefined" || !window.MediaRecorder) {
+      setVoiceError(
+        "Voice recording is not available in this browser. Please use Google Chrome or Microsoft Edge."
+      );
+      setAutoWakeMode(false);
+      return;
+    }
 
-    const updateMeter = () => {
-      if (!analyserRef.current) return;
+    startGeminiVoiceLoop();
+  }
 
-      analyserRef.current.getByteFrequencyData(dataArray);
+  async function startVoiceMeter() {
+    if (typeof window === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    if (audioStreamRef.current && analyserRef.current) return;
 
-      const average =
-        dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      const normalized = Math.min(1, Math.max(0, average / 120));
+      audioStreamRef.current = stream;
 
-      setVoiceLevel(normalized);
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
 
-      voiceMeterFrameRef.current = requestAnimationFrame(updateMeter);
-    };
+      if (!AudioContext) return;
 
-    updateMeter();
-  } catch {
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.72;
+
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const updateMeter = () => {
+        if (!analyserRef.current) return;
+
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        const average =
+          dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+
+        const normalized = Math.min(1, Math.max(0, average / 120));
+
+        setVoiceLevel(normalized);
+
+        voiceMeterFrameRef.current = requestAnimationFrame(updateMeter);
+      };
+
+      updateMeter();
+    } catch {
+      setVoiceLevel(0);
+    }
+  }
+
+  function stopVoiceMeter() {
+    if (voiceMeterFrameRef.current) {
+      cancelAnimationFrame(voiceMeterFrameRef.current);
+      voiceMeterFrameRef.current = null;
+    }
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close?.();
+      audioContextRef.current = null;
+    }
+
+    analyserRef.current = null;
     setVoiceLevel(0);
   }
-}
 
-function stopVoiceMeter() {
-  if (voiceMeterFrameRef.current) {
-    cancelAnimationFrame(voiceMeterFrameRef.current);
-    voiceMeterFrameRef.current = null;
+  function getBestRecordingMimeType() {
+    if (typeof window === "undefined" || !window.MediaRecorder) {
+      return "";
+    }
+
+    const types = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+
+    return types.find((type) => window.MediaRecorder.isTypeSupported(type)) || "";
   }
 
-  if (audioStreamRef.current) {
-    audioStreamRef.current.getTracks().forEach((track) => track.stop());
-    audioStreamRef.current = null;
+  function cleanupCurrentAudio() {
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.src = "";
+      } catch {
+        // ignore
+      }
+
+      currentAudioRef.current = null;
+    }
+
+    if (currentAudioUrlRef.current) {
+      try {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+      } catch {
+        // ignore
+      }
+
+      currentAudioUrlRef.current = "";
+    }
   }
 
-  if (audioContextRef.current) {
-    audioContextRef.current.close?.();
-    audioContextRef.current = null;
+  function playGeneratedVoice(audioUrl, onEnd) {
+    cleanupCurrentAudio();
+
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+
+      if (typeof onEnd === "function") {
+        onEnd();
+      }
+    };
+
+    const audio = new Audio(audioUrl);
+
+    currentAudioRef.current = audio;
+    currentAudioUrlRef.current = audioUrl;
+
+    audio.onended = finish;
+    audio.onerror = finish;
+
+    audio.play().catch(finish);
   }
 
-  analyserRef.current = null;
-  setVoiceLevel(0);
-}
+  function stopGeminiRecording({ stopLoop = false } = {}) {
+    if (stopLoop) {
+      geminiLoopActiveRef.current = false;
+    }
+
+    if (voiceChunkTimerRef.current) {
+      clearTimeout(voiceChunkTimerRef.current);
+      voiceChunkTimerRef.current = null;
+    }
+
+    if (geminiLoopTimerRef.current) {
+      clearTimeout(geminiLoopTimerRef.current);
+      geminiLoopTimerRef.current = null;
+    }
+
+    const recorder = mediaRecorderRef.current;
+
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        suppressGeminiStopRef.current = true;
+        recorder.onstop = null;
+        recorder.stop();
+      } catch {
+        // ignore
+      }
+    }
+
+    mediaRecorderRef.current = null;
+
+    setTimeout(() => {
+      suppressGeminiStopRef.current = false;
+    }, 0);
+  }
+
+  function scheduleGeminiVoiceLoop(delay = 350) {
+    if (!geminiLoopActiveRef.current) return;
+    if (!autoWakeModeRef.current) return;
+    if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
+    if (loadingRef.current) return;
+    if (isSpeakingRef.current) return;
+    if (isTranscribingRef.current) return;
+
+    if (geminiLoopTimerRef.current) {
+      clearTimeout(geminiLoopTimerRef.current);
+    }
+
+    geminiLoopTimerRef.current = setTimeout(() => {
+      geminiLoopTimerRef.current = null;
+      startGeminiVoiceLoop();
+    }, delay);
+  }
+
+  async function startGeminiVoiceLoop() {
+    if (!geminiLoopActiveRef.current) return;
+    if (!autoWakeModeRef.current) return;
+    if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
+    if (isSpeakingRef.current) return;
+    if (loadingRef.current) return;
+    if (isTranscribingRef.current) return;
+
+    if (typeof window === "undefined" || !window.MediaRecorder) {
+      return;
+    }
+
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      return;
+    }
+
+    await startVoiceMeter();
+
+    const stream = audioStreamRef.current;
+
+    if (!stream) {
+      return;
+    }
+
+    const mimeType = getBestRecordingMimeType();
+    const chunks = [];
+
+    try {
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        mediaRecorderRef.current = null;
+        scheduleGeminiVoiceLoop(900);
+      };
+
+      recorder.onstop = async () => {
+        if (suppressGeminiStopRef.current) {
+          return;
+        }
+
+        mediaRecorderRef.current = null;
+
+        const shouldContinue =
+          geminiLoopActiveRef.current &&
+          autoWakeModeRef.current &&
+          Date.now() >= voiceQuotaDisabledUntilRef.current &&
+          !isSpeakingRef.current &&
+          !loadingRef.current;
+
+        if (chunks.length && shouldContinue) {
+          const audioBlob = new Blob(chunks, {
+            type: mimeType || "audio/webm",
+          });
+
+          await transcribeGeminiAudioBlob(audioBlob);
+        }
+
+        if (shouldContinue) {
+          scheduleGeminiVoiceLoop(300);
+        }
+      };
+
+      recorder.start();
+
+      const chunkMs = voiceConversationModeRef.current ? 1600 : 2200;
+
+      voiceChunkTimerRef.current = setTimeout(() => {
+        voiceChunkTimerRef.current = null;
+
+        try {
+          if (recorder.state === "recording") {
+            recorder.stop();
+          }
+        } catch {
+          mediaRecorderRef.current = null;
+        }
+      }, chunkMs);
+    } catch {
+      mediaRecorderRef.current = null;
+      scheduleGeminiVoiceLoop(1200);
+    }
+  }
+
+  async function transcribeGeminiAudioBlob(audioBlob) {
+    if (!audioBlob || audioBlob.size < 1000) return;
+    if (isSpeakingRef.current || loadingRef.current) return;
+    if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
+
+    isTranscribingRef.current = true;
+
+    try {
+      setVoiceHint("Understanding your voice...");
+
+    const result = await transcribeAiAssistantAudio(audioBlob, {
+      timeoutMs: 22000,
+    });
+
+      const transcript = String(
+        result?.text ||
+          result?.transcript ||
+          ""
+      ).trim();
+
+        if (!transcript) {
+          setVoiceHint('Listening. I could not hear clear speech. Please speak a little closer to the mic.');
+          return;
+        }
+
+      const normalized = normalizeVoiceText(transcript);
+      const now = Date.now();
+
+        if (
+          normalized &&
+          normalized === lastHandledTranscriptRef.current &&
+          now - lastHandledTranscriptAtRef.current < 2200
+        ) {
+          return;
+        }
+
+      lastHandledTranscriptRef.current = normalized;
+      lastHandledTranscriptAtRef.current = now;
+
+      setLastVoiceTranscript(transcript);
+
+      await handleVoiceTranscript(transcript);
+    } catch (error) {
+      if (isVoiceQuotaError(error)) {
+        pauseVoiceForQuota(error, "STT");
+        return;
+      }
+
+      const errorMessage =
+        error?.message ||
+        "Voice understanding failed. Please check backend voice service logs.";
+
+      setVoiceError(errorMessage);
+      setVoiceHint("");
+
+      stopGeminiRecording({ stopLoop: true });
+
+      setTimeout(() => {
+        if (
+          autoWakeModeRef.current &&
+          !loadingRef.current &&
+          !isSpeakingRef.current &&
+          Date.now() >= voiceQuotaDisabledUntilRef.current
+        ) {
+          setVoiceError("");
+          geminiLoopActiveRef.current = true;
+          beginListening();
+        }
+      }, 2200);
+    } finally {
+      isTranscribingRef.current = false;
+    }
+  }
 
   function startListening() {
     if (listeningRef.current || isStartingRecognitionRef.current) {
@@ -1024,12 +2002,18 @@ function stopVoiceMeter() {
       return;
     }
 
+    if (showVoiceQuotaCooldownHint()) {
+      return;
+    }
+
     setAutoWakeMode(true);
     setEveActive(true);
     setManualChatOpen(false);
     setVoiceError("");
     setSiriStatus('Listening. Say “Hey Eve” anytime.');
-    setVoiceHint('Listening in the background. Say "Hey Eve" anytime.');
+    setVoiceHint('Listening now. Say "Hey Eve" and speak your command clearly.');
+    lastVoiceActivationAtRef.current = Date.now();
+    geminiLoopActiveRef.current = true;
     startVoiceMeter();
     beginListening();
   }
@@ -1050,6 +2034,7 @@ function stopVoiceMeter() {
   function clearChat() {
     stopVoiceSession();
     stopVoiceMeter();
+    voiceQuotaDisabledUntilRef.current = 0;
     setManualChatOpen(false);
     setSiriStatus("Click once to activate Eve voice");
     setLastVoiceTranscript("");
@@ -1106,166 +2091,167 @@ function stopVoiceMeter() {
           </div>
 
           {!showChat && (
-          <div className="ai-hero-zone">
-            <div className="ai-soft-grid" />
+            <div className="ai-hero-zone">
+              <div className="ai-soft-grid" />
 
-            <div className="ai-intro-copy">
-              <p>SDS HRMS Assistant</p>
-              <h2>
-                AI Powers <span>Leave, Attendance</span> And HR Workflows
-              </h2>
-            </div>
-
-            <div className="ai-project-scope-grid">
-              {PROJECT_MODULES.map((item) => (
-                <span key={item}>{item}</span>
-              ))}
-            </div>
-
-            <div
-              className={`ai-orb-shell ${
-                loading ? "is-thinking" : listening ? "is-listening" : ""
-              }`}
-              style={{
-                "--voice-level": voiceLevel,
-                "--voice-scale": 1 + voiceLevel * 0.22,
-                "--voice-glow": 0.18 + voiceLevel * 0.42,
-              }}
-            >
-              <div className="ai-orb-core">
-                <div className="ai-orb-gloss" />
-                <div className="ai-orb-shine" />
-                <div className="ai-orb-ring one" />
-                <div className="ai-orb-ring two" />
-                <div className="ai-orb-ring three" />
-                <Mic size={28} className="ai-orb-mic" />
-                <div className="ai-siri-wave">
-                  <span />
-                  <span />
-                  <span />
-                  <span />
-                  <span />
-                </div>
+              <div className="ai-intro-copy">
+                <p>SDS HRMS Assistant</p>
+                <h2>
+                  AI Powers <span>Leave, Attendance</span> And HR Workflows
+                </h2>
               </div>
-              <div className="ai-orb-reflection" />
-            </div>
 
-            <div className="ai-status-copy">
-              {loading ? (
-                <>
-                  <small>You asked:</small>
-                  <strong>{messages[messages.length - 1]?.text || "Processing..."}</strong>
-                  <span>Thinking...</span>
-                </>
-              ) : listening ? (
-                <>
-                  <small>Voice Assistant</small>
-                  <strong>{siriStatus || "Listening..."}</strong>
-                  <span>
-                    {lastVoiceTranscript
-                      ? `Heard: ${lastVoiceTranscript}`
-                      : "Start with “Hey Eve”, then speak your command."}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <small>Ready</small>
-                  <strong>{eveActive ? siriStatus : "Click Eve once to activate voice"}</strong>
-                  <span>Manual typing opens the full chat. Voice stays in Siri mode.</span>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+              <div className="ai-project-scope-grid">
+                {PROJECT_MODULES.map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
 
-        {showChat && actionMode && (
-          <div className="ai-action-mode-strip">
-            <span>{actionMode}</span>
-            <small>Guided action is active</small>
-          </div>
-        )}
-
-        {!showChat && (
-          <div className="ai-assistant-quick-row">
-            {QUICK_QUESTIONS.map((question) => (
-              <button
-                key={question}
-                type="button"
-                disabled={loading}
-                onClick={() => {
-                  setManualChatOpen(true);
-                  sendMessage(question);
+              <div
+                className={`ai-orb-shell ${
+                  loading ? "is-thinking" : listening ? "is-listening" : ""
+                }`}
+                style={{
+                  "--voice-level": voiceLevel,
+                  "--voice-scale": 1 + voiceLevel * 0.22,
+                  "--voice-glow": 0.18 + voiceLevel * 0.42,
                 }}
               >
-                {question}
-              </button>
-            ))}
-          </div>
-        )}
+                <div className="ai-orb-core">
+                  <div className="ai-orb-gloss" />
+                  <div className="ai-orb-shine" />
+                  <div className="ai-orb-ring one" />
+                  <div className="ai-orb-ring two" />
+                  <div className="ai-orb-ring three" />
+                  <Mic size={28} className="ai-orb-mic" />
+                  <div className="ai-siri-wave">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+                <div className="ai-orb-reflection" />
+              </div>
+
+              <div className="ai-status-copy">
+                {loading ? (
+                  <>
+                    <small>You asked:</small>
+                    <strong>{messages[messages.length - 1]?.text || "Processing..."}</strong>
+                    <span>Thinking...</span>
+                  </>
+                ) : listening ? (
+                  <>
+                    <small>Voice Assistant</small>
+                    <strong>{siriStatus || "Listening..."}</strong>
+                    <span>
+                      {lastVoiceTranscript
+                        ? `Heard: ${lastVoiceTranscript}`
+                        : "Start with “Hey Eve”, then speak your command."}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <small>Ready</small>
+                    <strong>{eveActive ? siriStatus : "Click Eve once to activate voice"}</strong>
+                    <span>Manual typing opens the full chat. Voice stays in Siri mode.</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showChat && actionMode && (
+            <div className="ai-action-mode-strip">
+              <span>{actionMode}</span>
+              <small>Guided action is active</small>
+            </div>
+          )}
+
+          {!showChat && (
+            <div className="ai-assistant-quick-row">
+              {QUICK_QUESTIONS.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  disabled={loading}
+                  onClick={() => {
+                    setManualChatOpen(true);
+                    sendMessage(question);
+                  }}
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          )}
 
           {showChat && (
             <div className="ai-response-area">
               <div className="ai-assistant-messages">
                 {visibleMessages.map((item, index) => {
-                const isUser = item.role === "user";
+                  const isUser = item.role === "user";
 
-                return (
-                  <div
-                    key={`${item.role}-${index}`}
-                    className={`ai-message-row ${isUser ? "user" : "assistant"}`}
-                  >
-                    <div className="ai-message-stack">
-                      <div className={`ai-message-bubble ${isUser ? "user" : "assistant"}`}>
-                        {item.text}
-                      </div>
-
-                      {!isUser && index > 0 && (
-                        <div className="ai-message-actions">
-                          <button
-                            type="button"
-                            onClick={() => copyMessage(item.text, index)}
-                            title="Copy answer"
-                          >
-                            {copiedIndex === index ? (
-                              <>
-                                <Check size={13} /> Copied
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={13} /> Copy
-                              </>
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => speakAssistantText(item.text)}
-                            title="Speak answer"
-                          >
-                            <Volume2 size={13} /> Speak
-                          </button>
+                  return (
+                    <div
+                      key={`${item.role}-${index}`}
+                      className={`ai-message-row ${isUser ? "user" : "assistant"}`}
+                    >
+                      <div className="ai-message-stack">
+                        <div className={`ai-message-bubble ${isUser ? "user" : "assistant"}`}>
+                          {item.text}
                         </div>
-                      )}
+
+                        {!isUser && index > 0 && (
+                          <div className="ai-message-actions">
+                            <button
+                              type="button"
+                              onClick={() => copyMessage(item.text, index)}
+                              title="Copy answer"
+                            >
+                              {copiedIndex === index ? (
+                                <>
+                                  <Check size={13} /> Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={13} /> Copy
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => speakAssistantText(item.text)}
+                              title="Speak answer"
+                            >
+                              <Volume2 size={13} /> Speak
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {loading && (
+                  <div className="ai-message-row assistant">
+                    <div className="ai-thinking">
+                      <Loader2 size={15} className="ai-spin" />
+                      Assistant is preparing your response...
                     </div>
                   </div>
-                );
-              })}
+                )}
 
-              {loading && (
-                <div className="ai-message-row assistant">
-                  <div className="ai-thinking">
-                    <Loader2 size={15} className="ai-spin" />
-                    Assistant is preparing your response...
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
+                <div ref={messagesEndRef} />
+              </div>
             </div>
-          </div>
-        )}
-            {showChat && quickReplies.length > 0 && (
-              <div className="ai-guided-replies">
+          )}
+
+          {showChat && quickReplies.length > 0 && (
+            <div className="ai-guided-replies">
               {quickReplies.map((reply) => (
                 <button
                   key={reply}

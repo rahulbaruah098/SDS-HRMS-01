@@ -1,12 +1,371 @@
+import base64
+import io
+import mimetypes
+import os
+import re
+import wave
+from datetime import datetime
+import requests
+
 from bson import ObjectId
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, Response
 
 from app.extensions import get_db
 from app.services.ai_assistant_service import generate_ai_answer, seed_ai_knowledge
+from app.services.ai_provider_service import (
+    AiProviderError,
+    synthesize_ai_speech,
+    transcribe_ai_audio,
+)
 from app.utils.auth import current_user_required, roles_required, normalize_roles
 
 
 ai_assistant_bp = Blueprint("ai_assistant", __name__)
+
+
+
+GEMINI_API_KEY = (
+    os.getenv("GEMINI_API_KEY", "").strip()
+    or os.getenv("GOOGLE_API_KEY", "").strip()
+    or os.getenv("GOOGLE_GEMINI_API_KEY", "").strip()
+)
+GEMINI_API_BASE = os.getenv(
+    "GEMINI_API_BASE",
+    "https://generativelanguage.googleapis.com/v1beta",
+).rstrip("/")
+GEMINI_STT_MODEL = os.getenv("GEMINI_STT_MODEL", "gemini-3.5-flash")
+GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+GEMINI_TTS_VOICE = os.getenv("GEMINI_TTS_VOICE", "Kore")
+
+AI_VOICE_MAX_AUDIO_BYTES = int(os.getenv("AI_VOICE_MAX_AUDIO_BYTES", str(15 * 1024 * 1024)))
+AI_VOICE_MIN_AUDIO_BYTES = int(os.getenv("AI_VOICE_MIN_AUDIO_BYTES", "2500"))
+AI_STT_TIMEOUT_SECONDS = int(os.getenv("AI_STT_TIMEOUT_SECONDS", "35"))
+AI_TTS_TIMEOUT_SECONDS = int(os.getenv("AI_TTS_TIMEOUT_SECONDS", "45"))
+
+VOICE_EMPLOYEE_NAME_CACHE_SECONDS = int(os.getenv("VOICE_EMPLOYEE_NAME_CACHE_SECONDS", "600"))
+VOICE_EMPLOYEE_NAME_CACHE = {}
+
+
+def _require_gemini_api_key():
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is missing in backend environment. "
+            "Add GEMINI_API_KEY to backend .env."
+        )
+
+    return GEMINI_API_KEY
+
+
+def _gemini_generate_content(model, payload, timeout=45):
+    api_key = _require_gemini_api_key()
+    url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
+
+    response = requests.post(
+        url,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+        json=payload,
+        timeout=timeout,
+    )
+
+    if not response.ok:
+        details = response.text[:1200]
+        raise RuntimeError(
+            f"Gemini API request failed with status {response.status_code}: {details}"
+        )
+
+    try:
+        return response.json()
+    except Exception as exc:
+        raise RuntimeError("Gemini API returned invalid JSON.") from exc
+
+
+def _safe_unlink(path):
+    if not path:
+        return
+
+    try:
+        os.unlink(path)
+    except Exception:
+        pass
+
+
+def _guess_audio_mime(filename="", uploaded_mime=""):
+    uploaded = _safe_str(uploaded_mime).lower()
+
+    if uploaded.startswith("audio/") or uploaded in ["video/webm", "video/mp4"]:
+        return uploaded
+
+    guessed, _ = mimetypes.guess_type(filename or "eve-audio.webm")
+
+    if guessed:
+        return guessed
+
+    ext = os.path.splitext(filename or "")[1].lower()
+
+    if ext == ".wav":
+        return "audio/wav"
+    if ext == ".mp3":
+        return "audio/mpeg"
+    if ext == ".m4a":
+        return "audio/mp4"
+    if ext == ".ogg":
+        return "audio/ogg"
+    if ext == ".mp4":
+        return "audio/mp4"
+
+    return "audio/webm"
+
+
+def _known_employee_names_for_prompt(user_context, limit=24):
+    """
+    Cached employee-name list for voice transcription.
+
+    Earlier this queried MongoDB on every small voice chunk, which made
+    Gemini voice feel slow. Now it caches names per tenant for a short time.
+    """
+
+    user_context = user_context or {}
+    tenant_id = _safe_str(user_context.get("tenant_id") or "global")
+    cache_key = f"{tenant_id}:{limit}"
+    now_ts = datetime.utcnow().timestamp()
+
+    cached = VOICE_EMPLOYEE_NAME_CACHE.get(cache_key)
+
+    if cached:
+        cached_at = cached.get("cached_at", 0)
+        if now_ts - cached_at <= VOICE_EMPLOYEE_NAME_CACHE_SECONDS:
+            return cached.get("names", [])
+
+    tenant_values = _id_variants(tenant_id)
+    query = {"is_deleted": {"$ne": True}}
+
+    if tenant_values:
+        query["$or"] = [
+            {"tenant_id": {"$in": tenant_values}},
+            {"company_id": {"$in": tenant_values}},
+            {"tenant": {"$in": tenant_values}},
+        ]
+
+    names = []
+
+    try:
+        db = get_db()
+        cursor = db.employees.find(
+            query,
+            {
+                "employee_name": 1,
+                "name": 1,
+                "full_name": 1,
+                "display_name": 1,
+                "first_name": 1,
+                "middle_name": 1,
+                "last_name": 1,
+            },
+        ).limit(limit)
+
+        for employee in cursor:
+            name = _display_name_from_record(employee)
+            if name and name.lower() != "employee" and name not in names:
+                names.append(name)
+    except Exception:
+        names = []
+
+    VOICE_EMPLOYEE_NAME_CACHE[cache_key] = {
+        "cached_at": now_ts,
+        "names": names,
+    }
+
+    return names
+
+
+def _build_voice_transcription_prompt(user_context):
+    user_context = user_context or {}
+
+    employee_name = (
+        user_context.get("employee_name")
+        or user_context.get("display_name")
+        or user_context.get("name")
+        or "Employee"
+    )
+
+    known_names = _known_employee_names_for_prompt(user_context, limit=24)
+    names_text = ", ".join(known_names[:24])
+
+    prompt_parts = [
+        "Transcribe this audio into plain text only.",
+        "If there is no clear speech, return empty text only.",
+        "Do not answer the user. Do not explain. Do not add markdown.",
+        "Context: SDS HRMS voice assistant Eve. Wake phrases: Hey Eve, Hi Eve, Hello Eve, Eve.",
+        "Preserve HRMS terms: CL, EL, WFH, attendance, leave, handover, reporting officer, team leader.",
+        "Preserve Indian and Assamese names carefully.",
+        f"Logged-in employee: {employee_name}.",
+    ]
+
+    if names_text:
+        prompt_parts.append(f"Known employee names: {names_text}.")
+
+    return " ".join(prompt_parts)[:1000]
+
+
+def _voice_transcription_hints(user_context):
+    hints = [
+        "SDS",
+        "HRMS",
+        "Eve",
+        "Hey Eve",
+        "CL",
+        "EL",
+        "WFH",
+        "attendance",
+        "leave",
+        "handover",
+        "reporting officer",
+        "team leader",
+        "management group",
+        "IT support",
+        "grievance",
+        "asset",
+        "project",
+    ]
+
+    try:
+        hints.extend(_known_employee_names_for_prompt(user_context, limit=24))
+    except Exception:
+        pass
+
+    unique = []
+
+    for item in hints:
+        text = _safe_str(item)
+
+        if text and text not in unique:
+            unique.append(text)
+
+    return unique[:40]
+
+
+def _normalize_tts_text(text):
+    clean = _safe_str(text)
+
+    if not clean:
+        return ""
+
+    replacements = {
+        "SDS": "S D S",
+        "HRMS": "H R M S",
+        "CL": "casual leave",
+        "EL": "earned leave",
+        "WFH": "work from home",
+        "IT": "I T",
+        "API": "A P I",
+    }
+
+    for source, target in replacements.items():
+        clean = re.sub(rf"\b{re.escape(source)}\b", target, clean)
+
+    clean = re.sub(r"\s+", " ", clean).strip()
+
+    return clean[:1800]
+
+
+def _build_tts_prompt(text):
+    clean_text = _normalize_tts_text(text)
+
+    return (
+        "Speak naturally in clear Indian English as Eve, a warm SDS HRMS assistant. "
+        "Use a calm professional tone. Do not sound robotic. "
+        "Pronounce Indian names carefully.\n\n"
+        f"{clean_text}"
+    )[:2200]
+
+
+def _extract_gemini_text(response_json):
+    candidates = response_json.get("candidates") or []
+
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+
+        for part in parts:
+            text = _safe_str(part.get("text"))
+            if text:
+                text = re.sub(r"^```[a-zA-Z]*", "", text).replace("```", "")
+                text = text.strip().strip('"').strip("'").strip()
+
+                if text.lower() in {
+                    "empty",
+                    "no speech",
+                    "no clear speech",
+                    "inaudible",
+                    "silence",
+                    "silent",
+                    "[silence]",
+                }:
+                    return ""
+
+                return text
+
+    return ""
+
+
+def _extract_gemini_audio(response_json):
+    candidates = response_json.get("candidates") or []
+
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+
+        for part in parts:
+            inline_data = part.get("inlineData") or part.get("inline_data") or {}
+            audio_b64 = inline_data.get("data")
+
+            if not audio_b64:
+                continue
+
+            mime_type = (
+                inline_data.get("mimeType")
+                or inline_data.get("mime_type")
+                or "audio/L16;codec=pcm;rate=24000"
+            )
+
+            return base64.b64decode(audio_b64), mime_type
+
+    return b"", ""
+
+
+def _pcm_to_wav_bytes(pcm_bytes, channels=1, rate=24000, sample_width=2):
+    buffer = io.BytesIO()
+
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm_bytes)
+
+    return buffer.getvalue()
+
+
+def _audio_response_bytes(audio_bytes, mime_type):
+    mime = _safe_str(mime_type).lower()
+
+    if not audio_bytes:
+        return b"", "audio/wav"
+
+    if "wav" in mime or "wave" in mime:
+        return audio_bytes, "audio/wav"
+
+    if "mpeg" in mime or "mp3" in mime:
+        return audio_bytes, "audio/mpeg"
+
+    if "ogg" in mime:
+        return audio_bytes, "audio/ogg"
+
+    # Gemini TTS commonly returns raw PCM: audio/L16;codec=pcm;rate=24000.
+    # Browser playback needs a WAV container, so wrap the PCM bytes.
+    return _pcm_to_wav_bytes(audio_bytes), "audio/wav"
 
 
 def _safe_str(value):
@@ -579,6 +938,226 @@ def voice_context():
         "unread_notification_count": unread_count,
         "notification_phrase": notification_phrase,
     }), 200
+
+
+@ai_assistant_bp.post("/transcribe")
+@current_user_required
+def transcribe_voice():
+    """
+    Provider-powered speech-to-text for Eve.
+
+    Current recommended provider from backend/.env:
+    - AI_STT_PROVIDER=deepgram
+
+    Frontend sends multipart/form-data:
+    - audio: webm/wav/mp3/m4a/ogg audio blob
+    """
+
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+
+    audio_file = request.files.get("audio")
+
+    if not audio_file:
+        return jsonify({
+            "success": False,
+            "error": "Audio file is required"
+        }), 400
+
+    try:
+        audio_bytes = audio_file.read()
+        file_size = len(audio_bytes or b"")
+        mime_type = _guess_audio_mime(audio_file.filename, audio_file.mimetype)
+        provider_name = os.getenv("AI_STT_PROVIDER", "deepgram").strip().lower() or "deepgram"
+
+        if file_size <= 0:
+            return jsonify({
+                "success": True,
+                "text": "",
+                "transcript": "",
+                "provider": provider_name,
+                "skipped": True,
+                "reason": "audio_empty",
+            }), 200
+
+        if file_size < AI_VOICE_MIN_AUDIO_BYTES:
+            return jsonify({
+                "success": True,
+                "text": "",
+                "transcript": "",
+                "provider": provider_name,
+                "skipped": True,
+                "reason": "audio_too_short",
+                "audio_size": file_size,
+            }), 200
+
+        if file_size > AI_VOICE_MAX_AUDIO_BYTES:
+            return jsonify({
+                "success": False,
+                "error": "Audio file is too large"
+            }), 413
+
+        hints = _voice_transcription_hints(user_context)
+        language = _safe_str(request.form.get("language")) or os.getenv("DEEPGRAM_LANGUAGE", "en-IN")
+
+        result = transcribe_ai_audio(
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+            language=language,
+            hints=hints,
+            timeout=AI_STT_TIMEOUT_SECONDS,
+        )
+
+        transcript_text = _safe_str(result.get("text") or result.get("transcript"))
+
+        return jsonify({
+            "success": True,
+            "text": transcript_text,
+            "transcript": transcript_text,
+            "provider": result.get("provider") or provider_name,
+            "fallback_used": bool(result.get("fallback_used")),
+            "latency_ms": result.get("latency_ms"),
+            "mime_type": mime_type,
+            "audio_size": file_size,
+        }), 200
+
+    except AiProviderError as exc:
+        print(
+            f"AI STT failed. Provider: {exc.provider}. "
+            f"Status: {exc.status_code}. Details: {exc.details or str(exc)}"
+        )
+
+        status_code = exc.status_code or 500
+
+        if exc.quota_exceeded:
+            status_code = 429
+
+        return jsonify({
+            "success": False,
+            "error": "Voice transcription failed",
+            "message": (
+                "Speech-to-text quota reached. Eve voice has been paused temporarily."
+                if exc.quota_exceeded
+                else str(exc)
+            ),
+            "provider": exc.provider,
+            "quota_exceeded": bool(exc.quota_exceeded),
+            "retry_after_seconds": exc.retry_after_seconds or 90 if exc.quota_exceeded else 0,
+        }), status_code
+
+    except Exception as e:
+        error_text = f"Voice transcription failed before provider call: {str(e)}"
+        print(error_text)
+
+        return jsonify({
+            "success": False,
+            "error": "Voice transcription failed",
+            "message": "Voice transcription failed. Please check backend logs.",
+            "quota_exceeded": False,
+        }), 500
+
+
+@ai_assistant_bp.post("/speak")
+@current_user_required
+def speak_voice():
+    """
+    Provider-powered text-to-speech for Eve.
+
+    Current recommended provider from backend/.env:
+    - AI_TTS_PROVIDER=sarvam
+    """
+
+    data = request.get_json(silent=True) or {}
+    text = _normalize_tts_text(data.get("text"))
+
+    if not text:
+        return jsonify({
+            "success": False,
+            "error": "Text is required"
+        }), 400
+
+    provider_name = os.getenv("AI_TTS_PROVIDER", "sarvam").strip().lower() or "sarvam"
+
+    if provider_name == "sarvam":
+        requested_voice = os.getenv("SARVAM_TTS_SPEAKER", "anushka").strip() or "anushka"
+        language_code = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN").strip() or "en-IN"
+    else:
+        requested_voice = _safe_str(data.get("voice")) or GEMINI_TTS_VOICE
+        language_code = _safe_str(data.get("language_code")) or "en-IN"
+
+        if not re.match(r"^[A-Za-z0-9_-]{2,40}$", requested_voice):
+            requested_voice = GEMINI_TTS_VOICE
+
+    try:
+        speech_result = synthesize_ai_speech(
+            text=text,
+            voice=requested_voice,
+            language_code=language_code,
+            timeout=AI_TTS_TIMEOUT_SECONDS,
+        )
+
+        audio_bytes = speech_result.get("audio_bytes") or b""
+        response_mime_type = speech_result.get("mime_type") or "audio/mpeg"
+
+        if not audio_bytes:
+            return jsonify({
+                "success": False,
+                "error": "Speech generation returned empty audio"
+            }), 502
+
+        extension = "wav" if response_mime_type == "audio/wav" else "mp3"
+
+        if response_mime_type == "audio/ogg":
+            extension = "ogg"
+
+        return Response(
+            audio_bytes,
+            mimetype=response_mime_type,
+            headers={
+                "Content-Disposition": f"inline; filename=eve-response.{extension}",
+                "Cache-Control": "no-store",
+                "X-Eve-Voice": requested_voice,
+                "X-Eve-Provider": speech_result.get("provider") or provider_name,
+                "X-Eve-Model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
+                "X-Eve-Latency-Ms": str(speech_result.get("latency_ms") or ""),
+            },
+        )
+
+    except AiProviderError as exc:
+        print(
+            f"AI TTS failed. Provider: {exc.provider}. "
+            f"Status: {exc.status_code}. Details: {exc.details or str(exc)}"
+        )
+
+        status_code = exc.status_code or 500
+
+        if exc.quota_exceeded:
+            status_code = 429
+
+        return jsonify({
+            "success": False,
+            "error": "Voice generation failed",
+            "message": (
+                "Text-to-speech quota reached. Eve voice has been paused temporarily."
+                if exc.quota_exceeded
+                else str(exc)
+            ),
+            "provider": exc.provider,
+            "quota_exceeded": bool(exc.quota_exceeded),
+            "retry_after_seconds": exc.retry_after_seconds or 90 if exc.quota_exceeded else 0,
+        }), status_code
+
+    except Exception as e:
+        error_text = str(e)
+        print(f"AI TTS failed: {error_text}")
+
+        return jsonify({
+            "success": False,
+            "error": "Voice generation failed",
+            "message": "Voice generation failed. Please check backend logs.",
+            "quota_exceeded": False,
+        }), 500
+
 
 @ai_assistant_bp.post("/seed")
 @roles_required(

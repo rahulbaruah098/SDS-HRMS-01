@@ -1,4 +1,5 @@
 import re
+from difflib import SequenceMatcher
 from datetime import date, datetime, timezone, timedelta
 
 from bson import ObjectId
@@ -24,6 +25,14 @@ from app.routes.workflow import (
 
 ACTION_COLLECTION = "ai_pending_actions"
 
+ACTION_STALE_AFTER_MINUTES = 180
+ACTION_STALE_ACTION_TYPES = {
+    "apply_leave",
+    "schedule_management_meeting",
+    "create_reminder",
+    "attendance_check_in",
+    "attendance_check_out",
+}
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -152,6 +161,61 @@ def _pending_action_query(user_context=None):
     return query
 
 
+def _pending_action_updated_at(action):
+    if not action:
+        return None
+
+    value = action.get("updated_at") or action.get("created_at")
+
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+
+        return value.astimezone(timezone.utc)
+
+    return None
+
+
+def _pending_action_is_stale(action):
+    if not action:
+        return False
+
+    action_type = _safe_str(action.get("action_type"))
+
+    if action_type not in ACTION_STALE_ACTION_TYPES:
+        return False
+
+    updated_at = _pending_action_updated_at(action)
+
+    if not updated_at:
+        return True
+
+    age = _now_utc() - updated_at
+
+    return age > timedelta(minutes=ACTION_STALE_AFTER_MINUTES)
+
+
+def _cancel_pending_action_by_id(action_id, reason="cancelled"):
+    if not action_id:
+        return
+
+    db = get_db()
+
+    db[ACTION_COLLECTION].update_one(
+        {"_id": action_id},
+        {
+            "$set": {
+                "status": "cancelled",
+                "cancel_reason": reason,
+                "updated_at": _now_utc(),
+            }
+        }
+    )
+
+
 def get_pending_action(user_context=None):
     user_key = _user_key(user_context)
 
@@ -160,10 +224,19 @@ def get_pending_action(user_context=None):
 
     db = get_db()
 
-    return db[ACTION_COLLECTION].find_one(
+    action = db[ACTION_COLLECTION].find_one(
         _pending_action_query(user_context),
         sort=[("updated_at", -1), ("_id", -1)]
     )
+
+    if not action:
+        return None
+
+    if _pending_action_is_stale(action):
+        _cancel_pending_action_by_id(action.get("_id"), "stale_expired")
+        return None
+
+    return action
 
 
 def clear_pending_action(user_context=None):
@@ -179,6 +252,7 @@ def clear_pending_action(user_context=None):
         {
             "$set": {
                 "status": "cancelled",
+                "cancel_reason": "manual_clear",
                 "updated_at": _now_utc(),
             }
         }
@@ -194,6 +268,7 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
         return None
 
     tenant_id = _tenant_id(user_context)
+    now = _now_utc()
 
     payload = {
         "tenant_id": tenant_id,
@@ -203,10 +278,14 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
         "data": data or {},
         "current_step": current_step,
         "status": "collecting",
-        "updated_at": _now_utc(),
+        "updated_at": now,
     }
 
     existing = get_pending_action(user_context)
+
+    if existing and existing.get("action_type") != action_type:
+        _cancel_pending_action_by_id(existing.get("_id"), "replaced_by_new_action")
+        existing = None
 
     if existing:
         db[ACTION_COLLECTION].update_one(
@@ -214,7 +293,7 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
             {
                 "$set": payload,
                 "$setOnInsert": {
-                    "created_at": _now_utc(),
+                    "created_at": now,
                 }
             },
             upsert=True
@@ -222,12 +301,11 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
 
         return db[ACTION_COLLECTION].find_one({"_id": existing["_id"]})
 
-    payload["created_at"] = _now_utc()
+    payload["created_at"] = now
 
     inserted = db[ACTION_COLLECTION].insert_one(payload)
 
     return db[ACTION_COLLECTION].find_one({"_id": inserted.inserted_id})
-
 
 def detect_action_intent(question):
     text = _lower(question)
@@ -243,10 +321,23 @@ def detect_action_intent(question):
         "steps to apply leave",
         "how to request leave",
         "how do i request leave",
+        "how to check in",
+        "how do i check in",
+        "how can i check in",
+        "how to check out",
+        "how do i check out",
+        "how can i check out",
+        "attendance process",
+        "steps to mark attendance",
     ]
 
     if any(phrase in text for phrase in info_question_phrases):
         return ""
+
+    attendance_intent = _detect_attendance_action_intent(text)
+
+    if attendance_intent:
+        return attendance_intent
 
     if any(word in text for word in [
         "cancel",
@@ -264,6 +355,14 @@ def detect_action_intent(question):
     # Do not include phrases like "please submit my leave" here, because that
     # phrase is used later as the final confirmation inside an active leave flow.
     leave_start_phrases = [
+        "new leave",
+        "fresh leave",
+        "start new leave",
+        "start again leave",
+        "restart leave",
+        "apply new leave",
+        "create new leave",
+        "i want to apply a new leave",
         "i want to apply leave",
         "i need to apply leave",
         "i want leave",
@@ -581,61 +680,224 @@ def get_leave_type_options(user_context=None):
 
     return options
 
+def _employee_record_is_active(record):
+    record = record or {}
 
-def get_handover_employee_options(user_context=None, limit=12):
+    if record.get("is_deleted") is True:
+        return False
+
+    if record.get("is_active") is False:
+        return False
+
+    if record.get("active") is False:
+        return False
+
+    inactive_values = {
+        "inactive",
+        "in_active",
+        "disabled",
+        "resigned",
+        "resign",
+        "left",
+        "terminated",
+        "alumni",
+        "ex_employee",
+        "ex-employee",
+        "deleted",
+        "blocked",
+        "suspended",
+    }
+
+    for key in ["status", "employment_status", "employee_status"]:
+        value = _lower(record.get(key)).replace(" ", "_")
+
+        if value and value in inactive_values:
+            return False
+
+    return True
+
+
+def _employee_lookup_values_from_context(user_context=None):
+    if not isinstance(user_context, dict):
+        return []
+
+    employee = user_context.get("employee") or {}
+
+    values = [
+        user_context.get("employee_id"),
+        user_context.get("user_id"),
+        user_context.get("_id"),
+        user_context.get("email"),
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_profile_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+        employee.get("official_email"),
+        employee.get("work_email"),
+    ]
+
+    cleaned = []
+
+    for value in values:
+        for candidate in _id_variants(value):
+            if candidate and candidate not in cleaned:
+                cleaned.append(candidate)
+
+    return cleaned
+
+
+def _current_employee_for_ai_action(user_context=None):
     db = get_db()
+    tenant_filter = _tenant_match_filter(user_context)
+    lookup_values = _employee_lookup_values_from_context(user_context)
+
+    if not lookup_values:
+        return None
+
+    object_values = [
+        value for value in lookup_values
+        if isinstance(value, ObjectId)
+    ]
+
+    text_values = [
+        _safe_str(value)
+        for value in lookup_values
+        if _safe_str(value)
+    ]
+
+    lookup_or = [
+        {"_id": {"$in": object_values}},
+        {"id": {"$in": text_values}},
+        {"user_id": {"$in": text_values}},
+        {"employee_user_id": {"$in": text_values}},
+        {"login_user_id": {"$in": text_values}},
+        {"account_user_id": {"$in": text_values}},
+        {"employee_id": {"$in": text_values}},
+        {"employee_ref_id": {"$in": text_values}},
+        {"employee_profile_id": {"$in": text_values}},
+        {"employee_code": {"$in": text_values}},
+        {"emp_code": {"$in": text_values}},
+        {"code": {"$in": text_values}},
+        {"email": {"$in": text_values}},
+        {"official_email": {"$in": text_values}},
+        {"work_email": {"$in": text_values}},
+        {"username": {"$in": text_values}},
+    ]
+
+    query_parts = [
+        {"is_deleted": {"$ne": True}},
+        {"$or": lookup_or},
+    ]
+
+    if tenant_filter:
+        query_parts.insert(0, tenant_filter)
+
+    employee = db.employees.find_one({"$and": query_parts})
+
+    if employee:
+        return employee
+
+    return db.employees.find_one({
+        "$and": [
+            {"is_deleted": {"$ne": True}},
+            {"$or": lookup_or},
+        ]
+    })
+
+
+def _active_employee_query_for_handover(user_context=None):
+    query_parts = []
 
     tenant_filter = _tenant_match_filter(user_context)
-    department = _department(user_context)
-    employee_id = _employee_id(user_context)
-
-    query_parts = []
 
     if tenant_filter:
         query_parts.append(tenant_filter)
 
-    if department:
-        query_parts.append({
-            "$or": [
-                {"department": department},
-                {"department_name": department},
-            ]
-        })
-
-    if employee_id:
-        own_values = _id_variants(employee_id)
-        query_parts.append({
-            "_id": {
+    query_parts.extend([
+        {"is_deleted": {"$ne": True}},
+        {"is_active": {"$ne": False}},
+        {"active": {"$ne": False}},
+        {
+            "status": {
                 "$nin": [
-                    item for item in own_values
-                    if isinstance(item, ObjectId)
+                    "Inactive",
+                    "inactive",
+                    "INACTIVE",
+                    "Resigned",
+                    "resigned",
+                    "Left",
+                    "left",
+                    "Terminated",
+                    "terminated",
+                    "Alumni",
+                    "alumni",
+                    "Deleted",
+                    "deleted",
+                    "Blocked",
+                    "blocked",
+                    "Suspended",
+                    "suspended",
                 ]
             }
-        })
+        },
+    ])
 
-    query_parts.append({
-        "$or": [
-            {"status": {"$in": ["active", "Active", "ACTIVE"]}},
-            {"is_active": True},
-            {"active": True},
-            {"status": {"$exists": False}},
-        ]
-    })
+    return {"$and": query_parts} if query_parts else {}
 
-    query = {"$and": query_parts} if query_parts else {}
+def get_handover_employee_options(user_context=None, limit=12):
+    db = get_db()
+
+    tenant_id = _tenant_id(user_context)
+    employee = _current_employee_for_ai_action(user_context)
+
+    if not employee:
+        return []
+
+    query = _active_employee_query_for_handover(user_context)
 
     docs = list(
         db.employees
         .find(query)
         .sort([("name", 1), ("employee_name", 1)])
-        .limit(limit)
+        .limit(500)
     )
 
     options = []
+    seen_ids = set()
 
     for doc in docs:
+        if not _employee_record_is_active(doc):
+            continue
+
+        if str(doc.get("_id")) == str(employee.get("_id")):
+            continue
+
+        try:
+            resolved = resolve_handover_employee(
+                db,
+                tenant_id,
+                employee,
+                str(doc.get("_id")),
+            )
+        except Exception:
+            continue
+
+        handover_id = resolved.get("task_handover_to_id") or str(doc.get("_id"))
+
+        if not handover_id or handover_id in seen_ids:
+            continue
+
+        seen_ids.add(handover_id)
+
         name = (
-            doc.get("name")
+            resolved.get("task_handover_to_name")
+            or doc.get("name")
             or doc.get("employee_name")
             or doc.get("full_name")
             or "Employee"
@@ -647,11 +909,30 @@ def get_handover_employee_options(user_context=None, limit=12):
             or ""
         )
 
+        department = (
+            doc.get("department")
+            or doc.get("department_name")
+            or ""
+        )
+
+        extra_parts = [
+            designation,
+            department,
+        ]
+
+        extra_text = " - ".join([item for item in extra_parts if item])
+
         options.append({
-            "id": str(doc.get("_id")),
-            "label": f"{name}{f' - {designation}' if designation else ''}",
+            "id": handover_id,
+            "label": f"{name}{f' - {extra_text}' if extra_text else ''}",
             "name": name,
+            "employee_code": resolved.get("task_handover_employee_id") or employee_code(doc),
+            "department": department,
+            "designation": designation,
         })
+
+        if len(options) >= limit:
+            break
 
     return options
 
@@ -960,6 +1241,32 @@ def _format_options(options):
 def _normalize_option_text(value):
     text = _lower(value)
 
+    typo_fixes = {
+        "leaev": "leave",
+        "leaeve": "leave",
+        "leav": "leave",
+        "earened": "earned",
+        "erned": "earned",
+        "casul": "casual",
+        "casula": "casual",
+        "tommorow": "tomorrow",
+        "tomorow": "tomorrow",
+        "tmrw": "tomorrow",
+        "handiver": "handover",
+        "hand over": "handover",
+        "hand-over": "handover",
+        "proejct": "project",
+        "projct": "project",
+        "atlnta": "atlanta",
+        "gogoii": "gogoi",
+        "unnatfarm": "unnat farm",
+        "f p o": "fpo",
+        "m i s": "mis",
+    }
+
+    for wrong, right in typo_fixes.items():
+        text = text.replace(wrong, right)
+
     text = (
         text.replace("-", " ")
         .replace("_", " ")
@@ -968,9 +1275,370 @@ def _normalize_option_text(value):
         .replace(")", " ")
         .replace(".", " ")
         .replace(",", " ")
+        .replace(":", " ")
+        .replace(";", " ")
+        .replace("'", " ")
+        .replace('"', " ")
     )
 
     return " ".join(text.split())
+
+
+def _strip_voice_instruction_suffix(text):
+    """
+    Frontend voice mode may append an internal speed instruction such as:
+    "Reply very briefly in 1-2 short sentences because this is a voice conversation."
+    This must never be treated as the user's actual command.
+    """
+    clean = _safe_str(text)
+
+    if not clean:
+        return ""
+
+    clean = re.split(
+        r"\n\s*\n\s*reply\s+very\s+briefly\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    clean = re.split(
+        r"\breply\s+very\s+briefly\s+in\s+1\s*[-–]\s*2\s+short\s+sentences\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    clean = re.split(
+        r"\bbecause\s+this\s+is\s+a\s+voice\s+conversation\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    return " ".join(clean.replace("\n", " ").split())
+
+
+def _simple_leave_type_label(leave_type):
+    normalized = normalize_leave_type(leave_type)
+
+    if normalized == "CL":
+        return "Casual Leave"
+
+    if normalized == "EL":
+        return "Earned Leave"
+
+    if normalized == "HALF-DAY":
+        return "Half-Day Leave"
+
+    if normalized == "COMP-OFF":
+        return "Comp-Off"
+
+    if normalized == "LWP":
+        return "Leave Without Pay"
+
+    return leave_type_label(normalized) if normalized else "Leave"
+
+
+def _set_leave_type_data(data, selected=None, detected_leave_type=""):
+    raw_type = ""
+
+    if selected:
+        raw_type = (
+            selected.get("value")
+            or selected.get("name")
+            or selected.get("label")
+            or detected_leave_type
+        )
+    else:
+        raw_type = detected_leave_type
+
+    leave_type = _normalize_ai_leave_type(raw_type)
+
+    if not leave_type:
+        return data
+
+    data["leave_type"] = leave_type
+    data["leave_type_label"] = _simple_leave_type_label(leave_type)
+
+    if selected and selected.get("label"):
+        data["leave_type_balance_label"] = selected.get("label")
+
+    return data
+
+
+def _extract_leave_reason_from_command(question):
+    clean = _strip_voice_instruction_suffix(question)
+
+    if not clean:
+        return ""
+
+    patterns = [
+        r"\b(?:leave\s+reason|reason)\s+(?:is|as|mention|mentioned|be|for|:)?\s*(.+)$",
+        r"\b(?:because|due\s+to|as)\s+(.+)$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, clean, flags=re.IGNORECASE)
+
+        if not match:
+            continue
+
+        reason = _safe_str(match.group(1))
+        reason = re.split(
+            r"\b(?:please\s+)?(?:submit|confirm|apply)\b",
+            reason,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        reason = re.sub(
+            r"^(?:mention|mentioned|is|as|for|my|the)\s+",
+            "",
+            reason,
+            flags=re.IGNORECASE,
+        )
+
+        return " ".join(reason.strip(" .,-:;").split())
+
+    return ""
+
+
+def _extract_handover_command_parts(question):
+    clean = _strip_voice_instruction_suffix(question)
+
+    result = {
+        "project_text": "",
+        "employee_text": "",
+        "reason": _extract_leave_reason_from_command(clean),
+    }
+
+    if not clean:
+        return result
+
+    handover_match = re.search(
+        r"\b(?:handover|hand\s+over|hand-over|handiver)\b\s+(.+)$",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if not handover_match:
+        return result
+
+    tail = _safe_str(handover_match.group(1))
+
+    tail_without_reason = re.split(
+        r"\b(?:and\s+)?(?:leave\s+)?reason\b|\bbecause\b|\bdue\s+to\b",
+        tail,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    if re.search(r"\bto\b", tail_without_reason, flags=re.IGNORECASE):
+        project_part, employee_part = re.split(
+            r"\bto\b",
+            tail_without_reason,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )
+    else:
+        project_part = tail_without_reason
+        employee_part = ""
+
+    project_part = re.sub(
+        r"\b(?:the|my|a|an|project|work|task|active|ongoing|open)\b",
+        " ",
+        project_part,
+        flags=re.IGNORECASE,
+    )
+
+    employee_part = re.sub(
+        r"\b(?:sir|madam|employee|person|team\s+member)\b",
+        " ",
+        employee_part,
+        flags=re.IGNORECASE,
+    )
+
+    result["project_text"] = " ".join(project_part.strip(" .,-:;").split())
+    result["employee_text"] = " ".join(employee_part.strip(" .,-:;").split())
+
+    return result
+
+
+def _looks_like_no_handover_project(text):
+    clean = _normalize_option_text(text)
+
+    return clean in {
+        "none",
+        "no",
+        "skip",
+        "not required",
+        "no project",
+        "no handover",
+        "nothing",
+    }
+
+
+def _apply_detected_project_and_handover(data, question, user_context=None):
+    parts = _extract_handover_command_parts(question)
+    project_text = parts.get("project_text")
+    employee_text = parts.get("employee_text")
+    reason = parts.get("reason")
+
+    if reason and _is_valid_leave_reason(reason):
+        data["reason"] = reason
+
+    if project_text:
+        if _looks_like_no_handover_project(project_text):
+            data["handover_project_id"] = ""
+            data["handover_project_name"] = "None"
+        else:
+            project_options = data.get("project_options") or get_project_handover_options(user_context)
+            data["project_options"] = project_options
+
+            selected_project = _extract_selected_option(project_text, project_options)
+
+            if selected_project:
+                data["handover_project_id"] = selected_project.get("id")
+                data["handover_project_name"] = (
+                    selected_project.get("name")
+                    or selected_project.get("label")
+                    or project_text
+                )
+            else:
+                # Keep the spoken project name. Native resolve_project_handover()
+                # will validate/fuzzy-resolve it during final submission.
+                data["handover_project_id"] = ""
+                data["handover_project_name"] = project_text
+
+    if employee_text:
+        handover_options = data.get("handover_options") or get_handover_employee_options(
+            user_context,
+            limit=50,
+        )
+        data["handover_options"] = handover_options
+
+        selected_employee = _extract_selected_option(employee_text, handover_options)
+
+        if selected_employee:
+            data["handover_to_id"] = selected_employee.get("id")
+            data["handover_to_name"] = (
+                selected_employee.get("name")
+                or selected_employee.get("label")
+                or employee_text
+            )
+        else:
+            data["handover_to_search_text"] = employee_text
+
+    return data
+
+
+def _leave_ready_for_confirmation(data):
+    return bool(
+        data.get("leave_type")
+        and data.get("date_range_text")
+        and data.get("handover_project_name")
+        and data.get("handover_to_name")
+        and _is_valid_leave_reason(data.get("reason"))
+    )
+
+def _extract_project_selection_text(text):
+    clean = _safe_str(text)
+
+    if not clean:
+        return ""
+
+    # If user says: "handover Unnat Farm MIS to Atlanta Gogoi reason is sick leave"
+    # then only "Unnat Farm MIS" should be matched against project options.
+    handover_match = re.search(
+        r"\b(?:handover|hand over|handiver)\b\s+(.+)$",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    if handover_match:
+        clean = _safe_str(handover_match.group(1))
+
+    clean = re.split(
+        r"\b(?:to|reason|because|and reason|for reason)\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    clean = re.sub(
+        r"\b(?:the|a|an|project|work|task|active|ongoing|open|select|option)\b",
+        " ",
+        clean,
+        flags=re.IGNORECASE,
+    )
+
+    return " ".join(clean.split()).strip(" .,-")
+
+
+def _compact_match_text(value):
+    clean = _normalize_option_text(value)
+
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "project",
+        "work",
+        "task",
+        "handover",
+        "hand",
+        "over",
+        "to",
+        "and",
+        "reason",
+        "is",
+        "for",
+        "please",
+        "select",
+        "option",
+        "active",
+        "ongoing",
+        "open",
+        "during",
+        "my",
+        "leave",
+    }
+
+    return " ".join([
+        token
+        for token in clean.split()
+        if token and token not in stop_words
+    ])
+
+
+def _match_score(search_text, candidate_text):
+    search = _compact_match_text(search_text)
+    candidate = _compact_match_text(candidate_text)
+
+    if not search or not candidate:
+        return 0
+
+    if search == candidate:
+        return 100
+
+    if search in candidate:
+        return 94
+
+    if candidate in search:
+        return 90
+
+    search_tokens = set(search.split())
+    candidate_tokens = set(candidate.split())
+
+    if not search_tokens or not candidate_tokens:
+        return 0
+
+    overlap = search_tokens.intersection(candidate_tokens)
+    overlap_score = int((len(overlap) / max(len(search_tokens), 1)) * 88)
+
+    ratio_score = int(SequenceMatcher(None, search, candidate).ratio() * 100)
+
+    return max(overlap_score, ratio_score)
 
 
 def _extract_selected_option(text, options):
@@ -986,14 +1654,22 @@ def _extract_selected_option(text, options):
 
     aliases = {
         "casual leave": "cl",
+        "casual": "cl",
+        "cl": "cl",
         "earned leave": "el",
+        "earned": "el",
+        "el": "el",
         "half day": "half_day",
         "halfday": "half_day",
+        "half leave": "half_day",
         "leave without pay": "lwp",
         "loss of pay": "lwp",
     }
 
     clean_alias = aliases.get(clean, clean)
+
+    best_option = None
+    best_score = 0
 
     for option in options:
         option_value = _normalize_option_text(option.get("value"))
@@ -1022,6 +1698,24 @@ def _extract_selected_option(text, options):
 
         if option_name_alias and option_name_alias in clean_alias:
             return option
+
+        for candidate in [
+            option.get("label"),
+            option.get("name"),
+            option.get("value"),
+            option.get("employee_code"),
+            option.get("department"),
+            option.get("designation"),
+            option.get("status"),
+        ]:
+            score = _match_score(clean_alias, candidate)
+
+            if score > best_score:
+                best_score = score
+                best_option = option
+
+    if best_score >= 58:
+        return best_option
 
     return None
 
@@ -1292,47 +1986,91 @@ def _is_valid_leave_reason(text):
 
 
 def _looks_like_leave_submit_confirmation(text):
-    clean = _normalize_option_text(text)
+    clean = _normalize_option_text(_strip_voice_instruction_suffix(text))
 
-    return clean in [
+    submit_phrases = {
         "confirm",
+        "confirm it",
         "yes",
+        "yes confirm",
+        "yes please",
+        "yes submit",
         "submit",
-        "ok",
-        "okay",
+        "submit it",
+        "submit this",
         "please submit",
+        "please submit it",
         "submit leave",
         "submit my leave",
         "please submit leave",
         "please submit my leave",
         "submit the leave",
         "please submit the leave",
-    ]
+        "submit leave request",
+        "submit the leave request",
+        "apply",
+        "apply it",
+        "apply leave",
+        "apply my leave",
+        "please apply",
+        "please apply leave",
+        "please apply my leave",
+        "go ahead",
+        "yes go ahead",
+        "okay",
+        "ok",
+        "okay submit",
+        "ok submit",
+        "done",
+        "proceed",
+        "please proceed",
+    }
+
+    if clean in submit_phrases:
+        return True
+
+    return bool(
+        re.search(
+            r"\b(?:please\s+)?(?:confirm|submit|apply|proceed)\b.*\b(?:leave|it|request)?\b",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        and not _looks_like_cancel_confirmation(clean)
+    )
 
 
 def _looks_like_cancel_confirmation(text):
-    clean = _normalize_option_text(text)
+    clean = _normalize_option_text(_strip_voice_instruction_suffix(text))
 
-    return clean in [
+    return clean in {
         "cancel",
         "no",
         "stop",
         "do not submit",
         "dont submit",
-        "don't submit",
-    ]
+        "don t submit",
+        "do not apply",
+        "dont apply",
+        "don t apply",
+        "discard",
+        "discard it",
+        "clear",
+        "clear this",
+    }
 
 
 def _leave_review_text(data):
+    leave_type = data.get("leave_type")
+    leave_type_text = data.get("leave_type_label") or _simple_leave_type_label(leave_type)
+
     return (
-        "Please check if all the leave details are correct before submission:\n\n"
-        f"Leave Type: {data.get('leave_type_label') or leave_type_label(data.get('leave_type'))}\n"
+        "Please confirm your leave request:\n\n"
+        f"Leave Type: {leave_type_text}\n"
         f"Date/Range: {data.get('date_range_text')}\n"
         f"Handover Work/Project: {data.get('handover_project_name') or 'None'}\n"
         f"Handover To: {data.get('handover_to_name') or 'Not selected'}\n"
         f"Reason: {data.get('reason')}\n\n"
-        "If everything is correct, say: Hey Eve please submit my leave.\n"
-        "You can also reply: confirm. To stop, say: cancel."
+        "Say confirm, submit it, or apply leave to submit. Say cancel to stop."
     )
 
 def _create_ai_audit_log(
@@ -1522,6 +2260,7 @@ def _submit_leave_request_from_ai(data, user_context=None):
             tenant_id,
             data.get("handover_project_id"),
             data.get("handover_project_name"),
+            employee=employee,
         )
 
     except ValueError as exc:
@@ -1654,6 +2393,7 @@ def _submit_leave_request_from_ai(data, user_context=None):
     }
 
 def _apply_leave_start(user_context=None, question=""):
+    question = _strip_voice_instruction_suffix(question)
     leave_options = get_leave_type_options(user_context)
     data = {
         "leave_options": leave_options,
@@ -1663,17 +2403,7 @@ def _apply_leave_start(user_context=None, question=""):
 
     if detected_leave_type:
         selected_leave_type = _leave_option_for_type(detected_leave_type, leave_options)
-
-        if selected_leave_type:
-            data["leave_type"] = _normalize_ai_leave_type(
-                selected_leave_type.get("value")
-                or selected_leave_type.get("name")
-                or detected_leave_type
-            )
-            data["leave_type_label"] = selected_leave_type.get("label") or leave_type_label(data["leave_type"])
-        else:
-            data["leave_type"] = _normalize_ai_leave_type(detected_leave_type)
-            data["leave_type_label"] = leave_type_label(data["leave_type"])
+        _set_leave_type_data(data, selected_leave_type, detected_leave_type)
 
     detected_date_text = _extract_leave_date_text_from_command(question)
 
@@ -1684,6 +2414,12 @@ def _apply_leave_start(user_context=None, question=""):
             data["date_range_text"] = detected_date_text
         else:
             data["date_error"] = parsed_dates.get("message")
+
+    # One-command support:
+    # Example: "apply casual leave tomorrow, handover PG MIS project to Ajanur Rahman, reason personal reason"
+    project_options = get_project_handover_options(user_context)
+    data["project_options"] = project_options
+    _apply_detected_project_and_handover(data, question, user_context=user_context)
 
     if not data.get("leave_type"):
         save_pending_action(
@@ -1724,29 +2460,101 @@ def _apply_leave_start(user_context=None, question=""):
             )
         }
 
-    project_options = get_project_handover_options(user_context)
-    data["project_options"] = project_options
+    if data.get("handover_project_name") and not data.get("handover_to_name"):
+        handover_options = data.get("handover_options") or get_handover_employee_options(
+            user_context,
+            limit=50,
+        )
+        data["handover_options"] = handover_options
+
+        if not handover_options:
+            data["handover_to_id"] = ""
+            data["handover_to_name"] = "Not selected"
+
+        elif data.get("handover_to_search_text"):
+            selected = _extract_selected_option(
+                data.get("handover_to_search_text"),
+                handover_options,
+            )
+
+            if selected:
+                data["handover_to_id"] = selected.get("id")
+                data["handover_to_name"] = selected.get("name") or selected.get("label")
+
+    if _leave_ready_for_confirmation(data):
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="confirm"
+        )
+
+        return {
+            "handled": True,
+            "answer": _leave_review_text(data)
+        }
+
+    if not data.get("handover_project_name"):
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="handover_projects"
+        )
+
+        return {
+            "handled": True,
+            "answer": (
+                f"Selected leave type: {data.get('leave_type_label')}.\n"
+                f"Leave date noted: {data.get('date_range_text')}.\n\n"
+                "Which project/work do you want to hand over during your leave?\n"
+                f"{_format_options(project_options)}\n\n"
+                "Reply with the option number, project name, or type 'none'."
+            )
+        }
+
+    if not data.get("handover_to_name"):
+        handover_options = data.get("handover_options") or get_handover_employee_options(
+            user_context,
+            limit=50,
+        )
+        data["handover_options"] = handover_options
+
+        save_pending_action(
+            user_context=user_context,
+            action_type="apply_leave",
+            data=data,
+            current_step="handover_to"
+        )
+
+        return {
+            "handled": True,
+            "answer": (
+                f"Handover project/work selected: {data.get('handover_project_name')}.\n\n"
+                "To whom do you want to hand over the task?\n"
+                f"{_format_options(handover_options)}\n\n"
+                "Reply with the option number or employee name."
+            )
+        }
 
     save_pending_action(
         user_context=user_context,
         action_type="apply_leave",
         data=data,
-        current_step="handover_projects"
+        current_step="reason"
     )
 
     return {
         "handled": True,
         "answer": (
-            f"Selected leave type: {data.get('leave_type_label')}.\n"
-            f"Leave date noted: {data.get('date_range_text')}.\n\n"
-            "Which project/work do you want to hand over during your leave?\n"
-            f"{_format_options(project_options)}\n\n"
-            "Reply with the option number, project name, or type 'none'."
+            f"Task handover selected: {data.get('handover_to_name')}.\n\n"
+            "Now please provide a valid reason for your leave."
         )
     }
 
 
 def _apply_leave_continue(pending, question, user_context=None):
+    question = _strip_voice_instruction_suffix(question)
     data = pending.get("data") or {}
     step = pending.get("current_step")
 
@@ -1774,8 +2582,7 @@ def _apply_leave_continue(pending, question, user_context=None):
                 )
             }
 
-        data["leave_type"] = _normalize_ai_leave_type(selected.get("value") or selected.get("name"))
-        data["leave_type_label"] = selected.get("label") or leave_type_label(data["leave_type"])
+        _set_leave_type_data(data, selected, selected.get("value") or selected.get("name"))
 
         date_text = _extract_leave_date_text_from_command(question)
 
@@ -1842,6 +2649,21 @@ def _apply_leave_continue(pending, question, user_context=None):
         project_options = get_project_handover_options(user_context)
         data["project_options"] = project_options
 
+        _apply_detected_project_and_handover(data, question, user_context=user_context)
+
+        if _leave_ready_for_confirmation(data):
+            save_pending_action(
+                user_context=user_context,
+                action_type="apply_leave",
+                data=data,
+                current_step="confirm"
+            )
+
+            return {
+                "handled": True,
+                "answer": _leave_review_text(data)
+            }
+
         save_pending_action(
             user_context=user_context,
             action_type="apply_leave",
@@ -1859,46 +2681,84 @@ def _apply_leave_continue(pending, question, user_context=None):
             )
         }
 
+
     if step == "handover_projects":
-        if _lower(question) in ["none", "no", "skip", "not required", "no project"]:
-            data["handover_project_id"] = ""
-            data["handover_project_name"] = "None"
-        else:
-            project_options = data.get("project_options") or get_project_handover_options(user_context)
-            selected = _extract_selected_option(question, project_options)
+        _apply_detected_project_and_handover(data, question, user_context=user_context)
 
-            if not selected:
-                return {
-                    "handled": True,
-                    "answer": (
-                        "Please choose a valid project/work from the list, or type 'none':\n"
-                        f"{_format_options(project_options)}"
-                    )
-                }
+        if not data.get("handover_project_name"):
+            if _looks_like_no_handover_project(question):
+                data["handover_project_id"] = ""
+                data["handover_project_name"] = "None"
+            else:
+                project_options = data.get("project_options") or get_project_handover_options(user_context)
+                data["project_options"] = project_options
+                project_selection_text = (
+                    _extract_handover_command_parts(question).get("project_text")
+                    or _extract_project_selection_text(question)
+                    or question
+                )
+                selected = _extract_selected_option(project_selection_text, project_options)
 
-            data["handover_project_id"] = selected.get("id")
-            data["handover_project_name"] = selected.get("name") or selected.get("label")
+                if not selected:
+                    return {
+                        "handled": True,
+                        "answer": (
+                            "Please choose a valid project/work from the list, or type 'none':\n"
+                            f"{_format_options(project_options)}"
+                        )
+                    }
 
-        handover_options = get_handover_employee_options(user_context)
+                data["handover_project_id"] = selected.get("id")
+                data["handover_project_name"] = selected.get("name") or selected.get("label")
+
+        handover_options = data.get("handover_options") or get_handover_employee_options(
+            user_context,
+            limit=50,
+        )
         data["handover_options"] = handover_options
 
-        if not handover_options:
+        if data.get("handover_to_search_text") and not data.get("handover_to_name"):
+            selected_employee = _extract_selected_option(
+                data.get("handover_to_search_text"),
+                handover_options,
+            )
+
+            if selected_employee:
+                data["handover_to_id"] = selected_employee.get("id")
+                data["handover_to_name"] = selected_employee.get("name") or selected_employee.get("label")
+
+        if not handover_options and not data.get("handover_to_name"):
             data["handover_to_id"] = ""
             data["handover_to_name"] = "Not selected"
 
+        if _leave_ready_for_confirmation(data):
             save_pending_action(
                 user_context=user_context,
                 action_type="apply_leave",
                 data=data,
-                current_step="reason"
+                current_step="confirm"
+            )
+
+            return {
+                "handled": True,
+                "answer": _leave_review_text(data)
+            }
+
+        if not data.get("handover_to_name"):
+            save_pending_action(
+                user_context=user_context,
+                action_type="apply_leave",
+                data=data,
+                current_step="handover_to"
             )
 
             return {
                 "handled": True,
                 "answer": (
                     f"Handover project/work selected: {data.get('handover_project_name')}.\n\n"
-                    "I could not find any active same-team employee for task handover.\n\n"
-                    "Now please provide a valid reason for your leave."
+                    "To whom do you want to hand over the task?\n"
+                    f"{_format_options(handover_options)}\n\n"
+                    "Reply with the option number or employee name."
                 )
             }
 
@@ -1906,22 +2766,28 @@ def _apply_leave_continue(pending, question, user_context=None):
             user_context=user_context,
             action_type="apply_leave",
             data=data,
-            current_step="handover_to"
+            current_step="reason"
         )
 
         return {
             "handled": True,
             "answer": (
-                f"Handover project/work selected: {data.get('handover_project_name')}.\n\n"
-                "To whom do you want to hand over the task?\n"
-                f"{_format_options(handover_options)}\n\n"
-                "Reply with the option number or employee name."
+                f"Task handover selected: {data.get('handover_to_name')}.\n\n"
+                "Now please provide a valid reason for your leave."
             )
         }
 
+
     if step == "handover_to":
-        handover_options = data.get("handover_options") or get_handover_employee_options(user_context)
-        selected = _extract_selected_option(question, handover_options)
+        handover_options = data.get("handover_options") or get_handover_employee_options(
+            user_context,
+            limit=50,
+        )
+        data["handover_options"] = handover_options
+
+        parts = _extract_handover_command_parts(question)
+        employee_text = parts.get("employee_text") or question
+        selected = _extract_selected_option(employee_text, handover_options)
 
         if not selected:
             return {
@@ -1934,6 +2800,23 @@ def _apply_leave_continue(pending, question, user_context=None):
 
         data["handover_to_id"] = selected.get("id")
         data["handover_to_name"] = selected.get("name") or selected.get("label")
+
+        detected_reason = parts.get("reason") or _extract_leave_reason_from_command(question)
+
+        if detected_reason and _is_valid_leave_reason(detected_reason):
+            data["reason"] = detected_reason
+
+            save_pending_action(
+                user_context=user_context,
+                action_type="apply_leave",
+                data=data,
+                current_step="confirm"
+            )
+
+            return {
+                "handled": True,
+                "answer": _leave_review_text(data)
+            }
 
         save_pending_action(
             user_context=user_context,
@@ -1950,8 +2833,15 @@ def _apply_leave_continue(pending, question, user_context=None):
             )
         }
 
+
     if step == "reason":
-        reason = _safe_str(question)
+        reason = _extract_leave_reason_from_command(question) or _safe_str(question)
+        reason = re.split(
+            r"\b(?:please\s+)?(?:submit|confirm|apply)\b",
+            reason,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip(" .,-:;")
 
         if not _is_valid_leave_reason(reason):
             return {
@@ -1972,6 +2862,7 @@ def _apply_leave_continue(pending, question, user_context=None):
             "handled": True,
             "answer": _leave_review_text(data)
         }
+
 
     if step == "confirm":
         if _looks_like_cancel_confirmation(question):
@@ -2002,12 +2893,15 @@ def _apply_leave_continue(pending, question, user_context=None):
                 }
 
             except Exception as error:
+                clear_pending_action(user_context)
+
                 return {
                     "handled": True,
                     "answer": (
                         "I could not submit your leave request.\n\n"
                         f"Reason: {str(error)}\n\n"
-                        "Please correct the details and start again by saying: Hey Eve apply casual leave for tomorrow."
+                        "I have cleared this failed leave setup so Eve will not continue the old details.\n"
+                        "Please start again by saying: Hey Eve apply casual leave for tomorrow."
                     )
                 }
 
@@ -2546,6 +3440,843 @@ def _reminder_continue(pending, question, user_context=None):
     }
 
 
+
+# ---------------------------------------------------------------------------
+# AI Attendance Actions: Check-in / Check-out
+# ---------------------------------------------------------------------------
+
+def _detect_attendance_action_intent(question):
+    """
+    Detects Eve attendance commands before the normal AI knowledge fallback.
+
+    Supported examples:
+    - Hey Eve check in
+    - Please punch in
+    - Mark my attendance
+    - Check out
+    - Punch out
+    """
+
+    clean = _normalize_option_text(_strip_voice_instruction_suffix(question))
+
+    if not clean:
+        return ""
+
+    check_out_phrases = {
+        "check out",
+        "checkout",
+        "punch out",
+        "clock out",
+        "mark checkout",
+        "mark check out",
+        "end attendance",
+        "close attendance",
+        "office out",
+        "i want to check out",
+        "please check out",
+        "please checkout",
+        "please punch out",
+    }
+
+    check_in_phrases = {
+        "check in",
+        "checkin",
+        "punch in",
+        "clock in",
+        "mark attendance",
+        "mark my attendance",
+        "start attendance",
+        "office in",
+        "i want to check in",
+        "please check in",
+        "please checkin",
+        "please punch in",
+    }
+
+    if any(phrase in clean for phrase in check_out_phrases):
+        return "attendance_check_out"
+
+    if any(phrase in clean for phrase in check_in_phrases):
+        return "attendance_check_in"
+
+    # Voice STT may hear "checking" / "checkout" differently.
+    if "attendance" in clean and any(word in clean for word in ["mark", "start", "begin"]):
+        return "attendance_check_in"
+
+    if "attendance" in clean and any(word in clean for word in ["end", "close", "finish"]):
+        return "attendance_check_out"
+
+    return ""
+
+
+def _request_json_payload_safe():
+    try:
+        from flask import request
+
+        return request.get_json(silent=True) or {}
+    except Exception:
+        return {}
+
+
+def _request_current_user_safe():
+    try:
+        from flask import g
+
+        return getattr(g, "current_user", {}) or {}
+    except Exception:
+        return {}
+
+
+def _float_or_none(value):
+    if value in [None, ""]:
+        return None
+
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _attendance_location_from_payload(payload=None, fallback_data=None):
+    payload = payload or _request_json_payload_safe()
+    fallback_data = fallback_data or {}
+
+    client_context = payload.get("client_context") if isinstance(payload.get("client_context"), dict) else {}
+
+    source = (
+        fallback_data.get("location")
+        or fallback_data.get("attendance_location")
+        or payload.get("attendance_location")
+        or client_context.get("attendance_location")
+        or payload.get("location")
+        or client_context.get("location")
+        or {}
+    )
+
+    if not isinstance(source, dict):
+        source = {}
+
+    latitude = _float_or_none(
+        source.get("latitude")
+        or source.get("lat")
+        or fallback_data.get("latitude")
+        or payload.get("latitude")
+        or client_context.get("latitude")
+    )
+    longitude = _float_or_none(
+        source.get("longitude")
+        or source.get("lng")
+        or source.get("lon")
+        or fallback_data.get("longitude")
+        or payload.get("longitude")
+        or client_context.get("longitude")
+    )
+    accuracy = _float_or_none(
+        source.get("accuracy")
+        or fallback_data.get("accuracy")
+        or payload.get("accuracy")
+        or client_context.get("accuracy")
+    )
+
+    address = _safe_str(
+        source.get("address")
+        or source.get("location_address")
+        or fallback_data.get("address")
+        or payload.get("address")
+        or client_context.get("address")
+    )
+
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "accuracy": accuracy,
+        "address": address,
+        "source": source.get("source") or "ai_assistant",
+    }
+
+
+def _attendance_location_available(location):
+    return bool(
+        isinstance(location, dict)
+        and location.get("latitude") is not None
+        and location.get("longitude") is not None
+    )
+
+
+def _attendance_mode_from_text(question):
+    clean = _normalize_option_text(question)
+
+    if any(phrase in clean for phrase in ["work from home", "wfh", "home attendance"]):
+        return "wfh"
+
+    # Field attendance needs field place and photo in the native route.
+    # Eve uses office mode by default to avoid bypassing those proofs.
+    return "office"
+
+
+def _attendance_employee(user_context=None):
+    employee = _current_employee_for_ai_action(user_context)
+
+    if not employee:
+        raise RuntimeError("Employee profile was not found for this login.")
+
+    return employee
+
+
+def _attendance_tenant_id(employee=None, user_context=None):
+    employee = employee or {}
+
+    return (
+        employee.get("tenant_id")
+        or _tenant_id(user_context)
+        or "sds"
+    )
+
+
+def _attendance_employee_org_name(employee):
+    employee = employee or {}
+
+    return _safe_str(
+        employee.get("organisation")
+        or employee.get("organization")
+        or employee.get("organisation_name")
+        or employee.get("organization_name")
+    )
+
+
+def _attendance_employee_org_code(employee):
+    employee = employee or {}
+
+    return _safe_str(
+        employee.get("organisation_code")
+        or employee.get("organization_code")
+    ).upper()
+
+
+def _attendance_employee_state(employee):
+    employee = employee or {}
+
+    state = _safe_str(
+        employee.get("state")
+        or employee.get("branch")
+        or employee.get("work_state")
+        or "Assam(HO)"
+    )
+
+    lowered = state.lower()
+
+    if lowered in ["assam", "assam ho", "assam(ho)", "ho", "assam/guwahati (ho)"]:
+        return "Assam(HO)"
+
+    return state or "Assam(HO)"
+
+
+def _attendance_employee_name(employee):
+    employee = employee or {}
+
+    return (
+        employee.get("name")
+        or employee.get("employee_name")
+        or employee.get("full_name")
+        or employee.get("email")
+        or "Employee"
+    )
+
+
+def _attendance_employee_code(employee):
+    employee = employee or {}
+
+    return (
+        employee.get("employee_id")
+        or employee.get("emp_code")
+        or employee.get("code")
+        or ""
+    )
+
+
+def _attendance_now_local():
+    try:
+        from app.routes.attendance import now_local
+
+        return now_local()
+    except Exception:
+        return datetime.utcnow() + timedelta(minutes=330)
+
+
+def _attendance_holiday_info(db, employee, attendance_date):
+    try:
+        from app.routes.attendance import holiday_info_for_employee
+
+        return holiday_info_for_employee(db, employee, attendance_date)
+    except Exception:
+        return {
+            "is_holiday": False,
+            "holiday_type": "",
+            "state": _attendance_employee_state(employee),
+            "title": "",
+            "message": "",
+        }
+
+
+def _attendance_approved_holiday_work(db, employee, attendance_date):
+    try:
+        from app.routes.attendance import approved_holiday_work_request
+
+        return approved_holiday_work_request(db, employee, attendance_date)
+    except Exception:
+        return None
+
+
+def _attendance_pending_holiday_work(db, employee, attendance_date):
+    try:
+        from app.routes.attendance import pending_holiday_work_request
+
+        return pending_holiday_work_request(db, employee, attendance_date)
+    except Exception:
+        return None
+
+
+def _attendance_create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
+    try:
+        from app.routes.attendance import create_compoff_if_needed
+
+        return create_compoff_if_needed(db, employee, attendance_doc, holiday_info)
+    except Exception:
+        return None
+
+
+def _attendance_greeting(action_type, employee_name="", is_late=False, is_early=False):
+    now = _attendance_now_local()
+    hour = now.hour
+
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 17:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+
+    first_name = _safe_str(employee_name).split(" ")[0] if _safe_str(employee_name) else ""
+
+    if action_type == "attendance_check_in":
+        if is_late:
+            return f"{greeting}{f' {first_name}' if first_name else ''}. Your late check-in is completed."
+        return f"{greeting}{f' {first_name}' if first_name else ''}. Your check-in is completed."
+
+    if is_early:
+        return f"{greeting}{f' {first_name}' if first_name else ''}. Your early check-out is completed."
+
+    return f"{greeting}{f' {first_name}' if first_name else ''}. Your check-out is completed."
+
+
+def _attendance_reason_from_text(question):
+    clean = _strip_voice_instruction_suffix(question)
+
+    patterns = [
+        r"\b(?:reason|because|due\s+to|as)\s+(?:is|was|:)?\s*(.+)$",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, clean, flags=re.IGNORECASE)
+
+        if match:
+            return " ".join(_safe_str(match.group(1)).strip(" .,-:;").split())
+
+    return _safe_str(clean)
+
+
+def _attendance_late_reason_required(now, holiday_info):
+    try:
+        from app.routes.attendance import LATE_CUTOFF
+
+        return now.time() >= LATE_CUTOFF and not holiday_info.get("is_holiday")
+    except Exception:
+        return now.time() >= datetime.strptime("09:50", "%H:%M").time() and not holiday_info.get("is_holiday")
+
+
+def _attendance_early_checkout_required(now, holiday_info):
+    try:
+        from app.routes.attendance import OFFICE_END_TIME
+
+        return now.time() < OFFICE_END_TIME and not holiday_info.get("is_holiday")
+    except Exception:
+        return now.time() < datetime.strptime("18:00", "%H:%M").time() and not holiday_info.get("is_holiday")
+
+
+def _attendance_location_error_message(location):
+    if not _attendance_location_available(location):
+        return (
+            "GPS location is required for attendance. "
+            "Please allow location permission in the browser and try again."
+        )
+
+    return ""
+
+
+def _submit_ai_check_in(data=None, user_context=None):
+    data = data or {}
+    db = get_db()
+
+    employee = _attendance_employee(user_context)
+    tenant_id = _attendance_tenant_id(employee, user_context)
+
+    now = _attendance_now_local()
+    today_date = now.date()
+    today = today_date.isoformat()
+
+    mode = data.get("mode") or "office"
+    mode = _safe_str(mode).lower() or "office"
+
+    if mode not in ["office", "wfh", "field"]:
+        mode = "office"
+
+    if mode == "field":
+        raise RuntimeError(
+            "Field attendance needs visit place and photo proof. Please use the Attendance page for field attendance."
+        )
+
+    location = _attendance_location_from_payload(fallback_data=data)
+    location_error = _attendance_location_error_message(location)
+
+    if location_error:
+        raise RuntimeError(location_error)
+
+    holiday_info = _attendance_holiday_info(db, employee, today_date)
+    holiday_work_request = None
+
+    if holiday_info.get("is_holiday"):
+        holiday_work_request = _attendance_approved_holiday_work(db, employee, today_date)
+
+        if not holiday_work_request:
+            pending_request = _attendance_pending_holiday_work(db, employee, today_date)
+            if pending_request:
+                raise RuntimeError("Holiday attendance requires approved holiday work request. Your request is still pending.")
+            raise RuntimeError("Holiday attendance requires approved holiday work request.")
+
+    is_late = _attendance_late_reason_required(now, holiday_info)
+    late_reason = _safe_str(data.get("late_reason") or data.get("reason"))
+
+    if is_late and not late_reason:
+        raise RuntimeError("Late reason is required from 09:50 AM onwards.")
+
+    old = db.attendance_logs.find_one({
+        "tenant_id": tenant_id,
+        "employee_id": str(employee["_id"]),
+        "date": today,
+        "is_deleted": {"$ne": True},
+    })
+
+    if old and old.get("check_in"):
+        return {
+            "already_done": True,
+            "message": "You are already checked in today.",
+            "attendance": old,
+            "is_late": bool(old.get("is_late")),
+        }
+
+    status = "present"
+
+    if holiday_info.get("is_holiday"):
+        status = "holiday_work"
+    elif is_late:
+        status = "late"
+
+    doc = {
+        "tenant_id": tenant_id,
+        "employee_id": str(employee["_id"]),
+        "employee_code": _attendance_employee_code(employee),
+        "emp_code": employee.get("emp_code", ""),
+        "employee_name": _attendance_employee_name(employee),
+        "department": employee.get("department", ""),
+        "designation": employee.get("designation", ""),
+        "organisation": _attendance_employee_org_name(employee),
+        "organization": _attendance_employee_org_name(employee),
+        "organisation_name": _attendance_employee_org_name(employee),
+        "organization_name": _attendance_employee_org_name(employee),
+        "organisation_code": _attendance_employee_org_code(employee),
+        "organization_code": _attendance_employee_org_code(employee),
+        "state": _attendance_employee_state(employee),
+        "team_leader_id": employee.get("team_leader_id", ""),
+        "team_leader_name": employee.get("team_leader_name", ""),
+        "reporting_officer_id": employee.get("reporting_officer_id", ""),
+        "reporting_officer_name": employee.get("reporting_officer_name", ""),
+
+        "date": today,
+        "check_in": now,
+        "check_out": None,
+
+        "office_start": "09:30",
+        "late_cutoff": "09:50",
+        "office_end": "18:00",
+
+        "mode": mode,
+        "field_location": "",
+        "field_photo": "",
+        "field_photo_url": "",
+        "late_reason": late_reason,
+        "early_checkout_reason": "",
+
+        "check_in_location": location,
+        "check_out_location": None,
+        "location_accuracy_warning": bool(
+            location.get("accuracy")
+            and float(location.get("accuracy")) > 60
+        ),
+
+        "is_late": is_late,
+        "is_early_checkout": False,
+        "is_holiday_work": bool(holiday_info.get("is_holiday")),
+        "holiday_title": holiday_info.get("title", ""),
+        "holiday_type": holiday_info.get("holiday_type", ""),
+        "holiday_message": holiday_info.get("message", ""),
+        "holiday_work_request_id": str(holiday_work_request.get("_id")) if holiday_work_request else "",
+        "status": status,
+        "verified_by_ro": False,
+
+        "created_offline": False,
+        "check_in_created_offline": False,
+        "offline_marked_at": None,
+        "check_in_offline_marked_at": None,
+        "client_attendance_id": "",
+        "client_check_in_id": "",
+        "client_attendance_ids": [],
+        "synced_at": None,
+        "sync_source": "ai_assistant",
+
+        "timeline": [
+            {
+                "type": "check_in",
+                "time": now,
+                "note": f"{mode.upper()} check-in through AI Assistant",
+                "location": location,
+                "field_location": "",
+                "created_offline": False,
+                "offline_marked_at": None,
+                "synced_at": None,
+                "client_attendance_id": "",
+            }
+        ],
+
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    result = db.attendance_logs.insert_one(doc)
+    doc["_id"] = result.inserted_id
+
+    _create_ai_audit_log(
+        user_context=user_context,
+        action_type="attendance_check_in",
+        status="success",
+        message="Attendance check-in completed through AI Assistant.",
+        metadata={
+            "attendance_id": str(result.inserted_id),
+            "date": today,
+            "is_late": is_late,
+            "mode": mode,
+        },
+    )
+
+    clear_pending_action(user_context)
+
+    return {
+        "already_done": False,
+        "attendance": doc,
+        "is_late": is_late,
+        "message": _attendance_greeting(
+            "attendance_check_in",
+            _attendance_employee_name(employee),
+            is_late=is_late,
+        ),
+    }
+
+
+def _submit_ai_check_out(data=None, user_context=None):
+    data = data or {}
+    db = get_db()
+
+    employee = _attendance_employee(user_context)
+    tenant_id = _attendance_tenant_id(employee, user_context)
+
+    now = _attendance_now_local()
+    today_date = now.date()
+    today = today_date.isoformat()
+
+    location = _attendance_location_from_payload(fallback_data=data)
+    location_error = _attendance_location_error_message(location)
+
+    if location_error:
+        raise RuntimeError(location_error)
+
+    rec = db.attendance_logs.find_one({
+        "tenant_id": tenant_id,
+        "employee_id": str(employee["_id"]),
+        "date": today,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not rec:
+        raise RuntimeError("Please check in first.")
+
+    if rec.get("check_out"):
+        return {
+            "already_done": True,
+            "message": "You are already checked out today.",
+            "attendance": rec,
+            "is_early_checkout": bool(rec.get("is_early_checkout")),
+        }
+
+    holiday_info = _attendance_holiday_info(db, employee, today_date)
+    is_early_checkout = _attendance_early_checkout_required(now, holiday_info)
+
+    early_checkout_reason = _safe_str(
+        data.get("early_checkout_reason")
+        or data.get("reason")
+    )
+
+    if is_early_checkout and not early_checkout_reason:
+        raise RuntimeError("Early checkout reason is required before 06:00 PM.")
+
+    update_data = {
+        "check_out": now,
+        "check_out_location": location,
+        "checkout_location_accuracy_warning": bool(
+            location.get("accuracy")
+            and float(location.get("accuracy")) > 60
+        ),
+        "is_early_checkout": is_early_checkout,
+        "early_checkout_reason": early_checkout_reason,
+        "updated_at": now,
+
+        "check_out_created_offline": False,
+        "check_out_offline_marked_at": None,
+        "client_check_out_id": "",
+        "synced_at": rec.get("synced_at"),
+        "sync_source": rec.get("sync_source", "ai_assistant"),
+    }
+
+    if rec.get("status") == "present" and is_early_checkout:
+        update_data["status"] = "early_checkout"
+
+    db.attendance_logs.update_one(
+        {"_id": rec["_id"]},
+        {
+            "$set": update_data,
+            "$push": {
+                "timeline": {
+                    "type": "check_out",
+                    "time": now,
+                    "note": "Day closed through AI Assistant",
+                    "location": location,
+                    "created_offline": False,
+                    "offline_marked_at": None,
+                    "synced_at": None,
+                    "client_attendance_id": "",
+                }
+            },
+        },
+    )
+
+    updated = db.attendance_logs.find_one({"_id": rec["_id"]})
+
+    if updated and updated.get("is_holiday_work"):
+        _attendance_create_compoff_if_needed(db, employee, updated, holiday_info)
+
+    _create_ai_audit_log(
+        user_context=user_context,
+        action_type="attendance_check_out",
+        status="success",
+        message="Attendance check-out completed through AI Assistant.",
+        metadata={
+            "attendance_id": str(rec["_id"]),
+            "date": today,
+            "is_early_checkout": is_early_checkout,
+        },
+    )
+
+    clear_pending_action(user_context)
+
+    return {
+        "already_done": False,
+        "attendance": updated,
+        "is_early_checkout": is_early_checkout,
+        "message": _attendance_greeting(
+            "attendance_check_out",
+            _attendance_employee_name(employee),
+            is_early=is_early_checkout,
+        ),
+    }
+
+
+def _attendance_start(action_type, question="", user_context=None):
+    clean_question = _strip_voice_instruction_suffix(question)
+    now = _attendance_now_local()
+    db = get_db()
+    employee = _attendance_employee(user_context)
+    holiday_info = _attendance_holiday_info(db, employee, now.date())
+    location = _attendance_location_from_payload()
+
+    data = {
+        "mode": _attendance_mode_from_text(clean_question),
+        "location": location,
+        "attendance_location": location,
+        "latitude": location.get("latitude"),
+        "longitude": location.get("longitude"),
+        "accuracy": location.get("accuracy"),
+    }
+
+    reason = _attendance_reason_from_text(clean_question)
+
+    # Avoid treating the command itself as a reason.
+    command_like_reasons = {
+        "check in",
+        "please check in",
+        "check out",
+        "please check out",
+        "punch in",
+        "punch out",
+        "mark attendance",
+        "mark my attendance",
+    }
+
+    if _normalize_option_text(reason) in command_like_reasons:
+        reason = ""
+
+    if action_type == "attendance_check_in":
+        if _attendance_late_reason_required(now, holiday_info) and not reason:
+            save_pending_action(
+                user_context=user_context,
+                action_type="attendance_check_in",
+                data=data,
+                current_step="late_reason",
+            )
+
+            return {
+                "handled": True,
+                "answer": "You are late today. Please tell me the late check-in reason."
+            }
+
+        if reason:
+            data["late_reason"] = reason
+            data["reason"] = reason
+
+        try:
+            result = _submit_ai_check_in(data, user_context=user_context)
+
+            return {
+                "handled": True,
+                "answer": result.get("message") or "Your check-in is completed."
+            }
+        except Exception as error:
+            return {
+                "handled": True,
+                "answer": str(error)
+            }
+
+    if action_type == "attendance_check_out":
+        # The existing attendance route requires check-in first. If check-in is missing,
+        # submit function will return that exact error.
+        if _attendance_early_checkout_required(now, holiday_info) and not reason:
+            save_pending_action(
+                user_context=user_context,
+                action_type="attendance_check_out",
+                data=data,
+                current_step="early_checkout_reason",
+            )
+
+            return {
+                "handled": True,
+                "answer": "You are checking out early. Please tell me the early check-out reason."
+            }
+
+        if reason:
+            data["early_checkout_reason"] = reason
+            data["reason"] = reason
+
+        try:
+            result = _submit_ai_check_out(data, user_context=user_context)
+
+            return {
+                "handled": True,
+                "answer": result.get("message") or "Your check-out is completed."
+            }
+        except Exception as error:
+            return {
+                "handled": True,
+                "answer": str(error)
+            }
+
+    return {
+        "handled": False,
+        "answer": "",
+    }
+
+
+def _attendance_continue(pending, question, user_context=None):
+    data = pending.get("data") or {}
+    step = pending.get("current_step")
+    action_type = pending.get("action_type")
+
+    reason = _attendance_reason_from_text(question)
+
+    if not reason or len(reason) < 3:
+        if step == "late_reason":
+            return {
+                "handled": True,
+                "answer": "Please tell me a valid late check-in reason."
+            }
+
+        return {
+            "handled": True,
+            "answer": "Please tell me a valid early check-out reason."
+        }
+
+    if action_type == "attendance_check_in":
+        data["late_reason"] = reason
+        data["reason"] = reason
+
+        try:
+            result = _submit_ai_check_in(data, user_context=user_context)
+
+            return {
+                "handled": True,
+                "answer": result.get("message") or "Your check-in is completed."
+            }
+        except Exception as error:
+            clear_pending_action(user_context)
+
+            return {
+                "handled": True,
+                "answer": str(error)
+            }
+
+    if action_type == "attendance_check_out":
+        data["early_checkout_reason"] = reason
+        data["reason"] = reason
+
+        try:
+            result = _submit_ai_check_out(data, user_context=user_context)
+
+            return {
+                "handled": True,
+                "answer": result.get("message") or "Your check-out is completed."
+            }
+        except Exception as error:
+            clear_pending_action(user_context)
+
+            return {
+                "handled": True,
+                "answer": str(error)
+            }
+
+    clear_pending_action(user_context)
+
+    return {
+        "handled": True,
+        "answer": "I cleared the incomplete attendance action. Please try again."
+    }
+
+
 def _looks_like_new_normal_question(question):
     """
     If a guided action is pending, but the user asks a normal HRMS question,
@@ -2606,7 +4337,7 @@ def handle_guided_action(question, user_context=None):
     It also restarts the guided flow if the user clearly starts the same action again.
     """
 
-    clean_question = _safe_str(question)
+    clean_question = _strip_voice_instruction_suffix(question)
 
     if not clean_question:
         return {
@@ -2631,6 +4362,22 @@ def handle_guided_action(question, user_context=None):
     # restart that flow from the beginning instead of showing:
     # "I am still collecting your details."
     if pending and intent:
+        pending_action_type = pending.get("action_type")
+        pending_step = pending.get("current_step")
+
+        # At final leave confirmation, phrases such as
+        # "apply leave", "please submit", and "submit it" must submit the
+        # prepared request, not restart the leave form.
+        if (
+            pending_action_type == "apply_leave"
+            and pending_step == "confirm"
+            and (
+                _looks_like_leave_submit_confirmation(clean_question)
+                or _looks_like_cancel_confirmation(clean_question)
+            )
+        ):
+            return _apply_leave_continue(pending, clean_question, user_context=user_context)
+
         clear_pending_action(user_context)
 
         if intent == "apply_leave":
@@ -2641,6 +4388,9 @@ def handle_guided_action(question, user_context=None):
 
         if intent == "create_reminder":
             return _reminder_start(user_context=user_context)
+
+        if intent in ["attendance_check_in", "attendance_check_out"]:
+            return _attendance_start(intent, question=clean_question, user_context=user_context)
 
     # If a pending guided action exists but the user asks a normal unrelated question,
     # cancel the stale flow and let the normal AI/capability system answer.
@@ -2664,6 +4414,9 @@ def handle_guided_action(question, user_context=None):
         if action_type == "create_reminder":
             return _reminder_continue(pending, clean_question, user_context=user_context)
 
+        if action_type in ["attendance_check_in", "attendance_check_out"]:
+            return _attendance_continue(pending, clean_question, user_context=user_context)
+
         # Safety fallback for corrupted/unknown pending actions.
         clear_pending_action(user_context)
 
@@ -2683,6 +4436,9 @@ def handle_guided_action(question, user_context=None):
 
     if intent == "create_reminder":
         return _reminder_start(user_context=user_context)
+
+    if intent in ["attendance_check_in", "attendance_check_out"]:
+        return _attendance_start(intent, question=clean_question, user_context=user_context)
 
     return {
         "handled": False,
