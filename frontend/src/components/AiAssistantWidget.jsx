@@ -54,6 +54,67 @@ function getSpeechRecognition() {
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
+function isIosDevice() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+
+  return (
+    /iPad|iPhone|iPod/i.test(ua) ||
+    (platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function isMobileBrowser() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+
+  return (
+    isIosDevice() ||
+    /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || "")
+  );
+}
+
+function isMobileSafari() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+
+  const ua = navigator.userAgent || "";
+
+  return (
+    isIosDevice() &&
+    /Safari/i.test(ua) &&
+    !/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua)
+  );
+}
+
+function supportsReliableBrowserSpeechRecognition() {
+  if (typeof window === "undefined") return false;
+  if (isMobileBrowser()) return false;
+
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function getMobileVoiceChunkMs() {
+  if (!isMobileBrowser()) return 0;
+
+  return 4200;
+}
+
+function formatLocationAccuracy(accuracy) {
+  const value = Number(accuracy);
+
+  if (!Number.isFinite(value)) return "";
+
+  return `${Math.round(value)}m`;
+}
+
+
 function speakText(text, onEnd) {
   const finish = () => {
     if (typeof onEnd === "function") {
@@ -457,6 +518,8 @@ export default function AiAssistantWidget() {
   const voiceQuotaDisabledUntilRef = useRef(0);
   const lastVoiceActivationAtRef = useRef(0);
   const pendingAttendanceActionRef = useRef(null);
+  const speakingSafetyTimerRef = useRef(null);
+  const oneShotVoiceModeRef = useRef(false);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -533,6 +596,12 @@ export default function AiAssistantWidget() {
   useEffect(() => {
     return () => {
       clearRestartTimer();
+
+      if (speakingSafetyTimerRef.current) {
+        clearTimeout(speakingSafetyTimerRef.current);
+        speakingSafetyTimerRef.current = null;
+      }
+
       autoWakeModeRef.current = false;
       voiceConversationModeRef.current = false;
       suppressNextRestartRef.current = true;
@@ -684,6 +753,12 @@ export default function AiAssistantWidget() {
 
   function stopVoiceSession() {
     clearRestartTimer();
+
+    if (speakingSafetyTimerRef.current) {
+      clearTimeout(speakingSafetyTimerRef.current);
+      speakingSafetyTimerRef.current = null;
+    }
+
     stopGeminiRecording({ stopLoop: true });
     cleanupCurrentAudio();
 
@@ -714,7 +789,12 @@ export default function AiAssistantWidget() {
   function scheduleListeningRestart(delay = 500) {
     clearRestartTimer();
 
+    const shouldListenForOneReply =
+      Boolean(pendingAttendanceActionRef.current) ||
+      Boolean(voiceConversationModeRef.current);
+
     if (!autoWakeModeRef.current) return;
+    if (!shouldListenForOneReply) return;
     if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
     if (loadingRef.current) return;
     if (isSpeakingRef.current) return;
@@ -722,11 +802,17 @@ export default function AiAssistantWidget() {
     restartListenTimerRef.current = setTimeout(() => {
       restartListenTimerRef.current = null;
 
+      const stillNeedsOneReply =
+        Boolean(pendingAttendanceActionRef.current) ||
+        Boolean(voiceConversationModeRef.current);
+
       if (!autoWakeModeRef.current) return;
+      if (!stillNeedsOneReply) return;
       if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
       if (loadingRef.current) return;
       if (isSpeakingRef.current) return;
 
+      oneShotVoiceModeRef.current = true;
       beginListening();
     }, delay);
   }
@@ -752,8 +838,15 @@ export default function AiAssistantWidget() {
       if (finished) return;
       finished = true;
 
+      if (speakingSafetyTimerRef.current) {
+        clearTimeout(speakingSafetyTimerRef.current);
+        speakingSafetyTimerRef.current = null;
+      }
+
       cleanupCurrentAudio();
       isSpeakingRef.current = false;
+      setListening(false);
+      listeningRef.current = false;
 
       if (typeof onEnd === "function") {
         onEnd();
@@ -761,6 +854,8 @@ export default function AiAssistantWidget() {
 
       if (restartAfterSpeech) {
         scheduleListeningRestart(450);
+      } else if (!pendingAttendanceActionRef.current && !voiceConversationModeRef.current) {
+        setVoiceHint("");
       }
     };
 
@@ -782,16 +877,26 @@ export default function AiAssistantWidget() {
     listeningRef.current = false;
     setVoiceHint("Eve is speaking...");
 
-        speakAiAssistantText(cleanText, {
-          voice: options.voice || "anushka",
-          timeoutMs: 30000,
-        })
+    const safetyMs = Math.max(5500, Math.min(18000, cleanText.length * 95 + 3500));
+
+    speakingSafetyTimerRef.current = setTimeout(() => {
+      finishSpeech();
+    }, safetyMs);
+
+    if (isMobileSafari() || isIosDevice()) {
+      speakText(cleanText, finishSpeech);
+      return;
+    }
+
+    speakAiAssistantText(cleanText, {
+      voice: options.voice || "ritu",
+      timeoutMs: 20000,
+    })
       .then((voiceResponse) => {
         const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
         if (!audioUrl) {
-          setVoiceHint("Eve voice could not be generated. Please check the voice service.");
-          finishSpeech();
+          speakText(cleanText, finishSpeech);
           return;
         }
 
@@ -808,28 +913,10 @@ export default function AiAssistantWidget() {
           return;
         }
 
-        setVoiceHint(
-          error?.message ||
-            "Eve voice could not be generated. Please check the voice service."
-        );
-
-        stopGeminiRecording({ stopLoop: true });
-
-        isSpeakingRef.current = false;
-
-        if (typeof onEnd === "function") {
-          onEnd();
-        }
-
-        if (restartAfterSpeech) {
-          setTimeout(() => {
-            if (!loadingRef.current && Date.now() >= voiceQuotaDisabledUntilRef.current) {
-              geminiLoopActiveRef.current = true;
-              beginListening();
-            }
-          }, 1800);
-        }
+        // Cloud TTS failed. Browser speech is more reliable on mobile Safari.
+        speakText(cleanText, finishSpeech);
       });
+
   }
 
   function appendWakeGreeting(greeting, userText = "Hey Eve") {
@@ -888,17 +975,21 @@ export default function AiAssistantWidget() {
       return;
     }
 
+    stopGeminiRecording({ stopLoop: true });
+    cleanupCurrentAudio();
+
     setAutoWakeMode(true);
     voiceConversationModeRef.current = false;
     pendingGreetingRef.current = "";
+    oneShotVoiceModeRef.current = true;
 
     setEveActive(true);
     setOpen(true);
     setManualChatOpen(false);
     setMessage("");
     setLastVoiceTranscript("");
-    setSiriStatus("Eve is active. Say “Hey Eve” anytime.");
-    setVoiceHint('Eve is active. Say “Hey Eve” and speak your command clearly.');
+    setSiriStatus("Listening. Speak your command now.");
+    setVoiceHint('Listening now. Say "check in", "check out", or ask your HRMS question.');
     setVoiceError("");
     lastVoiceActivationAtRef.current = Date.now();
 
@@ -1012,52 +1103,137 @@ export default function AiAssistantWidget() {
       );
     }
 
+    const toPayload = (position, source = "browser_geolocation") => {
+      const coords = position?.coords || {};
+
+      if (
+        coords.latitude === undefined ||
+        coords.latitude === null ||
+        coords.longitude === undefined ||
+        coords.longitude === null
+      ) {
+        throw new Error("GPS location is required for attendance. Please enable location permission and try again.");
+      }
+
+      return {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy: coords.accuracy,
+        altitude: coords.altitude,
+        altitude_accuracy: coords.altitudeAccuracy,
+        heading: coords.heading,
+        speed: coords.speed,
+        location_captured_at: new Date().toISOString(),
+        location_source: source,
+      };
+    };
+
     return new Promise((resolve, reject) => {
+      let resolved = false;
+      let watchId = null;
+      let bestPosition = null;
+
+      const finish = (position, source = "browser_geolocation") => {
+        if (resolved) return;
+        resolved = true;
+
+        if (watchId !== null) {
+          try {
+            navigator.geolocation.clearWatch(watchId);
+          } catch {
+            // ignore
+          }
+        }
+
+        try {
+          const payload = toPayload(position, source);
+          resolve(payload);
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const fail = (error) => {
+        if (resolved) return;
+        resolved = true;
+
+        if (watchId !== null) {
+          try {
+            navigator.geolocation.clearWatch(watchId);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (error?.code === 1) {
+          reject(new Error("Location permission is blocked. Please allow location permission, then ask Eve to check in again."));
+          return;
+        }
+
+        if (error?.code === 3) {
+          reject(new Error("Unable to get accurate GPS location in time. Please enable Precise Location, keep GPS/mobile data on, stand near a window, and try again."));
+          return;
+        }
+
+        reject(new Error(error?.message || "GPS location is required for attendance. Please enable location permission and try again."));
+      };
+
+      const handlePosition = (position, source) => {
+        const accuracy = Number(position?.coords?.accuracy || 99999);
+        const bestAccuracy = Number(bestPosition?.coords?.accuracy || 99999);
+
+        if (!bestPosition || accuracy < bestAccuracy) {
+          bestPosition = position;
+          const accuracyText = formatLocationAccuracy(accuracy);
+
+          if (accuracyText) {
+            setVoiceHint(`GPS found. Accuracy: ${accuracyText}. Improving location...`);
+          }
+        }
+
+        if (accuracy > 0 && accuracy <= 45) {
+          finish(position, source);
+        }
+      };
+
+      const options = {
+        enableHighAccuracy: true,
+        timeout: isMobileBrowser() ? 20000 : 12000,
+        maximumAge: 0,
+      };
+
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          const coords = position?.coords || {};
+          handlePosition(position, "browser_geolocation_current");
 
-          if (
-            coords.latitude === undefined ||
-            coords.latitude === null ||
-            coords.longitude === undefined ||
-            coords.longitude === null
-          ) {
-            reject(new Error("GPS location is required for attendance. Please enable location permission and try again."));
-            return;
+          if (!isMobileBrowser()) {
+            finish(bestPosition || position, "browser_geolocation_current");
           }
-
-          resolve({
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-            accuracy: coords.accuracy,
-            altitude: coords.altitude,
-            altitude_accuracy: coords.altitudeAccuracy,
-            heading: coords.heading,
-            speed: coords.speed,
-            location_captured_at: new Date().toISOString(),
-            location_source: "browser_geolocation",
-          });
         },
-        (error) => {
-          if (error?.code === 1) {
-            reject(new Error("Location permission is blocked. Please allow location permission, then ask Eve to check in again."));
-            return;
-          }
-
-          if (error?.code === 3) {
-            reject(new Error("Unable to get GPS location in time. Please stand near a window or enable precise location and try again."));
-            return;
-          }
-
-          reject(new Error(error?.message || "GPS location is required for attendance. Please enable location permission and try again."));
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 12000,
-          maximumAge: 15000,
-        }
+        fail,
+        options
       );
+
+      if (typeof navigator.geolocation.watchPosition === "function") {
+        watchId = navigator.geolocation.watchPosition(
+          (position) => handlePosition(position, "browser_geolocation_watch"),
+          () => {
+            // Keep waiting for currentPosition/timeout fallback.
+          },
+          options
+        );
+      }
+
+      setTimeout(() => {
+        if (resolved) return;
+
+        if (bestPosition) {
+          finish(bestPosition, "browser_geolocation_best_available");
+          return;
+        }
+
+        fail({ code: 3 });
+      }, isMobileBrowser() ? 16000 : 9000);
     });
   }
 
@@ -1616,26 +1792,25 @@ export default function AiAssistantWidget() {
     setListening(true);
     setVoiceError("");
     setVoiceHint(
-      voiceConversationModeRef.current
-        ? "Listening for your voice reply..."
-        : 'Listening now. Say "Hey Eve", then speak your command clearly.'
+      voiceConversationModeRef.current || pendingAttendanceActionRef.current
+        ? "Listening for your one voice reply..."
+        : 'Listening now. Speak your command clearly.'
     );
 
-    const SpeechRecognition = getSpeechRecognition();
-
-    if (SpeechRecognition) {
+    if (supportsReliableBrowserSpeechRecognition()) {
       startBrowserSpeechRecognition();
       return;
     }
 
     if (typeof window === "undefined" || !window.MediaRecorder) {
       setVoiceError(
-        "Voice recording is not available in this browser. Please use Google Chrome or Microsoft Edge."
+        "Voice recording is not available in this browser. Please use Chrome, Edge, or Safari with microphone permission enabled."
       );
       setAutoWakeMode(false);
       return;
     }
 
+    geminiLoopActiveRef.current = true;
     startGeminiVoiceLoop();
   }
 
@@ -1870,7 +2045,12 @@ export default function AiAssistantWidget() {
 
       recorder.onerror = () => {
         mediaRecorderRef.current = null;
-        scheduleGeminiVoiceLoop(900);
+        setListening(false);
+        listeningRef.current = false;
+
+        if (pendingAttendanceActionRef.current || voiceConversationModeRef.current) {
+          scheduleGeminiVoiceLoop(900);
+        }
       };
 
       recorder.onstop = async () => {
@@ -1880,14 +2060,14 @@ export default function AiAssistantWidget() {
 
         mediaRecorderRef.current = null;
 
-        const shouldContinue =
+        const shouldProcess =
           geminiLoopActiveRef.current &&
           autoWakeModeRef.current &&
           Date.now() >= voiceQuotaDisabledUntilRef.current &&
           !isSpeakingRef.current &&
           !loadingRef.current;
 
-        if (chunks.length && shouldContinue) {
+        if (chunks.length && shouldProcess) {
           const audioBlob = new Blob(chunks, {
             type: mimeType || "audio/webm",
           });
@@ -1895,14 +2075,21 @@ export default function AiAssistantWidget() {
           await transcribeGeminiAudioBlob(audioBlob);
         }
 
-        if (shouldContinue) {
-          scheduleGeminiVoiceLoop(300);
+        const shouldContinueForOneReply =
+          Boolean(pendingAttendanceActionRef.current) ||
+          Boolean(voiceConversationModeRef.current);
+
+        if (shouldProcess && shouldContinueForOneReply && !isSpeakingRef.current && !loadingRef.current) {
+          scheduleGeminiVoiceLoop(500);
         }
       };
 
       recorder.start();
 
-      const chunkMs = voiceConversationModeRef.current ? 1600 : 2200;
+      const mobileChunkMs = getMobileVoiceChunkMs();
+      const chunkMs =
+        mobileChunkMs ||
+        (voiceConversationModeRef.current || pendingAttendanceActionRef.current ? 2600 : 2200);
 
       voiceChunkTimerRef.current = setTimeout(() => {
         voiceChunkTimerRef.current = null;
@@ -1917,7 +2104,12 @@ export default function AiAssistantWidget() {
       }, chunkMs);
     } catch {
       mediaRecorderRef.current = null;
-      scheduleGeminiVoiceLoop(1200);
+      setListening(false);
+      listeningRef.current = false;
+
+      if (pendingAttendanceActionRef.current || voiceConversationModeRef.current) {
+        scheduleGeminiVoiceLoop(1200);
+      }
     }
   }
 
@@ -1931,9 +2123,9 @@ export default function AiAssistantWidget() {
     try {
       setVoiceHint("Understanding your voice...");
 
-    const result = await transcribeAiAssistantAudio(audioBlob, {
-      timeoutMs: 22000,
-    });
+      const result = await transcribeAiAssistantAudio(audioBlob, {
+        timeoutMs: isMobileBrowser() ? 30000 : 22000,
+      });
 
       const transcript = String(
         result?.text ||
@@ -1941,21 +2133,29 @@ export default function AiAssistantWidget() {
           ""
       ).trim();
 
-        if (!transcript) {
-          setVoiceHint('Listening. I could not hear clear speech. Please speak a little closer to the mic.');
-          return;
+      if (!transcript) {
+        const noSpeechMessage = "I could not hear clear speech. Tap the mic again and speak closer to the phone.";
+
+        setVoiceHint(noSpeechMessage);
+        setSiriStatus(noSpeechMessage);
+
+        if (!pendingAttendanceActionRef.current && !voiceConversationModeRef.current) {
+          stopVoiceSession();
         }
+
+        return;
+      }
 
       const normalized = normalizeVoiceText(transcript);
       const now = Date.now();
 
-        if (
-          normalized &&
-          normalized === lastHandledTranscriptRef.current &&
-          now - lastHandledTranscriptAtRef.current < 2200
-        ) {
-          return;
-        }
+      if (
+        normalized &&
+        normalized === lastHandledTranscriptRef.current &&
+        now - lastHandledTranscriptAtRef.current < 2200
+      ) {
+        return;
+      }
 
       lastHandledTranscriptRef.current = normalized;
       lastHandledTranscriptAtRef.current = now;
@@ -1977,19 +2177,23 @@ export default function AiAssistantWidget() {
       setVoiceHint("");
 
       stopGeminiRecording({ stopLoop: true });
+      setListening(false);
+      listeningRef.current = false;
 
-      setTimeout(() => {
-        if (
-          autoWakeModeRef.current &&
-          !loadingRef.current &&
-          !isSpeakingRef.current &&
-          Date.now() >= voiceQuotaDisabledUntilRef.current
-        ) {
-          setVoiceError("");
-          geminiLoopActiveRef.current = true;
-          beginListening();
-        }
-      }, 2200);
+      if (pendingAttendanceActionRef.current || voiceConversationModeRef.current) {
+        setTimeout(() => {
+          if (
+            autoWakeModeRef.current &&
+            !loadingRef.current &&
+            !isSpeakingRef.current &&
+            Date.now() >= voiceQuotaDisabledUntilRef.current
+          ) {
+            setVoiceError("");
+            geminiLoopActiveRef.current = true;
+            beginListening();
+          }
+        }, 2200);
+      }
     } finally {
       isTranscribingRef.current = false;
     }
@@ -1998,7 +2202,7 @@ export default function AiAssistantWidget() {
   function startListening() {
     if (listeningRef.current || isStartingRecognitionRef.current) {
       stopVoiceSession();
-      setVoiceHint("Voice listening stopped. Click mic or Eve again to reactivate.");
+      setVoiceHint("Voice listening stopped. Tap mic or Hey Eve again to reactivate.");
       return;
     }
 
@@ -2010,9 +2214,10 @@ export default function AiAssistantWidget() {
     setEveActive(true);
     setManualChatOpen(false);
     setVoiceError("");
-    setSiriStatus('Listening. Say “Hey Eve” anytime.');
-    setVoiceHint('Listening now. Say "Hey Eve" and speak your command clearly.');
+    setSiriStatus("Listening. Speak your command now.");
+    setVoiceHint('Listening now. Say "check in", "check out", or ask your HRMS question.');
     lastVoiceActivationAtRef.current = Date.now();
+    oneShotVoiceModeRef.current = true;
     geminiLoopActiveRef.current = true;
     startVoiceMeter();
     beginListening();
@@ -2149,7 +2354,7 @@ export default function AiAssistantWidget() {
                     <span>
                       {lastVoiceTranscript
                         ? `Heard: ${lastVoiceTranscript}`
-                        : "Start with “Hey Eve”, then speak your command."}
+                        : "Speak your command clearly."}
                     </span>
                   </>
                 ) : (
@@ -2284,7 +2489,7 @@ export default function AiAssistantWidget() {
                 <div>
                   <div className="ai-voice-title">Listening...</div>
                   <div className="ai-voice-subtitle">
-                    Start with “Hey Eve”, then speak your command.
+                    Speak your command clearly.
                   </div>
                 </div>
 
@@ -2310,7 +2515,7 @@ export default function AiAssistantWidget() {
                     sendMessage();
                   }
                 }}
-                placeholder={listening ? 'Say "Hey Eve"...' : 'Ask me anything or say "Hey Eve"...'}
+                placeholder={listening ? 'Speak your command...' : 'Ask me anything or tap Hey Eve...'}
                 rows={3}
               />
 
