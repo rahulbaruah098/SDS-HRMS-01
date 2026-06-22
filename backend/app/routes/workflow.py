@@ -1,13 +1,262 @@
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, current_app
 from bson import ObjectId
 from datetime import datetime, timedelta, date
+import os
 
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
 
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging
+except Exception:
+    firebase_admin = None
+    credentials = None
+    messaging = None
+
 
 workflow_bp = Blueprint("workflow", __name__)
+
+# -----------------------------------------------------------------------------
+# Firebase / FCM helpers
+# -----------------------------------------------------------------------------
+
+_firebase_ready = False
+
+
+def firebase_service_account_path():
+    raw_path = normalize_text(os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"))
+
+    if not raw_path:
+        return ""
+
+    if os.path.isabs(raw_path):
+        return raw_path
+
+    backend_root = os.path.abspath(os.path.join(current_app.root_path, ".."))
+    backend_relative_path = os.path.join(backend_root, raw_path)
+
+    if os.path.exists(backend_relative_path):
+        return backend_relative_path
+
+    return os.path.abspath(raw_path)
+
+
+def ensure_firebase_app():
+    global _firebase_ready
+
+    if _firebase_ready:
+        return True
+
+    if firebase_admin is None or credentials is None or messaging is None:
+        current_app.logger.warning("firebase-admin is not installed")
+        return False
+
+    if firebase_admin._apps:
+        _firebase_ready = True
+        return True
+
+    service_account_path = firebase_service_account_path()
+
+    if not service_account_path:
+        current_app.logger.warning("FIREBASE_SERVICE_ACCOUNT_PATH is not configured")
+        return False
+
+    if not os.path.exists(service_account_path):
+        current_app.logger.warning(
+            "Firebase service account file not found: %s",
+            service_account_path,
+        )
+        return False
+
+    try:
+        cred = credentials.Certificate(service_account_path)
+        firebase_admin.initialize_app(cred)
+        _firebase_ready = True
+        return True
+    except Exception as exc:
+        current_app.logger.exception("Firebase initialization failed: %s", exc)
+        return False
+
+
+def fcm_string_data(data):
+    if not isinstance(data, dict):
+        return {}
+
+    safe = {}
+
+    for key, value in data.items():
+        if value is None:
+            continue
+
+        if isinstance(value, (dict, list)):
+            continue
+
+        safe[str(key)] = str(value)
+
+    return safe
+
+
+def active_fcm_tokens_for_users(db, user_ids, tenant_id=None):
+    user_ids = [
+        str(user_id)
+        for user_id in user_ids
+        if normalize_text(user_id)
+    ]
+
+    user_ids = list(dict.fromkeys(user_ids))
+
+    if not user_ids:
+        return []
+
+    query = {
+        "user_id": {"$in": user_ids},
+        "is_active": {"$ne": False},
+        "is_deleted": {"$ne": True},
+        "token": {"$nin": ["", None]},
+    }
+
+    if tenant_id:
+        query["tenant_id"] = tenant_id
+
+    rows = list(db.notification_devices.find(query, {"token": 1}).limit(10000))
+
+    tokens = [
+        normalize_text(row.get("token"))
+        for row in rows
+        if normalize_text(row.get("token"))
+    ]
+
+    return list(dict.fromkeys(tokens))
+
+
+def mark_invalid_fcm_tokens(db, tokens):
+    tokens = [
+        normalize_text(token)
+        for token in tokens
+        if normalize_text(token)
+    ]
+
+    if not tokens:
+        return
+
+    db.notification_devices.update_many(
+        {"token": {"$in": tokens}},
+        {
+            "$set": {
+                "is_active": False,
+                "is_deleted": True,
+                "invalidated_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+
+def send_fcm_to_tokens(db, tokens, title, body, data=None):
+    tokens = [
+        normalize_text(token)
+        for token in tokens
+        if normalize_text(token)
+    ]
+
+    tokens = list(dict.fromkeys(tokens))
+
+    if not tokens:
+        return {
+            "sent": 0,
+            "failed": 0,
+            "skipped": True,
+            "reason": "no_tokens",
+        }
+
+    if not ensure_firebase_app():
+        return {
+            "sent": 0,
+            "failed": 0,
+            "skipped": True,
+            "reason": "firebase_not_ready",
+        }
+
+    payload_data = fcm_string_data(data or {})
+    total_sent = 0
+    total_failed = 0
+    invalid_tokens = []
+
+    for index in range(0, len(tokens), 500):
+        batch_tokens = tokens[index:index + 500]
+
+        message = messaging.MulticastMessage(
+            tokens=batch_tokens,
+            notification=messaging.Notification(
+                title=normalize_text(title),
+                body=normalize_text(body),
+            ),
+            data=payload_data,
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="sds_hrms_notifications",
+                    sound="default",
+                    priority="high",
+                    default_sound=True,
+                ),
+            ),
+        )
+
+        try:
+            response = messaging.send_each_for_multicast(message)
+            total_sent += response.success_count
+            total_failed += response.failure_count
+
+            for idx, result in enumerate(response.responses):
+                if result.success:
+                    continue
+
+                error_text = str(result.exception or "").lower()
+
+                if (
+                    "registration-token-not-registered" in error_text
+                    or "invalid-registration-token" in error_text
+                    or "requested entity was not found" in error_text
+                ):
+                    invalid_tokens.append(batch_tokens[idx])
+
+        except Exception as exc:
+            current_app.logger.exception("FCM send failed: %s", exc)
+            total_failed += len(batch_tokens)
+
+    if invalid_tokens:
+        mark_invalid_fcm_tokens(db, invalid_tokens)
+
+    return {
+        "sent": total_sent,
+        "failed": total_failed,
+        "skipped": False,
+    }
+
+
+def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
+    tokens = active_fcm_tokens_for_users(
+        db,
+        user_ids,
+        tenant_id=tenant_id,
+    )
+
+    return send_fcm_to_tokens(
+        db,
+        tokens,
+        title,
+        body,
+        data={
+            "target": (meta or {}).get("target") or (meta or {}).get("page") or "notifications",
+            "notification_type": (meta or {}).get("notification_type") or (meta or {}).get("type") or "system",
+            "priority": (meta or {}).get("priority") or "normal",
+            "link_id": (meta or {}).get("link_id") or "",
+            "link_type": (meta or {}).get("link_type") or "",
+        },
+    )
 
 
 ADMIN_HR_ROLES = {
@@ -509,8 +758,17 @@ def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
             "is_deleted": False,
         })
 
-    if docs:
-        db.notifications.insert_many(docs)
+        if docs:
+            db.notifications.insert_many(docs)
+
+            send_fcm_to_users(
+                db,
+                [doc.get("user_id") for doc in docs],
+                title,
+                body,
+                meta=meta,
+                tenant_id=tenant_id,
+            )
 
 
 def current_user_id():
@@ -1068,10 +1326,23 @@ def create_notification_documents(db, users, title, body, data, target_scope):
             },
         })
 
-    if docs:
-        db.notifications.insert_many(docs)
+        if docs:
+            db.notifications.insert_many(docs)
 
-    return docs
+            send_fcm_to_users(
+                db,
+                [doc.get("user_id") for doc in docs],
+                title,
+                body,
+                meta={
+                    **meta,
+                    "target": page_target,
+                    "notification_type": notification_type,
+                    "priority": priority,
+                },
+            )
+
+        return docs
 
 
 def notification_scope_for_current_user(extra=None):
@@ -2706,6 +2977,94 @@ def leave_list_scope_query(db):
 # -----------------------------------------------------------------------------
 # Notification APIs
 # -----------------------------------------------------------------------------
+
+#changes by atlanta
+@workflow_bp.post("/notifications/register-device")
+@current_user_required
+def register_notification_device():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    token = normalize_text(
+        data.get("token")
+        or data.get("fcm_token")
+        or data.get("device_token")
+    )
+
+    if not token:
+        return jsonify({"message": "FCM token is required"}), 400
+
+    platform = normalize_text(data.get("platform") or "android").lower()
+    device_id = normalize_text(data.get("device_id") or data.get("installation_id"))
+    app_version = normalize_text(data.get("app_version"))
+    tenant_id = current_tenant_id()
+    user_id = current_user_id()
+    employee_id = current_employee_id(db)
+    now = datetime.utcnow()
+
+    db.notification_devices.update_one(
+        {"token": token},
+        {
+            "$set": {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "employee_id": employee_id,
+                "token": token,
+                "platform": platform,
+                "device_id": device_id,
+                "app_version": app_version,
+                "is_active": True,
+                "is_deleted": False,
+                "last_seen_at": now,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
+
+    return jsonify({
+        "message": "Notification device registered",
+        "registered": True,
+    })
+
+#changes by atlanta
+@workflow_bp.post("/notifications/unregister-device")
+@current_user_required
+def unregister_notification_device():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    token = normalize_text(
+        data.get("token")
+        or data.get("fcm_token")
+        or data.get("device_token")
+    )
+
+    if not token:
+        return jsonify({"message": "FCM token is required"}), 400
+
+    db.notification_devices.update_many(
+        {
+            "token": token,
+            "user_id": current_user_id(),
+        },
+        {
+            "$set": {
+                "is_active": False,
+                "is_deleted": True,
+                "updated_at": datetime.utcnow(),
+                "deleted_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    return jsonify({
+        "message": "Notification device unregistered",
+        "registered": False,
+    })
 
 @workflow_bp.get("/notifications/options")
 @current_user_required

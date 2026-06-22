@@ -290,13 +290,7 @@ def department_is_it(employee=None):
 def is_it_head(employee=None):
     employee = employee or {}
 
-    return (
-        truthy(employee.get("is_it_support_head"))
-        or (
-            department_is_it(employee)
-            and truthy(employee.get("is_team_leader"))
-        )
-    )
+    return truthy(employee.get("is_it_support_head"))
 
 
 def is_it_member(employee=None):
@@ -305,7 +299,6 @@ def is_it_member(employee=None):
     return (
         is_it_head(employee)
         or truthy(employee.get("is_it_support_member"))
-        or department_is_it(employee)
     )
 
 
@@ -338,18 +331,18 @@ def it_department_query(tenant_id, include_heads=True):
         "is_active": {"$ne": False},
     }
 
-    department_conditions = [
-        {"department": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
-        {"department_id": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
+    support_conditions = [
         {"is_it_support_member": {"$in": [True, "true", "True", "1", 1]}},
     ]
 
     if include_heads:
-        department_conditions.append({"is_it_support_head": {"$in": [True, "true", "True", "1", 1]}})
+        support_conditions.append({
+            "is_it_support_head": {"$in": [True, "true", "True", "1", 1]}
+        })
 
     return {
         **active_filter,
-        "$or": department_conditions,
+        "$or": support_conditions,
     }
 
 
@@ -358,20 +351,7 @@ def get_it_heads(db, tenant_id):
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "is_active": {"$ne": False},
-        "$or": [
-            {"is_it_support_head": {"$in": [True, "true", "True", "1", 1]}},
-            {
-                "$and": [
-                    {
-                        "$or": [
-                            {"department": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
-                            {"department_id": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
-                        ]
-                    },
-                    {"is_team_leader": {"$in": [True, "true", "True", "1", 1]}},
-                ]
-            },
-        ],
+        "is_it_support_head": {"$in": [True, "true", "True", "1", 1]},
     }).sort("employee_name", 1))
 
 
@@ -459,26 +439,28 @@ def build_ticket_query_for_current_user(db, include_all_for_it=False):
 
     query = {"tenant_id": tenant_id}
 
+    # Used only when a backend route intentionally wants all tenant tickets for IT Head.
     if include_all_for_it and can_manage_normal_it_support(employee):
         return query
 
-    clauses = [
-        {"created_by_user_id": user_id},
-        {"raised_by_user_id": user_id},
-    ]
+    # My Tickets must show only tickets raised/created by the current user.
+    # It must NOT include assigned tickets or all tenant tickets.
+    clauses = []
 
-    if is_it_member(employee):
-        clauses.append({"tenant_id": tenant_id})
+    if user_id:
+        clauses.extend([
+            {"created_by_user_id": user_id},
+            {"raised_by_user_id": user_id},
+        ])
 
     if emp_id:
         clauses.extend([
             {"created_by_employee_id": emp_id},
             {"raised_by_employee_id": emp_id},
-            {"assigned_to_employee_id": emp_id},
         ])
 
-    if user_id:
-        clauses.append({"assigned_to_user_id": user_id})
+    if not clauses:
+        clauses = [{"created_by_user_id": "__none__"}]
 
     query["$or"] = clauses
 

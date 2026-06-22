@@ -401,32 +401,47 @@ def project_member_ids(project):
     ids = set()
 
     for key in [
+        "_id",
         "created_by_employee_id",
         "team_leader_id",
         "reporting_officer_id",
         "assigned_to_id",
+        "assigned_to_employee_id",
+        "assigned_employee_id",
         "latest_progress_by",
     ]:
         value = normalize_text(project.get(key))
         if value:
             ids.add(value)
 
-    for key in ["assigned_employee_ids", "collaborator_ids"]:
+    for key in [
+        "assigned_employee_ids",
+        "assigned_to_ids",
+        "collaborator_ids",
+    ]:
         values = project.get(key, [])
         if isinstance(values, list):
-            ids.update(normalize_text(value) for value in values if normalize_text(value))
+            ids.update(
+                normalize_text(value)
+                for value in values
+                if normalize_text(value)
+            )
 
-    for item in project.get("assigned_members", []):
-        if isinstance(item, dict):
-            value = normalize_text(item.get("employee_id") or item.get("_id"))
-            if value:
-                ids.add(value)
-
-    for item in project.get("collaborators", []):
-        if isinstance(item, dict):
-            value = normalize_text(item.get("employee_id") or item.get("_id"))
-            if value:
-                ids.add(value)
+    for key in ["assigned_members", "collaborators", "team_members"]:
+        values = project.get(key, [])
+        if isinstance(values, list):
+            for item in values:
+                if isinstance(item, dict):
+                    for item_key in [
+                        "_id",
+                        "id",
+                        "employee_id",
+                        "employee_ref_id",
+                        "user_id",
+                    ]:
+                        value = normalize_text(item.get(item_key))
+                        if value:
+                            ids.add(value)
 
     return ids
 
@@ -448,11 +463,11 @@ def can_view_project(db, project):
 
     return bool(project_member_ids(project).intersection(set(identifier_values)))
 
-
 def can_update_project_status_or_progress(db, project):
     """
-    Normal employees/team members can only view projects in scope and update
-    project status/progress. They cannot create, assign, or add collaborators.
+    Assigned project members, collaborators, TL, RO, and project creator
+    can update project status/progress.
+    They cannot edit full project details unless they have TL/RO permission.
     """
     employee = get_current_employee(db)
 
@@ -466,7 +481,6 @@ def can_update_project_status_or_progress(db, project):
         identifier_values.append(employee_id)
 
     return bool(project_member_ids(project).intersection(set(identifier_values)))
-
 
 def project_scope_query(db):
     tenant_id = current_tenant_id()
@@ -516,13 +530,20 @@ def project_scope_query(db):
             {"reporting_officer_id": {"$in": identifier_values}},
 
             {"assigned_to_id": {"$in": identifier_values}},
+            {"assigned_to_employee_id": {"$in": identifier_values}},
+            {"assigned_employee_id": {"$in": identifier_values}},
             {"assigned_employee_ids": {"$in": identifier_values}},
+            {"assigned_to_ids": {"$in": identifier_values}},
+            {"assigned_members._id": {"$in": identifier_values}},
+            {"assigned_members.id": {"$in": identifier_values}},
             {"assigned_members.employee_id": {"$in": identifier_values}},
             {"assigned_members.user_id": {"$in": identifier_values}},
             {"assigned_members.employee_code": {"$in": identifier_values}},
             {"assigned_members.email": {"$in": identifier_values}},
 
             {"collaborator_ids": {"$in": identifier_values}},
+            {"collaborators._id": {"$in": identifier_values}},
+            {"collaborators.id": {"$in": identifier_values}},
             {"collaborators.employee_id": {"$in": identifier_values}},
             {"collaborators.user_id": {"$in": identifier_values}},
             {"collaborators.employee_code": {"$in": identifier_values}},

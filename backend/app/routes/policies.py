@@ -280,6 +280,167 @@ def get_policy(policy_id):
         "item": clean_doc(policy),
     })
 
+#changes by atlanta
+@policies_bp.patch("/policies/<policy_id>")
+@roles_required("hr", "hr_admin", "hr_manager")
+def update_policy(policy_id):
+    policy_obj_id = safe_object_id(policy_id)
+
+    if not policy_obj_id:
+        return jsonify({"message": "Invalid policy id"}), 400
+
+    db = get_db()
+
+    policy = db.policies.find_one({
+        "_id": policy_obj_id,
+        **policy_base_query(),
+    })
+
+    if not policy:
+        return jsonify({"message": "Policy not found"}), 404
+
+    document_id = normalize_text(request.form.get("document_id")) or policy.get("document_id", "")
+    title = normalize_text(request.form.get("title")) or policy.get("title", "")
+    summary = normalize_text(request.form.get("summary")) or policy.get("summary", "")
+    status = normalize_text(request.form.get("status")) or policy.get("status", "active")
+
+    if status not in {"active", "inactive"}:
+        return jsonify({"message": "Invalid policy status"}), 400
+
+    if not document_id:
+        return jsonify({"message": "Document ID Number is required"}), 400
+
+    if not title:
+        return jsonify({"message": "Policy title is required"}), 400
+
+    if not summary:
+        return jsonify({"message": "Policy summary is required"}), 400
+
+    tenant_id = current_tenant_id()
+
+    duplicate = db.policies.find_one({
+        "_id": {"$ne": policy_obj_id},
+        "tenant_id": tenant_id,
+        "document_id": document_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if duplicate:
+        return jsonify({
+            "message": "A policy with this Document ID already exists for this tenant"
+        }), 400
+
+    update_payload = {
+        "document_id": document_id,
+        "title": title,
+        "summary": summary,
+        "status": status,
+        "updated_at": now_utc(),
+        "updated_by": current_user_id(),
+        "updated_by_name": current_user_name(),
+    }
+
+    policy_file = request.files.get("file") or request.files.get("policy_file")
+
+    if policy_file and policy_file.filename:
+        if not is_allowed_policy_file(policy_file.filename):
+            return jsonify({
+                "message": "Only PDF, DOCX, JPG, JPEG, PNG and WEBP files are allowed"
+            }), 400
+
+        saved_file = save_policy_file(policy_file)
+
+        old_file_data = policy.get("file") or {}
+        old_stored_name = old_file_data.get("stored_name") or policy.get("file_stored_name")
+
+        if old_stored_name:
+            try:
+                old_file_path = os.path.abspath(
+                    os.path.join(policy_upload_folder(), old_stored_name)
+                )
+                upload_root = os.path.abspath(policy_upload_folder())
+
+                if old_file_path.startswith(upload_root) and os.path.exists(old_file_path):
+                    os.remove(old_file_path)
+            except Exception:
+                pass
+
+        update_payload.update({
+            "file": {
+                "original_name": saved_file["original_name"],
+                "stored_name": saved_file["stored_name"],
+                "extension": saved_file["extension"],
+                "mime_type": saved_file["mime_type"],
+                "size_bytes": saved_file["size_bytes"],
+                "relative_path": saved_file["relative_path"],
+            },
+            "file_original_name": saved_file["original_name"],
+            "file_stored_name": saved_file["stored_name"],
+            "file_extension": saved_file["extension"],
+            "file_mime_type": saved_file["mime_type"],
+            "file_size_bytes": saved_file["size_bytes"],
+            "file_path": saved_file["relative_path"],
+        })
+
+    db.policies.update_one(
+        {"_id": policy_obj_id},
+        {"$set": update_payload},
+    )
+
+    updated_policy = db.policies.find_one({"_id": policy_obj_id})
+
+    audit("update_policy", "policies", str(policy_obj_id), {
+        "document_id": document_id,
+        "title": title,
+        "status": status,
+        "tenant_id": tenant_id,
+    })
+
+    return jsonify({
+        "message": "Policy updated successfully",
+        "item": clean_doc(updated_policy),
+    })
+
+#changes by atlanta
+@policies_bp.patch("/policies/<policy_id>/disable")
+@roles_required("hr", "hr_admin", "hr_manager")
+def disable_policy(policy_id):
+    policy_obj_id = safe_object_id(policy_id)
+
+    if not policy_obj_id:
+        return jsonify({"message": "Invalid policy id"}), 400
+
+    db = get_db()
+
+    policy = db.policies.find_one({
+        "_id": policy_obj_id,
+        **policy_base_query(),
+    })
+
+    if not policy:
+        return jsonify({"message": "Policy not found"}), 404
+
+    db.policies.update_one(
+        {"_id": policy_obj_id},
+        {
+            "$set": {
+                "status": "inactive",
+                "updated_at": now_utc(),
+                "updated_by": current_user_id(),
+                "updated_by_name": current_user_name(),
+            }
+        },
+    )
+
+    audit("disable_policy", "policies", str(policy_obj_id), {
+        "document_id": policy.get("document_id"),
+        "title": policy.get("title"),
+        "tenant_id": current_tenant_id(),
+    })
+
+    return jsonify({
+        "message": "Policy disabled successfully",
+    })
 
 @policies_bp.get("/policies/<policy_id>/download")
 @current_user_required

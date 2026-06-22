@@ -92,3 +92,4 @@ Werkzeug==3.0.3
 
 google-genai
 
+firebase-admin
