@@ -474,6 +474,7 @@ export default function AiAssistantWidget() {
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceHint, setVoiceHint] = useState("");
+  const [iosVoicePlayRequest, setIosVoicePlayRequest] = useState(null);
   const [voiceError, setVoiceError] = useState("");
   const [voiceContext, setVoiceContext] = useState(null);
   const [eveActive, setEveActive] = useState(false);
@@ -513,6 +514,9 @@ export default function AiAssistantWidget() {
   const isTranscribingRef = useRef(false);
   const currentAudioRef = useRef(null);
   const currentAudioUrlRef = useRef("");
+  const iosUnlockAudioRef = useRef(null);
+  const iosVoiceAudioRef = useRef(null);
+  const iosPendingVoiceRef = useRef({ audioUrl: "", onEnd: null });
   const lastHandledTranscriptRef = useRef("");
   const lastHandledTranscriptAtRef = useRef(0);
   const voiceQuotaDisabledUntilRef = useRef(0);
@@ -631,12 +635,101 @@ export default function AiAssistantWidget() {
     }
   }
 
+  function getIosSilentAudioElement() {
+    if (!isIosDevice() || typeof document === "undefined") {
+      return null;
+    }
+
+    if (iosUnlockAudioRef.current) {
+      return iosUnlockAudioRef.current;
+    }
+
+    const audio = document.createElement("audio");
+
+    // 1-frame silent WAV. iPhone needs an actual media element touched by a user gesture.
+    audio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+    audio.preload = "auto";
+    audio.muted = true;
+    audio.volume = 0;
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    audio.style.position = "fixed";
+    audio.style.left = "-9999px";
+    audio.style.width = "1px";
+    audio.style.height = "1px";
+    audio.style.opacity = "0";
+    audio.style.pointerEvents = "none";
+
+    try {
+      document.body.appendChild(audio);
+    } catch {
+      // ignore
+    }
+
+    iosUnlockAudioRef.current = audio;
+    return audio;
+  }
+
+  function getIosVoiceAudioElement() {
+    if (!isIosDevice() || typeof document === "undefined") {
+      return null;
+    }
+
+    if (iosVoiceAudioRef.current) {
+      return iosVoiceAudioRef.current;
+    }
+
+    const audio = document.createElement("audio");
+
+    audio.preload = "auto";
+    audio.volume = 1;
+    audio.muted = false;
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    audio.setAttribute("controls", "controls");
+    audio.style.position = "fixed";
+    audio.style.left = "-9999px";
+    audio.style.width = "1px";
+    audio.style.height = "1px";
+    audio.style.opacity = "0.01";
+
+    try {
+      document.body.appendChild(audio);
+    } catch {
+      // ignore
+    }
+
+    iosVoiceAudioRef.current = audio;
+    return audio;
+  }
+
   async function unlockIosAudioPlayback() {
     if (!isIosDevice() || iosAudioUnlockedRef.current) {
       return;
     }
 
-    iosAudioUnlockedRef.current = true;
+    let unlocked = false;
+
+    try {
+      const silentAudio = getIosSilentAudioElement();
+
+      if (silentAudio) {
+        silentAudio.currentTime = 0;
+        const playPromise = silentAudio.play();
+
+        if (playPromise && typeof playPromise.then === "function") {
+          await playPromise;
+        }
+
+        silentAudio.pause();
+        silentAudio.currentTime = 0;
+        unlocked = true;
+      }
+    } catch {
+      // Continue to AudioContext unlock below.
+    }
 
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -656,6 +749,7 @@ export default function AiAssistantWidget() {
         gain.connect(audioContext.destination);
         oscillator.start(0);
         oscillator.stop(audioContext.currentTime + 0.03);
+        unlocked = true;
 
         setTimeout(() => {
           audioContext.close?.();
@@ -664,6 +758,8 @@ export default function AiAssistantWidget() {
     } catch {
       // iPhone audio unlock is best-effort only.
     }
+
+    iosAudioUnlockedRef.current = unlocked;
   }
 
   function setAutoWakeMode(enabled) {
@@ -1951,16 +2047,48 @@ export default function AiAssistantWidget() {
     return types.find((type) => window.MediaRecorder.isTypeSupported(type)) || "";
   }
 
-  function cleanupCurrentAudio() {
+  function clearPendingIosVoice() {
+    iosPendingVoiceRef.current = { audioUrl: "", onEnd: null };
+    setIosVoicePlayRequest(null);
+  }
+
+  function rememberPendingIosVoice(audioUrl, onEnd) {
+    iosPendingVoiceRef.current = {
+      audioUrl,
+      onEnd: typeof onEnd === "function" ? onEnd : null,
+    };
+
+    setIosVoicePlayRequest({
+      id: Date.now(),
+      label: "Play Eve voice",
+    });
+
+    setVoiceHint("Eve answer is shown on screen. Tap Play Eve voice once to hear it on iPhone.");
+  }
+
+  function cleanupCurrentAudio({ clearPending = true } = {}) {
     if (currentAudioRef.current) {
       try {
         currentAudioRef.current.pause();
+        currentAudioRef.current.removeAttribute?.("src");
         currentAudioRef.current.src = "";
+        currentAudioRef.current.load?.();
       } catch {
         // ignore
       }
 
       currentAudioRef.current = null;
+    }
+
+    if (iosVoiceAudioRef.current) {
+      try {
+        iosVoiceAudioRef.current.pause();
+        iosVoiceAudioRef.current.removeAttribute?.("src");
+        iosVoiceAudioRef.current.src = "";
+        iosVoiceAudioRef.current.load?.();
+      } catch {
+        // ignore
+      }
     }
 
     if (currentAudioUrlRef.current) {
@@ -1972,10 +2100,92 @@ export default function AiAssistantWidget() {
 
       currentAudioUrlRef.current = "";
     }
+
+    if (clearPending) {
+      clearPendingIosVoice();
+    }
   }
 
-  function playGeneratedVoice(audioUrl, onEnd) {
-    cleanupCurrentAudio();
+  async function playPendingIosVoice() {
+    const pending = iosPendingVoiceRef.current || {};
+    const audioUrl = pending.audioUrl;
+
+    if (!audioUrl) {
+      setIosVoicePlayRequest(null);
+      return;
+    }
+
+    setIosVoicePlayRequest(null);
+    setVoiceHint("Eve is speaking...");
+
+    try {
+      await unlockIosAudioPlayback();
+    } catch {
+      // Best effort only.
+    }
+
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearPendingIosVoice();
+
+      if (typeof pending.onEnd === "function") {
+        pending.onEnd();
+      }
+    };
+
+    try {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+      }
+    } catch {
+      // ignore
+    }
+
+    const audio = getIosVoiceAudioElement() || new Audio();
+
+    audio.preload = "auto";
+    audio.volume = 1;
+    audio.muted = false;
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    audio.src = audioUrl;
+
+    currentAudioRef.current = audio;
+    currentAudioUrlRef.current = audioUrl;
+
+    audio.onplaying = () => {
+      setVoiceHint("Eve is speaking...");
+    };
+
+    audio.onended = finish;
+    audio.onerror = () => {
+      setVoiceHint("iPhone still could not play the generated voice. The answer is shown on screen.");
+      finish();
+    };
+
+    try {
+      audio.load?.();
+      const playPromise = audio.play();
+
+      if (playPromise && typeof playPromise.then === "function") {
+        await playPromise;
+      }
+    } catch {
+      setVoiceHint("iPhone still blocked voice playback. The answer is shown on screen.");
+      finish();
+    }
+  }
+
+  function playGeneratedVoice(audioUrl, onEnd, options = {}) {
+    const allowManualIosPlay = options.allowManualIosPlay !== false;
+
+    if (!options.keepExistingAudioUrl) {
+      cleanupCurrentAudio({ clearPending: false });
+    }
 
     let finished = false;
 
@@ -1988,7 +2198,9 @@ export default function AiAssistantWidget() {
       }
     };
 
-    const audio = new Audio(audioUrl);
+    const audio = isIosDevice()
+      ? (getIosVoiceAudioElement() || new Audio())
+      : new Audio();
 
     audio.preload = "auto";
     audio.volume = 1;
@@ -1997,16 +2209,23 @@ export default function AiAssistantWidget() {
     audio.playsInline = true;
     audio.setAttribute("playsinline", "true");
     audio.setAttribute("webkit-playsinline", "true");
+    audio.src = audioUrl;
 
     currentAudioRef.current = audio;
     currentAudioUrlRef.current = audioUrl;
 
     audio.onplaying = () => {
+      clearPendingIosVoice();
       setVoiceHint("Eve is speaking...");
     };
 
     audio.onended = finish;
     audio.onerror = () => {
+      if (isIosDevice() && allowManualIosPlay) {
+        rememberPendingIosVoice(audioUrl, onEnd);
+        return;
+      }
+
       if (isIosDevice()) {
         setVoiceHint("Eve answer is shown on screen. iPhone could not play the generated voice.");
       }
@@ -2014,10 +2233,21 @@ export default function AiAssistantWidget() {
       finish();
     };
 
+    try {
+      audio.load?.();
+    } catch {
+      // ignore
+    }
+
     const playPromise = audio.play();
 
     if (playPromise && typeof playPromise.catch === "function") {
       playPromise.catch(() => {
+        if (isIosDevice() && allowManualIosPlay) {
+          rememberPendingIosVoice(audioUrl, onEnd);
+          return;
+        }
+
         if (isIosDevice()) {
           setVoiceHint("Eve answer is shown on screen. iPhone blocked automatic voice playback.");
         }
@@ -2566,6 +2796,19 @@ export default function AiAssistantWidget() {
 
           {voiceHint && !voiceError && (
             <div className="ai-voice-hint">{voiceHint}</div>
+          )}
+
+          {iosVoicePlayRequest && !voiceError && (
+            <div className="ai-ios-play-wrap">
+              <button
+                type="button"
+                className="ai-ios-play-voice-btn"
+                onClick={playPendingIosVoice}
+              >
+                <Volume2 size={16} />
+                Play Eve voice
+              </button>
+            </div>
           )}
 
           {listening && (
@@ -3253,6 +3496,27 @@ export default function AiAssistantWidget() {
           font-weight: 800;
         }
 
+        .ai-ios-play-wrap {
+          margin: 10px 18px 0;
+          display: flex;
+          justify-content: center;
+        }
+
+        .ai-ios-play-voice-btn {
+          border: 0;
+          border-radius: 999px;
+          padding: 10px 16px;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: linear-gradient(135deg, #2563eb, #ec4899);
+          color: #fff;
+          font-size: 13px;
+          font-weight: 900;
+          box-shadow: 0 12px 24px rgba(37,99,235,.24);
+          cursor: pointer;
+        }
+
         .ai-voice-card-wrap {
           margin: 10px 18px 0;
         }
@@ -3496,6 +3760,7 @@ export default function AiAssistantWidget() {
           .ai-guided-replies,
           .ai-voice-error,
           .ai-voice-hint,
+          .ai-ios-play-wrap,
           .ai-voice-card-wrap {
             margin-inline: 14px;
           }
