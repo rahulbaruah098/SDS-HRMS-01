@@ -190,7 +190,6 @@ def detect_ai_capabilities(question):
     capabilities = set()
     text = _lower(question)
 
-
     if _contains_any(text, [
         "tenant",
         "company",
@@ -230,25 +229,74 @@ def detect_ai_capabilities(question):
     ]):
         capabilities.add("leave_status")
 
-
-
-    if _contains_any(text, ["cl left", "casual leave left", "el left", "earned leave left", "leave balance", "leave balances"]):
+    if _contains_any(text, [
+        "cl left",
+        "casual leave left",
+        "el left",
+        "earned leave left",
+        "leave balance",
+        "leave balances",
+    ]):
         capabilities.add("leave_balance")
 
-    if _contains_any(text, ["my assets", "asset assigned", "assets assigned", "how many assets", "employee asset"]):
+    if _contains_any(text, [
+        "my assets",
+        "asset assigned",
+        "assets assigned",
+        "how many assets",
+        "employee asset",
+    ]):
         capabilities.add("assets")
 
-    if _contains_any(text, ["late", "on time", "attendance summary", "how many days present", "how many days absent", "office on time"]):
+    if _contains_any(text, [
+        "late",
+        "on time",
+        "attendance summary",
+        "how many days present",
+        "how many days absent",
+        "office on time",
+    ]):
         capabilities.add("attendance_summary")
 
-    if _contains_any(text, ["performance", "weekly performance", "monthly performance", "yearly performance", "this week performance"]):
+    if _contains_any(text, [
+        "performance",
+        "weekly performance",
+        "monthly performance",
+        "yearly performance",
+        "this week performance",
+    ]):
         capabilities.add("performance_summary")
 
-    if _contains_any(text, ["project list", "department projects", "list projects", "my projects", "projects of department"]):
+    if _contains_any(text, [
+        "project",
+        "projects",
+        "project list",
+        "department projects",
+        "list projects",
+        "my projects",
+        "projects of department",
+        "project progress",
+        "task progress",
+    ]):
         capabilities.add("projects")
 
-    return list(capabilities)
+    if _contains_any(text, [
+        "team member",
+        "team members",
+        "my team",
+        "team list",
+        "who is in my team",
+        "reporting officer",
+        "my reporting officer",
+        "ro",
+        "team leader",
+        "my team leader",
+        "tl",
+        "department team",
+    ]):
+        capabilities.add("team_scope")
 
+    return list(capabilities)
 def get_tenant_profile_context(user_context=None):
     """
     Builds safe tenant/company context for the AI assistant.
@@ -1049,28 +1097,450 @@ def get_performance_summary_context(user_context=None, period="month", limit=8):
     }
 
 
-def get_projects_context(user_context=None, limit=12):
+def _roles(user_context=None):
+    roles = []
+
+    if isinstance(user_context, dict):
+        roles = user_context.get("roles") or []
+
+        if not roles and user_context.get("role"):
+            roles = [user_context.get("role")]
+
+    return [_lower(role) for role in roles if _safe_str(role)] or ["employee"]
+
+
+def _is_admin_like_role(user_context=None):
+    return bool(set(_roles(user_context)).intersection({
+        "super_admin",
+        "admin",
+        "hr",
+        "hr_admin",
+        "hr_manager",
+    }))
+
+
+def _unique_values(values):
+    unique = []
+
+    for value in values or []:
+        if value in [None, ""]:
+            continue
+
+        for variant in _id_variants(value):
+            if variant not in unique:
+                unique.append(variant)
+
+    return unique
+
+
+def _text_value_set(values):
+    result = set()
+
+    for value in values or []:
+        text = _safe_str(value)
+
+        if text:
+            result.add(text)
+
+    return result
+
+
+def _employee_department_from_context(user_context=None):
+    employee = user_context.get("employee") if isinstance(user_context, dict) else {}
+
+    if not isinstance(employee, dict):
+        employee = {}
+
+    return _safe_str(
+        employee.get("department")
+        or employee.get("department_name")
+        or user_context.get("department")
+        or user_context.get("department_name")
+        if isinstance(user_context, dict)
+        else ""
+    )
+
+
+def _employee_designation_from_context(user_context=None):
+    employee = user_context.get("employee") if isinstance(user_context, dict) else {}
+
+    if not isinstance(employee, dict):
+        employee = {}
+
+    return _safe_str(
+        employee.get("designation")
+        or employee.get("designation_name")
+        or user_context.get("designation")
+        or user_context.get("designation_name")
+        if isinstance(user_context, dict)
+        else ""
+    )
+
+
+def _display_name(doc):
+    doc = doc or {}
+
+    return _safe_str(
+        doc.get("employee_name")
+        or doc.get("name")
+        or doc.get("full_name")
+        or doc.get("display_name")
+        or doc.get("email")
+        or "Employee"
+    )
+
+
+def _identity_values_from_doc(doc=None, user_context=None):
+    values = []
+
+    if isinstance(user_context, dict):
+        values.extend([
+            user_context.get("user_id"),
+            user_context.get("_id"),
+            user_context.get("employee_id"),
+            user_context.get("employee_profile_id"),
+            user_context.get("employee_summary_id"),
+            user_context.get("employee_user_id"),
+            user_context.get("email"),
+            user_context.get("official_email"),
+            user_context.get("work_email"),
+        ])
+
+        context_employee = user_context.get("employee") or {}
+
+        if isinstance(context_employee, dict):
+            values.extend([
+                context_employee.get("_id"),
+                context_employee.get("id"),
+                context_employee.get("user_id"),
+                context_employee.get("employee_id"),
+                context_employee.get("employee_code"),
+                context_employee.get("emp_code"),
+                context_employee.get("code"),
+                context_employee.get("email"),
+                context_employee.get("official_email"),
+                context_employee.get("work_email"),
+            ])
+
+    if isinstance(doc, dict):
+        values.extend([
+            doc.get("_id"),
+            doc.get("id"),
+            doc.get("user_id"),
+            doc.get("employee_user_id"),
+            doc.get("login_user_id"),
+            doc.get("account_user_id"),
+            doc.get("employee_id"),
+            doc.get("employee_ref_id"),
+            doc.get("employee_profile_id"),
+            doc.get("employee_code"),
+            doc.get("emp_code"),
+            doc.get("code"),
+            doc.get("email"),
+            doc.get("official_email"),
+            doc.get("work_email"),
+            doc.get("username"),
+        ])
+
+    return _unique_values(values)
+
+
+def _person_lookup_or(values):
+    object_values = [value for value in values or [] if isinstance(value, ObjectId)]
+    text_values = [_safe_str(value) for value in values or [] if _safe_str(value)]
+
+    lookup_or = []
+
+    if object_values:
+        lookup_or.append({"_id": {"$in": object_values}})
+
+    if text_values:
+        lookup_or.extend([
+            {"id": {"$in": text_values}},
+            {"user_id": {"$in": text_values}},
+            {"employee_user_id": {"$in": text_values}},
+            {"login_user_id": {"$in": text_values}},
+            {"account_user_id": {"$in": text_values}},
+            {"employee_id": {"$in": text_values}},
+            {"employee_ref_id": {"$in": text_values}},
+            {"employee_profile_id": {"$in": text_values}},
+            {"employee_code": {"$in": text_values}},
+            {"emp_code": {"$in": text_values}},
+            {"code": {"$in": text_values}},
+            {"email": {"$in": text_values}},
+            {"official_email": {"$in": text_values}},
+            {"work_email": {"$in": text_values}},
+            {"username": {"$in": text_values}},
+        ])
+
+    return lookup_or
+
+
+def _lookup_current_employee(user_context=None):
     db = get_db()
+    values = _identity_values_from_doc(user_context=user_context)
+
+    if not values:
+        return None
+
+    query_parts = [
+        {"is_deleted": {"$ne": True}},
+        {"deleted": {"$ne": True}},
+        {"$or": _person_lookup_or(values)},
+    ]
 
     tenant_filter = _tenant_query(user_context)
 
-    employee = user_context.get("employee") if isinstance(user_context, dict) else {}
-    department = ""
+    if tenant_filter:
+        scoped_parts = [tenant_filter] + query_parts
+        employee = db.employees.find_one({"$and": scoped_parts})
 
-    if isinstance(employee, dict):
-        department = (
-            employee.get("department")
-            or employee.get("department_name")
-            or ""
-        )
+        if employee:
+            return employee
 
-    if not department and isinstance(user_context, dict):
-        department = user_context.get("department") or user_context.get("department_name") or ""
+    return db.employees.find_one({"$and": query_parts})
+
+
+def _department_match_query(department):
+    text = _safe_str(department)
+
+    if not text:
+        return {}
+
+    return {
+        "$or": [
+            {"department": text},
+            {"department_name": text},
+            {"assigned_department": text},
+            {"assigned_department_name": text},
+        ]
+    }
+
+
+def _active_employee_query_parts():
+    return [
+        {"is_deleted": {"$ne": True}},
+        {"deleted": {"$ne": True}},
+        {"is_active": {"$ne": False}},
+        {"active": {"$ne": False}},
+        {
+            "status": {
+                "$nin": [
+                    "Inactive",
+                    "inactive",
+                    "INACTIVE",
+                    "Resigned",
+                    "resigned",
+                    "Left",
+                    "left",
+                    "Terminated",
+                    "terminated",
+                    "Alumni",
+                    "alumni",
+                    "Deleted",
+                    "deleted",
+                    "Blocked",
+                    "blocked",
+                    "Suspended",
+                    "suspended",
+                ]
+            }
+        },
+    ]
+
+
+def _active_project_query_parts():
+    return [
+        {"is_deleted": {"$ne": True}},
+        {"deleted": {"$ne": True}},
+        {
+            "status": {
+                "$nin": [
+                    "deleted",
+                    "Deleted",
+                    "DELETED",
+                    "cancelled",
+                    "Cancelled",
+                    "CANCELLED",
+                ]
+            }
+        },
+    ]
+
+
+def _team_relation_values(employee_doc=None, user_context=None):
+    employee_doc = employee_doc or {}
+
+    team_leader_values = _unique_values([
+        employee_doc.get("team_leader_id"),
+        employee_doc.get("team_leader_user_id"),
+        employee_doc.get("tl_id"),
+        employee_doc.get("team_leader_employee_id"),
+        employee_doc.get("team_leader_employee_code"),
+        employee_doc.get("team_leader_code"),
+        employee_doc.get("team_leader_email"),
+    ])
+
+    reporting_officer_values = _unique_values([
+        employee_doc.get("reporting_officer_id"),
+        employee_doc.get("reporting_officer_user_id"),
+        employee_doc.get("ro_id"),
+        employee_doc.get("reporting_officer_employee_id"),
+        employee_doc.get("reporting_officer_employee_code"),
+        employee_doc.get("reporting_officer_code"),
+        employee_doc.get("reporting_officer_email"),
+    ])
+
+    if isinstance(user_context, dict):
+        team_leader_values = _unique_values(team_leader_values + [
+            user_context.get("team_leader_id"),
+            user_context.get("team_leader_user_id"),
+            user_context.get("tl_id"),
+        ])
+
+        reporting_officer_values = _unique_values(reporting_officer_values + [
+            user_context.get("reporting_officer_id"),
+            user_context.get("reporting_officer_user_id"),
+            user_context.get("ro_id"),
+        ])
+
+    return team_leader_values, reporting_officer_values
+
+
+def _employee_brief(employee):
+    if not employee:
+        return ""
+
+    name = _display_name(employee)
+    designation = _safe_str(employee.get("designation") or employee.get("designation_name"))
+    department = _safe_str(employee.get("department") or employee.get("department_name"))
+
+    extra = " | ".join([item for item in [designation, department] if item])
+
+    return f"{name}{f' ({extra})' if extra else ''}"
+
+
+def _find_person_by_values(values, user_context=None):
+    values = _unique_values(values)
+
+    if not values:
+        return None
+
+    db = get_db()
+    query_parts = _active_employee_query_parts()
+    lookup_or = _person_lookup_or(values)
+
+    if not lookup_or:
+        return None
+
+    query_parts.append({"$or": lookup_or})
+
+    tenant_filter = _tenant_query(user_context)
+
+    if tenant_filter:
+        employee = db.employees.find_one({"$and": [tenant_filter] + query_parts})
+
+        if employee:
+            return employee
+
+    return db.employees.find_one({"$and": query_parts})
+
+
+def get_team_scope_context(user_context=None, limit=30):
+    """
+    Returns the logged-in user's strict team scope only.
+
+    Rules:
+    - Never falls back to all employees.
+    - If department is available, every returned employee must match that department.
+    - Includes the current employee, their Team Leader, their Reporting Officer,
+      peers under the same Team Leader/Reporting Officer, and members who report
+      to the logged-in user when the logged-in user is a Team Leader/Reporting Officer.
+    """
+
+    db = get_db()
+
+    current_employee = _lookup_current_employee(user_context)
+    department = _safe_str(
+        (current_employee or {}).get("department")
+        or (current_employee or {}).get("department_name")
+        or _employee_department_from_context(user_context)
+    )
+
+    if not current_employee and not department:
+        return {
+            "title": "Team Scope",
+            "content": (
+                "No department/team scope was found for this user. "
+                "Do not show employee, team member, Team Leader, Reporting Officer, or project details."
+            )
+        }
+
+    current_values = _identity_values_from_doc(current_employee, user_context=user_context)
+    team_leader_values, reporting_officer_values = _team_relation_values(
+        current_employee,
+        user_context=user_context,
+    )
+
+    team_leader = _find_person_by_values(team_leader_values, user_context=user_context)
+    reporting_officer = _find_person_by_values(reporting_officer_values, user_context=user_context)
+
+    relationship_or = []
+
+    if current_values:
+        current_text_values = list(_text_value_set(current_values))
+
+        relationship_or.extend([
+            {"team_leader_id": {"$in": current_text_values}},
+            {"team_leader_user_id": {"$in": current_text_values}},
+            {"team_leader_employee_id": {"$in": current_text_values}},
+            {"team_leader_employee_code": {"$in": current_text_values}},
+            {"reporting_officer_id": {"$in": current_text_values}},
+            {"reporting_officer_user_id": {"$in": current_text_values}},
+            {"reporting_officer_employee_id": {"$in": current_text_values}},
+            {"reporting_officer_employee_code": {"$in": current_text_values}},
+        ])
+
+    shared_anchor_values = list(_text_value_set(team_leader_values + reporting_officer_values))
+
+    if shared_anchor_values:
+        relationship_or.extend([
+            {"team_leader_id": {"$in": shared_anchor_values}},
+            {"team_leader_user_id": {"$in": shared_anchor_values}},
+            {"team_leader_employee_id": {"$in": shared_anchor_values}},
+            {"team_leader_employee_code": {"$in": shared_anchor_values}},
+            {"reporting_officer_id": {"$in": shared_anchor_values}},
+            {"reporting_officer_user_id": {"$in": shared_anchor_values}},
+            {"reporting_officer_employee_id": {"$in": shared_anchor_values}},
+            {"reporting_officer_employee_code": {"$in": shared_anchor_values}},
+        ])
+
+    if current_values:
+        self_or = _person_lookup_or(current_values)
+
+        if self_or:
+            relationship_or.append({"$or": self_or})
+
+    if team_leader_values:
+        tl_or = _person_lookup_or(team_leader_values)
+
+        if tl_or:
+            relationship_or.append({"$or": tl_or})
+
+    if reporting_officer_values:
+        ro_or = _person_lookup_or(reporting_officer_values)
+
+        if ro_or:
+            relationship_or.append({"$or": ro_or})
 
     query_parts = []
 
+    tenant_filter = _tenant_query(user_context)
+
     if tenant_filter:
         query_parts.append(tenant_filter)
+
+    query_parts.extend(_active_employee_query_parts())
 
     if department:
         query_parts.append({
@@ -1079,6 +1549,166 @@ def get_projects_context(user_context=None, limit=12):
                 {"department_name": department},
             ]
         })
+
+    if relationship_or:
+        query_parts.append({"$or": relationship_or})
+    elif current_values:
+        query_parts.append({"$or": _person_lookup_or(current_values)})
+
+    query = {"$and": query_parts} if query_parts else {}
+
+    docs = list(
+        db.employees
+        .find(query)
+        .sort([("employee_name", 1), ("name", 1)])
+        .limit(limit)
+    )
+
+    seen = set()
+    scoped_people = []
+
+    for doc in docs:
+        person_key = str(doc.get("_id") or doc.get("id") or doc.get("employee_id") or "")
+
+        if not person_key or person_key in seen:
+            continue
+
+        seen.add(person_key)
+        scoped_people.append(doc)
+
+    current_id_values = _text_value_set(current_values)
+    tl_id_values = _text_value_set(team_leader_values)
+    ro_id_values = _text_value_set(reporting_officer_values)
+
+    member_lines = []
+
+    for person in scoped_people:
+        person_values = _text_value_set(_identity_values_from_doc(person))
+        relation = []
+
+        if current_id_values and person_values.intersection(current_id_values):
+            relation.append("self")
+
+        if tl_id_values and person_values.intersection(tl_id_values):
+            relation.append("team leader")
+
+        if ro_id_values and person_values.intersection(ro_id_values):
+            relation.append("reporting officer")
+
+        person_tl_values = _text_value_set(_team_relation_values(person)[0])
+        person_ro_values = _text_value_set(_team_relation_values(person)[1])
+
+        if current_id_values and (
+            person_tl_values.intersection(current_id_values)
+            or person_ro_values.intersection(current_id_values)
+        ):
+            relation.append("reports to current user")
+
+        if not relation:
+            relation.append("same team/department scope")
+
+        member_lines.append(
+            f"- {_employee_brief(person)} | Scope relation: {', '.join(relation)}"
+        )
+
+    content_lines = [
+        "Strict scope rule: Use only the people listed in this Team Scope block. Do not mention employees from another department/team.",
+        f"Department scope: {department or 'Not configured'}",
+        f"Current Employee: {_employee_brief(current_employee) or 'Not found'}",
+        f"Team Leader: {_employee_brief(team_leader) or 'Not found in accessible scope'}",
+        f"Reporting Officer: {_employee_brief(reporting_officer) or 'Not found in accessible scope'}",
+        "Accessible Team Members:",
+        "\n".join(member_lines[:limit]) if member_lines else "No accessible team members were found for this user.",
+    ]
+
+    return {
+        "title": "Team Scope",
+        "content": "\n".join(content_lines)
+    }
+
+
+def get_projects_context(user_context=None, limit=12):
+    """
+    Returns projects only inside the logged-in user's strict department/team scope.
+
+    Rules:
+    - Never falls back to all tenant projects.
+    - If department exists, projects must match that department.
+    - If employee/team identifiers exist, projects are further matched by assignment,
+      Team Leader, Reporting Officer, members, collaborators, creator, or manager.
+    """
+
+    db = get_db()
+
+    tenant_filter = _tenant_query(user_context)
+    current_employee = _lookup_current_employee(user_context)
+
+    department = _safe_str(
+        (current_employee or {}).get("department")
+        or (current_employee or {}).get("department_name")
+        or _employee_department_from_context(user_context)
+    )
+
+    current_values = _identity_values_from_doc(current_employee, user_context=user_context)
+    team_leader_values, reporting_officer_values = _team_relation_values(
+        current_employee,
+        user_context=user_context,
+    )
+    team_scope_values = _unique_values(current_values + team_leader_values + reporting_officer_values)
+    team_scope_text_values = list(_text_value_set(team_scope_values))
+
+    query_parts = []
+
+    if tenant_filter:
+        query_parts.append(tenant_filter)
+
+    query_parts.extend(_active_project_query_parts())
+
+    if department:
+        query_parts.append(_department_match_query(department))
+
+    project_or_parts = []
+
+    if team_scope_text_values:
+        project_or_parts.extend([
+            {"assigned_to": {"$in": team_scope_text_values}},
+            {"assigned_user_id": {"$in": team_scope_text_values}},
+            {"assigned_employee_id": {"$in": team_scope_text_values}},
+            {"employee_id": {"$in": team_scope_text_values}},
+            {"user_id": {"$in": team_scope_text_values}},
+            {"created_by": {"$in": team_scope_text_values}},
+
+            {"team_leader_id": {"$in": team_scope_text_values}},
+            {"team_leader_user_id": {"$in": team_scope_text_values}},
+            {"team_leader_employee_id": {"$in": team_scope_text_values}},
+            {"team_leader_employee_code": {"$in": team_scope_text_values}},
+            {"reporting_officer_id": {"$in": team_scope_text_values}},
+            {"reporting_officer_user_id": {"$in": team_scope_text_values}},
+            {"reporting_officer_employee_id": {"$in": team_scope_text_values}},
+            {"reporting_officer_employee_code": {"$in": team_scope_text_values}},
+            {"manager_id": {"$in": team_scope_text_values}},
+
+            {"members": {"$in": team_scope_text_values}},
+            {"member_ids": {"$in": team_scope_text_values}},
+            {"team_members": {"$in": team_scope_text_values}},
+            {"team_member_ids": {"$in": team_scope_text_values}},
+            {"collaborators": {"$in": team_scope_text_values}},
+            {"collaborator_ids": {"$in": team_scope_text_values}},
+
+            {"team_members.employee_id": {"$in": team_scope_text_values}},
+            {"team_members.user_id": {"$in": team_scope_text_values}},
+            {"team_members.id": {"$in": team_scope_text_values}},
+            {"members.employee_id": {"$in": team_scope_text_values}},
+            {"members.user_id": {"$in": team_scope_text_values}},
+            {"collaborators.employee_id": {"$in": team_scope_text_values}},
+            {"collaborators.user_id": {"$in": team_scope_text_values}},
+        ])
+
+    # For department project questions, allow department projects even when old
+    # project records do not store member IDs consistently. Still never leave the
+    # user's department/tenant scope.
+    if project_or_parts and not _is_admin_like_role(user_context):
+        query_parts.append({"$or": project_or_parts})
 
     query = {"$and": query_parts} if query_parts else {}
 
@@ -1092,24 +1722,35 @@ def get_projects_context(user_context=None, limit=12):
     if not docs:
         return {
             "title": "Projects",
-            "content": "No department projects were found for this user."
+            "content": (
+                "No accessible project/team record was found for this user. "
+                "Do not mention projects from another department/team."
+            )
         }
 
-    lines = []
+    lines = [
+        "Strict scope rule: Use only the projects listed below. Do not mention projects from another department/team.",
+        f"Department scope: {department or 'Not configured'}",
+        f"Total accessible projects found: {len(docs)}",
+    ]
 
     for index, doc in enumerate(docs, start=1):
         name = doc.get("name") or doc.get("title") or doc.get("project_name") or "Project"
         status = doc.get("status") or "N/A"
         progress = doc.get("progress") or doc.get("progress_percent") or doc.get("completion") or "N/A"
+        team_leader = doc.get("team_leader_name") or doc.get("team_leader") or "N/A"
+        reporting_officer = doc.get("reporting_officer_name") or doc.get("reporting_officer") or "N/A"
+        project_department = doc.get("department") or doc.get("department_name") or "N/A"
 
-        lines.append(f"{index}. {name} | Status: {status} | Progress: {progress}")
+        lines.append(
+            f"{index}. {name} | Department: {project_department} | Status: {status} | "
+            f"Progress: {progress} | Team Leader: {team_leader} | Reporting Officer: {reporting_officer}"
+        )
 
     return {
         "title": "Projects",
         "content": "\n".join(lines)
     }
-
-
 def build_capability_context(question, user_context=None):
     """
     Returns real HRMS data context based on user question.
@@ -1156,7 +1797,20 @@ def build_capability_context(question, user_context=None):
         elif capability == "performance_summary":
             result = get_performance_summary_context(user_context, period=period)
 
+        elif capability == "team_scope":
+            result = get_team_scope_context(user_context)
+
         elif capability == "projects":
+            # Project answers also need Team Scope so the AI cannot invent or
+            # mix Team Leader/Reporting Officer/member details from elsewhere.
+            team_result = get_team_scope_context(user_context)
+            blocks.append(
+                f"""
+Capability: {team_result.get("title")}
+Data:
+{team_result.get("content")}
+"""
+            )
             result = get_projects_context(user_context)
 
         else:
@@ -1171,7 +1825,6 @@ Data:
         )
 
     return "\n\n".join(blocks).strip()
-
 ROLE_MODULES = {
     "super_admin": [
         "companies",

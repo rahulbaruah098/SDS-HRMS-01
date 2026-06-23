@@ -383,6 +383,252 @@ def looks_like_writing_request(question):
     return any(keyword in lowered for keyword in writing_keywords)
 
 
+def _strip_voice_instruction_suffix(text):
+    """
+    Removes the frontend-only voice instruction from the real user question.
+
+    The mobile widget may append:
+    "Reply very briefly in 1-2 short sentences because this is a voice conversation."
+    That instruction is useful for output style, but it must not be treated as
+    part of the user's actual HRMS question or action command.
+    """
+
+    clean = str(text or "").strip()
+
+    if not clean:
+        return ""
+
+    clean = re.split(
+        r"\n\s*\n\s*reply\s+very\s+briefly\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    clean = re.split(
+        r"\breply\s+very\s+briefly\s+in\s+1\s*[-–]\s*2\s+short\s+sentences\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    clean = re.split(
+        r"\bbecause\s+this\s+is\s+a\s+voice\s+conversation\b",
+        clean,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    return " ".join(clean.replace("\n", " ").split())
+
+
+def looks_like_voice_request(question, history=None):
+    lowered = str(question or "").lower()
+
+    if (
+        "voice conversation" in lowered
+        or "reply very briefly" in lowered
+        or "spoken answer" in lowered
+    ):
+        return True
+
+    if isinstance(history, list):
+        for item in history[-4:]:
+            if not isinstance(item, dict):
+                continue
+
+            text = str(item.get("text") or "").lower()
+
+            if "voice conversation" in text or "reply very briefly" in text:
+                return True
+
+    return False
+
+
+def looks_like_project_team_question(question):
+    lowered = str(question or "").lower()
+
+    project_team_keywords = [
+        "project",
+        "projects",
+        "task",
+        "tasks",
+        "team",
+        "team member",
+        "team members",
+        "team leader",
+        "reporting officer",
+        "ro",
+        "tl",
+        "department project",
+        "my department",
+        "assigned project",
+        "active project",
+        "project status",
+        "project progress",
+    ]
+
+    return any(keyword in lowered for keyword in project_team_keywords)
+
+
+def _user_context_value(user_context, *keys):
+    if not isinstance(user_context, dict):
+        return ""
+
+    employee = user_context.get("employee") or {}
+
+    for key in keys:
+        value = user_context.get(key)
+
+        if value not in [None, ""]:
+            return str(value).strip()
+
+        value = employee.get(key)
+
+        if value not in [None, ""]:
+            return str(value).strip()
+
+    return ""
+
+
+def build_scope_guard_context(user_context=None, project_team_question=False):
+    """
+    Builds a strict natural-language boundary for live project/team answers.
+
+    Important: this guards the answer layer. The next file to fix is
+    ai_capability_service.py, because that file builds the live HRMS context.
+    """
+
+    employee_name = _user_context_value(
+        user_context,
+        "name",
+        "employee_name",
+        "full_name",
+        "display_name",
+    )
+
+    employee_id = _user_context_value(
+        user_context,
+        "employee_id",
+        "_id",
+        "id",
+        "user_id",
+        "employee_code",
+        "emp_code",
+        "code",
+    )
+
+    department_name = _user_context_value(
+        user_context,
+        "department_name",
+        "department",
+        "assigned_department",
+        "assigned_department_name",
+    )
+
+    designation_name = _user_context_value(
+        user_context,
+        "designation_name",
+        "designation",
+    )
+
+    team_leader_name = _user_context_value(
+        user_context,
+        "team_leader_name",
+        "tl_name",
+    )
+
+    reporting_officer_name = _user_context_value(
+        user_context,
+        "reporting_officer_name",
+        "ro_name",
+    )
+
+    parts = [
+        "Strict project/team data boundary:",
+        f"- Logged-in employee: {employee_name or 'Not available'}",
+        f"- Employee id/code: {employee_id or 'Not available'}",
+        f"- Department scope: {department_name or 'Not available'}",
+        f"- Designation: {designation_name or 'Not available'}",
+        f"- Team Leader scope: {team_leader_name or 'Only if provided in live HRMS context'}",
+        f"- Reporting Officer scope: {reporting_officer_name or 'Only if provided in live HRMS context'}",
+        "- For project questions, answer only from live HRMS data provided in this prompt.",
+        "- Do not invent project names, project counts, project statuses, team members, Team Leaders, or Reporting Officers.",
+        "- Do not list projects, employees, team members, Team Leaders, or Reporting Officers from any other department/team.",
+        "- If the live HRMS context contains no accessible project/team data, say: No accessible project/team record was found for your login.",
+        "- If the question asks for all company projects or all employees, restrict the answer to the logged-in user's accessible department/team scope only.",
+    ]
+
+    if project_team_question:
+        parts.extend([
+            "- This specific user question is about project/team data, so the above boundary is mandatory.",
+            "- Workflow knowledge may explain how to use the Projects module, but it must not be used to create fake live project/team data.",
+        ])
+
+    return "\n".join(parts)
+
+
+def _fallback_with_capability_context(prefix, capability_context, voice_mode=False):
+    text = f"{prefix}\n\n{capability_context}".strip()
+
+    if voice_mode:
+        return postprocess_ai_answer(
+            text,
+            voice_mode=True,
+            is_writing_request=False,
+        )
+
+    return text
+
+
+def postprocess_ai_answer(answer, voice_mode=False, is_writing_request=False):
+    clean = str(answer or "").strip()
+
+    if not clean:
+        return ""
+
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+
+    if not voice_mode:
+        return clean
+
+    # Voice mode must be complete and short so iPhone/Android TTS does not stop midway.
+    if is_writing_request:
+        limit = 900
+    else:
+        limit = 560
+
+    if len(clean) <= limit:
+        return clean
+
+    sentence_parts = re.split(r"(?<=[.!?])\s+", clean)
+    selected = []
+
+    for sentence in sentence_parts:
+        candidate = " ".join(selected + [sentence]).strip()
+
+        if len(candidate) > limit:
+            break
+
+        selected.append(sentence)
+
+        if not is_writing_request and len(selected) >= 3:
+            break
+
+    if selected:
+        compact = " ".join(selected).strip()
+    else:
+        compact = clean[:limit].rsplit(" ", 1)[0].strip()
+
+    if compact and compact[-1] not in ".!?":
+        compact = compact.rstrip(" ,;:-") + "."
+
+    if not is_writing_request:
+        compact += " Open the chat for full details."
+
+    return compact
+
+
 def local_fallback_answer(question):
     """
     Professional fallback if Gemini fails.
@@ -459,7 +705,9 @@ Please rephrase your question, or ask about:
 
 
 def generate_ai_answer(question, user_context=None, history=None):
-    clean_question = str(question or "").strip()
+    raw_question = str(question or "").strip()
+    voice_mode = looks_like_voice_request(raw_question, history=history)
+    clean_question = _strip_voice_instruction_suffix(raw_question)
 
     if not clean_question:
         return "Please ask a question."
@@ -473,13 +721,37 @@ def generate_ai_answer(question, user_context=None, history=None):
     employee_name = ""
 
     if user_context:
+        employee_context = user_context.get("employee") or {}
+
         tenant_id = user_context.get("tenant_id")
         role = user_context.get("role") or "employee"
         roles = user_context.get("roles") or []
         tenant_name = user_context.get("tenant_name") or ""
-        department_name = user_context.get("department_name") or user_context.get("department") or ""
-        designation_name = user_context.get("designation_name") or user_context.get("designation") or ""
-        employee_name = user_context.get("name") or ""
+
+        department_name = (
+            user_context.get("department_name")
+            or user_context.get("department")
+            or employee_context.get("department_name")
+            or employee_context.get("department")
+            or ""
+        )
+
+        designation_name = (
+            user_context.get("designation_name")
+            or user_context.get("designation")
+            or employee_context.get("designation_name")
+            or employee_context.get("designation")
+            or ""
+        )
+
+        employee_name = (
+            user_context.get("name")
+            or user_context.get("employee_name")
+            or employee_context.get("name")
+            or employee_context.get("employee_name")
+            or employee_context.get("full_name")
+            or ""
+        )
 
     safe_history = []
 
@@ -563,6 +835,23 @@ def generate_ai_answer(question, user_context=None, history=None):
     top_score = matched_items[0]["score"] if matched_items else 0
     has_reliable_hrms_context = bool(hrms_context.strip()) and top_score >= 0.22
     is_writing_request = looks_like_writing_request(clean_question)
+    is_project_team_question = looks_like_project_team_question(clean_question)
+
+    scope_guard_context = build_scope_guard_context(
+        user_context=user_context,
+        project_team_question=is_project_team_question,
+    )
+
+    voice_instruction = ""
+
+    if voice_mode:
+        voice_instruction = """
+Voice conversation mode is active:
+- Answer in 1 to 3 short complete sentences unless the user is asking for a draft/email.
+- Do not give long lists in voice mode.
+- Never end with an incomplete sentence.
+- If more details are needed, say that the details are available in the chat.
+"""
 
     if has_reliable_hrms_context:
         context_instruction = f"""
@@ -612,6 +901,10 @@ Recent chat history:
 Real HRMS data available for this question:
 {capability_context or "No live HRMS data context was required or found for this question."}
 
+{scope_guard_context}
+
+{voice_instruction}
+
 Core behavior:
 1. You are allowed to answer SDS HRMS workflow questions.
 2. You are allowed to answer live HRMS data questions using the "Real HRMS data available for this question" section.
@@ -639,7 +932,12 @@ Core behavior:
 24. If an action API has not been connected yet, clearly say that the details are collected but final submission is not available yet.
 25. Keep responses short unless the user asks for detailed explanation.
 26. If the question is unclear, ask one short clarification question.
+27. For project/team questions, never expose another department/team's project or employee details.
+28. For project/team questions, use only the live HRMS data available in this prompt; if it is missing, say no accessible record was found.
+29. In voice mode, give a complete short answer and never continue beyond the safe speaking length.
 Writing request detected: {is_writing_request}
+Voice conversation detected: {voice_mode}
+Project/team question detected: {is_project_team_question}
 
 Formatting:
 - Use short paragraphs.
@@ -663,7 +961,11 @@ User question:
                 }
             ],
             temperature=0.15,
-            max_tokens=int(os.getenv("AI_MAX_OUTPUT_TOKENS", "450") or 450),
+            max_tokens=(
+                int(os.getenv("AI_VOICE_MAX_OUTPUT_TOKENS", "220") or 220)
+                if voice_mode
+                else int(os.getenv("AI_MAX_OUTPUT_TOKENS", "650") or 650)
+            ),
             timeout=int(os.getenv("AI_CHAT_TIMEOUT_SECONDS", "20") or 20),
         )
 
@@ -675,29 +977,48 @@ User question:
 
         if not answer:
             if capability_context:
-                return (
-                    "I found the following HRMS data for your question:\n\n"
-                    f"{capability_context}"
+                return _fallback_with_capability_context(
+                    "I found the following HRMS data for your question:",
+                    capability_context,
+                    voice_mode=voice_mode,
                 )
 
-            return local_fallback_answer(clean_question)
+            return postprocess_ai_answer(
+                local_fallback_answer(clean_question),
+                voice_mode=voice_mode,
+                is_writing_request=is_writing_request,
+            )
 
-        return answer
+        return postprocess_ai_answer(
+            answer,
+            voice_mode=voice_mode,
+            is_writing_request=is_writing_request,
+        )
 
     except AiProviderError:
         if capability_context:
-            return (
-                "I could not generate a full AI response right now, but I found this HRMS data:\n\n"
-                f"{capability_context}"
+            return _fallback_with_capability_context(
+                "I could not generate a full AI response right now, but I found this HRMS data:",
+                capability_context,
+                voice_mode=voice_mode,
             )
 
-        return local_fallback_answer(clean_question)
+        return postprocess_ai_answer(
+            local_fallback_answer(clean_question),
+            voice_mode=voice_mode,
+            is_writing_request=is_writing_request,
+        )
 
     except Exception:
         if capability_context:
-            return (
-                "I could not generate a full AI response right now, but I found this HRMS data:\n\n"
-                f"{capability_context}"
+            return _fallback_with_capability_context(
+                "I could not generate a full AI response right now, but I found this HRMS data:",
+                capability_context,
+                voice_mode=voice_mode,
             )
 
-        return local_fallback_answer(clean_question)
+        return postprocess_ai_answer(
+            local_fallback_answer(clean_question),
+            voice_mode=voice_mode,
+            is_writing_request=is_writing_request,
+        )

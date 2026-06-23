@@ -34,6 +34,11 @@ ACTION_STALE_ACTION_TYPES = {
     "attendance_check_out",
 }
 
+# STRICT_AI_ACTION_SCOPE:
+# AI guided action dropdowns must never leak cross-department/cross-team data.
+# Project handover must never fall back to all tenant projects.
+STRICT_AI_ACTION_SCOPE = True
+
 def _now_utc():
     return datetime.now(timezone.utc)
 
@@ -850,6 +855,268 @@ def _active_employee_query_for_handover(user_context=None):
 
     return {"$and": query_parts} if query_parts else {}
 
+
+def _scope_text(value):
+    return _safe_str(value).strip().lower()
+
+
+def _scope_value_set(*values):
+    scoped = set()
+
+    for value in values:
+        for variant in _id_variants(value):
+            text = _scope_text(variant)
+
+            if text:
+                scoped.add(text)
+
+    return scoped
+
+
+def _employee_identity_scope_values(employee=None):
+    employee = employee or {}
+
+    return _scope_value_set(
+        employee.get("_id"),
+        employee.get("id"),
+        employee.get("user_id"),
+        employee.get("employee_user_id"),
+        employee.get("login_user_id"),
+        employee.get("account_user_id"),
+        employee.get("employee_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_profile_id"),
+        employee.get("employee_code"),
+        employee.get("emp_code"),
+        employee.get("code"),
+        employee.get("email"),
+        employee.get("official_email"),
+        employee.get("work_email"),
+        employee.get("username"),
+    )
+
+
+def _employee_tl_scope_values(employee=None):
+    employee = employee or {}
+
+    return _scope_value_set(
+        employee.get("team_leader_id"),
+        employee.get("team_leader_user_id"),
+        employee.get("tl_id"),
+        employee.get("team_lead_id"),
+        employee.get("leader_id"),
+    )
+
+
+def _employee_ro_scope_values(employee=None):
+    employee = employee or {}
+
+    return _scope_value_set(
+        employee.get("reporting_officer_id"),
+        employee.get("reporting_officer_user_id"),
+        employee.get("ro_id"),
+        employee.get("manager_id"),
+        employee.get("reporting_manager_id"),
+    )
+
+
+def _employee_department_scope_value(employee=None):
+    employee = employee or {}
+
+    return _scope_text(
+        employee.get("department")
+        or employee.get("department_name")
+        or employee.get("assigned_department")
+        or employee.get("assigned_department_name")
+    )
+
+
+def _employee_record_matches_ai_action_scope(current_employee=None, candidate_employee=None):
+    """
+    STRICT_AI_ACTION_SCOPE:
+    Handover employee options are restricted to the logged-in employee's own
+    department/team scope. This prevents AI guided leave handover from showing
+    employees from unrelated departments.
+    """
+
+    if not current_employee or not candidate_employee:
+        return False
+
+    current_ids = _employee_identity_scope_values(current_employee)
+    candidate_ids = _employee_identity_scope_values(candidate_employee)
+
+    current_department = _employee_department_scope_value(current_employee)
+    candidate_department = _employee_department_scope_value(candidate_employee)
+
+    if current_department and candidate_department and current_department == candidate_department:
+        return True
+
+    current_tl_values = _employee_tl_scope_values(current_employee)
+    current_ro_values = _employee_ro_scope_values(current_employee)
+    candidate_tl_values = _employee_tl_scope_values(candidate_employee)
+    candidate_ro_values = _employee_ro_scope_values(candidate_employee)
+
+    if candidate_ids.intersection(current_tl_values.union(current_ro_values)):
+        return True
+
+    if current_ids.intersection(candidate_tl_values.union(candidate_ro_values)):
+        return True
+
+    if current_tl_values and candidate_tl_values and current_tl_values.intersection(candidate_tl_values):
+        return True
+
+    if current_ro_values and candidate_ro_values and current_ro_values.intersection(candidate_ro_values):
+        return True
+
+    return False
+
+
+def _project_active_filter_for_ai_action():
+    return {
+        "$and": [
+            {"is_deleted": {"$ne": True}},
+            {"deleted": {"$ne": True}},
+            {"is_active": {"$ne": False}},
+            {"active": {"$ne": False}},
+            {
+                "status": {
+                    "$nin": [
+                        "deleted",
+                        "Deleted",
+                        "DELETED",
+                        "cancelled",
+                        "Cancelled",
+                        "CANCELLED",
+                    ]
+                }
+            },
+        ]
+    }
+
+
+def _project_department_scope_parts(department):
+    if not _safe_str(department):
+        return []
+
+    return [
+        {"department": department},
+        {"department_name": department},
+        {"assigned_department": department},
+        {"assigned_department_name": department},
+    ]
+
+
+def _project_handover_scope_query_parts(user_context=None, current_employee=None):
+    """
+    project_handover_scope:
+    Build only the logged-in employee's own project/team scope.
+    Never falls back to all tenant projects.
+    """
+
+    current_employee = current_employee or {}
+    employee_id = _employee_id(user_context)
+    user_key = _user_key(user_context)
+    department = _department(user_context)
+
+    if not department:
+        department = _employee_department_scope_value(current_employee)
+
+    current_person_values = []
+
+    for raw_value in [
+        employee_id,
+        user_key,
+        current_employee.get("_id"),
+        current_employee.get("id"),
+        current_employee.get("user_id"),
+        current_employee.get("employee_user_id"),
+        current_employee.get("employee_id"),
+        current_employee.get("employee_ref_id"),
+        current_employee.get("employee_profile_id"),
+        current_employee.get("employee_code"),
+        current_employee.get("emp_code"),
+        current_employee.get("code"),
+        current_employee.get("email"),
+        current_employee.get("official_email"),
+        current_employee.get("work_email"),
+    ]:
+        for value in _id_variants(raw_value):
+            if value not in current_person_values:
+                current_person_values.append(value)
+
+    supervisor_values = []
+
+    for raw_value in [
+        current_employee.get("team_leader_id"),
+        current_employee.get("team_leader_user_id"),
+        current_employee.get("tl_id"),
+        current_employee.get("reporting_officer_id"),
+        current_employee.get("reporting_officer_user_id"),
+        current_employee.get("ro_id"),
+        current_employee.get("manager_id"),
+    ]:
+        for value in _id_variants(raw_value):
+            if value not in supervisor_values:
+                supervisor_values.append(value)
+
+    scope_or_parts = []
+
+    if current_person_values:
+        scope_or_parts.extend([
+            {"assigned_to": {"$in": current_person_values}},
+            {"assigned_user_id": {"$in": current_person_values}},
+            {"assigned_employee_id": {"$in": current_person_values}},
+            {"employee_id": {"$in": current_person_values}},
+            {"user_id": {"$in": current_person_values}},
+            {"created_by": {"$in": current_person_values}},
+
+            {"members": {"$in": current_person_values}},
+            {"member_ids": {"$in": current_person_values}},
+            {"team_members": {"$in": current_person_values}},
+            {"team_member_ids": {"$in": current_person_values}},
+            {"collaborators": {"$in": current_person_values}},
+            {"collaborator_ids": {"$in": current_person_values}},
+
+            {"team_members.employee_id": {"$in": current_person_values}},
+            {"team_members.user_id": {"$in": current_person_values}},
+            {"team_members.id": {"$in": current_person_values}},
+            {"members.employee_id": {"$in": current_person_values}},
+            {"members.user_id": {"$in": current_person_values}},
+            {"collaborators.employee_id": {"$in": current_person_values}},
+            {"collaborators.user_id": {"$in": current_person_values}},
+        ])
+
+    department_parts = _project_department_scope_parts(department)
+
+    if department_parts:
+        scope_or_parts.extend(department_parts)
+
+    if supervisor_values:
+        supervisor_project_parts = [
+            {"team_leader_id": {"$in": supervisor_values}},
+            {"team_leader_user_id": {"$in": supervisor_values}},
+            {"reporting_officer_id": {"$in": supervisor_values}},
+            {"reporting_officer_user_id": {"$in": supervisor_values}},
+            {"manager_id": {"$in": supervisor_values}},
+        ]
+
+        if department_parts:
+            scope_or_parts.append({
+                "$and": [
+                    {"$or": supervisor_project_parts},
+                    {"$or": department_parts},
+                ]
+            })
+        else:
+            scope_or_parts.extend(supervisor_project_parts)
+
+    return scope_or_parts
+
+
+def _format_no_accessible_project_message():
+    return "No accessible project/work found for your department/team scope."
+
+
 def get_handover_employee_options(user_context=None, limit=12):
     db = get_db()
 
@@ -876,6 +1143,9 @@ def get_handover_employee_options(user_context=None, limit=12):
             continue
 
         if str(doc.get("_id")) == str(employee.get("_id")):
+            continue
+
+        if STRICT_AI_ACTION_SCOPE and not _employee_record_matches_ai_action_scope(employee, doc):
             continue
 
         try:
@@ -941,106 +1211,31 @@ def get_project_handover_options(user_context=None, limit=12):
     db = get_db()
 
     tenant_filter = _tenant_match_filter(user_context)
-    employee_id = _employee_id(user_context)
-    user_key = _user_key(user_context)
-    department = _department(user_context)
 
-    employee = user_context.get("employee") if isinstance(user_context, dict) else {}
-    employee = employee or {}
+    current_employee = _current_employee_for_ai_action(user_context)
 
-    team_leader_id = (
-        user_context.get("team_leader_id")
-        or employee.get("team_leader_id")
-        or employee.get("team_leader_user_id")
-        or employee.get("tl_id")
-    )
-
-    reporting_officer_id = (
-        user_context.get("reporting_officer_id")
-        or employee.get("reporting_officer_id")
-        or employee.get("reporting_officer_user_id")
-        or employee.get("ro_id")
-    )
-
-    person_values = []
-
-    for raw_value in [
-        employee_id,
-        user_key,
-        team_leader_id,
-        reporting_officer_id,
-        employee.get("_id"),
-        employee.get("id"),
-        employee.get("user_id"),
-        employee.get("employee_id"),
-    ]:
-        for value in _id_variants(raw_value):
-            if value not in person_values:
-                person_values.append(value)
+    if not current_employee:
+        return []
 
     query_parts = []
 
     if tenant_filter:
         query_parts.append(tenant_filter)
 
-    project_or_parts = []
+    scope_or_parts = _project_handover_scope_query_parts(
+        user_context=user_context,
+        current_employee=current_employee,
+    )
 
-    if person_values:
-        project_or_parts.extend([
-            {"assigned_to": {"$in": person_values}},
-            {"assigned_user_id": {"$in": person_values}},
-            {"assigned_employee_id": {"$in": person_values}},
-            {"employee_id": {"$in": person_values}},
-            {"user_id": {"$in": person_values}},
-            {"created_by": {"$in": person_values}},
+    if not scope_or_parts:
+        # No employee/team/department identifiers are available, so do not show
+        # any project. No accessible project/work found for this scope.
+        return []
 
-            {"team_leader_id": {"$in": person_values}},
-            {"team_leader_user_id": {"$in": person_values}},
-            {"reporting_officer_id": {"$in": person_values}},
-            {"reporting_officer_user_id": {"$in": person_values}},
-            {"manager_id": {"$in": person_values}},
+    query_parts.append({"$or": scope_or_parts})
+    query_parts.append(_project_active_filter_for_ai_action())
 
-            {"members": {"$in": person_values}},
-            {"member_ids": {"$in": person_values}},
-            {"team_members": {"$in": person_values}},
-            {"team_member_ids": {"$in": person_values}},
-            {"collaborators": {"$in": person_values}},
-            {"collaborator_ids": {"$in": person_values}},
-
-            {"team_members.employee_id": {"$in": person_values}},
-            {"team_members.user_id": {"$in": person_values}},
-            {"team_members.id": {"$in": person_values}},
-            {"members.employee_id": {"$in": person_values}},
-            {"members.user_id": {"$in": person_values}},
-            {"collaborators.employee_id": {"$in": person_values}},
-            {"collaborators.user_id": {"$in": person_values}},
-        ])
-
-    if department:
-        project_or_parts.extend([
-            {"department": department},
-            {"department_name": department},
-            {"assigned_department": department},
-            {"assigned_department_name": department},
-        ])
-
-    if project_or_parts:
-        query_parts.append({"$or": project_or_parts})
-
-    active_filter = {
-        "$or": [
-            {"is_deleted": {"$ne": True}},
-            {"deleted": {"$ne": True}},
-            {"is_active": True},
-            {"active": True},
-            {"status": {"$nin": ["deleted", "Deleted", "DELETED", "cancelled", "Cancelled"]}},
-            {"status": {"$exists": False}},
-        ]
-    }
-
-    query_parts.append(active_filter)
-
-    query = {"$and": query_parts} if query_parts else {}
+    query = {"$and": query_parts}
 
     docs = list(
         db.projects
@@ -1049,50 +1244,12 @@ def get_project_handover_options(user_context=None, limit=12):
         .limit(limit)
     )
 
-    # Fallback:
-    # If no directly assigned project is found, show tenant + department projects.
-    # This is useful for handover because employees may hand over department work
-    # even when project member fields are stored differently.
-    if not docs and department:
-        fallback_parts = []
-
-        if tenant_filter:
-            fallback_parts.append(tenant_filter)
-
-        fallback_parts.append({
-            "$or": [
-                {"department": department},
-                {"department_name": department},
-                {"assigned_department": department},
-                {"assigned_department_name": department},
-            ]
-        })
-
-        fallback_parts.append(active_filter)
-
-        docs = list(
-            db.projects
-            .find({"$and": fallback_parts})
-            .sort([("created_at", -1), ("_id", -1)])
-            .limit(limit)
-        )
-
-    # Final fallback:
-    # Show recent active tenant projects instead of saying no project found.
+    # STRICT_AI_ACTION_SCOPE:
+    # Never falls back to all tenant projects. If no scoped project is found,
+    # the guided leave flow will show "No options found" instead of leaking
+    # another department/team project.
     if not docs:
-        fallback_parts = []
-
-        if tenant_filter:
-            fallback_parts.append(tenant_filter)
-
-        fallback_parts.append(active_filter)
-
-        docs = list(
-            db.projects
-            .find({"$and": fallback_parts})
-            .sort([("created_at", -1), ("_id", -1)])
-            .limit(limit)
-        )
+        return []
 
     options = []
 
