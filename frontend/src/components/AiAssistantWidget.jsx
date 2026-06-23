@@ -520,6 +520,7 @@ export default function AiAssistantWidget() {
   const pendingAttendanceActionRef = useRef(null);
   const speakingSafetyTimerRef = useRef(null);
   const oneShotVoiceModeRef = useRef(false);
+  const iosAudioUnlockedRef = useRef(false);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -627,6 +628,41 @@ export default function AiAssistantWidget() {
     if (restartListenTimerRef.current) {
       clearTimeout(restartListenTimerRef.current);
       restartListenTimerRef.current = null;
+    }
+  }
+
+  async function unlockIosAudioPlayback() {
+    if (!isIosDevice() || iosAudioUnlockedRef.current) {
+      return;
+    }
+
+    iosAudioUnlockedRef.current = true;
+
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+
+      if (AudioContext) {
+        const audioContext = new AudioContext();
+
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        gain.gain.value = 0.00001;
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start(0);
+        oscillator.stop(audioContext.currentTime + 0.03);
+
+        setTimeout(() => {
+          audioContext.close?.();
+        }, 120);
+      }
+    } catch {
+      // iPhone audio unlock is best-effort only.
     }
   }
 
@@ -875,27 +911,29 @@ export default function AiAssistantWidget() {
     isSpeakingRef.current = true;
     setListening(false);
     listeningRef.current = false;
-    setVoiceHint("Eve is speaking...");
+    setVoiceHint(isIosDevice() ? "Preparing Eve voice for iPhone..." : "Eve is preparing to speak...");
 
-    const safetyMs = Math.max(5500, Math.min(18000, cleanText.length * 95 + 3500));
+    const wordCount = cleanText.split(/\s+/).filter(Boolean).length || 1;
+    const safetyMs = Math.max(14000, Math.min(90000, wordCount * 720 + 9000));
 
     speakingSafetyTimerRef.current = setTimeout(() => {
       finishSpeech();
     }, safetyMs);
 
-    if (isMobileSafari() || isIosDevice()) {
-      speakText(cleanText, finishSpeech);
-      return;
-    }
-
     speakAiAssistantText(cleanText, {
       voice: options.voice || "ritu",
-      timeoutMs: 20000,
+      timeoutMs: isIosDevice() ? 30000 : 20000,
     })
       .then((voiceResponse) => {
         const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
         if (!audioUrl) {
+          if (isIosDevice()) {
+            setVoiceHint("Eve answer is shown on screen. iPhone could not generate playable audio.");
+            finishSpeech();
+            return;
+          }
+
           speakText(cleanText, finishSpeech);
           return;
         }
@@ -913,7 +951,13 @@ export default function AiAssistantWidget() {
           return;
         }
 
-        // Cloud TTS failed. Browser speech is more reliable on mobile Safari.
+        if (isIosDevice()) {
+          setVoiceHint("Eve answer is shown on screen. iPhone blocked automatic voice playback.");
+          finishSpeech();
+          return;
+        }
+
+        // Desktop/browser fallback only.
         speakText(cleanText, finishSpeech);
       });
 
@@ -993,6 +1037,7 @@ export default function AiAssistantWidget() {
     setVoiceError("");
     lastVoiceActivationAtRef.current = Date.now();
 
+    await unlockIosAudioPlayback();
     await refreshVoiceContextIfNeeded(true);
     await startVoiceMeter();
 
@@ -1888,13 +1933,20 @@ export default function AiAssistantWidget() {
       return "";
     }
 
-    const types = [
-      "audio/webm;codecs=opus",
-      "audio/webm",
-      "audio/mp4",
-      "audio/ogg;codecs=opus",
-      "audio/ogg",
-    ];
+    const types = isIosDevice()
+      ? [
+          "audio/mp4",
+          "audio/mpeg",
+          "audio/webm;codecs=opus",
+          "audio/webm",
+        ]
+      : [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+        ];
 
     return types.find((type) => window.MediaRecorder.isTypeSupported(type)) || "";
   }
@@ -1938,13 +1990,41 @@ export default function AiAssistantWidget() {
 
     const audio = new Audio(audioUrl);
 
+    audio.preload = "auto";
+    audio.volume = 1;
+    audio.muted = false;
+    audio.autoplay = false;
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+
     currentAudioRef.current = audio;
     currentAudioUrlRef.current = audioUrl;
 
-    audio.onended = finish;
-    audio.onerror = finish;
+    audio.onplaying = () => {
+      setVoiceHint("Eve is speaking...");
+    };
 
-    audio.play().catch(finish);
+    audio.onended = finish;
+    audio.onerror = () => {
+      if (isIosDevice()) {
+        setVoiceHint("Eve answer is shown on screen. iPhone could not play the generated voice.");
+      }
+
+      finish();
+    };
+
+    const playPromise = audio.play();
+
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {
+        if (isIosDevice()) {
+          setVoiceHint("Eve answer is shown on screen. iPhone blocked automatic voice playback.");
+        }
+
+        finish();
+      });
+    }
   }
 
   function stopGeminiRecording({ stopLoop = false } = {}) {
@@ -2125,6 +2205,10 @@ export default function AiAssistantWidget() {
 
       const result = await transcribeAiAssistantAudio(audioBlob, {
         timeoutMs: isMobileBrowser() ? 30000 : 22000,
+        language: "en-IN",
+        filename: isIosDevice()
+          ? (audioBlob.type && audioBlob.type.includes("mp4") ? "eve-ios-audio.mp4" : "eve-ios-audio.webm")
+          : undefined,
       });
 
       const transcript = String(
@@ -2219,6 +2303,7 @@ export default function AiAssistantWidget() {
     lastVoiceActivationAtRef.current = Date.now();
     oneShotVoiceModeRef.current = true;
     geminiLoopActiveRef.current = true;
+    unlockIosAudioPlayback();
     startVoiceMeter();
     beginListening();
   }
