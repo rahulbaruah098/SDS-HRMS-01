@@ -138,35 +138,136 @@ function speakText(text, onEnd) {
     return null;
   }
 
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(cleanText);
-  const availableVoices = window.speechSynthesis.getVoices?.() || [];
-  const preferredVoice =
-    availableVoices.find((voice) => /en-IN/i.test(voice.lang || "")) ||
-    availableVoices.find((voice) => /Google.*English/i.test(voice.name || "")) ||
-    availableVoices.find((voice) => /^en-/i.test(voice.lang || ""));
-
-  if (preferredVoice) {
-    utterance.voice = preferredVoice;
+  try {
+    window.speechSynthesis.cancel();
+  } catch {
+    // ignore
   }
 
-  utterance.lang = preferredVoice?.lang || "en-IN";
-  utterance.rate = 0.92;
-  utterance.pitch = 1.02;
-  utterance.volume = 1;
-  utterance.onend = finish;
-  utterance.onerror = finish;
+  const chunks = cleanText
+    .replace(/\s+/g, " ")
+    .match(/[^.!?]+[.!?]*/g)
+    ?.map((item) => item.trim())
+    .filter(Boolean) || [cleanText];
 
-  window.speechSynthesis.speak(utterance);
+  let index = 0;
+  let finished = false;
+  let resumeTimer = null;
+
+  const stopResumeTimer = () => {
+    if (resumeTimer) {
+      clearInterval(resumeTimer);
+      resumeTimer = null;
+    }
+  };
+
+  const speakNext = () => {
+    if (finished) return;
+
+    if (index >= chunks.length) {
+      finished = true;
+      stopResumeTimer();
+      finish();
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(chunks[index]);
+    index += 1;
+
+    const voices = window.speechSynthesis.getVoices?.() || [];
+    const preferredVoice =
+      voices.find((voice) => /en-IN/i.test(voice.lang || "")) ||
+      voices.find((voice) => /^en-/i.test(voice.lang || "")) ||
+      voices[0];
+
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
+
+    utterance.lang = preferredVoice?.lang || "en-IN";
+    utterance.rate = isIosDevice() ? 0.88 : 0.92;
+    utterance.pitch = 1.02;
+    utterance.volume = 1;
+
+    utterance.onend = () => {
+      setTimeout(speakNext, 120);
+    };
+
+    utterance.onerror = () => {
+      setTimeout(speakNext, 120);
+    };
+
+    try {
+      window.speechSynthesis.speak(utterance);
+      window.speechSynthesis.resume?.();
+
+      stopResumeTimer();
+      resumeTimer = setInterval(() => {
+        try {
+          window.speechSynthesis.resume?.();
+        } catch {
+          // ignore
+        }
+      }, 250);
+    } catch {
+      finished = true;
+      stopResumeTimer();
+      finish();
+    }
+  };
+
+  const startSpeaking = () => {
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume?.();
+    } catch {
+      // ignore
+    }
+
+    speakNext();
+  };
+
+  const voices = window.speechSynthesis.getVoices?.() || [];
+
+  if (!voices.length && typeof window.speechSynthesis.onvoiceschanged !== "undefined") {
+    window.speechSynthesis.onvoiceschanged = startSpeaking;
+    setTimeout(startSpeaking, 350);
+  } else {
+    startSpeaking();
+  }
+
+  return {
+    cancel: () => {
+      finished = true;
+      stopResumeTimer();
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    },
+  };
+}
+
+function primeIosNativeSpeech() {
+  // FINAL_IPHONE_SPEECH_UNLOCK_ON_TAP_FIX
+  // This runs directly after the user taps Eve/mic.
+  // It primes iOS speechSynthesis so the later AI answer can talk back.
+  if (!isIosDevice()) return;
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
 
   try {
+    const utterance = new SpeechSynthesisUtterance(".");
+    utterance.lang = "en-IN";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 0.01;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
     window.speechSynthesis.resume?.();
   } catch {
     // Best effort only.
   }
-
-  return utterance;
 }
 
 const DEFAULT_WAKE_WORD = "hey eve";
@@ -1068,33 +1169,21 @@ export default function AiAssistantWidget() {
     }, safetyMs);
 
 if (isIosDevice()) {
-  setVoiceHint("Eve is speaking...");
+      // FINAL_IPHONE_NATIVE_TALKBACK_ONLY_FIX
+      // iPhone Safari/Chrome must NOT use generated audio for talk-back.
+      // Use native iOS speechSynthesis after the user taps Eve/mic once.
+      setVoiceHint("Eve is speaking...");
 
-  speakAiAssistantText(cleanText, {
-    voice: options.voice || "ritu",
-    timeoutMs: 30000,
-  })
-    .then((voiceResponse) => {
-      const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
-
-      if (!audioUrl) {
-        speakText(cleanText, finishSpeech);
-        return;
+      try {
+        window.speechSynthesis?.cancel?.();
+        window.speechSynthesis?.resume?.();
+      } catch {
+        // ignore
       }
 
-      playGeneratedVoice(audioUrl, () => {
-        finishSpeech();
-      }, {
-        allowManualIosPlay: false,
-        keepExistingAudioUrl: true,
-      });
-    })
-    .catch(() => {
       speakText(cleanText, finishSpeech);
-    });
-
-  return;
-}
+      return;
+    }
 
     speakAiAssistantText(cleanText, {
       voice: options.voice || "ritu",
@@ -1201,6 +1290,7 @@ if (isIosDevice()) {
     setVoiceError("");
     lastVoiceActivationAtRef.current = Date.now();
 
+    primeIosNativeSpeech();
     await unlockIosAudioPlayback();
     await refreshVoiceContextIfNeeded(true);
     await startVoiceMeter();
@@ -2685,6 +2775,7 @@ if (isIosDevice()) {
     lastVoiceActivationAtRef.current = Date.now();
     oneShotVoiceModeRef.current = true;
     geminiLoopActiveRef.current = true;
+    primeIosNativeSpeech();
     unlockIosAudioPlayback();
     startVoiceMeter();
     beginListening();
