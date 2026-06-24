@@ -97,30 +97,227 @@ def fcm_string_data(data):
 
     return safe
 
+def append_identity_value(values, value):
+    text = normalize_text(value)
 
-def active_fcm_tokens_for_users(db, user_ids, tenant_id=None):
-    user_ids = [
-        str(user_id)
+    if text and text not in values:
+        values.append(text)
+
+def identity_values_from_record(record):
+    values = []
+    record = record or {}
+
+    append_identity_value(values, record.get("_id"))
+    append_identity_value(values, record.get("id"))
+    append_identity_value(values, record.get("user_id"))
+    append_identity_value(values, record.get("employee_user_id"))
+    append_identity_value(values, record.get("employee_id"))
+    append_identity_value(values, record.get("employee_ref_id"))
+    append_identity_value(values, record.get("employee_code"))
+    append_identity_value(values, record.get("emp_code"))
+    append_identity_value(values, record.get("code"))
+    append_identity_value(values, record.get("email"))
+    append_identity_value(values, record.get("official_email"))
+    append_identity_value(values, record.get("username"))
+
+    raw_identity_values = record.get("identity_values") or []
+    raw_user_ids = record.get("user_ids") or []
+
+    if isinstance(raw_identity_values, list):
+        for item in raw_identity_values:
+            append_identity_value(values, item)
+
+    if isinstance(raw_user_ids, list):
+        for item in raw_user_ids:
+            append_identity_value(values, item)
+
+    return values
+
+def notification_identity_values_for_user_ids(db, user_ids, tenant_id=None):
+    values = []
+
+    clean_user_ids = [
+        normalize_text(user_id)
         for user_id in user_ids
         if normalize_text(user_id)
     ]
 
-    user_ids = list(dict.fromkeys(user_ids))
+    clean_user_ids = list(dict.fromkeys(clean_user_ids))
 
-    if not user_ids:
-        return []
+    for user_id in clean_user_ids:
+        append_identity_value(values, user_id)
 
-    query = {
-        "user_id": {"$in": user_ids},
+    object_ids = [
+        safe_object_id(user_id)
+        for user_id in clean_user_ids
+        if safe_object_id(user_id)
+    ]
+
+    user_or = [
+        {"id": {"$in": clean_user_ids}},
+        {"user_id": {"$in": clean_user_ids}},
+        {"employee_id": {"$in": clean_user_ids}},
+        {"employee_code": {"$in": clean_user_ids}},
+        {"emp_code": {"$in": clean_user_ids}},
+        {"email": {"$in": clean_user_ids}},
+        {"official_email": {"$in": clean_user_ids}},
+        {"username": {"$in": clean_user_ids}},
+    ]
+
+    if object_ids:
+        user_or.insert(0, {"_id": {"$in": object_ids}})
+
+    user_query = {
+        "$or": user_or,
+        "is_deleted": {"$ne": True},
+    }
+
+    if tenant_id:
+        user_query["tenant_id"] = tenant_id
+
+    users = list(
+        db.users.find(
+            user_query,
+            {
+                "_id": 1,
+                "id": 1,
+                "user_id": 1,
+                "employee_id": 1,
+                "employee_code": 1,
+                "emp_code": 1,
+                "email": 1,
+                "official_email": 1,
+                "username": 1,
+                "tenant_id": 1,
+            },
+        ).limit(5000)
+    )
+
+    for user in users:
+        for item in identity_values_from_record(user):
+            append_identity_value(values, item)
+
+    employee_lookup_values = list(dict.fromkeys(values))
+
+    employee_object_ids = [
+        safe_object_id(value)
+        for value in employee_lookup_values
+        if safe_object_id(value)
+    ]
+
+    employee_or = [
+        {"user_id": {"$in": employee_lookup_values}},
+        {"employee_user_id": {"$in": employee_lookup_values}},
+        {"employee_id": {"$in": employee_lookup_values}},
+        {"employee_ref_id": {"$in": employee_lookup_values}},
+        {"employee_code": {"$in": employee_lookup_values}},
+        {"emp_code": {"$in": employee_lookup_values}},
+        {"code": {"$in": employee_lookup_values}},
+        {"email": {"$in": employee_lookup_values}},
+        {"official_email": {"$in": employee_lookup_values}},
+    ]
+
+    if employee_object_ids:
+        employee_or.insert(0, {"_id": {"$in": employee_object_ids}})
+
+    employee_query = {
+        "$or": employee_or,
+        "is_deleted": {"$ne": True},
+    }
+
+    if tenant_id:
+        employee_query["tenant_id"] = tenant_id
+
+    employees = list(
+        db.employees.find(
+            employee_query,
+            {
+                "_id": 1,
+                "user_id": 1,
+                "employee_user_id": 1,
+                "employee_id": 1,
+                "employee_ref_id": 1,
+                "employee_code": 1,
+                "emp_code": 1,
+                "code": 1,
+                "email": 1,
+                "official_email": 1,
+                "tenant_id": 1,
+            },
+        ).limit(5000)
+    )
+
+    for employee in employees:
+        for item in identity_values_from_record(employee):
+            append_identity_value(values, item)
+
+    return list(dict.fromkeys(values))
+
+def active_fcm_device_rows_for_users(db, user_ids, tenant_id=None):
+    identity_values = notification_identity_values_for_user_ids(
+        db,
+        user_ids,
+        tenant_id=tenant_id,
+    )
+
+    identity_values = [
+        normalize_text(value)
+        for value in identity_values
+        if normalize_text(value)
+    ]
+
+    identity_values = list(dict.fromkeys(identity_values))
+
+    if not identity_values:
+        return [], [], 0
+
+    base_query = {
         "is_active": {"$ne": False},
         "is_deleted": {"$ne": True},
         "token": {"$nin": ["", None]},
     }
 
     if tenant_id:
-        query["tenant_id"] = tenant_id
+        base_query["tenant_id"] = tenant_id
 
-    rows = list(db.notification_devices.find(query, {"token": 1}).limit(10000))
+    scanned_device_count = db.notification_devices.count_documents(base_query)
+
+    query = {
+        **base_query,
+        "$or": [
+            {"user_id": {"$in": identity_values}},
+            {"employee_id": {"$in": identity_values}},
+            {"employee_user_id": {"$in": identity_values}},
+            {"user_ids": {"$in": identity_values}},
+            {"identity_values": {"$in": identity_values}},
+        ],
+    }
+
+    rows = list(
+        db.notification_devices.find(
+            query,
+            {
+                "token": 1,
+                "user_id": 1,
+                "employee_id": 1,
+                "employee_user_id": 1,
+                "user_ids": 1,
+                "identity_values": 1,
+                "tenant_id": 1,
+                "platform": 1,
+                "last_seen_at": 1,
+            },
+        ).limit(10000)
+    )
+
+    return rows, identity_values, scanned_device_count
+
+def active_fcm_tokens_for_users(db, user_ids, tenant_id=None):
+    rows, _, _ = active_fcm_device_rows_for_users(
+        db,
+        user_ids,
+        tenant_id=tenant_id,
+    )
 
     tokens = [
         normalize_text(row.get("token"))
@@ -129,7 +326,6 @@ def active_fcm_tokens_for_users(db, user_ids, tenant_id=None):
     ]
 
     return list(dict.fromkeys(tokens))
-
 
 def mark_invalid_fcm_tokens(db, tokens):
     tokens = [
@@ -184,6 +380,8 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
     total_failed = 0
     invalid_tokens = []
 
+    error_details = []
+
     for index in range(0, len(tokens), 500):
         batch_tokens = tokens[index:index + 500]
 
@@ -214,12 +412,20 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
                 if result.success:
                     continue
 
-                error_text = str(result.exception or "").lower()
+                error_text = str(result.exception or "")
+                error_text_lower = error_text.lower()
+
+                error_details.append({
+                    "token_prefix": batch_tokens[idx][:18],
+                    "error": error_text,
+                })
 
                 if (
-                    "registration-token-not-registered" in error_text
-                    or "invalid-registration-token" in error_text
-                    or "requested entity was not found" in error_text
+                    "registration-token-not-registered" in error_text_lower
+                    or "invalid-registration-token" in error_text_lower
+                    or "requested entity was not found" in error_text_lower
+                    or "sender id mismatch" in error_text_lower
+                    or "mismatched credential" in error_text_lower
                 ):
                     invalid_tokens.append(batch_tokens[idx])
 
@@ -234,30 +440,84 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
         "sent": total_sent,
         "failed": total_failed,
         "skipped": False,
+        "errors": error_details[:20],
     }
 
-
 def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
-    tokens = active_fcm_tokens_for_users(
+    meta = meta or {}
+
+    clean_user_ids = [
+        str(user_id)
+        for user_id in user_ids
+        if normalize_text(user_id)
+    ]
+
+    clean_user_ids = list(dict.fromkeys(clean_user_ids))
+
+    device_rows, identity_values, scanned_device_count = active_fcm_device_rows_for_users(
         db,
-        user_ids,
+        clean_user_ids,
         tenant_id=tenant_id,
     )
 
-    return send_fcm_to_tokens(
+    tokens = [
+        normalize_text(row.get("token"))
+        for row in device_rows
+        if normalize_text(row.get("token"))
+    ]
+
+    tokens = list(dict.fromkeys(tokens))
+
+    result = send_fcm_to_tokens(
         db,
         tokens,
         title,
         body,
         data={
-            "target": (meta or {}).get("target") or (meta or {}).get("page") or "notifications",
-            "notification_type": (meta or {}).get("notification_type") or (meta or {}).get("type") or "system",
-            "priority": (meta or {}).get("priority") or "normal",
-            "link_id": (meta or {}).get("link_id") or "",
-            "link_type": (meta or {}).get("link_type") or "",
+            "title": normalize_text(title),
+            "body": normalize_text(body),
+            "message": normalize_text(body),
+            "target": meta.get("target") or meta.get("page") or "notifications",
+            "notification_type": meta.get("notification_type") or meta.get("type") or "system",
+            "priority": meta.get("priority") or "normal",
+            "link_id": meta.get("link_id") or "",
+            "link_type": meta.get("link_type") or "",
         },
     )
 
+    result["token_count"] = len(tokens)
+    result["user_count"] = len(clean_user_ids)
+    result["tenant_id"] = tenant_id or ""
+    result["lookup_user_ids"] = clean_user_ids
+    result["lookup_identity_values"] = identity_values[:80]
+    result["scanned_device_count"] = scanned_device_count
+    result["device_matches"] = [
+        {
+            "user_id": str(row.get("user_id") or ""),
+            "employee_id": str(row.get("employee_id") or ""),
+            "employee_user_id": str(row.get("employee_user_id") or ""),
+            "tenant_id": str(row.get("tenant_id") or ""),
+            "platform": str(row.get("platform") or ""),
+            "token_prefix": normalize_text(row.get("token"))[:18],
+            "last_seen_at": row.get("last_seen_at"),
+        }
+        for row in device_rows
+    ]
+
+    current_app.logger.info(
+        "FCM result tenant=%s users=%s identities=%s scanned_devices=%s tokens=%s sent=%s failed=%s skipped=%s reason=%s",
+        tenant_id or "",
+        len(clean_user_ids),
+        len(identity_values),
+        scanned_device_count,
+        len(tokens),
+        result.get("sent"),
+        result.get("failed"),
+        result.get("skipped"),
+        result.get("reason", ""),
+    )
+
+    return result
 
 ADMIN_HR_ROLES = {
     "super_admin",
@@ -729,9 +989,18 @@ def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
     now = datetime.utcnow()
     tenant_id = tenant_id or current_tenant_id()
     meta = meta or {}
+
+    recipient_user_ids = [
+        str(user_id)
+        for user_id in user_ids
+        if normalize_text(user_id)
+    ]
+
+    recipient_user_ids = list(dict.fromkeys(recipient_user_ids))
+
     docs = []
 
-    for user_id in set([uid for uid in user_ids if uid]):
+    for user_id in recipient_user_ids:
         docs.append({
             "tenant_id": tenant_id,
             "target_tenant_id": meta.get("target_tenant_id") or tenant_id,
@@ -758,18 +1027,37 @@ def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
             "is_deleted": False,
         })
 
-        if docs:
-            db.notifications.insert_many(docs)
+    if not docs:
+        return []
 
-            send_fcm_to_users(
-                db,
-                [doc.get("user_id") for doc in docs],
-                title,
-                body,
-                meta=meta,
-                tenant_id=tenant_id,
-            )
+    insert_result = db.notifications.insert_many(docs)
+    inserted_ids = list(insert_result.inserted_ids)
 
+    fcm_result = send_fcm_to_users(
+        db,
+        recipient_user_ids,
+        title,
+        body,
+        meta=meta,
+        tenant_id=tenant_id,
+    )
+
+    db.notifications.update_many(
+        {"_id": {"$in": inserted_ids}},
+        {
+            "$set": {
+                "fcm_result": fcm_result,
+                "fcm_sent_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    for index, inserted_id in enumerate(inserted_ids):
+        docs[index]["_id"] = inserted_id
+        docs[index]["fcm_result"] = fcm_result
+        docs[index]["fcm_sent_at"] = datetime.utcnow()
+
+    return docs
 
 def current_user_id():
     return str(g.current_user.get("_id") or "")
@@ -1283,6 +1571,7 @@ def create_notification_documents(db, users, title, body, data, target_scope):
     notification_type = normalize_text(data.get("notification_type") or data.get("type") or "general")
     page_target = normalize_text(data.get("page") or data.get("target_page") or "notifications")
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+
     docs = []
 
     for user in users:
@@ -1326,24 +1615,54 @@ def create_notification_documents(db, users, title, body, data, target_scope):
             },
         })
 
-        if docs:
-            db.notifications.insert_many(docs)
+    if not docs:
+        return []
 
-            send_fcm_to_users(
-                db,
-                [doc.get("user_id") for doc in docs],
-                title,
-                body,
-                meta={
-                    **meta,
-                    "target": page_target,
-                    "notification_type": notification_type,
-                    "priority": priority,
-                },
-            )
+    insert_result = db.notifications.insert_many(docs)
+    inserted_ids = list(insert_result.inserted_ids)
 
-        return docs
+    tenant_user_map = {}
 
+    for doc in docs:
+        doc_tenant_id = doc.get("tenant_id") or current_tenant_id()
+        tenant_user_map.setdefault(doc_tenant_id, [])
+        tenant_user_map[doc_tenant_id].append(doc.get("user_id"))
+
+    fcm_results = []
+
+    for doc_tenant_id, tenant_user_ids in tenant_user_map.items():
+        fcm_result = send_fcm_to_users(
+            db,
+            tenant_user_ids,
+            title,
+            body,
+            meta={
+                **meta,
+                "target": page_target,
+                "notification_type": notification_type,
+                "priority": priority,
+            },
+            tenant_id=doc_tenant_id,
+        )
+
+        fcm_results.append(fcm_result)
+
+    db.notifications.update_many(
+        {"_id": {"$in": inserted_ids}},
+        {
+            "$set": {
+                "fcm_result": fcm_results,
+                "fcm_sent_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    for index, inserted_id in enumerate(inserted_ids):
+        docs[index]["_id"] = inserted_id
+        docs[index]["fcm_result"] = fcm_results
+        docs[index]["fcm_sent_at"] = datetime.utcnow()
+
+    return docs
 
 def notification_scope_for_current_user(extra=None):
     q = {
@@ -3002,6 +3321,12 @@ def register_notification_device():
     employee_id = current_employee_id(db)
     now = datetime.utcnow()
 
+    identity_values = notification_identity_values_for_user_ids(
+        db,
+        [user_id, employee_id],
+        tenant_id=tenant_id,
+    )
+
     db.notification_devices.update_one(
         {"token": token},
         {
@@ -3009,6 +3334,9 @@ def register_notification_device():
                 "tenant_id": tenant_id,
                 "user_id": user_id,
                 "employee_id": employee_id,
+                "employee_user_id": user_id,
+                "user_ids": identity_values,
+                "identity_values": identity_values,
                 "token": token,
                 "platform": platform,
                 "device_id": device_id,
