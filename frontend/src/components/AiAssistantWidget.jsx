@@ -156,6 +156,12 @@ function speakText(text, onEnd) {
 
   window.speechSynthesis.speak(utterance);
 
+  try {
+    window.speechSynthesis.resume?.();
+  } catch {
+    // Best effort only.
+  }
+
   return utterance;
 }
 
@@ -1016,20 +1022,45 @@ export default function AiAssistantWidget() {
       finishSpeech();
     }, safetyMs);
 
+    if (isIosDevice()) {
+      // IPHONE_AUTO_NATIVE_SPEECH_FIX:
+      // iOS Safari/Chrome blocks async generated audio more aggressively than Android.
+      // After the user taps Hey Eve/mic, use native speechSynthesis for the answer,
+      // so Eve speaks automatically without a manual Play button.
+      try {
+        window.speechSynthesis?.resume?.();
+      } catch {
+        // Best effort only.
+      }
+
+      setVoiceHint("Eve is speaking...");
+      const utterance = speakText(cleanText, finishSpeech);
+
+      if (!utterance) {
+        setVoiceHint("Eve answer is shown on screen. iPhone voice is not available in this browser.");
+        finishSpeech();
+        return;
+      }
+
+      try {
+        window.speechSynthesis?.resume?.();
+        setTimeout(() => window.speechSynthesis?.resume?.(), 250);
+        setTimeout(() => window.speechSynthesis?.resume?.(), 900);
+      } catch {
+        // Best effort only.
+      }
+
+      return;
+    }
+
     speakAiAssistantText(cleanText, {
       voice: options.voice || "ritu",
-      timeoutMs: isIosDevice() ? 30000 : 20000,
+      timeoutMs: 20000,
     })
       .then((voiceResponse) => {
         const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
         if (!audioUrl) {
-          if (isIosDevice()) {
-            setVoiceHint("Eve answer is shown on screen. iPhone could not generate playable audio.");
-            finishSpeech();
-            return;
-          }
-
           speakText(cleanText, finishSpeech);
           return;
         }
@@ -1044,12 +1075,6 @@ export default function AiAssistantWidget() {
             onEnd();
           }
 
-          return;
-        }
-
-        if (isIosDevice()) {
-          setVoiceHint("Eve answer is shown on screen. iPhone blocked automatic voice playback.");
-          finishSpeech();
           return;
         }
 
@@ -2053,17 +2078,16 @@ export default function AiAssistantWidget() {
   }
 
   function rememberPendingIosVoice(audioUrl, onEnd) {
-    iosPendingVoiceRef.current = {
-      audioUrl,
-      onEnd: typeof onEnd === "function" ? onEnd : null,
-    };
+    // IPHONE_AUTO_NATIVE_SPEECH_FIX:
+    // Do not show a manual Play button as the normal iPhone flow.
+    // iPhone should use native speechSynthesis after the user taps Hey Eve/mic.
+    iosPendingVoiceRef.current = { audioUrl: "", onEnd: null };
+    setIosVoicePlayRequest(null);
+    setVoiceHint("Eve answer is shown on screen. iPhone could not play browser voice.");
 
-    setIosVoicePlayRequest({
-      id: Date.now(),
-      label: "Play Eve voice",
-    });
-
-    setVoiceHint("Eve answer is shown on screen. Tap Play Eve voice once to hear it on iPhone.");
+    if (typeof onEnd === "function") {
+      onEnd();
+    }
   }
 
   function cleanupCurrentAudio({ clearPending = true } = {}) {
@@ -2798,7 +2822,7 @@ export default function AiAssistantWidget() {
             <div className="ai-voice-hint">{voiceHint}</div>
           )}
 
-          {iosVoicePlayRequest && !voiceError && (
+          {false && iosVoicePlayRequest && !voiceError && (
             <div className="ai-ios-play-wrap">
               <button
                 type="button"
