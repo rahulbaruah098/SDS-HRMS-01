@@ -523,6 +523,8 @@ export default function AiAssistantWidget() {
   const iosUnlockAudioRef = useRef(null);
   const iosVoiceAudioRef = useRef(null);
   const iosPendingVoiceRef = useRef({ audioUrl: "", onEnd: null });
+  const iosTtsAudioContextRef = useRef(null);
+  const iosTtsSourceRef = useRef(null);
   const lastHandledTranscriptRef = useRef("");
   const lastHandledTranscriptAtRef = useRef(0);
   const voiceQuotaDisabledUntilRef = useRef(0);
@@ -711,12 +713,37 @@ export default function AiAssistantWidget() {
     return audio;
   }
 
+  async function getIosTtsAudioContext() {
+    if (!isIosDevice() || typeof window === "undefined") {
+      return null;
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    let audioContext = iosTtsAudioContextRef.current;
+
+    if (!audioContext || audioContext.state === "closed") {
+      audioContext = new AudioContextClass();
+      iosTtsAudioContextRef.current = audioContext;
+    }
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    return audioContext;
+  }
+
   async function unlockIosAudioPlayback() {
-    if (!isIosDevice() || iosAudioUnlockedRef.current) {
+    if (!isIosDevice()) {
       return;
     }
 
-    let unlocked = false;
+    let unlocked = Boolean(iosAudioUnlockedRef.current);
 
     try {
       const silentAudio = getIosSilentAudioElement();
@@ -734,19 +761,13 @@ export default function AiAssistantWidget() {
         unlocked = true;
       }
     } catch {
-      // Continue to AudioContext unlock below.
+      // Continue to persistent AudioContext unlock below.
     }
 
     try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioContext = await getIosTtsAudioContext();
 
-      if (AudioContext) {
-        const audioContext = new AudioContext();
-
-        if (audioContext.state === "suspended") {
-          await audioContext.resume();
-        }
-
+      if (audioContext) {
         const oscillator = audioContext.createOscillator();
         const gain = audioContext.createGain();
 
@@ -754,12 +775,8 @@ export default function AiAssistantWidget() {
         oscillator.connect(gain);
         gain.connect(audioContext.destination);
         oscillator.start(0);
-        oscillator.stop(audioContext.currentTime + 0.03);
+        oscillator.stop(audioContext.currentTime + 0.04);
         unlocked = true;
-
-        setTimeout(() => {
-          audioContext.close?.();
-        }, 120);
       }
     } catch {
       // iPhone audio unlock is best-effort only.
@@ -1023,32 +1040,30 @@ export default function AiAssistantWidget() {
     }, safetyMs);
 
     if (isIosDevice()) {
-      // IPHONE_AUTO_NATIVE_SPEECH_FIX:
-      // iOS Safari/Chrome blocks async generated audio more aggressively than Android.
-      // After the user taps Hey Eve/mic, use native speechSynthesis for the answer,
-      // so Eve speaks automatically without a manual Play button.
-      try {
-        window.speechSynthesis?.resume?.();
-      } catch {
-        // Best effort only.
-      }
+      // IPHONE_FINAL_AUTO_WEB_AUDIO_TTS_FIX:
+      // iPhone Safari/Chrome can show speechSynthesis as speaking while producing no sound.
+      // Use backend generated Eve voice and play it through a persistent unlocked WebAudio context.
+      setVoiceHint("Preparing Eve voice for iPhone...");
 
-      setVoiceHint("Eve is speaking...");
-      const utterance = speakText(cleanText, finishSpeech);
+      speakAiAssistantText(cleanText, {
+        voice: options.voice || "ritu",
+        timeoutMs: 25000,
+      })
+        .then((voiceResponse) => {
+          const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
-      if (!utterance) {
-        setVoiceHint("Eve answer is shown on screen. iPhone voice is not available in this browser.");
-        finishSpeech();
-        return;
-      }
+          if (!audioUrl) {
+            setVoiceHint("Eve answer is shown on screen. Voice audio was not returned.");
+            finishSpeech();
+            return;
+          }
 
-      try {
-        window.speechSynthesis?.resume?.();
-        setTimeout(() => window.speechSynthesis?.resume?.(), 250);
-        setTimeout(() => window.speechSynthesis?.resume?.(), 900);
-      } catch {
-        // Best effort only.
-      }
+          playIosGeneratedVoiceWithAudioContext(audioUrl, finishSpeech);
+        })
+        .catch(() => {
+          setVoiceHint("Eve answer is shown on screen. iPhone voice generation failed.");
+          finishSpeech();
+        });
 
       return;
     }
@@ -2091,6 +2106,16 @@ export default function AiAssistantWidget() {
   }
 
   function cleanupCurrentAudio({ clearPending = true } = {}) {
+    if (iosTtsSourceRef.current) {
+      try {
+        iosTtsSourceRef.current.stop(0);
+      } catch {
+        // ignore
+      }
+
+      iosTtsSourceRef.current = null;
+    }
+
     if (currentAudioRef.current) {
       try {
         currentAudioRef.current.pause();
@@ -2127,6 +2152,76 @@ export default function AiAssistantWidget() {
 
     if (clearPending) {
       clearPendingIosVoice();
+    }
+  }
+
+  async function playIosGeneratedVoiceWithAudioContext(audioUrl, onEnd) {
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+
+      if (typeof onEnd === "function") {
+        onEnd();
+      }
+    };
+
+    if (!audioUrl) {
+      finish();
+      return;
+    }
+
+    try {
+      await unlockIosAudioPlayback();
+      const audioContext = await getIosTtsAudioContext();
+
+      if (!audioContext) {
+        throw new Error("iPhone AudioContext is not available.");
+      }
+
+      if (iosTtsSourceRef.current) {
+        try {
+          iosTtsSourceRef.current.stop(0);
+        } catch {
+          // ignore
+        }
+        iosTtsSourceRef.current = null;
+      }
+
+      setVoiceHint("Eve is speaking...");
+
+      const response = await fetch(audioUrl);
+
+      if (!response.ok) {
+        throw new Error("Could not load generated Eve voice.");
+      }
+
+      const audioBuffer = await response.arrayBuffer();
+      const decodedAudio = await audioContext.decodeAudioData(audioBuffer.slice(0));
+      const source = audioContext.createBufferSource();
+
+      source.buffer = decodedAudio;
+      source.connect(audioContext.destination);
+      iosTtsSourceRef.current = source;
+      currentAudioUrlRef.current = audioUrl;
+
+      source.onended = () => {
+        if (iosTtsSourceRef.current === source) {
+          iosTtsSourceRef.current = null;
+        }
+        finish();
+      };
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      source.start(0);
+    } catch (error) {
+      console.warn("iPhone WebAudio Eve voice failed", error);
+      setVoiceHint("Eve answer is shown on screen. iPhone could not start audio output.");
+      finish();
     }
   }
 
