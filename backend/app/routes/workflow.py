@@ -10,7 +10,8 @@ from app.utils.serializers import clean_doc
 try:
     import firebase_admin
     from firebase_admin import credentials, messaging
-except Exception:
+except Exception as exc:
+    print("FCM IMPORT ERROR:", exc)
     firebase_admin = None
     credentials = None
     messaging = None
@@ -28,19 +29,25 @@ _firebase_ready = False
 def firebase_service_account_path():
     raw_path = normalize_text(os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"))
 
-    if not raw_path:
-        return ""
-
-    if os.path.isabs(raw_path):
-        return raw_path
-
     backend_root = os.path.abspath(os.path.join(current_app.root_path, ".."))
-    backend_relative_path = os.path.join(backend_root, raw_path)
 
-    if os.path.exists(backend_relative_path):
-        return backend_relative_path
+    if raw_path:
+        if os.path.isabs(raw_path):
+            return raw_path
 
-    return os.path.abspath(raw_path)
+        backend_relative_path = os.path.join(backend_root, raw_path)
+
+        if os.path.exists(backend_relative_path):
+            return backend_relative_path
+
+        return os.path.abspath(raw_path)
+
+    default_path = os.path.join(backend_root, "firebase-service-account.json")
+
+    if os.path.exists(default_path):
+        return default_path
+
+    return ""
 
 
 def ensure_firebase_app():
@@ -58,6 +65,14 @@ def ensure_firebase_app():
         return True
 
     service_account_path = firebase_service_account_path()
+    current_app.logger.warning(
+    "FCM DEBUG: env_path=%s resolved_path=%s exists=%s cwd=%s app_root=%s",
+    os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"),
+    service_account_path,
+    os.path.exists(service_account_path) if service_account_path else False,
+    os.getcwd(),
+    current_app.root_path,
+)
 
     if not service_account_path:
         current_app.logger.warning("FIREBASE_SERVICE_ACCOUNT_PATH is not configured")
@@ -365,6 +380,7 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
             "failed": 0,
             "skipped": True,
             "reason": "no_tokens",
+            "token_count": 0,
         }
 
     if not ensure_firebase_app():
@@ -373,20 +389,21 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
             "failed": 0,
             "skipped": True,
             "reason": "firebase_not_ready",
+            "token_count": len(tokens),
         }
 
     payload_data = fcm_string_data(data or {})
+
     total_sent = 0
     total_failed = 0
     invalid_tokens = []
-
     error_details = []
 
-    for index in range(0, len(tokens), 500):
-        batch_tokens = tokens[index:index + 500]
+    for token in tokens:
+        token_prefix = token[:18]
 
-        message = messaging.MulticastMessage(
-            tokens=batch_tokens,
+        message = messaging.Message(
+            token=token,
             notification=messaging.Notification(
                 title=normalize_text(title),
                 body=normalize_text(body),
@@ -399,39 +416,56 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
                     sound="default",
                     priority="high",
                     default_sound=True,
+                    click_action="FLUTTER_NOTIFICATION_CLICK",
                 ),
             ),
         )
 
         try:
-            response = messaging.send_each_for_multicast(message)
-            total_sent += response.success_count
-            total_failed += response.failure_count
+            message_id = messaging.send(message)
+            total_sent += 1
 
-            for idx, result in enumerate(response.responses):
-                if result.success:
-                    continue
-
-                error_text = str(result.exception or "")
-                error_text_lower = error_text.lower()
-
-                error_details.append({
-                    "token_prefix": batch_tokens[idx][:18],
-                    "error": error_text,
-                })
-
-                if (
-                    "registration-token-not-registered" in error_text_lower
-                    or "invalid-registration-token" in error_text_lower
-                    or "requested entity was not found" in error_text_lower
-                    or "sender id mismatch" in error_text_lower
-                    or "mismatched credential" in error_text_lower
-                ):
-                    invalid_tokens.append(batch_tokens[idx])
+            current_app.logger.info(
+                "FCM sent successfully token_prefix=%s message_id=%s",
+                token_prefix,
+                message_id,
+            )
 
         except Exception as exc:
-            current_app.logger.exception("FCM send failed: %s", exc)
-            total_failed += len(batch_tokens)
+            total_failed += 1
+
+            error_text = str(exc)
+            error_code = getattr(exc, "code", "") or ""
+            error_type = exc.__class__.__name__
+
+            current_app.logger.exception(
+                "FCM token send failed token_prefix=%s code=%s error=%s",
+                token_prefix,
+                error_code,
+                error_text,
+            )
+
+            error_details.append({
+                "token_prefix": token_prefix,
+                "error": error_text,
+                "code": error_code,
+                "type": error_type,
+            })
+
+            error_text_lower = error_text.lower()
+            error_code_lower = str(error_code).lower()
+
+            if (
+                "registration-token-not-registered" in error_text_lower
+                or "invalid-registration-token" in error_text_lower
+                or "requested entity was not found" in error_text_lower
+                or "sender id mismatch" in error_text_lower
+                or "mismatched credential" in error_text_lower
+                or "unregistered" in error_code_lower
+                or "invalid-argument" in error_code_lower
+                or "sender-id-mismatch" in error_code_lower
+            ):
+                invalid_tokens.append(token)
 
     if invalid_tokens:
         mark_invalid_fcm_tokens(db, invalid_tokens)
@@ -441,6 +475,8 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
         "failed": total_failed,
         "skipped": False,
         "errors": error_details[:20],
+        "token_count": len(tokens),
+        "invalid_token_count": len(invalid_tokens),
     }
 
 def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
