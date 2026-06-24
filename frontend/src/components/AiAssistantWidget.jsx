@@ -1067,34 +1067,34 @@ export default function AiAssistantWidget() {
       finishSpeech();
     }, safetyMs);
 
-    if (isIosDevice()) {
-      // IPHONE_FINAL_AUTO_WEB_AUDIO_TTS_FIX:
-      // iPhone Safari/Chrome can show speechSynthesis as speaking while producing no sound.
-      // Use backend generated Eve voice and play it through a persistent unlocked WebAudio context.
-      setVoiceHint("Eve is responding...");
+if (isIosDevice()) {
+  setVoiceHint("Eve is speaking...");
 
-      speakAiAssistantText(cleanText, {
-        voice: options.voice || "ritu",
-        timeoutMs: 25000,
-      })
-        .then((voiceResponse) => {
-          const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
+  speakAiAssistantText(cleanText, {
+    voice: options.voice || "ritu",
+    timeoutMs: 30000,
+  })
+    .then((voiceResponse) => {
+      const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
-          if (!audioUrl) {
-            setVoiceHint("Eve answer is shown on screen. Voice audio was not returned.");
-            finishSpeech();
-            return;
-          }
+      if (!audioUrl) {
+        speakText(cleanText, finishSpeech);
+        return;
+      }
 
-          playIosGeneratedVoiceWithAudioContext(audioUrl, finishSpeech);
-        })
-        .catch(() => {
-          setVoiceHint("Eve answer is shown on screen. iPhone voice generation failed.");
-          finishSpeech();
-        });
+      playGeneratedVoice(audioUrl, () => {
+        finishSpeech();
+      }, {
+        allowManualIosPlay: false,
+        keepExistingAudioUrl: true,
+      });
+    })
+    .catch(() => {
+      speakText(cleanText, finishSpeech);
+    });
 
-      return;
-    }
+  return;
+}
 
     speakAiAssistantText(cleanText, {
       voice: options.voice || "ritu",
