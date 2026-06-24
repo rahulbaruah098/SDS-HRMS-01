@@ -95,7 +95,11 @@ function isMobileSafari() {
 
 function supportsReliableBrowserSpeechRecognition() {
   if (typeof window === "undefined") return false;
-  if (isMobileBrowser()) return false;
+
+  // FINAL_ANDROID_WAKE_WORD_FIX
+  // Android Chrome supports SpeechRecognition more reliably than iPhone.
+  // Keep iPhone on one-tap voice mode, but allow Android/web wake-word recognition.
+  if (isIosDevice()) return false;
 
   return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
@@ -166,13 +170,31 @@ function speakText(text, onEnd) {
 }
 
 const DEFAULT_WAKE_WORD = "hey eve";
+const FINAL_IPHONE_WAKE_AND_AUDIO_STABILITY_FIX = true;
 
 const WAKE_WORD_VARIANTS = [
+  // FINAL_WAKE_WORD_VARIANTS_FIX
+  // Keep many short/phonetic variants because mobile STT often hears Eve differently.
   "hey eve",
   "hi eve",
   "hello eve",
   "okay eve",
   "ok eve",
+  "eve",
+  "ev",
+  "evie",
+  "eevee",
+  "ivy",
+  "evey",
+  "evi",
+  "evy",
+  "evee",
+  "eave",
+  "heave",
+  "efve",
+  "evfe",
+  "evve",
+  "e v",
   "hay eve",
   "hai eve",
   "hii eve",
@@ -188,6 +210,12 @@ const WAKE_WORD_VARIANTS = [
   "hey ivy",
   "hi ivy",
   "hello ivy",
+  "hey evi",
+  "hi evi",
+  "hello evi",
+  "hey evy",
+  "hi evy",
+  "hello evy",
 ];
 
 function normalizeVoiceText(value) {
@@ -1030,7 +1058,7 @@ export default function AiAssistantWidget() {
     isSpeakingRef.current = true;
     setListening(false);
     listeningRef.current = false;
-    setVoiceHint(isIosDevice() ? "Preparing Eve voice for iPhone..." : "Eve is preparing to speak...");
+    setVoiceHint("Eve is responding...");
 
     const wordCount = cleanText.split(/\s+/).filter(Boolean).length || 1;
     const safetyMs = Math.max(14000, Math.min(90000, wordCount * 720 + 9000));
@@ -1043,7 +1071,7 @@ export default function AiAssistantWidget() {
       // IPHONE_FINAL_AUTO_WEB_AUDIO_TTS_FIX:
       // iPhone Safari/Chrome can show speechSynthesis as speaking while producing no sound.
       // Use backend generated Eve voice and play it through a persistent unlocked WebAudio context.
-      setVoiceHint("Preparing Eve voice for iPhone...");
+      setVoiceHint("Eve is responding...");
 
       speakAiAssistantText(cleanText, {
         voice: options.voice || "ritu",
@@ -1196,7 +1224,10 @@ export default function AiAssistantWidget() {
       Date.now() - lastVoiceActivationAtRef.current < 12000;
 
     const waitingForOneVoiceReply =
-      Boolean(pendingAttendanceActionRef.current) || voiceConversationModeRef.current;
+      Boolean(pendingAttendanceActionRef.current) ||
+      Boolean(voiceConversationModeRef.current) ||
+      Boolean(oneShotVoiceModeRef.current) ||
+      Boolean(autoWakeModeRef.current);
 
     if (!hasWakeWord && !waitingForOneVoiceReply && !recentlyActivatedByClick) {
       setMessage("");
@@ -1226,7 +1257,9 @@ export default function AiAssistantWidget() {
       setLastVoiceTranscript("");
       setSiriStatus(greeting);
       setVoiceHint("Eve is active. Speak your HRMS command now.");
-      speakAssistantText(greeting, { restartAfterSpeech: true });
+      // FINAL_NO_EMPTY_WAKE_GREETING_AUDIO_FIX
+      // Keep listening instead of trying to speak a greeting on iPhone/mobile.
+      scheduleListeningRestart(250);
       return;
     }
 
@@ -1235,16 +1268,16 @@ export default function AiAssistantWidget() {
     setSiriStatus(`Processing: ${commandText}`);
 
     if (hasWakeWord) {
-      setVoiceHint(`${greeting} Processing your command...`);
-      speakAssistantText(greeting, {
-        restartAfterSpeech: false,
-        onEnd: () => {
-          sendMessage(commandText, {
-            speakAnswer: true,
-            skipWakeWordCheck: true,
-            voiceInput: true,
-          });
-        },
+      // FINAL_NO_GREETING_TTS_BEFORE_COMMAND_FIX
+      // Do not speak an intermediate greeting before the real answer.
+      // On iPhone this was the main reason the UI got stuck on "Eve is speaking" with no answer audio.
+      setVoiceHint("Processing your command...");
+      stopRecognition({ suppressRestart: true });
+
+      await sendMessage(commandText, {
+        speakAnswer: true,
+        skipWakeWordCheck: true,
+        voiceInput: true,
       });
       return;
     }
@@ -2220,7 +2253,7 @@ export default function AiAssistantWidget() {
       source.start(0);
     } catch (error) {
       console.warn("iPhone WebAudio Eve voice failed", error);
-      setVoiceHint("Eve answer is shown on screen. iPhone could not start audio output.");
+      setVoiceHint("Eve answer is shown on screen. iPhone audio output was blocked.");
       finish();
     }
   }
