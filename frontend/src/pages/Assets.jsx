@@ -16,6 +16,7 @@ import {
   getAssets,
   updateAsset,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const EMPTY_FORM = {
   assigned_to_employee_id: '',
@@ -126,6 +127,7 @@ function getAssetExpiry(asset) {
 }
 
 export default function Assets() {
+  const alerts = useCustomAlert();
   const [assets, setAssets] = useState([]);
   const [stats, setStats] = useState({
     total: 0,
@@ -158,7 +160,6 @@ export default function Assets() {
   const [reportLoading, setReportLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState('');
-  const [message, setMessage] = useState({ type: '', text: '' });
 
   const isSoftware = form.asset_type === 'software';
   const isEditing = Boolean(editingAssetId);
@@ -170,15 +171,6 @@ export default function Assets() {
   }, [employees, form.assigned_to_employee_id]);
 
   const filteredReportRows = useMemo(() => reportRows, [reportRows]);
-
-  const showMessage = useCallback((type, text) => {
-    setMessage({ type, text });
-
-    window.clearTimeout(window.__assetMessageTimer);
-    window.__assetMessageTimer = window.setTimeout(() => {
-      setMessage({ type: '', text: '' });
-    }, 4500);
-  }, []);
 
   const loadEmployees = useCallback(async () => {
     try {
@@ -208,11 +200,11 @@ export default function Assets() {
         loadEmployees();
       }
     } catch (error) {
-      showMessage('error', error?.message || 'Unable to load assets');
+      alerts.error(error?.message || 'Unable to load assets', 'Assets Load Failed');
     } finally {
       setLoading(false);
     }
-  }, [filters, loadEmployees, showMessage]);
+  }, [filters, loadEmployees, alerts]);
 
   const loadReport = useCallback(async () => {
     if (!canReport) return;
@@ -230,7 +222,7 @@ export default function Assets() {
       setReportRows(data.items || []);
       setReportSummary(data.summary || {});
     } catch (error) {
-      showMessage('error', error?.message || 'Unable to load asset report');
+      alerts.error(error?.message || 'Unable to load asset report', 'Asset Report Load Failed');
     } finally {
       setReportLoading(false);
     }
@@ -240,7 +232,7 @@ export default function Assets() {
     filters.employee_id,
     filters.status,
     filters.verification_status,
-    showMessage,
+    alerts,
   ]);
 
   useEffect(() => {
@@ -309,7 +301,7 @@ export default function Assets() {
     const validationError = validateForm();
 
     if (validationError) {
-      showMessage('error', validationError);
+      alerts.warning(validationError, 'Asset Details Required');
       return;
     }
 
@@ -328,14 +320,14 @@ export default function Assets() {
 
       if (isEditing) {
         await updateAsset(editingAssetId, payload);
-        showMessage('success', 'Asset updated successfully');
+        alerts.success('Asset updated successfully', 'Asset Updated');
       } else {
         await createAsset(payload);
-        showMessage(
-          'success',
+        alerts.success(
           canManage
             ? 'Asset saved and verified successfully'
             : 'Asset submitted successfully. HR will verify it.',
+          canManage ? 'Asset Saved' : 'Asset Submitted',
         );
       }
 
@@ -346,7 +338,7 @@ export default function Assets() {
         await loadReport();
       }
     } catch (error) {
-      showMessage('error', error?.message || 'Unable to save asset');
+      alerts.error(error?.message || 'Unable to save asset', 'Asset Save Failed');
     } finally {
       setSaving(false);
     }
@@ -391,10 +383,14 @@ export default function Assets() {
 
     const assetId = asset.id || asset._id;
 
-    if (!assetId) return;
+    if (!assetId) {
+      alerts.warning('Invalid asset selected.', 'Asset Required');
+      return;
+    }
 
-    const confirmed = window.confirm(
-      `Delete asset "${asset.asset_name}" assigned to ${asset.assigned_to_name}?`,
+    const confirmed = await alerts.confirm(
+      `Delete asset "${asset.asset_name}" assigned to ${asset.assigned_to_name || 'this employee'}?`,
+      'Delete Asset?',
     );
 
     if (!confirmed) return;
@@ -403,14 +399,14 @@ export default function Assets() {
 
     try {
       await deleteAsset(assetId);
-      showMessage('success', 'Asset deleted successfully');
+      alerts.success('Asset deleted successfully', 'Asset Deleted');
       await loadAssets();
 
       if (activeTab === 'report' && canReport) {
         await loadReport();
       }
     } catch (error) {
-      showMessage('error', error?.message || 'Unable to delete asset');
+      alerts.error(error?.message || 'Unable to delete asset', 'Asset Delete Failed');
     } finally {
       setDeletingId('');
     }
@@ -418,12 +414,13 @@ export default function Assets() {
 
   function handleExportCsv() {
     if (!reportRows.length) {
-      showMessage('error', 'No report data available to export');
+      alerts.warning('No report data available to export', 'Export Not Available');
       return;
     }
 
     const csv = exportAssetReportCsv(reportRows);
     downloadTextFile(`asset-report-${buildDateStamp()}.csv`, csv);
+    alerts.success('Asset report CSV exported successfully.', 'Export Ready');
   }
 
   return (
@@ -1417,12 +1414,6 @@ export default function Assets() {
           </aside>
         </section>
 
-        {message.text ? (
-          <div className={`asset-message ${message.type}`}>
-            {message.text}
-          </div>
-        ) : null}
-
         <section className="asset-stats">
           <div className="asset-stat">
             <span>Total Assets</span>
@@ -1486,7 +1477,7 @@ export default function Assets() {
                 </div>
               </div>
 
-              <form className="asset-form" onSubmit={handleSubmit}>
+              <form className="asset-form" onSubmit={handleSubmit} noValidate>
                 {canManage ? (
                   <div className="asset-field">
                     <label>Employee</label>

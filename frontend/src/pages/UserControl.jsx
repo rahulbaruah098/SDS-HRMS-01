@@ -23,6 +23,7 @@ import {
   deleteSuperAdminTenantUser,
 } from '../api/client';
 import { emptyUser } from '../data/modules';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HOLIDAY_STATES = [
   'Assam(HO)',
@@ -500,7 +501,7 @@ function UserAvatar({ user = {}, size = 'md' }) {
   );
 }
 
-function ProfilePhotoInput({ state, setState, mode = 'create' }) {
+function ProfilePhotoInput({ state, setState, mode = 'create', alerts }) {
   const photo = profilePhotoValue(state);
   const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
   const name = state.name || state.email || 'Employee';
@@ -523,12 +524,12 @@ function ProfilePhotoInput({ state, setState, mode = 'create' }) {
     }
 
     if (!file.type.startsWith('image/')) {
-      alert('Please choose an image file.');
+      alerts?.warning?.('Please choose an image file.', 'Invalid Photo File');
       return;
     }
 
     if (file.size > 1024 * 1024 * 2) {
-      alert('Image size should be below 2MB.');
+      alerts?.warning?.('Image size should be below 2MB.', 'Photo Too Large');
       return;
     }
 
@@ -595,6 +596,7 @@ function ProfilePhotoInput({ state, setState, mode = 'create' }) {
 }
 
 export default function UserControl() {
+  const alerts = useCustomAlert();
   const [rows, setRows] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
@@ -602,7 +604,6 @@ export default function UserControl() {
   const [tenant, setTenant] = useState('');
   const [designationFilter, setDesignationFilter] = useState('');
   const [edit, setEdit] = useState(null);
-  const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
@@ -710,14 +711,13 @@ export default function UserControl() {
     async function boot() {
       try {
         setLoading(true);
-        setMessage('');
 
         const selectedTenant = await loadTenants();
         await loadHelperOptions(selectedTenant);
         await load(selectedTenant);
       } catch (error) {
         console.error(error);
-        setMessage(error.message || 'Unable to load users');
+        alerts.error(error.message || 'Unable to load users', 'Users Load Failed');
       } finally {
         setLoading(false);
       }
@@ -743,12 +743,11 @@ export default function UserControl() {
 
   async function searchUsers() {
     try {
-      setMessage('');
       setLoading(true);
       await load(tenant);
       await loadHelperOptions(tenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to search users');
+      alerts.error(error.message || 'Unable to search users', 'User Search Failed');
     } finally {
       setLoading(false);
     }
@@ -757,7 +756,6 @@ export default function UserControl() {
   async function clearSearch() {
     setQ('');
     setDesignationFilter('');
-    setMessage('');
 
     try {
       setLoading(true);
@@ -765,7 +763,7 @@ export default function UserControl() {
       setRows(data.items || []);
       await loadHelperOptions(tenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to clear search');
+      alerts.error(error.message || 'Unable to clear search', 'Clear Search Failed');
     } finally {
       setLoading(false);
     }
@@ -777,7 +775,6 @@ export default function UserControl() {
     setTenant(cleanTenant);
     setQ('');
     setDesignationFilter('');
-    setMessage('');
     setForm((prev) => ({
       ...prev,
       tenant_id: cleanTenant,
@@ -791,7 +788,7 @@ export default function UserControl() {
       const data = await getSuperAdminTenantUsers({ tenant_id: cleanTenant });
       setRows(data.items || []);
     } catch (error) {
-      setMessage(error.message || 'Unable to load selected tenant users');
+      alerts.error(error.message || 'Unable to load selected tenant users', 'Tenant Users Load Failed');
     } finally {
       setLoading(false);
     }
@@ -848,22 +845,21 @@ export default function UserControl() {
     const validationMessage = validateUserPayload(payload, 'create');
 
     if (validationMessage) {
-      setMessage(validationMessage);
+      alerts.warning(validationMessage, 'Required Details Missing');
       return;
     }
 
     try {
-      setMessage('');
       setSaving(true);
 
       const data = await createSuperAdminTenantEmployee(payload);
 
-      setMessage(data.message || 'Employee created successfully');
+      alerts.success(data.message || 'Employee created successfully', 'Employee Created');
       resetCreateForm(payload.tenant_id);
       await load(payload.tenant_id);
       await loadHelperOptions(payload.tenant_id);
     } catch (error) {
-      setMessage(error.message || 'Unable to create employee');
+      alerts.error(error.message || 'Unable to create employee', 'Employee Create Failed');
     } finally {
       setSaving(false);
     }
@@ -871,7 +867,6 @@ export default function UserControl() {
 
   async function openEdit(user) {
     try {
-      setMessage('');
 
       const employee = user.employee_profile || user.employee || {};
       const photo = profilePhotoValue(employee) || profilePhotoValue(user);
@@ -960,7 +955,7 @@ export default function UserControl() {
         });
       }, 100);
     } catch (error) {
-      setMessage(error.message || 'Unable to open edit form');
+      alerts.error(error.message || 'Unable to open edit form', 'Edit Open Failed');
     }
   }
 
@@ -971,17 +966,16 @@ export default function UserControl() {
     const validationMessage = validateUserPayload(payload, 'edit');
 
     if (validationMessage) {
-      setMessage(validationMessage);
+      alerts.warning(validationMessage, 'Required Details Missing');
       return;
     }
 
     if (payload.password && payload.password !== payload.confirm_password && payload.confirm_password) {
-      setMessage('Password and confirm password do not match');
+      alerts.warning('Password and confirm password do not match', 'Password Mismatch');
       return;
     }
 
     try {
-      setMessage('');
       setSaving(true);
 
       delete payload.user_id_for_edit;
@@ -1002,12 +996,12 @@ export default function UserControl() {
         body: JSON.stringify(payload),
       });
 
-      setMessage(data.message || 'User/profile updated successfully');
+      alerts.success(data.message || 'User/profile updated successfully', 'User Updated');
       setEdit(null);
       await load(payload.tenant_id);
       await loadHelperOptions(payload.tenant_id);
     } catch (error) {
-      setMessage(error.message || 'Unable to save user');
+      alerts.error(error.message || 'Unable to save user', 'User Save Failed');
     } finally {
       setSaving(false);
     }
@@ -1032,34 +1026,33 @@ export default function UserControl() {
     e.preventDefault();
 
     if (!resetTarget?._id) {
-      setMessage('No user selected for password reset');
+      alerts.warning('No user selected for password reset', 'Select User');
       return;
     }
 
     if (!resetForm.password || resetForm.password.length < 6) {
-      setMessage('Password must be at least 6 characters');
+      alerts.warning('Password must be at least 6 characters', 'Password Too Short');
       return;
     }
 
     if (resetForm.password !== resetForm.confirm_password) {
-      setMessage('Password and confirm password do not match');
+      alerts.warning('Password and confirm password do not match', 'Password Mismatch');
       return;
     }
 
     try {
-      setMessage('');
       setSaving(true);
 
       const data = await changeSuperAdminTenantUserPassword(resetTarget._id, resetForm);
 
-      setMessage(data.message || 'Password updated successfully');
+      alerts.success(data.message || 'Password updated successfully', 'Password Updated');
       setResetTarget(null);
       setResetForm({
         password: '',
         confirm_password: '',
       });
     } catch (error) {
-      setMessage(error.message || 'Unable to reset password');
+      alerts.error(error.message || 'Unable to reset password', 'Password Reset Failed');
     } finally {
       setSaving(false);
     }
@@ -1072,24 +1065,26 @@ export default function UserControl() {
 
     const isActive = user.is_active !== false && user.is_disabled !== true;
     const action = isActive ? 'disable' : 'enable';
-    const ok = window.confirm(`Are you sure you want to ${action} ${user.name || user.email || 'this user'}?`);
+    const ok = await alerts.confirm(
+      `Are you sure you want to ${action} ${user.name || user.email || 'this user'}?`,
+      isActive ? 'Disable User?' : 'Enable User?',
+    );
 
     if (!ok) {
       return;
     }
 
     try {
-      setMessage('');
       setSaving(true);
 
       const data = await updateSuperAdminTenantUserStatus(user._id, {
         is_active: !isActive,
       });
 
-      setMessage(data.message || (isActive ? 'User disabled successfully' : 'User enabled successfully'));
+      alerts.success(data.message || (isActive ? 'User disabled successfully' : 'User enabled successfully'), isActive ? 'User Disabled' : 'User Enabled');
       await load(tenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to update user status');
+      alerts.error(error.message || 'Unable to update user status', 'Status Update Failed');
     } finally {
       setSaving(false);
     }
@@ -1100,8 +1095,9 @@ export default function UserControl() {
       return;
     }
 
-    const ok = window.confirm(
+    const ok = await alerts.confirm(
       `Delete ${user.name || user.email || 'this user'} from the active database list?`,
+      'Delete User?',
     );
 
     if (!ok) {
@@ -1109,16 +1105,15 @@ export default function UserControl() {
     }
 
     try {
-      setMessage('');
       setSaving(true);
 
       const data = await deleteSuperAdminTenantUser(user._id);
 
-      setMessage(data.message || 'User deleted successfully');
+      alerts.success(data.message || 'User deleted successfully', 'User Deleted');
       await load(tenant);
       await loadHelperOptions(tenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to delete user');
+      alerts.error(error.message || 'Unable to delete user', 'User Delete Failed');
     } finally {
       setSaving(false);
     }
@@ -1199,7 +1194,7 @@ export default function UserControl() {
     }
 
     if (key === 'avatar') {
-      return <ProfilePhotoInput key={key} state={state} setState={setState} mode={mode} />;
+      return <ProfilePhotoInput key={key} state={state} setState={setState} mode={mode} alerts={alerts} />;
     }
 
     if (key === 'department') {
@@ -1611,7 +1606,6 @@ export default function UserControl() {
           </button>
         </form>
 
-        {message && <div className="inline-message">{message}</div>}
 
         <div className="table-wrap">
           <table>

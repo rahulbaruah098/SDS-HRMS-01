@@ -1,27 +1,28 @@
 import React, { useState } from 'react';
 import { api, setSession, refreshCurrentSession, currentUser } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 export default function Login({ onLogin }) {
+  const alerts = useCustomAlert();
   const [form, setForm] = useState({
     email: '',
     password: '',
   });
 
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
-    setError('');
+    const email = form.email.trim();
 
-    if (!form.email.trim()) {
-      setError('Email is required');
+    if (!email) {
+      alerts.warning('Email is required.', 'Missing Email');
       return;
     }
 
     if (!form.password) {
-      setError('Password is required');
+      alerts.warning('Password is required.', 'Missing Password');
       return;
     }
 
@@ -31,7 +32,7 @@ export default function Login({ onLogin }) {
       const data = await api('/auth/login', {
         method: 'POST',
         body: JSON.stringify({
-          email: form.email.trim().toLowerCase(),
+          email: email.toLowerCase(),
           password: form.password,
         }),
       });
@@ -47,7 +48,7 @@ export default function Login({ onLogin }) {
       const freshUser = currentUser();
       onLogin(freshUser || data.user);
     } catch (err) {
-      setError(err.message || 'Unable to login');
+      alerts.error(err.message || 'Unable to login.', 'Login Failed');
     } finally {
       setLoading(false);
     }
@@ -1035,7 +1036,7 @@ export default function Login({ onLogin }) {
               </div>
             </div>
 
-            <form className="sds-form" onSubmit={submit}>
+            <form className="sds-form" onSubmit={submit} noValidate>
               <div className="sds-field">
                 <label>
                   Email Address
@@ -1090,7 +1091,6 @@ export default function Login({ onLogin }) {
                 </div>
               </div>
 
-              {error ? <div className="sds-alert">{error}</div> : null}
 
               <button type="submit" className="sds-login-btn" disabled={loading}>
                 {loading ? 'Opening dashboard...' : 'Enter Dashboard'}

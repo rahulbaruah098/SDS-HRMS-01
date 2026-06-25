@@ -18,6 +18,7 @@ import {
 } from '../utils/authHelpers';
 import AttendanceWidget from '../components/AttendanceWidget';
 import Table from '../components/Table';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HOLIDAY_STATES = [
   'Assam(HO)',
@@ -593,6 +594,8 @@ function AttendanceReportList({ rows = [], loading = false }) {
 }
 
 export default function Attendance() {
+  const alerts = useCustomAlert();
+
   const [myAttendance, setMyAttendance] = useState([]);
   const [report, setReport] = useState([]);
   const [holidayWorkRequests, setHolidayWorkRequests] = useState([]);
@@ -601,7 +604,6 @@ export default function Attendance() {
   const [holidays, setHolidays] = useState([]);
   const [myCompOffs, setMyCompOffs] = useState([]);
 
-  const [message, setMessage] = useState('');
   const [loadingPage, setLoadingPage] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
   const [savingHoliday, setSavingHoliday] = useState(false);
@@ -727,10 +729,9 @@ export default function Attendance() {
     setMyCompOffs(normalizeCompOffRows(data.items || []));
   }
 
-  async function refreshAttendance() {
-    try {
-      setMessage('');
-      setLoadingPage(true);
+async function refreshAttendance() {
+  try {
+    setLoadingPage(true);
 
       await Promise.all([
         loadMyAttendance(),
@@ -741,9 +742,9 @@ export default function Attendance() {
         canViewReport ? loadTeamFieldAttendance(teamFieldFilters) : Promise.resolve(),
         canManageHoliday ? loadHolidays() : Promise.resolve(),
       ]);
-    } catch (error) {
-      setMessage(error.message || 'Unable to refresh attendance data');
-    } finally {
+      } catch (error) {
+        alerts.error(error.message || 'Unable to refresh attendance data', 'Refresh Failed');
+      } finally {
       setLoadingPage(false);
     }
   }
@@ -756,23 +757,21 @@ export default function Attendance() {
   async function searchReport(event) {
     event.preventDefault();
 
-    try {
-      setMessage('');
-      await loadReport(filters);
-    } catch (error) {
-      setMessage(error.message || 'Unable to load attendance report');
-    }
+      try {
+        await loadReport(filters);
+      } catch (error) {
+        alerts.error(error.message || 'Unable to load attendance report', 'Report Load Failed');
+      }
   }
 
   async function clearReportFilters() {
     const cleared = { ...EMPTY_REPORT_FILTERS };
 
     try {
-      setMessage('');
       setFilters(cleared);
       await loadReport(cleared);
     } catch (error) {
-      setMessage(error.message || 'Unable to clear report filters');
+      alerts.error(error.message || 'Unable to clear report filters', 'Clear Failed');
     }
   }
 
@@ -780,16 +779,20 @@ export default function Attendance() {
     const attendanceId = row?._id;
 
     if (!attendanceId) {
-      setMessage('Attendance id not found');
+      alerts.error('Attendance id not found', 'Missing Attendance ID');
       return;
     }
 
-    const ok = window.confirm('Verify this attendance record?');
+    const ok = await alerts.confirm('Verify this attendance record?', {
+      title: 'Verify Attendance',
+      confirmText: 'Yes, Verify',
+      cancelText: 'Cancel',
+      type: 'warning',
+    });
 
     if (!ok) return;
 
     try {
-      setMessage('');
       setVerifyingId(attendanceId);
 
       const data = await api(`/attendance/${attendanceId}/verify`, {
@@ -797,108 +800,172 @@ export default function Attendance() {
         body: JSON.stringify({}),
       });
 
-      setMessage(data.message || 'Attendance verified');
+      alerts.success(data.message || 'Attendance verified', 'Attendance Verified');
       await loadReport(filters);
     } catch (error) {
-      setMessage(error.message || 'Unable to verify attendance');
+      alerts.error(error.message || 'Unable to verify attendance', 'Verification Failed');
     } finally {
       setVerifyingId('');
     }
   }
 
-  async function createHoliday(event) {
-    event.preventDefault();
+async function createHoliday(event) {
+  event.preventDefault();
 
-    if (!holidayForm.date || !holidayForm.title.trim()) {
-      setMessage('Holiday date and title are required');
-      return;
-    }
-
-    try {
-      setMessage('');
-      setSavingHoliday(true);
-
-      const data = await api('/attendance/holidays', {
-        method: 'POST',
-        body: JSON.stringify(holidayForm),
-      });
-
-      setMessage(data.message || 'Holiday added');
-      setHolidayForm({ ...EMPTY_HOLIDAY_FORM });
-      await loadHolidays();
-    } catch (error) {
-      setMessage(error.message || 'Unable to add holiday');
-    } finally {
-      setSavingHoliday(false);
-    }
+  if (!holidayForm.date || !holidayForm.title.trim()) {
+    alerts.warning('Holiday date and title are required', 'Missing Holiday Details');
+    return;
   }
 
+  try {
+    setSavingHoliday(true);
 
-  async function decideHolidayWorkRequest(row, status) {
-    const requestId = row?._id;
+    const data = await api('/attendance/holidays', {
+      method: 'POST',
+      body: JSON.stringify(holidayForm),
+    });
 
-    if (!requestId) {
-      setMessage('Request id not found');
-      return;
-    }
+    alerts.success(data.message || 'Holiday added', 'Holiday Added');
+    setHolidayForm({ ...EMPTY_HOLIDAY_FORM });
+    await loadHolidays();
+  } catch (error) {
+    alerts.error(error.message || 'Unable to add holiday', 'Holiday Save Failed');
+  } finally {
+    setSavingHoliday(false);
+  }
+}
 
-    const ok = window.confirm(`${statusLabel(status)} this holiday work request?`);
 
-    if (!ok) return;
+async function decideHolidayWorkRequest(row, status) {
+  const requestId = row?._id;
 
-    try {
-      setMessage('');
-      setDecidingHolidayWorkId(requestId);
-
-      const data = await api(`/attendance/holiday-work-requests/${requestId}/decision`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
-      });
-
-      setMessage(data.message || `Holiday work request ${status}`);
-
-      await Promise.all([
-        loadHolidayWorkRequests(holidayWorkFilters),
-        loadMyHolidayWorkRequests(),
-        loadReport(filters),
-        loadTeamFieldAttendance(teamFieldFilters),
-      ]);
-    } catch (error) {
-      setMessage(error.message || 'Unable to update holiday work request');
-    } finally {
-      setDecidingHolidayWorkId('');
-    }
+  if (!requestId) {
+    alerts.error('Request id not found', 'Missing Request ID');
+    return;
   }
 
-  async function claimCompOff(event) {
-    event.preventDefault();
+  const decisionText = statusLabel(status);
+  const isReject = String(status || '').toLowerCase() === 'rejected';
 
-    if (!compOffForm.compoff_id || !compOffForm.claim_date) {
-      setMessage('Select comp-off and claim date');
-      return;
-    }
+  const ok = await alerts.confirm(`${decisionText} this holiday work request?`, {
+    title: `${decisionText} Holiday Work`,
+    confirmText: `Yes, ${decisionText}`,
+    cancelText: 'Cancel',
+    type: 'warning',
+    danger: isReject,
+  });
 
-    try {
-      setMessage('');
-      setClaimingCompOff(true);
+  if (!ok) return;
 
-      const data = await api(`/attendance/compoffs/${compOffForm.compoff_id}/claim`, {
-        method: 'POST',
-        body: JSON.stringify({
-          claim_date: compOffForm.claim_date,
-          reason: compOffForm.reason,
-        }),
-      });
+  try {
+    setDecidingHolidayWorkId(requestId);
 
-      setMessage(data.message || 'Comp-off claim submitted');
-      setCompOffForm({ ...EMPTY_COMPOFF_FORM });
-      await loadMyCompOffs();
-    } catch (error) {
-      setMessage(error.message || 'Unable to claim comp-off');
-    } finally {
-      setClaimingCompOff(false);
-    }
+    const data = await api(`/attendance/holiday-work-requests/${requestId}/decision`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+
+    alerts.success(
+      data.message || `Holiday work request ${status}`,
+      isReject ? 'Holiday Work Rejected' : 'Holiday Work Approved',
+    );
+
+    await Promise.all([
+      loadHolidayWorkRequests(holidayWorkFilters),
+      loadMyHolidayWorkRequests(),
+      loadReport(filters),
+      loadTeamFieldAttendance(teamFieldFilters),
+    ]);
+  } catch (error) {
+    alerts.error(error.message || 'Unable to update holiday work request', 'Update Failed');
+  } finally {
+    setDecidingHolidayWorkId('');
   }
+}
+
+async function searchHolidayWorkRequests(event) {
+  event.preventDefault();
+
+  try {
+    await loadHolidayWorkRequests(holidayWorkFilters);
+  } catch (error) {
+    alerts.error(
+      error.message || 'Unable to load holiday work requests',
+      'Holiday Requests Load Failed',
+    );
+  }
+}
+
+async function clearHolidayWorkFilters() {
+  const cleared = { ...EMPTY_HOLIDAY_WORK_FILTERS };
+
+  try {
+    setHolidayWorkFilters(cleared);
+    await loadHolidayWorkRequests(cleared);
+  } catch (error) {
+    alerts.error(
+      error.message || 'Unable to clear holiday work request filters',
+      'Clear Failed',
+    );
+  }
+}
+
+async function searchTeamFieldAttendance(event) {
+  event.preventDefault();
+
+  try {
+    await loadTeamFieldAttendance(teamFieldFilters);
+  } catch (error) {
+    alerts.error(
+      error.message || 'Unable to load team field attendance',
+      'Field Attendance Load Failed',
+    );
+  }
+}
+
+async function clearTeamFieldFilters() {
+  const cleared = { ...EMPTY_TEAM_FIELD_FILTERS };
+
+  try {
+    setTeamFieldFilters(cleared);
+    await loadTeamFieldAttendance(cleared);
+  } catch (error) {
+    alerts.error(
+      error.message || 'Unable to clear team field attendance filters',
+      'Clear Failed',
+    );
+  }
+}
+
+async function claimCompOff(event) {
+  event.preventDefault();
+
+  if (!compOffForm.compoff_id || !compOffForm.claim_date) {
+    alerts.warning('Select comp-off and claim date', 'Missing Comp-Off Details');
+    return;
+  }
+
+  try {
+    setClaimingCompOff(true);
+
+    const data = await api(`/attendance/compoffs/${compOffForm.compoff_id}/claim`, {
+      method: 'POST',
+      body: JSON.stringify({
+        claim_date: compOffForm.claim_date,
+        reason: compOffForm.reason,
+      }),
+    });
+
+    alerts.success(data.message || 'Comp-off claim submitted', 'Comp-Off Claim Submitted');
+    setCompOffForm({ ...EMPTY_COMPOFF_FORM });
+    await loadMyCompOffs();
+  } catch (error) {
+    alerts.error(error.message || 'Unable to claim comp-off', 'Comp-Off Claim Failed');
+  } finally {
+    setClaimingCompOff(false);
+  }
+}
+
 
   const reportRows = report.map((row) => ({
     ...row,
@@ -1065,8 +1132,6 @@ return (
           <AttendanceWidget onSuccess={refreshAttendance} />
         )}
       </section>
-
-      {message && <div className="inline-message">{message}</div>}
 
 
       {showEmployeeSelfAttendancePanel && (
@@ -1385,13 +1450,10 @@ return (
             </span>
           </div>
 
-          <form
-            className="attendance-filter-card"
-            onSubmit={(event) => {
-              event.preventDefault();
-              loadHolidayWorkRequests(holidayWorkFilters);
-            }}
-          >
+              <form
+                className="attendance-filter-card"
+                onSubmit={searchHolidayWorkRequests}
+              >
             <div className="attendance-filter-grid">
               <label>
                 Status
@@ -1431,17 +1493,13 @@ return (
                 Search Holiday Requests
               </button>
 
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  const cleared = { ...EMPTY_HOLIDAY_WORK_FILTERS };
-                  setHolidayWorkFilters(cleared);
-                  loadHolidayWorkRequests(cleared);
-                }}
-              >
-                Clear
-              </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={clearHolidayWorkFilters}
+                  >
+                    Clear
+                  </button>
             </div>
           </form>
 
@@ -1465,13 +1523,10 @@ return (
             </span>
           </div>
 
-          <form
-            className="attendance-filter-card"
-            onSubmit={(event) => {
-              event.preventDefault();
-              loadTeamFieldAttendance(teamFieldFilters);
-            }}
-          >
+                <form
+                  className="attendance-filter-card"
+                  onSubmit={searchTeamFieldAttendance}
+                >
             <div className="attendance-filter-grid">
               <label>
                 Date From
@@ -1507,18 +1562,14 @@ return (
                 {loadingTeamField ? 'Loading...' : 'Search Field Attendance'}
               </button>
 
-              <button
-                type="button"
-                className="secondary"
-                disabled={loadingTeamField}
-                onClick={() => {
-                  const cleared = { ...EMPTY_TEAM_FIELD_FILTERS };
-                  setTeamFieldFilters(cleared);
-                  loadTeamFieldAttendance(cleared);
-                }}
-              >
-                Clear
-              </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={loadingTeamField}
+                      onClick={clearTeamFieldFilters}
+                    >
+                      Clear
+                    </button>
             </div>
           </form>
 

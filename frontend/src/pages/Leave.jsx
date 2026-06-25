@@ -14,6 +14,7 @@ import {
   getActiveEmployees,
   downloadCsv,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -273,11 +274,12 @@ function leaveStatusClass(value = '') {
 }
 
 export default function Leave() {
+  const alerts = useCustomAlert();
+
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [employees, setEmployees] = useState([]);
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
 
@@ -317,17 +319,22 @@ export default function Leave() {
       });
 
       setEmployees(data.items || []);
-    } catch {
+    } catch (error) {
       setEmployees([]);
+      alerts.error(
+        error.message || 'Unable to load employee list.',
+        'Employee List Failed',
+      );
     } finally {
       setLoadingEmployees(false);
     }
   }
 
-  async function loadLeaves(nextFilters = filters) {
+  async function loadLeaves(nextFilters = filters, options = {}) {
+    const errorTitle = options.errorTitle || 'Leave Records Load Failed';
+
     try {
       setLoading(true);
-      setMessage('');
 
       const data = await getLeaveRequestReports(buildReportParams(nextFilters));
 
@@ -336,7 +343,10 @@ export default function Leave() {
     } catch (error) {
       setRows([]);
       setSummary({});
-      setMessage(error.message || 'Unable to load leave records.');
+      alerts.error(
+        error.message || 'Unable to load leave records.',
+        errorTitle,
+      );
     } finally {
       setLoading(false);
     }
@@ -378,16 +388,21 @@ export default function Leave() {
 
   async function handleSearch(event) {
     event.preventDefault();
-    await loadLeaves(filters);
+    await loadLeaves(filters, { errorTitle: 'Search Failed' });
   }
 
   async function handleReset() {
     const cleared = { ...EMPTY_FILTERS };
     setFilters(cleared);
-    await loadLeaves(cleared);
+    await loadLeaves(cleared, { errorTitle: 'Reset Failed' });
   }
 
 function handleCsvExport() {
+  if (!normalizedRows.length) {
+    alerts.warning('There are no leave records to export.', 'Export Not Available');
+    return;
+  }
+
   const exportRows = normalizedRows.map((row) => ({
     ...row,
     from_date: row.from_date_display,
@@ -402,6 +417,7 @@ function handleCsvExport() {
   }));
 
   downloadCsv('hr-leave-management.csv', exportRows, LEAVE_COLUMNS);
+  alerts.success('Leave records CSV export is ready.', 'Export Ready');
 }
 
   return (
@@ -420,15 +436,13 @@ function handleCsvExport() {
         <button
           type="button"
           className="secondary"
-          onClick={() => loadLeaves(filters)}
+          onClick={() => loadLeaves(filters, { errorTitle: 'Refresh Failed' })}
           disabled={loading}
         >
           <RefreshCcw size={16} />
           {loading ? 'Refreshing...' : 'Refresh'}
         </button>
       </section>
-
-      {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
         <div className="stat-card">

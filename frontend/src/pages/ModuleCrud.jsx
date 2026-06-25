@@ -11,6 +11,7 @@ import {
   LEAVE_TYPES_FOR_EMPLOYEE,
 } from '../data/modules';
 import { isSuperAdmin } from '../utils/authHelpers';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HOLIDAY_STATES = [
   'Assam(HO)',
@@ -516,6 +517,7 @@ function EmployeeAvatar({ employee = {}, size = 'md' }) {
 }
 
 function ProfilePhotoInput({ state, setState, isEditMode = false }) {
+  const alerts = useCustomAlert();
   const photo = profilePhotoValue(state);
   const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
   const name = employeeDisplayName(state);
@@ -532,12 +534,12 @@ function ProfilePhotoInput({ state, setState, isEditMode = false }) {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      alert('Please choose an image file.');
+      alerts.warning('Please choose an image file.', 'Invalid File Type');
       return;
     }
 
     if (file.size > 1024 * 1024 * 2) {
-      alert('Image size should be below 2MB.');
+      alerts.warning('Image size should be below 2MB.', 'Image Too Large');
       return;
     }
 
@@ -792,6 +794,7 @@ export default function ModuleCrud({
   requiredFields = [],
   defaultValues = null,
 }) {
+const alerts = useCustomAlert();
 const moduleInfo = allModules.find((m) => m[0] === collection);
 
 const baseTemplate =
@@ -817,7 +820,6 @@ const hiddenFieldSet = useMemo(() => new Set(hiddenFields || []), [hiddenFields]
   const [edit, setEdit] = useState(null);
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
-  const [message, setMessage] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [designationOptions, setDesignationOptions] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
@@ -1053,7 +1055,6 @@ const editFields = useMemo(() => {
   useEffect(() => {
     resetForm();
     setEdit(null);
-    setMessage('');
     setRows([]);
     setEmployeeOptions([]);
     setDesignationOptions([]);
@@ -1064,7 +1065,7 @@ const editFields = useMemo(() => {
 
     if (collection === 'leave_balances' && !canManageLeaveBalances()) {
       setLoading(false);
-      setMessage('Leave Balances can only be accessed by HR, Admin, and Super Admin.');
+      alerts.warning('Leave Balances can only be accessed by HR, Admin, and Super Admin.', 'Access Restricted');
       return;
     }
 
@@ -1074,7 +1075,7 @@ const editFields = useMemo(() => {
       .then(() => reloadEmployeeHelpers(''))
       .catch((error) => {
         console.error(error);
-        setMessage(error.message || 'Unable to load records');
+        alerts.error(error.message || 'Unable to load records', 'Records Load Failed');
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1084,16 +1085,15 @@ const editFields = useMemo(() => {
     event.preventDefault();
 
     if (!leaveBalanceAllowed) {
-      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      alerts.warning('Leave Balances can only be managed by HR, Admin, and Super Admin.', 'Access Restricted');
       return;
     }
 
     if (isSystemGenerated) {
-      setMessage('This module is system generated. Use the dedicated workflow page.');
+      alerts.warning('This module is system generated. Use the dedicated workflow page.', 'System Generated Module');
       return;
     }
 
-    setMessage('');
 
     try {
       setSaving(true);
@@ -1116,7 +1116,7 @@ const editFields = useMemo(() => {
 
         if (isCompOffLeaveType(payload.leave_type)) {
           if (!payload.compoff_credit_id && !payload.compoff_id) {
-            setMessage('Please select an available comp-off credit.');
+            alerts.warning('Please select an available comp-off credit.', 'Comp-Off Credit Required');
             setSaving(false);
             return;
           }
@@ -1127,13 +1127,13 @@ const editFields = useMemo(() => {
           );
 
           if (!selectedCredit || !isCompOffClaimable(selectedCredit)) {
-            setMessage('Selected comp-off credit is not available or has expired.');
+            alerts.warning('Selected comp-off credit is not available or has expired.', 'Comp-Off Not Available');
             setSaving(false);
             return;
           }
 
           if (payload.from_date !== payload.upto_date && payload.from_date !== payload.to_date) {
-            setMessage('Comp-off leave can be applied for one day only.');
+            alerts.warning('Comp-off leave can be applied for one day only.', 'Invalid Comp-Off Dates');
             setSaving(false);
             return;
           }
@@ -1144,7 +1144,7 @@ const editFields = useMemo(() => {
         payload = normalizeBalancePayload(payload);
 
         if (!payload.employee_id) {
-          setMessage('Please select an employee.');
+          alerts.warning('Please select an employee.', 'Employee Required');
           setSaving(false);
           return;
         }
@@ -1163,7 +1163,7 @@ const editFields = useMemo(() => {
       }
 
       resetForm();
-setMessage(
+alerts.success(
   collection === 'leave_balances'
     ? 'Casual Leave and Earned Leave balances saved successfully'
     : collection === 'leave_requests'
@@ -1173,6 +1173,7 @@ setMessage(
         : collection === 'organisations'
           ? 'Organisation / Entity created successfully'
           : 'Record created successfully',
+  'Created Successfully',
 );
       await load();
       await reloadEmployeeHelpers();
@@ -1181,7 +1182,7 @@ setMessage(
         await loadAvailableCompOffs();
       }
     } catch (error) {
-      setMessage(error.message || 'Unable to create record');
+      alerts.error(error.message || 'Unable to create record', 'Create Failed');
     } finally {
       setSaving(false);
     }
@@ -1189,18 +1190,17 @@ setMessage(
 
   async function startEdit(row) {
     if (!leaveBalanceAllowed) {
-      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      alerts.warning('Leave Balances can only be managed by HR, Admin, and Super Admin.', 'Access Restricted');
       return;
     }
 
     if (isSystemGenerated) {
-      setMessage('This module is system generated and cannot be edited here.');
+      alerts.warning('This module is system generated and cannot be edited here.', 'System Generated Module');
       return;
     }
 
     try {
-      setMessage('');
-      await reloadEmployeeHelpers();
+        await reloadEmployeeHelpers();
 
       const editData = { ...template, ...row };
 
@@ -1257,13 +1257,12 @@ setMessage(
         });
       }, 100);
     } catch (error) {
-      setMessage(error.message || 'Unable to open edit form');
+      alerts.error(error.message || 'Unable to open edit form', 'Edit Open Failed');
     }
   }
 
   async function saveEdit(event) {
     event.preventDefault();
-    setMessage('');
 
     try {
       setSaving(true);
@@ -1309,7 +1308,7 @@ setMessage(
       });
 
       setEdit(null);
-setMessage(
+alerts.success(
   collection === 'leave_balances'
     ? 'Casual Leave and Earned Leave balances updated successfully'
     : collection === 'employees'
@@ -1317,11 +1316,12 @@ setMessage(
       : collection === 'organisations'
         ? 'Organisation / Entity updated successfully'
         : 'Record updated successfully',
+  'Updated Successfully',
 );
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
-      setMessage(error.message || 'Unable to update record');
+      alerts.error(error.message || 'Unable to update record', 'Update Failed');
     } finally {
       setSaving(false);
     }
@@ -1329,49 +1329,52 @@ setMessage(
 
   async function remove(id) {
     if (!leaveBalanceAllowed) {
-      setMessage('Leave Balances can only be managed by HR, Admin, and Super Admin.');
+      alerts.warning('Leave Balances can only be managed by HR, Admin, and Super Admin.', 'Access Restricted');
       return;
     }
 
     if (collection === 'leave_balances') {
-      setMessage('Leave Balances should be updated instead of deleted.');
+      alerts.warning('Leave Balances should be updated instead of deleted.', 'Delete Not Allowed');
       return;
     }
 
     if (isSystemGenerated) {
-      setMessage('This module is system generated and cannot be deleted here.');
+      alerts.warning('This module is system generated and cannot be deleted here.', 'System Generated Module');
       return;
     }
 
-    const ok = window.confirm('Are you sure you want to delete this record?');
+    const ok = await alerts.confirm(
+      'Are you sure you want to delete this record?',
+      'Delete Record',
+      { confirmText: 'Delete', cancelText: 'Cancel', danger: true },
+    );
 
     if (!ok) {
       return;
     }
 
     try {
-      setMessage('');
-
+  
       await api(`/${collection}/${id}`, {
         method: 'DELETE',
       });
 
-      setMessage(
+      alerts.success(
         collection === 'employees'
           ? 'Employee deleted and login account deactivated successfully'
           : 'Record deleted successfully',
+        'Deleted Successfully',
       );
       await load();
       await reloadEmployeeHelpers();
     } catch (error) {
-      setMessage(error.message || 'Unable to delete record');
+      alerts.error(error.message || 'Unable to delete record', 'Delete Failed');
     }
   }
 
   async function runPayroll() {
     try {
-      setMessage('');
-
+  
       const month = form.month || new Date().toISOString().slice(0, 7);
 
       const data = await api('/payroll/run', {
@@ -1379,58 +1382,64 @@ setMessage(
         body: JSON.stringify({ month }),
       });
 
-      setMessage(data.message || 'Payroll processed');
+      alerts.success(data.message || 'Payroll processed', 'Payroll Processed');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Unable to run payroll');
+      alerts.error(error.message || 'Unable to run payroll', 'Payroll Failed');
     }
   }
 
   async function decideLeave(row, status) {
-    const ok = window.confirm(`${statusLabel(status)} this leave request?`);
+    const ok = await alerts.confirm(
+      `${statusLabel(status)} this leave request?`,
+      'Confirm Leave Decision',
+      { confirmText: statusLabel(status), cancelText: 'Cancel' },
+    );
 
     if (!ok) {
       return;
     }
 
     try {
-      setMessage('');
-      setSaving(true);
+        setSaving(true);
 
       const data = await api(`/leave_requests/${row._id}/decision`, {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       });
 
-      setMessage(data.message || `Leave ${status}`);
+      alerts.success(data.message || `Leave ${status}`, 'Leave Request Updated');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Unable to update leave request');
+      alerts.error(error.message || 'Unable to update leave request', 'Leave Update Failed');
     } finally {
       setSaving(false);
     }
   }
 
   async function decideModeRequest(row, status) {
-    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+    const ok = await alerts.confirm(
+      `${statusLabel(status)} this WFH / Field request?`,
+      'Confirm Attendance Mode Decision',
+      { confirmText: statusLabel(status), cancelText: 'Cancel' },
+    );
 
     if (!ok) {
       return;
     }
 
     try {
-      setMessage('');
-      setSaving(true);
+        setSaving(true);
 
       const data = await api(`/attendance/mode-requests/${row._id}/decision`, {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       });
 
-      setMessage(data.message || `Request ${status}`);
+      alerts.success(data.message || `Request ${status}`, 'Request Updated');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Unable to update WFH / Field request');
+      alerts.error(error.message || 'Unable to update WFH / Field request', 'Request Update Failed');
     } finally {
       setSaving(false);
     }
@@ -1438,13 +1447,12 @@ setMessage(
 
   async function searchRecords() {
     try {
-      setMessage('');
-      setLoading(true);
+        setLoading(true);
 
       await load(q, tenant);
       await reloadEmployeeHelpers(tenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to search records');
+      alerts.error(error.message || 'Unable to search records', 'Search Failed');
     } finally {
       setLoading(false);
     }
@@ -1456,14 +1464,13 @@ setMessage(
 
     setQ(clearedQ);
     setTenant(clearedTenant);
-    setMessage('');
 
     try {
       setLoading(true);
       await load(clearedQ, clearedTenant);
       await reloadEmployeeHelpers(clearedTenant);
     } catch (error) {
-      setMessage(error.message || 'Unable to clear search');
+      alerts.error(error.message || 'Unable to clear search', 'Clear Failed');
     } finally {
       setLoading(false);
     }
@@ -2969,7 +2976,6 @@ if (key === 'lwp_days') {
           </form>
         )}
 
-        {message && <div className="inline-message">{message}</div>}
 
         <div className="table-wrap">
           <table>

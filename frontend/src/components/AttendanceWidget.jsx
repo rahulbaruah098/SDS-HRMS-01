@@ -7,6 +7,7 @@ import {
   submitCheckIn,
   submitCheckOut,
 } from '../api/client';
+import { useCustomAlert } from './CustomAlertProvider.jsx';
 
 const HOLD_DURATION = 1600;
 
@@ -234,6 +235,8 @@ function HoldButton({
 }
 
 export default function AttendanceWidget({ onSuccess }) {
+  const alerts = useCustomAlert();
+
   const [mode, setMode] = useState('office');
   const [fieldLocation, setFieldLocation] = useState('');
   const [fieldPhotoFile, setFieldPhotoFile] = useState(null);
@@ -249,7 +252,6 @@ export default function AttendanceWidget({ onSuccess }) {
   const [showHolidayRequestForm, setShowHolidayRequestForm] = useState(false);
 
   const [statusData, setStatusData] = useState(null);
- const [message, setMessage] = useState('');
   const [loadingType, setLoadingType] = useState('');
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [currentGps, setCurrentGps] = useState(null);
@@ -291,25 +293,27 @@ export default function AttendanceWidget({ onSuccess }) {
     return 'Approval will go to HR because Team Leader and Reporting Officer are not mapped.';
   }, [employee, statusData]);
 
-  async function loadStatus() {
-    try {
-      setLoadingStatus(true);
-      setMessage('');
+async function loadStatus() {
+  try {
+    setLoadingStatus(true);
 
-      const data = await getAttendanceStatus();
-      setStatusData(data);
+    const data = await getAttendanceStatus();
+    setStatusData(data);
 
-      const modes = data?.available_modes || ['office'];
+    const modes = data?.available_modes || ['office'];
 
-      if (!modes.includes(mode)) {
-        setMode(modes[0] || 'office');
-      }
-    } catch (error) {
-      setMessage(error.message || 'Unable to load attendance status');
-    } finally {
-      setLoadingStatus(false);
+    if (!modes.includes(mode)) {
+      setMode(modes[0] || 'office');
     }
+  } catch (error) {
+    alerts.error(
+      error.message || 'Unable to load attendance status',
+      'Attendance Status Failed',
+    );
+  } finally {
+    setLoadingStatus(false);
   }
+}
 
   useEffect(() => {
     loadStatus();
@@ -327,15 +331,15 @@ export default function AttendanceWidget({ onSuccess }) {
 async function refreshGps() {
   try {
     setLoadingType('gps-refresh');
-    setMessage('Refreshing GPS location. Please wait...');
+    alerts.info('Refreshing GPS location. Please wait...', 'GPS Refresh');
 
     const location = await getCurrentLocation();
 
     setCurrentGps(location);
-    setMessage(gpsStatusText(location) || 'GPS location refreshed.');
+    alerts.success(gpsStatusText(location) || 'GPS location refreshed.', 'GPS Ready');
   } catch (error) {
     setCurrentGps(null);
-    setMessage(attendanceErrorMessage(error));
+    alerts.error(attendanceErrorMessage(error), 'GPS Failed');
   } finally {
     setLoadingType('');
   }
@@ -357,133 +361,178 @@ function savedGpsPayload() {
 }
 
 
-  async function submitAttendance(type) {
-    setMessage('');
+async function submitAttendance(type) {
+  if (type === 'check-in') {
+    if (checkedIn) {
+      alerts.info('You have already checked in today.', 'Already Checked In');
+      return;
+    }
+
+    if (holidayCheckInBlocked) {
+      alerts.warning(
+        'Today is a holiday. Please submit a Holiday Work Request and wait for approval before check-in.',
+        'Holiday Approval Required',
+      );
+      setShowHolidayRequestForm(true);
+      return;
+    }
+
+    if (!availableModes.includes(mode)) {
+      alerts.warning(
+        `${modeLabel(mode)} check-in is not available for today.`,
+        'Check-in Not Available',
+      );
+      return;
+    }
+
+    if (mode === 'field' && !fieldLocation.trim()) {
+      alerts.warning(
+        'Field location / visit place is required for field check-in.',
+        'Field Location Required',
+      );
+      return;
+    }
+
+    if (mode === 'field' && !fieldPhotoFile) {
+      alerts.warning(
+        'Field photo is required for field check-in.',
+        'Field Photo Required',
+      );
+      return;
+    }
+
+    if (lateNow && !lateReason.trim() && !holiday?.is_holiday) {
+      alerts.warning(
+        'Late reason is required from 09:50 AM onwards.',
+        'Late Check-in Reason Required',
+      );
+      return;
+    }
+  }
+
+  if (type === 'check-out') {
+    if (!checkedIn) {
+      alerts.warning('Please check in first before check out.', 'Check In First');
+      return;
+    }
+
+    if (checkedOut) {
+      alerts.info('You have already checked out today.', 'Already Checked Out');
+      return;
+    }
+
+    if (earlyCheckoutNow && !earlyCheckoutReason.trim() && !holiday?.is_holiday) {
+      alerts.warning(
+        'Early checkout reason is required before 06:00 PM.',
+        'Early Checkout Reason Required',
+      );
+      return;
+    }
+  }
+
+  try {
+    setLoadingType(type);
+    alerts.info('Capturing GPS location. Please wait...', 'GPS Capture');
 
     if (type === 'check-in') {
-      if (holidayCheckInBlocked) {
-        setMessage('Today is a holiday. Please submit a Holiday Work Request and wait for approval before check-in.');
-        setShowHolidayRequestForm(true);
-        return;
-      }
+      const payload = await buildAttendancePayload({
+        ...savedGpsPayload(),
+        mode,
+        field_location: fieldLocation.trim(),
+        field_photo_file: fieldPhotoFile,
+        late_reason: lateReason.trim(),
+      });
 
-      if (!availableModes.includes(mode)) {
-        setMessage(`${modeLabel(mode)} check-in is not available for today`);
-        return;
-      }
+      const data = await submitCheckIn(payload);
 
-      if (mode === 'field' && !fieldLocation.trim()) {
-        setMessage('Field location / visit place is required for field check-in');
-        return;
-      }
-
-      if (mode === 'field' && !fieldPhotoFile) {
-        setMessage('Field photo is required for field check-in');
-        return;
-      }
-
-      if (lateNow && !lateReason.trim() && !holiday?.is_holiday) {
-        setMessage('Late reason is required from 09:50 AM onwards');
-        return;
-      }
-    }
-
-    if (type === 'check-out') {
-      if (earlyCheckoutNow && !earlyCheckoutReason.trim() && !holiday?.is_holiday) {
-        setMessage('Early checkout reason is required before 06:00 PM');
-        return;
-      }
-    }
-
-    try {
-      setLoadingType(type);
-      setMessage('Capturing GPS location. Please wait...');
-
-      if (type === 'check-in') {
-        const payload = await buildAttendancePayload({
-          ...savedGpsPayload(),
-          mode,
-          field_location: fieldLocation.trim(),
-          field_photo_file: fieldPhotoFile,
-          late_reason: lateReason.trim(),
-        });
-
-        const data = await submitCheckIn(payload);
-
-        setMessage(data.message || 'Check-in successful');
-        setFieldLocation('');
-        setFieldPhotoFile(null);
-        setFieldPhotoPreview('');
-        setLateReason('');
+      if (lateNow && !holiday?.is_holiday) {
+        alerts.warning(
+          data.message || 'Late check-in recorded successfully.',
+          'Late Check-in Recorded',
+        );
       } else {
-        const payload = await buildAttendancePayload({
-          ...savedGpsPayload(),
-          early_checkout_reason: earlyCheckoutReason.trim(),
-        });
-
-        const data = await submitCheckOut(payload);
-
-        setMessage(data.message || 'Check-out successful');
-        setEarlyCheckoutReason('');
+        alerts.success(data.message || 'Check-in successful.', 'Check-in Successful');
       }
 
-      await refreshAfterSuccess();
-      } catch (error) {
-        setMessage(attendanceErrorMessage(error));
-      } finally {
-        setLoadingType('');
-      }
+      setFieldLocation('');
+      setFieldPhotoFile(null);
+      setFieldPhotoPreview('');
+      setLateReason('');
+    } else {
+      const payload = await buildAttendancePayload({
+        ...savedGpsPayload(),
+        early_checkout_reason: earlyCheckoutReason.trim(),
+      });
+
+      const data = await submitCheckOut(payload);
+
+      alerts.success(data.message || 'Check-out successful.', 'Check-out Successful');
+      setEarlyCheckoutReason('');
+    }
+
+    await refreshAfterSuccess();
+  } catch (error) {
+    alerts.error(
+      attendanceErrorMessage(error),
+      type === 'check-in' ? 'Check-in Failed' : 'Check-out Failed',
+    );
+  } finally {
+    setLoadingType('');
   }
-
-  async function submitHolidayWorkRequest(event) {
-    event.preventDefault();
-    setMessage('');
-
-    if (!holidayRequestDate) {
-      setMessage('Please select holiday work date');
-      return;
-    }
-
-    if (!holidayReason.trim()) {
-      setMessage('Please enter holiday work reason');
-      return;
-    }
-
-    if (!holidayWorkLocation.trim()) {
-      setMessage('Please enter work location / place');
-      return;
-    }
-
-    try {
-      setLoadingType('holiday-work-request');
-      setMessage('Capturing GPS location. Please wait...');
-
-        const payload = await buildAttendancePayload({
-          ...savedGpsPayload(),
-          date: holidayRequestDate,
-          reason: holidayReason.trim(),
-          work_location: holidayWorkLocation.trim(),
-          field_location: holidayWorkLocation.trim(),
-          field_photo_file: holidayPhotoFile,
-        });
-
-      const data = await createHolidayWorkRequest(payload);
-
-      setMessage(data.message || 'Holiday work request submitted');
-      setHolidayRequestDate(todayISO());
-      setHolidayReason('');
-      setHolidayWorkLocation('');
-      setHolidayPhotoFile(null);
-      setHolidayPhotoPreview('');
-      setShowHolidayRequestForm(false);
-
-      await refreshAfterSuccess();
-} catch (error) {
-  setMessage(attendanceErrorMessage(error));
-} finally {
-  setLoadingType('');
 }
+
+async function submitHolidayWorkRequest(event) {
+  event.preventDefault();
+
+  if (!holidayRequestDate) {
+    alerts.warning('Please select holiday work date.', 'Holiday Date Required');
+    return;
   }
+
+  if (!holidayReason.trim()) {
+    alerts.warning('Please enter holiday work reason.', 'Holiday Reason Required');
+    return;
+  }
+
+  if (!holidayWorkLocation.trim()) {
+    alerts.warning('Please enter work location / place.', 'Work Location Required');
+    return;
+  }
+
+  try {
+    setLoadingType('holiday-work-request');
+    alerts.info('Capturing GPS location. Please wait...', 'GPS Capture');
+
+    const payload = await buildAttendancePayload({
+      ...savedGpsPayload(),
+      date: holidayRequestDate,
+      reason: holidayReason.trim(),
+      work_location: holidayWorkLocation.trim(),
+      field_location: holidayWorkLocation.trim(),
+      field_photo_file: holidayPhotoFile,
+    });
+
+    const data = await createHolidayWorkRequest(payload);
+
+    alerts.success(
+      data.message || 'Holiday work request submitted.',
+      'Holiday Work Submitted',
+    );
+
+    setHolidayRequestDate(todayISO());
+    setHolidayReason('');
+    setHolidayWorkLocation('');
+    setHolidayPhotoFile(null);
+    setHolidayPhotoPreview('');
+    setShowHolidayRequestForm(false);
+
+    await refreshAfterSuccess();
+  } catch (error) {
+    alerts.error(attendanceErrorMessage(error), 'Holiday Work Submit Failed');
+  } finally {
+    setLoadingType('');
+  }
+}
 
   return (
     <div className="attendance-card attendance-pro-card">
@@ -646,7 +695,7 @@ function savedGpsPayload() {
               loadingType === 'check-in' ? 'Checking In...' : 'Processing...'
             }
           loading={loadingType === 'check-in'}
-          disabled={loadingType !== '' || checkedIn || holidayCheckInBlocked}
+          disabled={loadingType !== ''}
           onComplete={() => submitAttendance('check-in')}
           variant="primary"
         />
@@ -663,7 +712,7 @@ function savedGpsPayload() {
             loadingType === 'check-out' ? 'Checking Out...' : 'Processing...'
           }
           loading={loadingType === 'check-out'}
-          disabled={loadingType !== '' || !checkedIn || checkedOut}
+          disabled={loadingType !== ''}
           onComplete={() => submitAttendance('check-out')}
           variant="secondary"
         />
@@ -791,8 +840,6 @@ function savedGpsPayload() {
           </div>
         </div>
       )}
-
-      {message && <div className="inline-message">{message}</div>}
     </div>
   );
 }

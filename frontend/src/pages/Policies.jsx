@@ -6,9 +6,7 @@ import {
   Search,
   RefreshCw,
   ShieldCheck,
-  AlertCircle,
   CheckCircle2,
-  X,
 } from 'lucide-react';
 
 import {
@@ -16,6 +14,7 @@ import {
   uploadPolicy,
   downloadPolicy,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HR_UPLOAD_ROLES = ['hr', 'hr_admin', 'hr_manager'];
 
@@ -90,13 +89,13 @@ function formatDate(value) {
 
 export default function Policies({ user }) {
   const allowUpload = canUploadPolicy(user);
+  const alerts = useCustomAlert();
 
   const [policies, setPolicies] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [downloadingId, setDownloadingId] = useState('');
-  const [message, setMessage] = useState(null);
 
   const [form, setForm] = useState({
     document_id: '',
@@ -134,10 +133,7 @@ export default function Policies({ user }) {
 
       setPolicies(data.items || data.policies || []);
     } catch (error) {
-      setMessage({
-        type: 'error',
-        text: error?.message || 'Unable to load policies.',
-      });
+      alerts.error(error?.message || 'Unable to load policies.', 'Policies Load Failed');
     } finally {
       setLoading(false);
     }
@@ -203,31 +199,21 @@ export default function Policies({ user }) {
     const validationError = validateForm();
 
     if (validationError) {
-      setMessage({
-        type: 'error',
-        text: validationError,
-      });
+      alerts.warning(validationError, 'Policy Validation');
       return;
     }
 
     setUploading(true);
-    setMessage(null);
 
     try {
       await uploadPolicy(form);
 
-      setMessage({
-        type: 'success',
-        text: 'Policy uploaded successfully.',
-      });
+      alerts.success('Policy uploaded successfully.', 'Policy Uploaded');
 
       resetForm();
       await loadPolicies();
     } catch (error) {
-      setMessage({
-        type: 'error',
-        text: error?.message || 'Unable to upload policy.',
-      });
+      alerts.error(error?.message || 'Unable to upload policy.', 'Policy Upload Failed');
     } finally {
       setUploading(false);
     }
@@ -237,26 +223,21 @@ export default function Policies({ user }) {
     const policyId = policy.id || policy._id;
 
     if (!policyId) {
-      setMessage({
-        type: 'error',
-        text: 'Invalid policy selected.',
-      });
+      alerts.error('Invalid policy selected.', 'Invalid Policy');
       return;
     }
 
     setDownloadingId(policyId);
-    setMessage(null);
 
     try {
       await downloadPolicy(
         policyId,
         policy.file_original_name || `${policy.document_id || 'policy'}`
       );
+
+      alerts.success('Policy download started successfully.', 'Download Started');
     } catch (error) {
-      setMessage({
-        type: 'error',
-        text: error?.message || 'Unable to download policy.',
-      });
+      alerts.error(error?.message || 'Unable to download policy.', 'Policy Download Failed');
     } finally {
       setDownloadingId('');
     }
@@ -753,23 +734,6 @@ export default function Policies({ user }) {
           </div>
         </div>
       </section>
-
-      {message ? (
-        <div className={`policy-alert ${message.type}`}>
-          <div className="policy-alert-main">
-            {message.type === 'success' ? (
-              <CheckCircle2 size={20} />
-            ) : (
-              <AlertCircle size={20} />
-            )}
-            <span>{message.text}</span>
-          </div>
-
-          <button type="button" onClick={() => setMessage(null)} aria-label="Close message">
-            <X size={18} />
-          </button>
-        </div>
-      ) : null}
 
       {allowUpload ? (
         <section className="policy-card">

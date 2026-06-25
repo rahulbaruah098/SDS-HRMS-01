@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCcw, Search, X } from 'lucide-react';
 import { api } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const EMPTY_FILTERS = {
   status: 'pending',
@@ -57,8 +58,9 @@ function buildQuery(params = {}) {
 }
 
 export default function PasswordRequests() {
+  const alerts = useCustomAlert();
+
   const [rows, setRows] = useState([]);
-  const [message, setMessage] = useState('');
   const [loadingId, setLoadingId] = useState('');
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
@@ -76,12 +78,11 @@ export default function PasswordRequests() {
   async function load(nextFilters = filters) {
     try {
       setLoading(true);
-      setMessage('');
 
       const data = await api(`/password-requests${buildQuery(nextFilters)}`);
       setRows(data.items || []);
     } catch (error) {
-      setMessage(error.message || 'Unable to load password requests');
+      alerts.error(error.message || 'Unable to load password requests.', 'Password Requests Load Failed');
     } finally {
       setLoading(false);
     }
@@ -94,11 +95,14 @@ export default function PasswordRequests() {
 
   async function approve(id) {
     if (!id) {
-      setMessage('Password request id not found');
+      alerts.warning('Password request id not found.', 'Request ID Missing');
       return;
     }
 
-    const ok = window.confirm('Approve this password change request?');
+    const ok = await alerts.confirm(
+      'Approve this password change request? The login password will be updated immediately.',
+      'Approve Password Request',
+    );
 
     if (!ok) {
       return;
@@ -106,17 +110,16 @@ export default function PasswordRequests() {
 
     try {
       setLoadingId(id);
-      setMessage('');
 
       const data = await api(`/password-requests/${id}/approve`, {
         method: 'POST',
         body: JSON.stringify({}),
       });
 
-      setMessage(data.message || 'Password request approved');
+      alerts.success(data.message || 'Password request approved.', 'Request Approved');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Unable to approve request');
+      alerts.error(error.message || 'Unable to approve request.', 'Approval Failed');
     } finally {
       setLoadingId('');
     }
@@ -140,13 +143,12 @@ export default function PasswordRequests() {
     const id = rejectTarget?._id;
 
     if (!id) {
-      setMessage('Password request id not found');
+      alerts.warning('Password request id not found.', 'Request ID Missing');
       return;
     }
 
     try {
       setLoadingId(id);
-      setMessage('');
 
       const data = await api(`/password-requests/${id}/reject`, {
         method: 'POST',
@@ -155,12 +157,12 @@ export default function PasswordRequests() {
         }),
       });
 
-      setMessage(data.message || 'Password request rejected');
+      alerts.success(data.message || 'Password request rejected.', 'Request Rejected');
       setRejectTarget(null);
       setRejectReason('');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Unable to reject request');
+      alerts.error(error.message || 'Unable to reject request.', 'Rejection Failed');
     } finally {
       setLoadingId('');
     }
@@ -231,7 +233,7 @@ export default function PasswordRequests() {
           )}
         </div>
 
-        <form className="dynamic-form" onSubmit={searchRequests}>
+        <form className="dynamic-form" onSubmit={searchRequests} noValidate>
           <label>
             Status
             <select
@@ -277,8 +279,6 @@ export default function PasswordRequests() {
             Clear
           </button>
         </form>
-
-        {message && <div className="inline-message">{message}</div>}
       </section>
 
       {rejectTarget && (
@@ -306,7 +306,7 @@ export default function PasswordRequests() {
             </button>
           </div>
 
-          <form className="dynamic-form" onSubmit={reject}>
+          <form className="dynamic-form" onSubmit={reject} noValidate>
             <label>
               Rejection Reason
               <textarea

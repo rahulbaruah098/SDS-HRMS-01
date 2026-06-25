@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle,
   CheckCircle2,
   ClipboardCheck,
   Filter,
@@ -36,6 +35,7 @@ import {
   IT_SUPPORT_PRIORITY_OPTIONS,
   IT_SUPPORT_STATUS_OPTIONS,
 } from '../data/modules';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_ESCALATION_TYPES = [
   { value: 'software_application', label: 'Software / Application Problem' },
@@ -1091,6 +1091,8 @@ const IT_SUPPORT_SHEET_STYLES = `
 `;
 
 export default function ITSupport() {
+  const alerts = useCustomAlert();
+
   const [profile, setProfile] = useState({});
   const [permissions, setPermissions] = useState({
     can_manage: false,
@@ -1144,8 +1146,6 @@ const [showMyTicketsSheet, setShowMyTicketsSheet] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [panelSaving, setPanelSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
   const manageAccess = Boolean(permissions.can_manage_normal || permissions.can_manage);
   const workAccess = Boolean(permissions.is_it_member || permissions.is_it_head);
@@ -1288,7 +1288,6 @@ function closePanel() {
 
 async function loadData() {
   setLoading(true);
-  setError('');
 
   try {
     const [profileRes, optionsRes, myRes] = await Promise.all([
@@ -1358,7 +1357,7 @@ async function loadData() {
     setMyTickets(myRes.tickets || []);
     setTeamTickets(teamRes.tickets || []);
   } catch (err) {
-    setError(err.message || 'Unable to load IT support data.');
+    alerts.error(err.message || 'Unable to load IT support data.', 'IT Support Load Failed');
   } finally {
     setLoading(false);
   }
@@ -1368,7 +1367,6 @@ async function loadTeamTickets() {
     if (!canSeeDesk) return;
 
     setLoading(true);
-    setError('');
 
     try {
       const data = await getItSupportTickets(filters);
@@ -1382,7 +1380,7 @@ async function loadTeamTickets() {
         team_slots: data.team_slots || prev.team_slots,
       }));
     } catch (err) {
-      setError(err.message || 'Unable to load IT support tickets.');
+      alerts.error(err.message || 'Unable to load IT support tickets.', 'Ticket Load Failed');
     } finally {
       setLoading(false);
     }
@@ -1391,16 +1389,13 @@ async function loadTeamTickets() {
   async function handleCreateTicket(event) {
     event.preventDefault();
 
-    setError('');
-    setSuccess('');
-
     if (!normalizeText(ticketForm.subject)) {
-      setError('Subject is required.');
+      alerts.warning('Subject is required.', 'Missing Subject');
       return;
     }
 
     if (!normalizeText(ticketForm.description)) {
-      setError('Description is required.');
+      alerts.warning('Description is required.', 'Missing Description');
       return;
     }
 
@@ -1415,10 +1410,10 @@ async function loadTeamTickets() {
       });
 
       setTicketForm(emptyTicketForm);
-      setSuccess('IT support ticket submitted successfully to the IT Department.');
+      alerts.success('IT support ticket submitted successfully to the IT Department.', 'Ticket Submitted');
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to submit IT support ticket.');
+      alerts.error(err.message || 'Unable to submit IT support ticket.', 'Ticket Submit Failed');
     } finally {
       setSaving(false);
     }
@@ -1428,26 +1423,24 @@ async function loadTeamTickets() {
     event.preventDefault();
 
     if (!selectedTicket) {
-      setError('Please select a ticket first.');
+      alerts.warning('Please select a ticket first.', 'Ticket Required');
       return;
     }
 
     if (!assignForm.assigned_to_employee_id) {
-      setError('Please select an IT Department member.');
+      alerts.warning('Please select an IT Department member.', 'Assignee Required');
       return;
     }
 
     setPanelSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await assignItSupportTicket(ticketId(selectedTicket), assignForm);
-      setSuccess('IT support ticket assigned successfully.');
+      alerts.success('IT support ticket assigned successfully.', 'Ticket Assigned');
       closePanel();
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to assign ticket.');
+      alerts.error(err.message || 'Unable to assign ticket.', 'Assignment Failed');
     } finally {
       setPanelSaving(false);
     }
@@ -1457,30 +1450,29 @@ async function loadTeamTickets() {
     event.preventDefault();
 
     if (!selectedTicket) {
-      setError('Please select a ticket first.');
+      alerts.warning('Please select a ticket first.', 'Ticket Required');
       return;
     }
 
     if (statusForm.status === 'resolved' && !normalizeText(statusForm.resolution_note || statusForm.status_note)) {
-      setError('Resolution note is required before marking ticket as resolved.');
+      alerts.warning('Resolution note is required before marking ticket as resolved.', 'Resolution Note Required');
       return;
     }
 
     setPanelSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await updateItSupportTicketStatus(ticketId(selectedTicket), statusForm);
-      setSuccess(
+      alerts.success(
         statusForm.status === 'resolved'
           ? 'Ticket marked as resolved. The requester can now give a review from My IT Tickets.'
           : 'IT support ticket status updated successfully.',
+        statusForm.status === 'resolved' ? 'Ticket Resolved' : 'Status Updated',
       );
       closePanel();
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to update ticket status.');
+      alerts.error(err.message || 'Unable to update ticket status.', 'Status Update Failed');
     } finally {
       setPanelSaving(false);
     }
@@ -1490,18 +1482,16 @@ async function loadTeamTickets() {
     event.preventDefault();
 
     if (!selectedTicket) {
-      setError('Please select a ticket first.');
+      alerts.warning('Please select a ticket first.', 'Ticket Required');
       return;
     }
 
     if (!normalizeText(escalationForm.escalation_reason)) {
-      setError('Escalation reason is required.');
+      alerts.warning('Escalation reason is required.', 'Escalation Reason Required');
       return;
     }
 
     setPanelSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await escalateItSupportTicket(ticketId(selectedTicket), {
@@ -1509,11 +1499,11 @@ async function loadTeamTickets() {
         escalation_reason: normalizeText(escalationForm.escalation_reason),
       });
 
-      setSuccess('IT support ticket escalated to Super Admin successfully.');
+      alerts.success('IT support ticket escalated to Super Admin successfully.', 'Ticket Escalated');
       closePanel();
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to escalate ticket.');
+      alerts.error(err.message || 'Unable to escalate ticket.', 'Escalation Failed');
     } finally {
       setPanelSaving(false);
     }
@@ -1523,21 +1513,19 @@ async function loadTeamTickets() {
     event.preventDefault();
 
     if (!selectedTicket) {
-      setError('Please select a ticket first.');
+      alerts.warning('Please select a ticket first.', 'Ticket Required');
       return;
     }
 
     setPanelSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await reviewItSupportTicket(ticketId(selectedTicket), reviewForm);
-      setSuccess('Review submitted successfully. The IT support ticket is now closed.');
+      alerts.success('Review submitted successfully. The IT support ticket is now closed.', 'Review Submitted');
       closePanel();
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to submit review.');
+      alerts.error(err.message || 'Unable to submit review.', 'Review Submit Failed');
     } finally {
       setPanelSaving(false);
     }
@@ -1547,26 +1535,24 @@ async function loadTeamTickets() {
     event.preventDefault();
 
     if (!selectedTicket) {
-      setError('Please select a ticket first.');
+      alerts.warning('Please select a ticket first.', 'Ticket Required');
       return;
     }
 
     if (!normalizeText(reopenForm.reason)) {
-      setError('Reopen reason is required.');
+      alerts.warning('Reopen reason is required.', 'Reopen Reason Required');
       return;
     }
 
     setPanelSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await reopenItSupportTicket(ticketId(selectedTicket), reopenForm);
-      setSuccess('IT support ticket reopened successfully.');
+      alerts.success('IT support ticket reopened successfully.', 'Ticket Reopened');
       closePanel();
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to reopen ticket.');
+      alerts.error(err.message || 'Unable to reopen ticket.', 'Reopen Failed');
     } finally {
       setPanelSaving(false);
     }
@@ -2029,20 +2015,6 @@ function renderTicketCard(ticket, section = 'my') {
           </button>
         </div>
       </section>
-
-      {error ? (
-        <div className="alert-card danger">
-          <AlertCircle size={18} />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      {success ? (
-        <div className="alert-card success">
-          <CheckCircle2 size={18} />
-          <span>{success}</span>
-        </div>
-      ) : null}
 
       <section className="grievance-stats">
         <div className="mini-stat-card">

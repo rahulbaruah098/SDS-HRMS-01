@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle,
   CheckCircle2,
   EyeOff,
   FileText,
@@ -30,6 +29,7 @@ import {
   hasAnyRole,
   effectiveRoleList,
 } from '../data/modules';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const emptyForm = {
   grievance_type: 'workplace_issue',
@@ -106,6 +106,7 @@ function buildProfileRows(profile = {}) {
 }
 
 export default function Grievance({ user }) {
+  const alerts = useCustomAlert();
   const canManage = useMemo(() => isHrUser(user), [user]);
 
   const [profile, setProfile] = useState({});
@@ -132,8 +133,6 @@ export default function Grievance({ user }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
   const visibleItems = canManage ? manageItems : myItems;
 
@@ -165,7 +164,6 @@ export default function Grievance({ user }) {
 
   async function loadData() {
     setLoading(true);
-    setError('');
 
     try {
       const [profileRes, optionsRes, myRes, manageRes] = await Promise.all([
@@ -189,7 +187,7 @@ export default function Grievance({ user }) {
       setMyItems(myRes.grievances || []);
       setManageItems(manageRes.grievances || []);
     } catch (err) {
-      setError(err.message || 'Unable to load grievance data.');
+      alerts.error(err.message || 'Unable to load grievance data.', 'Grievance Load Failed');
     } finally {
       setLoading(false);
     }
@@ -199,13 +197,12 @@ export default function Grievance({ user }) {
     if (!canManage) return;
 
     setLoading(true);
-    setError('');
 
     try {
       const data = await getGrievances(filters);
       setManageItems(data.grievances || []);
     } catch (err) {
-      setError(err.message || 'Unable to load HR grievance list.');
+      alerts.error(err.message || 'Unable to load HR grievance list.', 'Grievance List Failed');
     } finally {
       setLoading(false);
     }
@@ -214,16 +211,13 @@ export default function Grievance({ user }) {
   async function handleSubmit(event) {
     event.preventDefault();
 
-    setError('');
-    setSuccess('');
-
     if (!normalizeText(form.subject)) {
-      setError('Subject is required.');
+      alerts.warning('Subject is required.', 'Missing Subject');
       return;
     }
 
     if (!normalizeText(form.description)) {
-      setError('Description is required.');
+      alerts.warning('Description is required.', 'Missing Description');
       return;
     }
 
@@ -239,10 +233,10 @@ export default function Grievance({ user }) {
       });
 
       setForm(emptyForm);
-      setSuccess('Grievance submitted successfully.');
+      alerts.success('Grievance submitted successfully.', 'Grievance Submitted');
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to submit grievance.');
+      alerts.error(err.message || 'Unable to submit grievance.', 'Submission Failed');
     } finally {
       setSaving(false);
     }
@@ -261,22 +255,20 @@ export default function Grievance({ user }) {
     event.preventDefault();
 
     if (!selectedGrievance?._id && !selectedGrievance?.id) {
-      setError('Please select a grievance first.');
+      alerts.warning('Please select a grievance first.', 'No Grievance Selected');
       return;
     }
 
     setStatusSaving(true);
-    setError('');
-    setSuccess('');
 
     try {
       await updateGrievanceStatus(selectedGrievance._id || selectedGrievance.id, statusForm);
       setSelectedGrievance(null);
       setStatusForm(emptyStatusForm);
-      setSuccess('Grievance status updated successfully.');
+      alerts.success('Grievance status updated successfully.', 'Status Updated');
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to update grievance status.');
+      alerts.error(err.message || 'Unable to update grievance status.', 'Status Update Failed');
     } finally {
       setStatusSaving(false);
     }
@@ -308,20 +300,6 @@ export default function Grievance({ user }) {
           </button>
         </div>
       </section>
-
-      {error ? (
-        <div className="alert-card danger">
-          <AlertCircle size={18} />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      {success ? (
-        <div className="alert-card success">
-          <CheckCircle2 size={18} />
-          <span>{success}</span>
-        </div>
-      ) : null}
 
       <section className="grievance-stats">
         <div className="mini-stat-card">

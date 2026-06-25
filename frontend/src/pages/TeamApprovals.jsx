@@ -25,7 +25,7 @@ import {
   getDisplayRole,
   getEmployeeCapabilities,
 } from '../data/modules';
-
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 function formatDate(value) {
   if (!value) return '—';
 
@@ -662,6 +662,7 @@ function RequestCard({ row, onApprove, onReject, savingId, capabilities }) {
 }
 
 export default function TeamApprovals({ setPage }) {
+  const alerts = useCustomAlert();
   const user = currentUser();
   const capabilities = getEmployeeCapabilities(user || {});
   const displayRole = getDisplayRole(user || {});
@@ -672,7 +673,6 @@ export default function TeamApprovals({ setPage }) {
   const [summary, setSummary] = useState({});
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('pending');
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingTeamField, setLoadingTeamField] = useState(false);
   const [savingId, setSavingId] = useState('');
@@ -728,8 +728,7 @@ return [
 
 async function loadData(nextFilter = filter) {
   try {
-    setLoading(true);
-    setMessage('');
+      setLoading(true);
 
     const status = nextFilter === 'all' ? '' : nextFilter;
 
@@ -770,7 +769,7 @@ async function loadData(nextFilter = filter) {
       rejected: mergedItems.filter(isRejectedRecord).length,
     });
   } catch (error) {
-    setMessage(error.message || 'Unable to load team approvals.');
+    alerts.error(error.message || 'Unable to load team approvals.', 'Load Failed');
   } finally {
     setLoading(false);
   }
@@ -800,117 +799,137 @@ async function loadData(nextFilter = filter) {
   }
 
 
-  async function approveRequest(row) {
-    const requestId = getRequestId(row);
+async function approveRequest(row) {
+  const requestId = getRequestId(row);
 
-    if (!requestId) {
-      setMessage('Leave request id not found.');
-      return;
-    }
-
-const ok = window.confirm(
-  isHolidayWorkRequest(row)
-    ? 'Approve this holiday work request?'
-    : 'Approve this leave request?',
-);
-
-    if (!ok) return;
-
-    try {
-      setSavingId(requestId);
-      setMessage('');
-
-let data;
-
-if (isHolidayWorkRequest(row)) {
-  data = await decideHolidayWorkRequest(requestId, {
-    status: 'approved',
-  });
-} else {
-  data = await approveTeamLeaveRequest(requestId);
-}
-
-const updatedStage = String(data?.item?.approval_stage || '').toLowerCase();
-const updatedStatus = String(data?.item?.status || '').toLowerCase();
-
-if (updatedStage === 'reporting_officer' && updatedStatus === 'pending') {
-  setMessage(
-    data.message ||
-      'Approved by Team Leader. The request has now been sent to the Reporting Officer.',
-  );
-} else {
-  setMessage(
-    data.message ||
-      (isHolidayWorkRequest(row)
-        ? 'Holiday work request approved successfully.'
-        : 'Leave request approved successfully.'),
-  );
-}
-
-      await loadData(filter);
-    } catch (error) {
-      setMessage(
-  error.message ||
-    (isHolidayWorkRequest(row)
-      ? 'Unable to approve holiday work request.'
-      : 'Unable to approve leave request.'),
-);
-    } finally {
-      setSavingId('');
-    }
+  if (!requestId) {
+    alerts.error('Leave request id not found.', 'Missing Request ID');
+    return;
   }
 
-  async function rejectRequest(row) {
-    const requestId = getRequestId(row);
+  const isHolidayWork = isHolidayWorkRequest(row);
 
-    if (!requestId) {
-      setMessage('Leave request id not found.');
-      return;
+  const ok = await alerts.confirm(
+    isHolidayWork
+      ? 'Approve this holiday work request?'
+      : 'Approve this leave request?',
+    {
+      title: isHolidayWork ? 'Approve Holiday Work' : 'Approve Leave Request',
+      confirmText: 'Yes, Approve',
+      cancelText: 'Cancel',
+      type: 'warning',
+    },
+  );
+
+  if (!ok) return;
+
+  try {
+    setSavingId(requestId);
+
+    let data;
+
+    if (isHolidayWork) {
+      data = await decideHolidayWorkRequest(requestId, {
+        status: 'approved',
+      });
+    } else {
+      data = await approveTeamLeaveRequest(requestId);
     }
 
-    const reason = window.prompt(
-  isHolidayWorkRequest(row)
-    ? 'Enter holiday work rejection reason:'
-    : 'Enter rejection reason:',
-);
+    const updatedStage = String(data?.item?.approval_stage || '').toLowerCase();
+    const updatedStatus = String(data?.item?.status || '').toLowerCase();
 
-    if (reason === null) return;
+    if (updatedStage === 'reporting_officer' && updatedStatus === 'pending') {
+      alerts.success(
+        data.message ||
+          'Approved by Team Leader. The request has now been sent to the Reporting Officer.',
+        'Request Forwarded',
+      );
+    } else {
+      alerts.success(
+        data.message ||
+          (isHolidayWork
+            ? 'Holiday work request approved successfully.'
+            : 'Leave request approved successfully.'),
+        isHolidayWork ? 'Holiday Work Approved' : 'Leave Approved',
+      );
+    }
 
-    try {
-      setSavingId(requestId);
-      setMessage('');
-
-let data;
-
-if (isHolidayWorkRequest(row)) {
-  data = await decideHolidayWorkRequest(requestId, {
-    status: 'rejected',
-    reason: reason || '',
-    note: reason || '',
-  });
-} else {
-  data = await rejectTeamLeaveRequest(requestId, reason || '');
+    await loadData(filter);
+  } catch (error) {
+    alerts.error(
+      error.message ||
+        (isHolidayWork
+          ? 'Unable to approve holiday work request.'
+          : 'Unable to approve leave request.'),
+      'Approval Failed',
+    );
+  } finally {
+    setSavingId('');
+  }
 }
 
-setMessage(
-  data.message ||
-    (isHolidayWorkRequest(row)
-      ? 'Holiday work request rejected successfully.'
-      : 'Leave request rejected successfully.'),
-);
+async function rejectRequest(row) {
+  const requestId = getRequestId(row);
 
-await loadData(filter);
-    } catch (error) {
-      setMessage(
-  error.message ||
-    (isHolidayWorkRequest(row)
-      ? 'Unable to reject holiday work request.'
-      : 'Unable to reject leave request.'),
-);
-    } finally {
-      setSavingId('');
-    }
+  if (!requestId) {
+    alerts.error('Leave request id not found.', 'Missing Request ID');
+    return;
   }
+
+  const isHolidayWork = isHolidayWorkRequest(row);
+
+  const reason = await alerts.prompt(
+    isHolidayWork
+      ? 'Enter holiday work rejection reason:'
+      : 'Enter rejection reason:',
+    {
+      title: isHolidayWork ? 'Reject Holiday Work' : 'Reject Leave Request',
+      confirmText: 'Reject',
+      cancelText: 'Cancel',
+      placeholder: 'Write rejection reason here...',
+      type: 'warning',
+    },
+  );
+
+  if (reason === null) return;
+
+  try {
+    setSavingId(requestId);
+
+    let data;
+
+    if (isHolidayWork) {
+      data = await decideHolidayWorkRequest(requestId, {
+        status: 'rejected',
+        reason: reason || '',
+        note: reason || '',
+      });
+    } else {
+      data = await rejectTeamLeaveRequest(requestId, reason || '');
+    }
+
+    alerts.success(
+      data.message ||
+        (isHolidayWork
+          ? 'Holiday work request rejected successfully.'
+          : 'Leave request rejected successfully.'),
+      isHolidayWork ? 'Holiday Work Rejected' : 'Leave Rejected',
+    );
+
+    await loadData(filter);
+  } catch (error) {
+    alerts.error(
+      error.message ||
+        (isHolidayWork
+          ? 'Unable to reject holiday work request.'
+          : 'Unable to reject leave request.'),
+      'Rejection Failed',
+    );
+  } finally {
+    setSavingId('');
+  }
+}
 
   return (
     <div className="page-grid team-approvals-page">
@@ -1535,8 +1554,6 @@ await loadData(filter);
           <UserCheck size={36} />
         </div>
       </section>
-
-      {message && <div className="inline-message">{message}</div>}
 
       <section className="ta-kpis">
         <div className="ta-kpi">

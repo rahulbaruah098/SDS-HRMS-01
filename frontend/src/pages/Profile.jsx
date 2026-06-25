@@ -9,6 +9,7 @@ import {
   buildProfilePhotoPayload,
   uploadEmployeeProfilePhoto,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function normalizeRoles(user) {
   const userRoles = user?.roles;
@@ -134,11 +135,17 @@ function capabilityLabel(employee = {}, roles = []) {
     labels.push('Reporting Officer');
   }
 
-  return labels.length ? labels.join(' + ') : 'No additional capability mapped';
+  return labels.length ? labels.join(' + ') : 'No additional capability';
 }
 
 function employeeId(employee = {}) {
   return employee._id || employee.employee_id_for_edit || employee.employee_ref_id || '';
+}
+
+function DetailIcon({ label = '' }) {
+  const first = String(label || 'I').trim().charAt(0).toUpperCase() || 'I';
+
+  return <span className="profile-detail-icon">{first}</span>;
 }
 
 function ProfileAvatar({ user = {}, employee = {}, photoValue = '' }) {
@@ -156,7 +163,7 @@ function ProfileAvatar({ user = {}, employee = {}, photoValue = '' }) {
         )}
       </div>
 
-      <div>
+      <div className="profile-avatar-meta">
         <strong>{name}</strong>
         <small>{employee.designation || 'Employee'}</small>
       </div>
@@ -164,28 +171,37 @@ function ProfileAvatar({ user = {}, employee = {}, photoValue = '' }) {
   );
 }
 
-function ProfileTable({ title, rows }) {
-  return (
-    <section className="panel">
-      <h3>{title}</h3>
+function ProfileTable({ title, subtitle = '', rows }) {
+  const visibleRows = rows.filter(([label]) => label);
 
-      <div className="table-wrap">
-        <table>
-          <tbody>
-            {rows.map(([label, value]) => (
-              <tr key={label}>
-                <th>{label}</th>
-                <td>{displayValue(value)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+  return (
+    <section className="profile-card">
+      <div className="profile-section-head">
+        <div>
+          <span className="profile-section-kicker">Employee Record</span>
+          <h3>{title}</h3>
+          {subtitle ? <p>{subtitle}</p> : null}
+        </div>
+      </div>
+
+      <div className="profile-detail-grid">
+        {visibleRows.map(([label, value]) => (
+          <div className="profile-detail-card" key={label}>
+            <DetailIcon label={label} />
+            <div>
+              <span>{label}</span>
+              <strong>{displayValue(value)}</strong>
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );
 }
 
 export default function Profile() {
+  const alerts = useCustomAlert();
+
   const [user, setUser] = useState(currentUser());
   const [employee, setEmployee] = useState(currentEmployee());
 
@@ -194,7 +210,6 @@ export default function Profile() {
 
   const [photo, setPhoto] = useState(initialPhoto);
   const [photoFile, setPhotoFile] = useState(null);
-  const [photoMessage, setPhotoMessage] = useState('');
   const [photoSaving, setPhotoSaving] = useState(false);
 
   const [form, setForm] = useState({
@@ -203,7 +218,6 @@ export default function Profile() {
     confirm_password: '',
   });
 
-  const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const mainName = user.name || employee.name || user.email || 'My Profile';
@@ -213,7 +227,7 @@ export default function Profile() {
 
   const profileRows = useMemo(() => {
     return [
-      ['Profile Photo', photo ? 'Uploaded / Available' : 'Not uploaded'],
+      ['Photo Status', photo ? 'Uploaded' : 'Not uploaded'],
       ['Name', user.name || employee.name || ''],
       ['Email', user.email || employee.email || ''],
       ['Phone', employee.phone || ''],
@@ -233,14 +247,14 @@ export default function Profile() {
     ["Father's Name", employee.father_name || ''],
     ['Religion', employee.religion || ''],
     ['Marital Status', employee.marital_status || ''],
-    ['Speak Language', employee.speak_language || ''],
+    ['Language', employee.speak_language || ''],
     ['Address', employee.address || ''],
   ];
 
   const employmentRows = [
     ['Employee ID', employee.employee_id || ''],
     ['Employee Code', employee.emp_code || ''],
-    ['Tenant', user.tenant_id || employee.tenant_id || ''],
+    ['Company / Tenant', user.tenant_id || employee.tenant_id || ''],
     ['Dashboard Role', mainRole],
     ['Login Access', userRoles.map(roleLabel).join(', ')],
     ['Employee Capability', capabilities],
@@ -267,9 +281,9 @@ export default function Profile() {
   ];
 
   const familyAndDisabilityRows = [
-    ['Are Parents Senior Citizen?', boolLabel(employee.are_parents_senior_citizen)],
+    ['Parents Senior Citizen?', boolLabel(employee.are_parents_senior_citizen)],
     ['Number of Children', employee.number_of_children || ''],
-    ['No. of Children in Hostel', employee.children_in_hostel || ''],
+    ['Children in Hostel', employee.children_in_hostel || ''],
     ['Disability Level', employee.disability_level || ''],
     ['Dependent Disability Level', employee.dependent_disability_level || ''],
   ];
@@ -278,11 +292,11 @@ export default function Profile() {
     ['Previous Employer Name', employee.previous_employer_name || ''],
     ['Previous Designation', employee.previous_designation || ''],
     [
-      'Previous Employment Tenure From Date',
+      'Previous Employment From Date',
       employee.previous_employment_tenure_from_date || '',
     ],
     [
-      'Previous Employment Tenure End Date',
+      'Previous Employment End Date',
       employee.previous_employment_tenure_end_date || '',
     ],
   ];
@@ -290,10 +304,10 @@ export default function Profile() {
   const reportingRows = [
     ['Team Leader Capability', boolLabel(employee.is_team_leader)],
     ['Reporting Officer Capability', boolLabel(employee.is_reporting_officer)],
-    ['Mapped Team Leader ID', employee.team_leader_id || ''],
-    ['Mapped Team Leader Name', employee.team_leader_name || ''],
-    ['Mapped Reporting Officer ID', employee.reporting_officer_id || ''],
-    ['Mapped Reporting Officer Name', employee.reporting_officer_name || ''],
+    ['Team Leader ID', employee.team_leader_id || ''],
+    ['Team Leader Name', employee.team_leader_name || ''],
+    ['Reporting Officer ID', employee.reporting_officer_id || ''],
+    ['Reporting Officer Name', employee.reporting_officer_name || ''],
   ];
 
   async function refreshProfileSession() {
@@ -304,11 +318,11 @@ export default function Profile() {
         setUser(data.user);
       }
 
-    if (data.employee) {
-      setEmployee(data.employee);
-      setPhoto(profilePhotoValue(data.employee) || profilePhotoValue(data.user));
-      setPhotoFile(null);
-    }
+      if (data.employee) {
+        setEmployee(data.employee);
+        setPhoto(profilePhotoValue(data.employee) || profilePhotoValue(data.user));
+        setPhotoFile(null);
+      }
 
       return data;
     } catch {
@@ -316,121 +330,113 @@ export default function Profile() {
     }
   }
 
-function updatePhotoValue(value) {
-  const nextPhoto = String(value || '').trim();
+  function updatePhotoValue(value) {
+    const nextPhoto = String(value || '').trim();
 
-  setPhoto(nextPhoto);
-  setPhotoFile(null);
-
-  if (isUnsafePhotoValue(nextPhoto)) {
-    setPhotoMessage(
-      'This photo value is too large. Please upload a photo file or save only a short uploaded image path/URL.',
-    );
-    return;
-  }
-
-  setPhotoMessage('');
-}
-
-function handlePhotoFileChange(event) {
-  const file = event.target.files?.[0];
-
-  if (!file) {
-    return;
-  }
-
-  if (!file.type.startsWith('image/')) {
+    setPhoto(nextPhoto);
     setPhotoFile(null);
-    setPhotoMessage('Please choose a valid image file.');
-    event.target.value = '';
-    return;
   }
 
-  if (file.size > 1024 * 1024 * 2) {
-    setPhotoFile(null);
-    setPhotoMessage('Image size should be below 2MB.');
-    event.target.value = '';
-    return;
-  }
+  function handlePhotoFileChange(event) {
+    const file = event.target.files?.[0];
 
-  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-
-  if (!allowedTypes.includes(file.type.toLowerCase())) {
-    setPhotoFile(null);
-    setPhotoMessage('Only JPG, JPEG, PNG, and WEBP images are allowed.');
-    event.target.value = '';
-    return;
-  }
-
-  setPhotoFile(file);
-  setPhotoMessage(`Selected: ${file.name}. Click Save Photo to upload.`);
-}
-
-async function saveProfilePhoto() {
-  const empId = employeeId(employee);
-  const cleanPhoto = String(photo || '').trim();
-
-  if (!empId) {
-    setPhotoMessage('Employee profile id not found. Please ask HR/Admin to sync your employee profile.');
-    return;
-  }
-
-  setPhotoMessage('');
-
-  try {
-    setPhotoSaving(true);
-
-    if (photoFile) {
-      const data = await uploadEmployeeProfilePhoto(empId, photoFile);
-      const uploadedPhoto = data.photo || data.photo_url || '';
-
-      if (uploadedPhoto) {
-        setPhoto(uploadedPhoto);
-      }
-
-      setPhotoFile(null);
-    } else {
-      if (isUnsafePhotoValue(cleanPhoto)) {
-        setPhotoMessage(
-          'This image value is too large/base64 and cannot be saved because it can crash the dashboard. Please upload a photo file or paste a saved image URL/path.',
-        );
-        return;
-      }
-
-      await api(`/employees/${empId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(buildProfilePhotoPayload(cleanPhoto)),
-      });
+    if (!file) {
+      return;
     }
 
-    await refreshProfileSession();
+    if (!file.type.startsWith('image/')) {
+      setPhotoFile(null);
+      event.target.value = '';
+      alerts.warning('Please choose a valid image file.', 'Invalid File');
+      return;
+    }
 
-    window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
+    if (file.size > 1024 * 1024 * 2) {
+      setPhotoFile(null);
+      event.target.value = '';
+      alerts.warning('Image size should be below 2MB.', 'File Too Large');
+      return;
+    }
 
-    setPhotoMessage('Profile photo updated successfully.');
-  } catch (error) {
-    setPhotoMessage(error.message || 'Unable to update profile photo.');
-  } finally {
-    setPhotoSaving(false);
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      setPhotoFile(null);
+      event.target.value = '';
+      alerts.warning('Only JPG, JPEG, PNG, and WEBP images are allowed.', 'Unsupported Image');
+      return;
+    }
+
+    setPhotoFile(file);
+    alerts.info(`${file.name} is ready. Click Save Photo to upload.`, 'Photo Selected');
   }
-}
+
+  async function saveProfilePhoto() {
+    const empId = employeeId(employee);
+    const cleanPhoto = String(photo || '').trim();
+
+    if (!empId) {
+      alerts.error(
+        'Employee profile ID was not found. Please ask HR/Admin to sync your employee profile.',
+        'Profile Not Linked',
+      );
+      return;
+    }
+
+    try {
+      setPhotoSaving(true);
+
+      if (photoFile) {
+        const data = await uploadEmployeeProfilePhoto(empId, photoFile);
+        const uploadedPhoto = data.photo || data.photo_url || '';
+
+        if (uploadedPhoto) {
+          setPhoto(uploadedPhoto);
+        }
+
+        setPhotoFile(null);
+      } else {
+        if (isUnsafePhotoValue(cleanPhoto)) {
+          alerts.warning(
+            'This image value is too large/base64 and cannot be saved because it can slow down the dashboard. Please upload a photo file or paste a saved image URL/path.',
+            'Photo Value Too Large',
+          );
+          return;
+        }
+
+        await api(`/employees/${empId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(buildProfilePhotoPayload(cleanPhoto)),
+        });
+      }
+
+      await refreshProfileSession();
+
+      window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
+
+      alerts.success('Profile photo updated successfully.', 'Photo Saved');
+    } catch (error) {
+      alerts.error(error.message || 'Unable to update profile photo.', 'Photo Update Failed');
+    } finally {
+      setPhotoSaving(false);
+    }
+  }
 
   async function submit(e) {
     e.preventDefault();
-    setMessage('');
 
     if (!form.current_password.trim()) {
-      setMessage('Current password is required');
+      alerts.warning('Current password is required.', 'Missing Current Password');
       return;
     }
 
     if (!form.new_password || form.new_password.length < 6) {
-      setMessage('New password must be at least 6 characters');
+      alerts.warning('New password must be at least 6 characters.', 'Invalid New Password');
       return;
     }
 
     if (form.new_password !== form.confirm_password) {
-      setMessage('New password and confirm password do not match');
+      alerts.warning('New password and confirm password do not match.', 'Password Mismatch');
       return;
     }
 
@@ -445,7 +451,7 @@ async function saveProfilePhoto() {
         }),
       });
 
-      setMessage(data.message || 'Password change request submitted');
+      alerts.success(data.message || 'Password change request submitted.', 'Request Submitted');
 
       setForm({
         current_password: '',
@@ -453,7 +459,10 @@ async function saveProfilePhoto() {
         confirm_password: '',
       });
     } catch (error) {
-      setMessage(error.message || 'Unable to submit password change request');
+      alerts.error(
+        error.message || 'Unable to submit password change request.',
+        'Password Request Failed',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -462,47 +471,88 @@ async function saveProfilePhoto() {
   return (
     <div className="page-grid profile-page">
       <style>{`
-        .profile-page .profile-hero-grid {
+        .profile-page {
           display: grid;
-          grid-template-columns: auto minmax(0, 1fr);
-          gap: 18px;
+          gap: 22px;
+        }
+
+        .profile-page .profile-hero {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(226, 232, 240, 0.9);
+          border-radius: 34px;
+          padding: 28px;
+          background:
+            radial-gradient(circle at 12% 8%, rgba(79,70,229,.18), transparent 34%),
+            radial-gradient(circle at 86% 0%, rgba(14,165,233,.14), transparent 32%),
+            radial-gradient(circle at 80% 92%, rgba(5,150,105,.12), transparent 35%),
+            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+          box-shadow: 0 22px 60px rgba(15, 23, 42, .08);
+        }
+
+        .profile-hero::after {
+          content: "";
+          position: absolute;
+          width: 260px;
+          height: 260px;
+          right: -90px;
+          top: -90px;
+          border-radius: 999px;
+          background: rgba(79, 70, 229, .08);
+          pointer-events: none;
+        }
+
+        .profile-hero-grid {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 22px;
           align-items: center;
         }
 
         .profile-avatar-card {
           display: grid;
           grid-template-columns: auto minmax(0, 1fr);
-          gap: 14px;
+          gap: 16px;
           align-items: center;
+          min-width: 0;
+        }
+
+        .profile-avatar-meta {
+          min-width: 0;
         }
 
         .profile-avatar-card strong {
           display: block;
-          color: var(--ink);
-          font-size: 16px;
+          color: #0f172a;
+          font-size: 18px;
           line-height: 1.2;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .profile-avatar-card small {
           display: block;
-          margin-top: 4px;
-          color: var(--muted);
-          font-weight: 700;
+          margin-top: 5px;
+          color: #64748b;
+          font-weight: 800;
         }
 
         .profile-avatar-frame {
-          width: 94px;
-          height: 94px;
+          width: 104px;
+          height: 104px;
           overflow: hidden;
-          border-radius: 28px;
+          border-radius: 32px;
           display: grid;
           place-items: center;
           background: linear-gradient(135deg, #eef2ff, #ecfdf5);
-          color: var(--primary);
+          color: #4f46e5;
           border: 4px solid #ffffff;
           box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
-          font-size: 26px;
-          font-weight: 900;
+          font-size: 28px;
+          font-weight: 950;
           flex: 0 0 auto;
         }
 
@@ -513,32 +563,209 @@ async function saveProfilePhoto() {
           display: block;
         }
 
+        .profile-identity h1 {
+          margin: 8px 0 8px;
+          color: #0f172a;
+          font-size: clamp(28px, 4vw, 42px);
+          line-height: 1.05;
+          letter-spacing: -0.045em;
+        }
+
+        .profile-identity p {
+          margin: 0;
+          color: #475569;
+          line-height: 1.55;
+          max-width: 720px;
+        }
+
+        .profile-chip-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 9px;
+          margin-top: 14px;
+        }
+
+        .profile-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          color: #334155;
+          font-size: 12px;
+          font-weight: 900;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, .05);
+        }
+
+        .profile-chip.primary {
+          background: #eef2ff;
+          border-color: #c7d2fe;
+          color: #4338ca;
+        }
+
+        .profile-chip.success {
+          background: #ecfdf5;
+          border-color: #bbf7d0;
+          color: #047857;
+        }
+
+        .profile-hero-stat {
+          min-width: 185px;
+          border-radius: 24px;
+          padding: 18px;
+          background: rgba(255, 255, 255, .78);
+          border: 1px solid rgba(226, 232, 240, .95);
+          box-shadow: 0 16px 38px rgba(15, 23, 42, .06);
+        }
+
+        .profile-hero-stat span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .profile-hero-stat strong {
+          display: block;
+          margin-top: 7px;
+          color: #0f172a;
+          font-size: 19px;
+          line-height: 1.25;
+        }
+
+        .profile-card {
+          border: 1px solid #e2e8f0;
+          border-radius: 28px;
+          background: #ffffff;
+          box-shadow: 0 18px 48px rgba(15, 23, 42, .06);
+          padding: 22px;
+        }
+
+        .profile-section-head {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: flex-start;
+          margin-bottom: 16px;
+          padding-bottom: 14px;
+          border-bottom: 1px solid #edf2f7;
+        }
+
+        .profile-section-kicker {
+          display: inline-flex;
+          width: fit-content;
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: #eef2ff;
+          color: #4f46e5;
+          font-size: 11px;
+          font-weight: 950;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+          margin-bottom: 8px;
+        }
+
+        .profile-section-head h3 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 20px;
+          letter-spacing: -0.02em;
+        }
+
+        .profile-section-head p {
+          margin: 6px 0 0;
+          color: #64748b;
+          line-height: 1.55;
+          font-size: 13px;
+        }
+
+        .profile-detail-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .profile-detail-card {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 11px;
+          align-items: start;
+          min-height: 84px;
+          border: 1px solid #e8eef7;
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(79,70,229,.05), transparent 40%),
+            #f8fafc;
+          padding: 14px;
+          transition: .18s ease;
+        }
+
+        .profile-detail-card:hover {
+          transform: translateY(-1px);
+          border-color: #c7d2fe;
+          background: #ffffff;
+          box-shadow: 0 14px 30px rgba(15, 23, 42, .06);
+        }
+
+        .profile-detail-icon {
+          width: 34px;
+          height: 34px;
+          border-radius: 13px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: #eef2ff;
+          color: #4f46e5;
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .profile-detail-card span {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 900;
+          margin-bottom: 5px;
+        }
+
+        .profile-detail-card strong {
+          display: block;
+          color: #0f172a;
+          font-size: 14px;
+          line-height: 1.45;
+          word-break: break-word;
+        }
+
         .profile-photo-panel {
           display: grid;
-          grid-template-columns: 120px minmax(0, 1fr);
-          gap: 18px;
+          grid-template-columns: 136px minmax(0, 1fr);
+          gap: 20px;
           align-items: center;
-          border: 1px solid var(--line);
+          border: 1px solid #e2e8f0;
           border-radius: 24px;
           background:
             radial-gradient(circle at 0% 0%, rgba(79,70,229,.08), transparent 32%),
-            #f8fafc;
-          padding: 16px;
+            linear-gradient(135deg, #f8fafc, #ffffff);
+          padding: 18px;
         }
 
         .profile-photo-preview {
-          width: 112px;
-          height: 112px;
-          border-radius: 30px;
+          width: 124px;
+          height: 124px;
+          border-radius: 34px;
           overflow: hidden;
           display: grid;
           place-items: center;
           background: linear-gradient(135deg, #eef2ff, #ecfdf5);
           border: 4px solid #ffffff;
           box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
-          color: var(--primary);
-          font-size: 28px;
-          font-weight: 900;
+          color: #4f46e5;
+          font-size: 30px;
+          font-weight: 950;
         }
 
         .profile-photo-preview img {
@@ -550,12 +777,24 @@ async function saveProfilePhoto() {
 
         .profile-photo-controls {
           display: grid;
-          gap: 10px;
+          gap: 12px;
           min-width: 0;
         }
 
         .profile-photo-controls input[type="text"] {
           width: 100%;
+          border: 1px solid #dbe4f0;
+          border-radius: 16px;
+          background: #ffffff;
+          color: #0f172a;
+          padding: 12px 14px;
+          outline: none;
+          transition: .18s ease;
+        }
+
+        .profile-photo-controls input[type="text"]:focus {
+          border-color: #4f46e5;
+          box-shadow: 0 0 0 4px rgba(79, 70, 229, .12);
         }
 
         .profile-photo-actions {
@@ -572,64 +811,139 @@ async function saveProfilePhoto() {
           gap: 8px;
           border-radius: 999px;
           background: #eef2ff;
-          color: var(--primary);
+          color: #4f46e5;
           padding: 10px 14px;
-          font-weight: 800;
+          font-weight: 900;
           cursor: pointer;
+          border: 1px solid #c7d2fe;
         }
 
         .profile-file-btn input {
           display: none;
         }
 
-        .profile-photo-controls small {
-          color: var(--muted);
+        .profile-photo-controls small,
+        .profile-help-text {
+          color: #64748b;
           line-height: 1.5;
+          font-size: 13px;
+        }
+
+        .profile-selected-file {
+          width: fit-content;
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: #ecfdf5;
+          color: #047857;
+          border: 1px solid #bbf7d0;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .profile-password-card form {
+          margin-top: 8px;
+        }
+
+        .profile-password-card input {
+          border-radius: 16px;
+        }
+
+        @media (max-width: 1100px) {
+          .profile-hero-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .profile-hero-stat {
+            min-width: 0;
+            width: fit-content;
+          }
+
+          .profile-detail-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 760px) {
-          .profile-page .profile-hero-grid,
+          .profile-page .profile-hero,
+          .profile-card {
+            border-radius: 24px;
+            padding: 18px;
+          }
+
+          .profile-detail-grid,
           .profile-photo-panel {
             grid-template-columns: 1fr;
           }
 
           .profile-avatar-frame,
           .profile-photo-preview {
-            width: 84px;
-            height: 84px;
-            border-radius: 24px;
+            width: 88px;
+            height: 88px;
+            border-radius: 26px;
+          }
+
+          .profile-hero-stat {
+            width: 100%;
+          }
+
+          .profile-photo-actions button,
+          .profile-file-btn {
+            width: 100%;
           }
         }
       `}</style>
 
-      <section className="hero compact">
+      <section className="profile-hero">
         <div className="profile-hero-grid">
           <ProfileAvatar user={user} employee={employee} photoValue={photo} />
 
-          <div>
+          <div className="profile-identity">
             <span className="kicker">My Profile</span>
 
             <h1>{mainName}</h1>
 
             <p>
-              {mainRole}
-              {capabilities !== 'No additional capability mapped'
-                ? ` • ${capabilities}`
-                : ''}
-              {user.tenant_id || employee.tenant_id
-                ? ` • ${user.tenant_id || employee.tenant_id}`
-                : ''}
+              A clean overview of your personal information, employment details,
+              reporting structure and HRMS access.
             </p>
+
+            <div className="profile-chip-row">
+              <span className="profile-chip primary">{mainRole}</span>
+
+              {capabilities !== 'No additional capability' ? (
+                <span className="profile-chip success">{capabilities}</span>
+              ) : null}
+
+              {(user.tenant_id || employee.tenant_id) ? (
+                <span className="profile-chip">{user.tenant_id || employee.tenant_id}</span>
+              ) : null}
+
+              {(employee.department || employee.designation) ? (
+                <span className="profile-chip">
+                  {[employee.department, employee.designation].filter(Boolean).join(' • ')}
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="profile-hero-stat">
+            <span>Employee Code</span>
+            <strong>{employee.employee_id || employee.emp_code || 'Not available'}</strong>
           </div>
         </div>
       </section>
 
-      <section className="panel">
-        <h3>Profile Photo</h3>
+      <section className="profile-card">
+        <div className="profile-section-head">
+          <div>
+            <span className="profile-section-kicker">Photo</span>
+            <h3>Profile Photo</h3>
             <p>
-              Choose a photo from your computer and click Save Photo. This photo will show in
-              your profile, dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
+              Choose a clear professional photo. It appears in your profile,
+              dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
             </p>
+          </div>
+        </div>
 
         <div className="profile-photo-panel">
           <div className="profile-photo-preview">
@@ -650,7 +964,7 @@ async function saveProfilePhoto() {
 
             <div className="profile-photo-actions">
               <label className="profile-file-btn">
-                Choose Photo from Computer
+                Choose Photo
                 <input
                   type="file"
                   accept="image/*"
@@ -679,40 +993,72 @@ async function saveProfilePhoto() {
               </button>
             </div>
 
-              <small>
-                Select a JPG, JPEG, PNG, or WEBP image below 2MB. The backend saves the file
-                safely and stores only the image path in MongoDB, not base64 image data.
-              </small>
-                  {photoFile && (
-                    <small>
-                      Ready to upload: <strong>{photoFile.name}</strong>
-                    </small>
-                  )}
+            <small>
+              Accepted formats: JPG, JPEG, PNG and WEBP below 2MB. The backend stores
+              the uploaded file safely and keeps only the image path in MongoDB.
+            </small>
 
-            {photoMessage && <div className="inline-message">{photoMessage}</div>}
+            {photoFile && (
+              <div className="profile-selected-file">
+                Ready to upload: {photoFile.name}
+              </div>
+            )}
           </div>
         </div>
       </section>
 
-      <ProfileTable title="Profile Summary" rows={profileRows} />
+      <ProfileTable
+        title="Profile Summary"
+        subtitle="Quick view of your official identity and contact details."
+        rows={profileRows}
+      />
 
-      <ProfileTable title="Personal Details" rows={personalRows} />
+      <ProfileTable
+        title="Personal Details"
+        subtitle="Personal information maintained in your employee record."
+        rows={personalRows}
+      />
 
-      <ProfileTable title="Employment Details" rows={employmentRows} />
+      <ProfileTable
+        title="Employment Details"
+        subtitle="Official role, department, branch and employment information."
+        rows={employmentRows}
+      />
 
-      <ProfileTable title="Salary & Statutory Details" rows={salaryAndStatutoryRows} />
+      <ProfileTable
+        title="Salary & Statutory Details"
+        subtitle="Salary, payment and statutory identification information."
+        rows={salaryAndStatutoryRows}
+      />
 
-      <ProfileTable title="Family & Disability Details" rows={familyAndDisabilityRows} />
+      <ProfileTable
+        title="Family & Disability Details"
+        subtitle="Family-related and disability declaration details."
+        rows={familyAndDisabilityRows}
+      />
 
-      <ProfileTable title="Previous Employment Details" rows={previousEmploymentRows} />
+      <ProfileTable
+        title="Previous Employment Details"
+        subtitle="Past employment history saved in the employee record."
+        rows={previousEmploymentRows}
+      />
 
-      <ProfileTable title="Reporting Hierarchy" rows={reportingRows} />
+      <ProfileTable
+        title="Reporting Hierarchy"
+        subtitle="Your reporting structure and approval responsibilities."
+        rows={reportingRows}
+      />
 
-      <section className="panel">
-        <h3>Request Password Change</h3>
-        <p>Your request will be sent to Super Admin for approval.</p>
+      <section className="profile-card profile-password-card">
+        <div className="profile-section-head">
+          <div>
+            <span className="profile-section-kicker">Security</span>
+            <h3>Request Password Change</h3>
+            <p>Your request will be sent to Super Admin for approval.</p>
+          </div>
+        </div>
 
-        <form className="dynamic-form" onSubmit={submit}>
+        <form className="dynamic-form" onSubmit={submit} noValidate>
           <label>
             Current Password
             <input
@@ -750,8 +1096,6 @@ async function saveProfilePhoto() {
             {submitting ? 'Submitting...' : 'Send Approval Request'}
           </button>
         </form>
-
-        {message && <div className="inline-message">{message}</div>}
       </section>
     </div>
   );

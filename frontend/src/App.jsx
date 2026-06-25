@@ -34,6 +34,7 @@ import ITSupport from './pages/ITSupport';
 import ManagementGroup from './pages/ManagementGroup';
 import CelebrationPopup from './components/CelebrationPopup.jsx';
 import AiAssistantWidget from "./components/AiAssistantWidget";
+import CustomAlertProvider from './components/CustomAlertProvider.jsx';
 import HolidayWorkRequests from './pages/HolidayWorkRequests';
 import SuperAdminAttendanceCorrection from './pages/SuperAdminAttendanceCorrection';
 
@@ -739,27 +740,31 @@ export default function App() {
     };
   }, [normalizedUser]);
 
-  if (!normalizedUser) {
-    return <Login onLogin={handleSetUser} />;
-  }
-
+if (!normalizedUser) {
   return (
-    <>
-      <AppLayout
-        user={normalizedUser}
-        setUser={handleSetUser}
-        page={normalizedPage}
-        setPage={handleSetPage}
-      >
-        <PageRouter
-          page={normalizedPage}
-          user={normalizedUser}
-          setPage={handleSetPage}
-        />
-      </AppLayout>
-
-      <CelebrationPopup celebrations={celebrations} />
-      <AiAssistantWidget />
-    </>
+    <CustomAlertProvider>
+      <Login onLogin={handleSetUser} />
+    </CustomAlertProvider>
   );
+}
+
+return (
+  <CustomAlertProvider>
+    <AppLayout
+      user={normalizedUser}
+      setUser={handleSetUser}
+      page={normalizedPage}
+      setPage={handleSetPage}
+    >
+      <PageRouter
+        page={normalizedPage}
+        user={normalizedUser}
+        setPage={handleSetPage}
+      />
+    </AppLayout>
+
+    <CelebrationPopup celebrations={celebrations} />
+    <AiAssistantWidget />
+  </CustomAlertProvider>
+);
 }

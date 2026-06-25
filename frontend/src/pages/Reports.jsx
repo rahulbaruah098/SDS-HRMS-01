@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import Table from '../components/Table';
 import Stat from '../components/Stat';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const REPORT_TABS = [
   {
@@ -535,7 +536,6 @@ export default function Reports() {
   const [activeTab, setActiveTab] = useState('attendance');
   const [rows, setRows] = useState([]);
   const [tabSummary, setTabSummary] = useState(null);
-  const [message, setMessage] = useState('');
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
@@ -545,6 +545,8 @@ export default function Reports() {
     ...EMPTY_ATTENDANCE_EXCEL_FILTERS,
   });
   const [downloadingExcel, setDownloadingExcel] = useState(false);
+
+  const alerts = useCustomAlert();
 
   const currentTab = REPORT_TABS.find((tab) => tab.key === activeTab);
 
@@ -606,8 +608,12 @@ export default function Reports() {
     try {
       const data = await getActiveOrganisations({ limit: 500 });
       setOrganisations(data.items || []);
-    } catch {
+    } catch (error) {
       setOrganisations([]);
+      alerts.error(
+        error?.message || 'Unable to load organisations for attendance Excel export.',
+        'Organisation Load Failed',
+      );
     }
   }
 
@@ -619,15 +625,18 @@ export default function Reports() {
       });
 
       setEmployees(data.items || []);
-    } catch {
+    } catch (error) {
       setEmployees([]);
+      alerts.error(
+        error?.message || 'Unable to load employees for report filters.',
+        'Employee Load Failed',
+      );
     }
   }
 
   async function loadSummary(nextFilters = filters) {
     try {
       setLoadingSummary(true);
-      setMessage('');
 
       const data = await api(
         `/reports/summary${buildQuery({
@@ -637,7 +646,7 @@ export default function Reports() {
 
       setSummary(data);
     } catch (error) {
-      setMessage(error.message || 'Unable to load report summary');
+      alerts.error(error.message || 'Unable to load report summary', 'Report Summary Load Failed');
     } finally {
       setLoadingSummary(false);
     }
@@ -652,7 +661,6 @@ export default function Reports() {
 
     try {
       setLoadingRows(true);
-      setMessage('');
       setTabSummary(null);
 
       const filteredPayload = activeTabFilters(tabKey, nextFilters);
@@ -663,7 +671,7 @@ export default function Reports() {
     } catch (error) {
       setRows([]);
       setTabSummary(null);
-      setMessage(error.message || 'Unable to load report');
+      alerts.error(error.message || 'Unable to load report', 'Report Load Failed');
     } finally {
       setLoadingRows(false);
     }
@@ -699,7 +707,6 @@ export default function Reports() {
     const cleared = { ...EMPTY_FILTERS };
 
     setFilters(cleared);
-    setMessage('');
     await refreshAll(activeTab, cleared);
   }
 
@@ -789,12 +796,34 @@ export default function Reports() {
     event.preventDefault();
 
     if (!excelFilters.organisation_id && !excelFilters.organisation_code && !excelFilters.organisation) {
-      setMessage('Please select Organisation / Entity before downloading the attendance Excel.');
+      alerts.warning(
+        'Please select Organisation / Entity before downloading the attendance Excel.',
+        'Organisation Required',
+      );
+      return;
+    }
+
+    if (excelFilters.period === 'month' && (!excelFilters.year || !excelFilters.month)) {
+      alerts.warning('Please select year and month before downloading.', 'Month Required');
+      return;
+    }
+
+    if (excelFilters.period === 'week' && (!excelFilters.week_start || !excelFilters.week_end)) {
+      alerts.warning('Please select week start and week end before downloading.', 'Week Range Required');
+      return;
+    }
+
+    if (excelFilters.period === 'day' && !excelFilters.date) {
+      alerts.warning('Please select date before downloading.', 'Date Required');
+      return;
+    }
+
+    if (excelFilters.period === 'year' && !excelFilters.year) {
+      alerts.warning('Please enter year before downloading.', 'Year Required');
       return;
     }
 
     setDownloadingExcel(true);
-    setMessage('');
 
     try {
       const payload = {
@@ -822,9 +851,9 @@ export default function Reports() {
       }
 
       await downloadAttendanceRegisterExcel(payload);
-      setMessage('Attendance Excel downloaded successfully.');
+      alerts.success('Attendance Excel downloaded successfully.', 'Download Complete');
     } catch (error) {
-      setMessage(error.message || 'Unable to download attendance Excel report.');
+      alerts.error(error.message || 'Unable to download attendance Excel report.', 'Download Failed');
     } finally {
       setDownloadingExcel(false);
     }
@@ -873,7 +902,6 @@ export default function Reports() {
         </button>
       </section>
 
-      {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
         {statItems.map(([label, value]) => (
@@ -975,7 +1003,7 @@ export default function Reports() {
           </div>
         </div>
 
-        <form className="dynamic-form" onSubmit={handleAttendanceExcelDownload}>
+        <form className="dynamic-form" onSubmit={handleAttendanceExcelDownload} noValidate>
           <label>
             Organisation / Entity
             <select
@@ -1168,7 +1196,7 @@ export default function Reports() {
           )}
         </div>
 
-        <form className="dynamic-form" onSubmit={searchReport}>
+        <form className="dynamic-form" onSubmit={searchReport} noValidate>
           <label>
             Tenant ID
             <input

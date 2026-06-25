@@ -7,6 +7,7 @@ import {
   markNotificationRead,
 } from '../api/client';
 import { canCreateNotifications } from '../data/modules';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const EMPTY_FORM = {
   title: '',
@@ -292,6 +293,7 @@ function NotificationCard({ item, onMarkRead }) {
 }
 
 export default function Notifications() {
+  const alerts = useCustomAlert();
   const user = currentUser();
   const canCreate = canCreateNotifications(user);
 
@@ -309,10 +311,6 @@ export default function Notifications() {
 
   const [form, setForm] = useState(EMPTY_FORM);
 
-  const [message, setMessage] = useState({
-    type: '',
-    text: '',
-  });
 
   const filteredItems = useMemo(() => {
     const q = String(filters.q || '').trim().toLowerCase();
@@ -417,13 +415,25 @@ export default function Notifications() {
       .filter((item) => item.value);
   }, [options.users]);
 
-  const showMessage = (type, text) => {
-    setMessage({ type, text });
+  const showMessage = (type, text, title = '') => {
+    const cleanText = text || 'Notification action completed.';
 
-    window.clearTimeout(window.__notificationMessageTimer);
-    window.__notificationMessageTimer = window.setTimeout(() => {
-      setMessage({ type: '', text: '' });
-    }, 4000);
+    if (type === 'success') {
+      alerts.success(cleanText, title || 'Notification Success');
+      return;
+    }
+
+    if (type === 'warning') {
+      alerts.warning(cleanText, title || 'Notification Notice');
+      return;
+    }
+
+    if (type === 'info') {
+      alerts.info(cleanText, title || 'Notification Notice');
+      return;
+    }
+
+    alerts.error(cleanText, title || 'Notification Error');
   };
 
   const loadNotifications = async () => {
@@ -443,7 +453,7 @@ export default function Notifications() {
       setItems(data.items || []);
       setUnreadCount(Number(data.unread_count || 0));
     } catch (error) {
-      showMessage('error', error.message || 'Unable to load notifications.');
+      showMessage('error', error.message || 'Unable to load notifications.', 'Notifications Load Failed');
     } finally {
       setLoading(false);
     }
@@ -469,7 +479,7 @@ export default function Notifications() {
       });
     } catch (error) {
       setOptions(EMPTY_OPTIONS);
-      showMessage('error', error.message || 'Unable to load notification target options.');
+      showMessage('error', error.message || 'Unable to load notification target options.', 'Target Options Load Failed');
     }
   };
 
@@ -527,15 +537,35 @@ export default function Notifications() {
     event.preventDefault();
 
     if (!canCreate) {
-      showMessage('error', 'You do not have permission to create notifications.');
+      showMessage('error', 'You do not have permission to create notifications.', 'Permission Denied');
       return;
     }
 
     const title = String(form.title || '').trim();
     const body = String(form.body || '').trim();
 
-    if (!title || !body) {
-      showMessage('error', 'Title and message are required.');
+    if (!title) {
+      showMessage('warning', 'Notification title is required.', 'Missing Title');
+      return;
+    }
+
+    if (!body) {
+      showMessage('warning', 'Notification message is required.', 'Missing Message');
+      return;
+    }
+
+    if (form.target_scope === 'selected_tenant' && !form.target_tenant_id) {
+      showMessage('warning', 'Please select a tenant before sending this notification.', 'Tenant Required');
+      return;
+    }
+
+    if (form.target_scope === 'department' && !form.department_id) {
+      showMessage('warning', 'Please select a department before sending this notification.', 'Department Required');
+      return;
+    }
+
+    if (form.target_scope === 'selected_users' && !form.user_ids.length) {
+      showMessage('warning', 'Please select at least one employee before sending this notification.', 'Employee Required');
       return;
     }
 
@@ -576,9 +606,9 @@ export default function Notifications() {
 
       window.dispatchEvent(new Event('sds_hrms_notification_created'));
 
-      showMessage('success', 'Notification sent successfully.');
+      showMessage('success', 'Notification sent successfully.', 'Notification Sent');
     } catch (error) {
-      showMessage('error', error.message || 'Unable to create notification.');
+      showMessage('error', error.message || 'Unable to create notification.', 'Notification Send Failed');
     } finally {
       setSaving(false);
     }
@@ -588,15 +618,16 @@ export default function Notifications() {
     const id = item._id || item.id;
 
     if (!id) {
+      showMessage('warning', 'Invalid notification selected.', 'Notification Required');
       return;
     }
 
     try {
       await markNotificationRead(id);
       await loadNotifications();
-      showMessage('success', 'Notification marked as read.');
+      showMessage('success', 'Notification marked as read.', 'Notification Updated');
     } catch (error) {
-      showMessage('error', error.message || 'Unable to mark notification as read.');
+      showMessage('error', error.message || 'Unable to mark notification as read.', 'Mark Read Failed');
     }
   };
 
@@ -604,9 +635,9 @@ export default function Notifications() {
     try {
       await markAllNotificationsRead();
       await loadNotifications();
-      showMessage('success', 'All notifications marked as read.');
+      showMessage('success', 'All notifications marked as read.', 'Notifications Updated');
     } catch (error) {
-      showMessage('error', error.message || 'Unable to mark all notifications as read.');
+      showMessage('error', error.message || 'Unable to mark all notifications as read.', 'Mark All Read Failed');
     }
   };
 
@@ -1136,12 +1167,6 @@ export default function Notifications() {
         </div>
       </div>
 
-      {message.text ? (
-        <div className={`notif-alert ${message.type}`}>
-          {message.text}
-        </div>
-      ) : null}
-
       <div className="notif-layout">
         <div className="notif-panel">
           <div className="notif-section-heading">
@@ -1212,7 +1237,7 @@ export default function Notifications() {
           </div>
 
           {canCreate ? (
-            <form onSubmit={handleCreateNotification}>
+            <form onSubmit={handleCreateNotification} noValidate>
               <div className="notif-form-grid">
                 <TextInput
                   label="Title"

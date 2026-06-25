@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle,
   CalendarDays,
-  CheckCircle2,
   Clock,
   FileText,
   Loader2,
@@ -29,6 +27,8 @@ import {
   updateManagementGroupMembers,
   updateManagementGroupMinutes,
 } from '../api/client';
+
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const EMPTY_MEETING_FORM = {
   topic: '',
@@ -127,25 +127,8 @@ function StatusPill({ value }) {
   );
 }
 
-function MessageBox({ type = 'info', children, onClose }) {
-  if (!children) return null;
-
-  return (
-    <div className={`mg-message mg-message-${type}`}>
-      <div className="mg-message-icon">
-        {type === 'error' ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
-      </div>
-      <div>{children}</div>
-      {onClose ? (
-        <button type="button" className="mg-message-close" onClick={onClose}>
-          <X size={16} />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 export default function ManagementGroup({ user }) {
+  const alerts = useCustomAlert();
   const [loading, setLoading] = useState(true);
   const [savingMembers, setSavingMembers] = useState(false);
   const [savingMeeting, setSavingMeeting] = useState(false);
@@ -177,8 +160,6 @@ export default function ManagementGroup({ user }) {
   const [selectedMeeting, setSelectedMeeting] = useState(null);
   const [minutesForm, setMinutesForm] = useState(EMPTY_MINUTES_FORM);
 
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
 
   const canManage = Boolean(permissions.can_manage);
   const canViewPrivate = Boolean(permissions.can_view_private);
@@ -241,7 +222,6 @@ export default function ManagementGroup({ user }) {
     }
 
     try {
-      setError('');
       const data = await getManagementGroup();
 
       setGroup(data.group || {});
@@ -273,7 +253,7 @@ export default function ManagementGroup({ user }) {
         setMeetings([]);
       }
     } catch (ex) {
-      setError(ex.message || 'Unable to load Management Group.');
+      alerts.error(ex.message || 'Unable to load Management Group.', 'Management Group Load Failed');
     } finally {
       setLoading(false);
     }
@@ -284,7 +264,7 @@ export default function ManagementGroup({ user }) {
       const data = await getManagementGroupMeetings(nextFilters);
       setMeetings(data.items || data.meetings || []);
     } catch (ex) {
-      setError(ex.message || 'Unable to load Management Group meetings.');
+      alerts.error(ex.message || 'Unable to load Management Group meetings.', 'Meetings Load Failed');
     }
   }
 
@@ -335,13 +315,11 @@ export default function ManagementGroup({ user }) {
     event.preventDefault();
 
     if (!selectedMemberIds.length) {
-      setError('Select at least one Management Group member.');
+      alerts.warning('Select at least one Management Group member.', 'Members Required');
       return;
     }
 
     setSavingMembers(true);
-    setError('');
-    setMessage('');
 
     try {
       const data = await updateManagementGroupMembers({
@@ -353,11 +331,11 @@ export default function ManagementGroup({ user }) {
 
       setGroup(data.group || {});
       setMembers(data.members || []);
-      setMessage(data.message || 'Management Group members updated successfully.');
+      alerts.success(data.message || 'Management Group members updated successfully.', 'Members Updated');
 
       await loadGroup({ silent: true });
     } catch (ex) {
-      setError(ex.message || 'Unable to update Management Group members.');
+      alerts.error(ex.message || 'Unable to update Management Group members.', 'Members Update Failed');
     } finally {
       setSavingMembers(false);
     }
@@ -374,23 +352,21 @@ export default function ManagementGroup({ user }) {
     event.preventDefault();
 
     if (!meetingForm.topic.trim()) {
-      setError('Meeting topic is required.');
+      alerts.warning('Meeting topic is required.', 'Meeting Topic Required');
       return;
     }
 
     if (!meetingForm.meeting_date) {
-      setError('Meeting date is required.');
+      alerts.warning('Meeting date is required.', 'Meeting Date Required');
       return;
     }
 
     setSavingMeeting(true);
-    setError('');
-    setMessage('');
 
     try {
       const data = await createManagementGroupMeeting(meetingForm);
 
-      setMessage(data.message || 'Management Group meeting scheduled successfully.');
+      alerts.success(data.message || 'Management Group meeting scheduled successfully.', 'Meeting Scheduled');
       setMeetingForm({
         ...EMPTY_MEETING_FORM,
         meeting_date: todayDate(),
@@ -398,7 +374,7 @@ export default function ManagementGroup({ user }) {
 
       await loadMeetings();
     } catch (ex) {
-      setError(ex.message || 'Unable to schedule Management Group meeting.');
+      alerts.error(ex.message || 'Unable to schedule Management Group meeting.', 'Meeting Schedule Failed');
     } finally {
       setSavingMeeting(false);
     }
@@ -431,29 +407,27 @@ export default function ManagementGroup({ user }) {
     event.preventDefault();
 
     if (!selectedMeeting?._id && !selectedMeeting?.id) {
-      setError('Please select a meeting first.');
+      alerts.warning('Please select a meeting first.', 'Meeting Required');
       return;
     }
 
     if (!minutesForm.minutes.trim()) {
-      setError('Meeting minutes are required.');
+      alerts.warning('Meeting minutes are required.', 'Minutes Required');
       return;
     }
 
     const meetingId = selectedMeeting._id || selectedMeeting.id;
 
     setSavingMinutes(true);
-    setError('');
-    setMessage('');
 
     try {
       const data = await updateManagementGroupMinutes(meetingId, minutesForm);
 
-      setMessage(data.message || 'Meeting minutes saved successfully.');
+      alerts.success(data.message || 'Meeting minutes saved successfully.', 'Minutes Saved');
       setSelectedMeeting(data.meeting || null);
       await loadMeetings();
     } catch (ex) {
-      setError(ex.message || 'Unable to save meeting minutes.');
+      alerts.error(ex.message || 'Unable to save meeting minutes.', 'Minutes Save Failed');
     } finally {
       setSavingMinutes(false);
     }
@@ -462,22 +436,20 @@ export default function ManagementGroup({ user }) {
   async function handleAssignWriter(meetingId, userId) {
     if (!meetingId || !userId) return;
 
-    setError('');
-    setMessage('');
 
     try {
       const data = await assignManagementGroupMinutesWriter(meetingId, {
         assigned_minutes_user_id: userId,
       });
 
-      setMessage(data.message || 'Minutes writer assigned successfully.');
+      alerts.success(data.message || 'Minutes writer assigned successfully.', 'Minutes Writer Assigned');
       await loadMeetings();
 
       if (selectedMeeting && String(selectedMeeting._id || selectedMeeting.id) === String(meetingId)) {
         setSelectedMeeting(data.meeting || selectedMeeting);
       }
     } catch (ex) {
-      setError(ex.message || 'Unable to assign minutes writer.');
+      alerts.error(ex.message || 'Unable to assign minutes writer.', 'Writer Assignment Failed');
     }
   }
 
@@ -486,27 +458,26 @@ export default function ManagementGroup({ user }) {
 
     if (!meetingId) return;
 
-    const confirmed = window.confirm(
+    const confirmed = await alerts.confirm(
       `Delete meeting "${meeting.topic}"? This will hide it from Management Group history.`,
+      'Delete Meeting?',
     );
 
     if (!confirmed) return;
 
     setDeletingMeetingId(meetingId);
-    setError('');
-    setMessage('');
 
     try {
       const data = await deleteManagementGroupMeeting(meetingId);
 
-      setMessage(data.message || 'Meeting deleted successfully.');
+      alerts.success(data.message || 'Meeting deleted successfully.', 'Meeting Deleted');
       await loadMeetings();
 
       if (selectedMeeting && String(selectedMeeting._id || selectedMeeting.id) === String(meetingId)) {
         closeMinutesEditor();
       }
     } catch (ex) {
-      setError(ex.message || 'Unable to delete meeting.');
+      alerts.error(ex.message || 'Unable to delete meeting.', 'Meeting Delete Failed');
     } finally {
       setDeletingMeetingId('');
     }
@@ -564,14 +535,6 @@ export default function ManagementGroup({ user }) {
           </div>
         </div>
       </div>
-
-      <MessageBox type="success" onClose={() => setMessage('')}>
-        {message}
-      </MessageBox>
-
-      <MessageBox type="error" onClose={() => setError('')}>
-        {error}
-      </MessageBox>
 
       {!canViewPrivate && (
         <div className="mg-restricted-note">

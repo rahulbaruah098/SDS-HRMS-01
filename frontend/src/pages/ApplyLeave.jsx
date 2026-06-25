@@ -10,6 +10,7 @@ import {
   applyLeaveRequest,
   getLeaveOptions,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HR_ADMIN_ROLES = new Set([
   'super_admin',
@@ -173,6 +174,7 @@ function daysBetween(fromDate, toDate, dayType) {
 }
 
 export default function ApplyLeave({ user }) {
+  const alerts = useCustomAlert();
   const userRoles = useMemo(() => normalizeRoles(user), [user]);
   const isHrAdminUser = hasAnyRole(userRoles, HR_ADMIN_ROLES);
   const isAdminUser = hasAnyRole(userRoles, ADMIN_ROLES);
@@ -182,7 +184,6 @@ export default function ApplyLeave({ user }) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [projects, setProjects] = useState([]);
   const [members, setMembers] = useState([]);
-  const [message, setMessage] = useState('');
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -240,11 +241,11 @@ export default function ApplyLeave({ user }) {
 
       setProjects(data.projects || []);
       setMembers(data.task_handover_options || data.members || []);
-    } catch (error) {
-      setProjects([]);
-      setMembers([]);
-      setMessage(error.message || 'Unable to load leave options.');
-    } finally {
+        } catch (error) {
+          setProjects([]);
+          setMembers([]);
+          alerts.error(error.message || 'Unable to load leave options.');
+        } finally {
       setLoadingOptions(false);
     }
   }
@@ -278,27 +279,29 @@ export default function ApplyLeave({ user }) {
     });
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setMessage('');
+async function handleSubmit(event) {
+  event.preventDefault();
 
-    if (!form.from_date || !form.to_date) {
-      setMessage('From date and to date are required.');
+  if (!form.from_date || !form.to_date) {
+      alerts.warning('From date and to date are required.', 'Missing Details');
       return;
     }
 
     if (form.to_date < form.from_date) {
-      setMessage('To date cannot be before from date.');
+      alerts.warning('To date cannot be before from date.', 'Invalid Date Range');
       return;
     }
 
     if (!form.reason.trim()) {
-      setMessage('Leave reason is required.');
+      alerts.warning('Leave reason is required.', 'Missing Reason');
       return;
     }
 
     if (isHrAdminUser && !form.work_project_name.trim() && !form.project_handover_id) {
-      setMessage('Please enter your work/project details before applying leave.');
+          alerts.warning(
+          'Please enter your work/project details before applying leave.',
+          'Work Details Required',
+        );
       return;
     }
 
@@ -325,7 +328,7 @@ export default function ApplyLeave({ user }) {
 
       const data = await applyLeaveRequest(payload);
 
-      setMessage(data.message || 'Leave request submitted successfully.');
+      alerts.success(data.message || 'Leave request submitted successfully.', 'Leave Submitted');
 
       setForm({
         ...EMPTY_FORM,
@@ -333,7 +336,7 @@ export default function ApplyLeave({ user }) {
         to_date: today,
       });
     } catch (error) {
-      setMessage(error.message || 'Unable to submit leave request.');
+      alerts.error(error.message || 'Unable to submit leave request.', 'Leave Not Submitted');
     } finally {
       setSubmitting(false);
     }
@@ -616,8 +619,6 @@ export default function ApplyLeave({ user }) {
           {loadingOptions ? 'Refreshing...' : 'Refresh'}
         </button>
       </section>
-
-      {message ? <div className="apply-leave-alert">{message}</div> : null}
 
       <section className="apply-leave-layout">
         <aside className="apply-leave-panel">

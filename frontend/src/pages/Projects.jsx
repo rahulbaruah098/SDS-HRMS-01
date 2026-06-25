@@ -16,6 +16,7 @@ import {
   normalizeProjectTeamTree,
   updateProjectStatus,
 } from '../api/client';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function toArray(value) {
   if (Array.isArray(value)) return value;
@@ -1226,10 +1227,9 @@ function ProjectCard({
 }
 
 export default function Projects() {
+  const alerts = useCustomAlert();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
   const [projects, setProjects] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [dashboard, setDashboard] = useState(null);
@@ -1312,8 +1312,6 @@ const createFormEmployees = useMemo(() => {
 
   async function loadData() {
     setLoading(true);
-    setError('');
-    setMessage('');
 
     try {
       const [
@@ -1367,7 +1365,7 @@ const createFormEmployees = useMemo(() => {
         ),
       });
     } catch (err) {
-      setError(err.message || 'Unable to load project data.');
+      alerts.error(err.message || 'Unable to load project data.', 'Project Load Failed');
     } finally {
       setLoading(false);
     }
@@ -1400,7 +1398,7 @@ if (key === 'department') {
     const selfId = currentEmployeeOption ? String(getId(currentEmployeeOption)) : '';
 
     if (!selfId) {
-      setError('Current employee profile was not found. Please refresh or login again.');
+      alerts.warning('Current employee profile was not found. Please refresh or login again.', 'Employee Profile Missing');
       return;
     }
 
@@ -1415,63 +1413,90 @@ if (key === 'department') {
       };
     });
 
-    setMessage('Your name has been added to the assigned team members list.');
+    alerts.success('Your name has been added to the assigned team members list.', 'Added Successfully');
   }
 
   async function handleCreateProject(event) {
     event.preventDefault();
 
     if (!canManageProjectSetup) {
-      setError('Only Team Leaders and Reporting Officers can create projects.');
+      alerts.warning('Only Team Leaders and Reporting Officers can create projects.', 'Access Restricted');
       return;
     }
 
-if (!form.department) {
-  setError('Please select a department before creating a project.');
-  return;
-}
+    if (!String(form.name || '').trim()) {
+      alerts.warning('Project name is required.', 'Missing Project Name');
+      return;
+    }
+
+    if (!form.department) {
+      alerts.warning('Please select a department before creating a project.', 'Missing Department');
+      return;
+    }
 
     setSaving(true);
-    setError('');
-    setMessage('');
 
     try {
       await createProject({
         ...form,
-        project_name: form.name,
-        title: form.name,
+        name: String(form.name || '').trim(),
+        project_name: String(form.name || '').trim(),
+        title: String(form.name || '').trim(),
         status: 'active',
       });
 
-      setMessage('Project created successfully.');
-setForm({
-  name: '',
-  description: '',
-  department: '',
-  status: 'active',
-  assigned_employee_ids: [],
-  collaborator_ids: [],
-});
+      alerts.success('Project created successfully.', 'Project Created');
+
+      setForm({
+        name: '',
+        description: '',
+        department: '',
+        status: 'active',
+        assigned_employee_ids: [],
+        collaborator_ids: [],
+      });
 
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to create project.');
+      alerts.error(err.message || 'Unable to create project.', 'Project Create Failed');
     } finally {
       setSaving(false);
     }
   }
 
   async function handleStatusChange(projectId, status) {
+    if (!projectId) {
+      alerts.warning('Project id not found.', 'Invalid Project');
+      return;
+    }
+
+    const nextStatusLabel = status === 'completed' ? 'mark this project as completed' : 'reopen this project as active';
+
+    const confirmed = await alerts.confirm(
+      `Are you sure you want to ${nextStatusLabel}?`,
+      status === 'completed' ? 'Complete Project' : 'Reopen Project',
+      {
+        confirmText: status === 'completed' ? 'Yes, Complete' : 'Yes, Reopen',
+        cancelText: 'Cancel',
+        tone: status === 'completed' ? 'warning' : 'info',
+      },
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
     setSaving(true);
-    setError('');
-    setMessage('');
 
     try {
       await updateProjectStatus(projectId, status);
-      setMessage(status === 'completed' ? 'Project marked as completed.' : 'Project reopened as active.');
+      alerts.success(
+        status === 'completed' ? 'Project marked as completed.' : 'Project reopened as active.',
+        'Project Status Updated',
+      );
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to update project status.');
+      alerts.error(err.message || 'Unable to update project status.', 'Status Update Failed');
     } finally {
       setSaving(false);
     }
@@ -1479,13 +1504,16 @@ setForm({
 
 async function handleAssign(projectId, payload) {
   if (!canManageProjectSetup) {
-    setError('Only Team Leaders and Reporting Officers can assign members or collaborators.');
+    alerts.warning('Only Team Leaders and Reporting Officers can assign members or collaborators.', 'Access Restricted');
+    return;
+  }
+
+  if (!projectId) {
+    alerts.warning('Project id not found.', 'Invalid Project');
     return;
   }
 
   setSaving(true);
-  setError('');
-  setMessage('');
 
   try {
     const assignedPayload = {
@@ -1501,38 +1529,41 @@ async function handleAssign(projectId, payload) {
     await assignProject(projectId, assignedPayload);
     await updateProjectCollaborators(projectId, collaboratorPayload);
 
-    setMessage('Project assignment and collaborators updated successfully.');
+    alerts.success('Project assignment and collaborators updated successfully.', 'Assignment Updated');
     await loadData();
   } catch (err) {
-    setError(err.message || 'Unable to update project assignment.');
+    alerts.error(err.message || 'Unable to update project assignment.', 'Assignment Update Failed');
   } finally {
     setSaving(false);
   }
 }
 
   async function handleProgressSubmit(projectId, payload) {
+    if (!projectId) {
+      alerts.warning('Project id not found.', 'Invalid Project');
+      return;
+    }
+
     const progress = Number(payload.progress_percent);
 
     if (Number.isNaN(progress) || progress < 0 || progress > 100) {
-      setError('Progress must be between 0 and 100.');
+      alerts.warning('Progress must be between 0 and 100.', 'Invalid Progress');
       return;
     }
 
     if (!String(payload.note || '').trim()) {
-      setError('Daily progress note is required.');
+      alerts.warning('Daily progress note is required.', 'Missing Progress Note');
       return;
     }
 
     setSaving(true);
-    setError('');
-    setMessage('');
 
     try {
       await addProjectProgress(projectId, payload);
-      setMessage('Daily project progress submitted.');
+      alerts.success('Daily project progress submitted.', 'Progress Submitted');
       await loadData();
     } catch (err) {
-      setError(err.message || 'Unable to submit daily progress.');
+      alerts.error(err.message || 'Unable to submit daily progress.', 'Progress Submit Failed');
     } finally {
       setSaving(false);
     }
@@ -2820,13 +2851,10 @@ async function handleAssign(projectId, payload) {
         </div>
       </section>
 
-      {error && <div className="project-alert project-alert-error">{error}</div>}
-      {message && <div className="project-alert project-alert-success">{message}</div>}
-
       <ProjectAnalyticsGraph projects={projects} />
 
       {canManageProjectSetup ? (
-        <form className="project-form" onSubmit={handleCreateProject}>
+        <form className="project-form" onSubmit={handleCreateProject} noValidate>
            <h2 className="project-section-title">Create Department Project</h2>
 
           <div className="project-form-grid">

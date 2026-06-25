@@ -9,6 +9,7 @@ import {
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 import AttendanceWidget from '../components/AttendanceWidget';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -577,8 +578,8 @@ function ProjectTeamRootCard({ project }) {
 }
 
 export default function AdminDashboard({ setPage }) {
+  const alerts = useCustomAlert();
   const [data, setData] = useState(null);
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [decisionSavingId, setDecisionSavingId] = useState('');
   const [recentNotifications, setRecentNotifications] = useState([]);
@@ -588,13 +589,12 @@ export default function AdminDashboard({ setPage }) {
   async function loadDashboard() {
     try {
       setLoading(true);
-      setMessage('');
 
       const dashboardData = await api('/dashboard/admin');
       setData(dashboardData);
     } catch (error) {
       console.error(error);
-      setMessage(error.message || 'Unable to load admin dashboard');
+      alerts.error(error.message || 'Unable to load admin dashboard', 'Dashboard Load Failed');
     } finally {
       setLoading(false);
     }
@@ -611,6 +611,7 @@ export default function AdminDashboard({ setPage }) {
       console.error(error);
       setRecentNotifications([]);
       setNotificationUnreadCount(0);
+      alerts.error(error.message || 'Unable to load dashboard notifications', 'Notifications Load Failed');
     } finally {
       setNotificationLoading(false);
     }
@@ -631,16 +632,18 @@ export default function AdminDashboard({ setPage }) {
     const requestId = row?._id;
 
     if (!requestId) {
-      setMessage('Leave request id not found');
+      alerts.warning('Leave request id not found.', 'Invalid Leave Request');
       return;
     }
 
-    const ok = window.confirm(`${statusLabel(status)} this leave request?`);
+    const confirmed = await alerts.confirm(
+      `${statusLabel(status)} this leave request?`,
+      `${statusLabel(status)} Leave Request`,
+    );
 
-    if (!ok) return;
+    if (!confirmed) return;
 
     try {
-      setMessage('');
       setDecisionSavingId(requestId);
 
       const res = await api(`/leave_requests/${requestId}/decision`, {
@@ -648,10 +651,10 @@ export default function AdminDashboard({ setPage }) {
         body: JSON.stringify({ status }),
       });
 
-      setMessage(res.message || `Leave ${status}`);
+      alerts.success(res.message || `Leave ${status}`, 'Leave Request Updated');
       await loadDashboard();
     } catch (error) {
-      setMessage(error.message || 'Unable to update leave request');
+      alerts.error(error.message || 'Unable to update leave request', 'Leave Update Failed');
     } finally {
       setDecisionSavingId('');
     }
@@ -661,16 +664,18 @@ export default function AdminDashboard({ setPage }) {
     const requestId = row?._id;
 
     if (!requestId) {
-      setMessage('WFH / Field request id not found');
+      alerts.warning('WFH / Field request id not found.', 'Invalid Request');
       return;
     }
 
-    const ok = window.confirm(`${statusLabel(status)} this WFH / Field request?`);
+    const confirmed = await alerts.confirm(
+      `${statusLabel(status)} this WFH / Field request?`,
+      `${statusLabel(status)} WFH / Field Request`,
+    );
 
-    if (!ok) return;
+    if (!confirmed) return;
 
     try {
-      setMessage('');
       setDecisionSavingId(requestId);
 
       const res = await api(`/attendance/mode-requests/${requestId}/decision`, {
@@ -678,10 +683,10 @@ export default function AdminDashboard({ setPage }) {
         body: JSON.stringify({ status }),
       });
 
-      setMessage(res.message || `Request ${status}`);
+      alerts.success(res.message || `Request ${status}`, 'WFH / Field Request Updated');
       await loadDashboard();
     } catch (error) {
-      setMessage(error.message || 'Unable to update WFH / Field request');
+      alerts.error(error.message || 'Unable to update WFH / Field request', 'Request Update Failed');
     } finally {
       setDecisionSavingId('');
     }
@@ -2004,7 +2009,6 @@ export default function AdminDashboard({ setPage }) {
         </div>
       </section>
 
-      {message && <div className="inline-message">{message}</div>}
 
       {loading && (
         <section className="panel">

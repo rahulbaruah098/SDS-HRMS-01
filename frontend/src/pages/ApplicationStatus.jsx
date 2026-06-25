@@ -16,6 +16,7 @@ import {
 } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
+import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -556,21 +557,24 @@ function LeaveStatusCard({ row }) {
 }
 
 export default function ApplicationStatus() {
+  const alerts = useCustomAlert();
+
   const [data, setData] = useState(null);
   const [holidayWorkRequests, setHolidayWorkRequests] = useState([]);
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingHolidayWork, setLoadingHolidayWork] = useState(false);
 
   async function loadStatus() {
     try {
       setLoading(true);
-      setMessage('');
 
       const res = await api('/application_status');
       setData(res);
     } catch (error) {
-      setMessage(error.message || 'Unable to load application status');
+      alerts.error(
+        error.message || 'Unable to load application status.',
+        'Status Load Failed',
+      );
     } finally {
       setLoading(false);
     }
@@ -582,8 +586,12 @@ export default function ApplicationStatus() {
 
       const res = await getMyHolidayWorkRequests();
       setHolidayWorkRequests(res.items || res.requests || []);
-    } catch {
+    } catch (error) {
       setHolidayWorkRequests([]);
+      alerts.error(
+        error.message || 'Unable to load holiday work request status.',
+        'Holiday Work Status Failed',
+      );
     } finally {
       setLoadingHolidayWork(false);
     }
@@ -987,8 +995,6 @@ export default function ApplicationStatus() {
             {loading || loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
           </button>
       </section>
-
-      {message && <div className="inline-message">{message}</div>}
 
       <section className="stats-grid">
         <Stat label="Total Requests" value={summary.total || 0} />
