@@ -256,6 +256,51 @@ PROFILE_PHOTO_FIELDS = {
     "picture",
 }
 
+PROFILE_COVER_IMAGE_FIELDS = {
+    "cover_image",
+    "cover_photo",
+    "profile_cover",
+    "profile_cover_image",
+    "banner_image",
+    "banner_photo",
+}
+
+EMPLOYEE_SELF_PROFILE_FIELDS = {
+    "name",
+    "employee_name",
+    "full_name",
+    "display_name",
+    "phone",
+    "mobile",
+    "contact",
+    "contact_number",
+    "personal_email",
+    "alternate_email",
+    "gender",
+    "sex",
+    "date_of_birth",
+    "dob",
+    "marital_status",
+    "blood_group",
+    "father_name",
+    "mother_name",
+    "religion",
+    "speak_language",
+    "current_address",
+    "address",
+    "permanent_address",
+    "college",
+    "school",
+    "qualification",
+    "education",
+    "emergency_contact_person",
+    "emergency_contact_name",
+    "emergency_contact_number",
+    "emergency_phone",
+    *PROFILE_PHOTO_FIELDS,
+    *PROFILE_COVER_IMAGE_FIELDS,
+}
+
 REPORTING_OFFICER_DESIGNATION_REGEX = re.compile(
     r"(manager|managing director|director|ceo|chief executive officer)",
     re.IGNORECASE,
@@ -421,11 +466,14 @@ def normalize_master_payload(collection, payload):
 
     if collection == "states":
         name = normalize_text(payload.get("name") or payload.get("state_name"))
+
         if name:
             payload["name"] = name
             payload["state_name"] = name
+
         payload["status"] = normalize_text(payload.get("status") or "active")
-        
+        return payload
+
     if collection == "organisations":
         name = normalize_text(
             payload.get("name")
@@ -439,11 +487,11 @@ def normalize_master_payload(collection, payload):
             or payload.get("organization_code")
         ).upper()
 
-    if name:
-        payload["name"] = name
-        payload["title"] = name
-        payload["organisation_name"] = name
-        payload["organization_name"] = name
+        if name:
+            payload["name"] = name
+            payload["title"] = name
+            payload["organisation_name"] = name
+            payload["organization_name"] = name
 
         if code:
             payload["code"] = code
@@ -451,13 +499,17 @@ def normalize_master_payload(collection, payload):
             payload["organization_code"] = code
 
         payload["status"] = normalize_text(payload.get("status") or "active")
+        return payload
 
     if collection == "departments":
         name = normalize_text(payload.get("name") or payload.get("department_name"))
+
         if name:
             payload["name"] = name
             payload["department_name"] = name
+
         payload["status"] = normalize_text(payload.get("status") or "active")
+        return payload
 
     if collection == "designations":
         name = normalize_text(
@@ -465,11 +517,14 @@ def normalize_master_payload(collection, payload):
             or payload.get("title")
             or payload.get("designation_name")
         )
+
         if name:
             payload["name"] = name
             payload["title"] = name
             payload["designation_name"] = name
+
         payload["status"] = normalize_text(payload.get("status") or "active")
+        return payload
 
     return payload
 
@@ -535,6 +590,38 @@ def apply_avatar_aliases(payload, avatar_value=None):
 
     return payload
 
+
+def employee_cover_image_from_payload(payload):
+    payload = payload or {}
+
+    return (
+        safe_employee_avatar_value(payload.get("cover_image"))
+        or safe_employee_avatar_value(payload.get("cover_photo"))
+        or safe_employee_avatar_value(payload.get("profile_cover"))
+        or safe_employee_avatar_value(payload.get("profile_cover_image"))
+        or safe_employee_avatar_value(payload.get("banner_image"))
+        or safe_employee_avatar_value(payload.get("banner_photo"))
+        or ""
+    )
+
+
+def apply_cover_image_aliases(payload, cover_value=None):
+    payload = payload or {}
+    cover = safe_employee_avatar_value(cover_value) or employee_cover_image_from_payload(payload)
+
+    if cover:
+        payload["cover_image"] = cover
+        payload["cover_photo"] = cover
+        payload["profile_cover"] = cover
+        payload["profile_cover_image"] = cover
+        payload["banner_image"] = cover
+        payload["banner_photo"] = cover
+    else:
+        for key in PROFILE_COVER_IMAGE_FIELDS:
+            if payload.get(key) and not safe_employee_avatar_value(payload.get(key)):
+                payload.pop(key, None)
+
+    return payload
 
 def normalize_role_value(value):
     role_key = normalize_role_key(value)
@@ -714,6 +801,7 @@ def build_user_sync_payload(employee_doc, existing_user=None):
     email = employee_email_from_payload(employee_doc)
     status = normalize_text(employee_doc.get("status") or "active")
     avatar = employee_avatar_from_payload(employee_doc)
+    cover = employee_cover_image_from_payload(employee_doc)
 
     is_active = not (
         status.lower() in {"inactive", "disabled", "deleted"}
@@ -755,6 +843,9 @@ def build_user_sync_payload(employee_doc, existing_user=None):
 
     if avatar:
         apply_avatar_aliases(payload, avatar)
+
+    if cover:
+        apply_cover_image_aliases(payload, cover)
 
     if employee_doc.get("department_id"):
         payload["department_id"] = employee_doc.get("department_id")
@@ -1254,20 +1345,35 @@ def can_write_collection(collection):
     return False
 
 
-def is_profile_photo_only_payload(data):
-    payload_keys = {
+def payload_keys_without_ids(data):
+    return {
         key
         for key in (data or {}).keys()
         if key not in {"_id", "id"}
     }
 
+
+def is_profile_photo_only_payload(data):
+    payload_keys = payload_keys_without_ids(data)
+
     return bool(payload_keys) and payload_keys.issubset(PROFILE_PHOTO_FIELDS)
 
 
-def can_update_own_employee_photo(db, item_id, data):
-    if not is_profile_photo_only_payload(data):
-        return False
+def is_employee_self_profile_payload(data):
+    payload_keys = payload_keys_without_ids(data)
 
+    return bool(payload_keys) and payload_keys.issubset(EMPLOYEE_SELF_PROFILE_FIELDS)
+
+
+def employee_self_profile_payload(data):
+    return {
+        key: value
+        for key, value in (data or {}).items()
+        if key in EMPLOYEE_SELF_PROFILE_FIELDS
+    }
+
+
+def current_user_owns_employee(db, item_id):
     employee_obj_id = safe_object_id(item_id)
 
     if not employee_obj_id:
@@ -1296,6 +1402,14 @@ def can_update_own_employee_photo(db, item_id, data):
     return str(current_employee.get("_id")) == str(employee_obj_id)
 
 
+def can_update_own_employee_photo(db, item_id, data):
+    return is_profile_photo_only_payload(data) and current_user_owns_employee(db, item_id)
+
+
+def can_update_own_employee_profile(db, item_id, data):
+    return is_employee_self_profile_payload(data) and current_user_owns_employee(db, item_id)
+
+
 def collection_exists(collection):
     return collection in READ_ALLOWED_COLLECTIONS
 
@@ -1305,6 +1419,21 @@ def get_collection(db, collection):
         return None
 
     return getattr(db, collection)
+
+
+def validate_employee_image_value(raw_value, label):
+    raw_text = normalize_text(raw_value)
+
+    if not raw_text:
+        return ""
+
+    if raw_text.startswith("data:image") and len(raw_text) > 5000:
+        return f"{label} is too large/base64. Please save only an uploaded image path or URL."
+
+    if len(raw_text) > 1000 and not raw_text.startswith("http"):
+        return f"{label} value is too long. Please save only a short image path or URL."
+
+    return ""
 
 
 def validate_employee_photo_payload(data):
@@ -1320,18 +1449,23 @@ def validate_employee_photo_payload(data):
         or ""
     )
 
-    raw_avatar_text = normalize_text(raw_avatar)
+    return validate_employee_image_value(raw_avatar, "Profile photo")
 
-    if not raw_avatar_text:
-        return ""
 
-    if raw_avatar_text.startswith("data:image") and len(raw_avatar_text) > 5000:
-        return "Profile photo is too large/base64. Please save only an uploaded image path or URL."
+def validate_employee_cover_image_payload(data):
+    data = data or {}
 
-    if len(raw_avatar_text) > 1000 and not raw_avatar_text.startswith("http"):
-        return "Profile photo value is too long. Please save only a short image path or URL."
+    raw_cover = (
+        data.get("cover_image")
+        or data.get("cover_photo")
+        or data.get("profile_cover")
+        or data.get("profile_cover_image")
+        or data.get("banner_image")
+        or data.get("banner_photo")
+        or ""
+    )
 
-    return ""
+    return validate_employee_image_value(raw_cover, "Cover image")
 
 
 def clean_payload(data):
@@ -3243,6 +3377,11 @@ def create_collection_item(collection):
         if photo_error:
             return jsonify({"message": photo_error}), 400
 
+        cover_error = validate_employee_cover_image_payload(data)
+
+        if cover_error:
+            return jsonify({"message": cover_error}), 400
+
     if collection == "projects":
         payload = normalize_project_payload(payload)
 
@@ -3305,6 +3444,7 @@ def create_collection_item(collection):
             payload.setdefault("dob", date_of_birth)
 
         apply_avatar_aliases(payload)
+        apply_cover_image_aliases(payload)
         remove_employee_auth_fields(payload)
 
         if not skip_login:
@@ -3409,13 +3549,17 @@ def update_collection_item(collection, item_id):
         collection == "employees"
         and can_update_own_employee_photo(db, item_id, data)
     )
+    self_profile_update = (
+        collection == "employees"
+        and can_update_own_employee_profile(db, item_id, data)
+    )
 
     if collection == "projects" and not can_create_assign_or_collaborate_projects():
         return jsonify({
             "message": "Only Team Leaders and Reporting Officers can edit project details"
         }), 403
 
-    if not self_photo_update and not can_write_collection(collection):
+    if not self_photo_update and not self_profile_update and not can_write_collection(collection):
         return jsonify({
             "message": "You do not have permission to update this record"
         }), 403
@@ -3455,6 +3599,11 @@ def update_collection_item(collection, item_id):
 
         if photo_error:
             return jsonify({"message": photo_error}), 400
+
+        cover_error = validate_employee_cover_image_payload(data)
+
+        if cover_error:
+            return jsonify({"message": cover_error}), 400
 
     if self_photo_update:
         apply_avatar_aliases(payload)
@@ -3516,6 +3665,129 @@ def update_collection_item(collection, item_id):
             "message": "Profile photo updated successfully",
             "item": serialize_item(updated),
         })
+    if self_profile_update:
+        payload = employee_self_profile_payload(payload)
+
+        if not payload:
+            return jsonify({"message": "No allowed profile fields to update"}), 400
+
+        if PROFILE_PHOTO_FIELDS.intersection(payload.keys()):
+            apply_avatar_aliases(payload)
+
+        if PROFILE_COVER_IMAGE_FIELDS.intersection(payload.keys()):
+            apply_cover_image_aliases(payload)
+
+        merged_employee = dict(existing)
+        merged_employee.update(payload)
+        merged_employee["_id"] = existing["_id"]
+
+        if (
+            payload.get("name")
+            or payload.get("employee_name")
+            or payload.get("full_name")
+        ):
+            payload["name"] = employee_name_from_payload(merged_employee)
+            payload["employee_name"] = payload["name"]
+            merged_employee["name"] = payload["name"]
+            merged_employee["employee_name"] = payload["name"]
+
+        date_of_birth = employee_date_of_birth(merged_employee)
+
+        if date_of_birth and (payload.get("date_of_birth") or payload.get("dob")):
+            payload["date_of_birth"] = date_of_birth
+            payload["dob"] = date_of_birth
+
+        payload.update({
+            "updated_at": now_utc(),
+            "updated_by": current_user_id(),
+            "updated_by_name": current_user_name(),
+        })
+
+        mongo_collection.update_one(
+            {"_id": item_obj_id},
+            {"$set": payload},
+        )
+
+        updated = mongo_collection.find_one({"_id": item_obj_id})
+
+        user_payload = {
+            "updated_at": now_utc(),
+            "updated_by": current_user_id(),
+            "updated_by_name": current_user_name(),
+        }
+        should_sync_user = False
+
+        if (
+            payload.get("name")
+            or payload.get("employee_name")
+            or payload.get("full_name")
+            or payload.get("display_name")
+        ):
+            display_name = (
+                employee_name_from_payload(updated)
+                or normalize_text(updated.get("display_name"))
+            )
+
+            if display_name:
+                user_payload["name"] = display_name
+                user_payload["full_name"] = display_name
+                user_payload["display_name"] = display_name
+                should_sync_user = True
+
+        if PROFILE_PHOTO_FIELDS.intersection(payload.keys()):
+            avatar = employee_avatar_from_payload(payload)
+
+            if avatar:
+                apply_avatar_aliases(user_payload, avatar)
+            else:
+                for key in PROFILE_PHOTO_FIELDS:
+                    user_payload[key] = ""
+
+            should_sync_user = True
+
+        if PROFILE_COVER_IMAGE_FIELDS.intersection(payload.keys()):
+            cover = employee_cover_image_from_payload(payload)
+
+            if cover:
+                apply_cover_image_aliases(user_payload, cover)
+            else:
+                for key in PROFILE_COVER_IMAGE_FIELDS:
+                    user_payload[key] = ""
+
+            should_sync_user = True
+
+        if should_sync_user:
+            user_id = normalize_text(updated.get("user_id")) if updated else ""
+            user_obj_id = safe_object_id(user_id)
+
+            if user_obj_id:
+                db.users.update_one(
+                    {"_id": user_obj_id},
+                    {"$set": user_payload},
+                )
+            else:
+                user_email = normalize_email(
+                    updated.get("email")
+                    or updated.get("official_email")
+                    or (getattr(g, "current_user", {}) or {}).get("email")
+                )
+
+                if user_email:
+                    db.users.update_one(
+                        {
+                            "email": user_email,
+                            "tenant_id": updated.get("tenant_id") or current_tenant_id(),
+                            "is_deleted": {"$ne": True},
+                        },
+                        {"$set": user_payload},
+                    )
+
+        audit("update", collection, item_id, payload)
+
+        return jsonify({
+            "message": "Profile updated successfully",
+            "item": serialize_item(updated),
+        })    
     
     if collection == "projects":
         payload = normalize_project_payload(payload, existing)
@@ -3585,6 +3857,11 @@ def update_collection_item(collection, item_id):
         if avatar:
             apply_avatar_aliases(payload, avatar)
             apply_avatar_aliases(merged_employee, avatar)
+
+        cover = employee_cover_image_from_payload(merged_employee)
+        if cover:
+            apply_cover_image_aliases(payload, cover)
+            apply_cover_image_aliases(merged_employee, cover)
 
         joining_date = employee_joining_date(merged_employee)
 

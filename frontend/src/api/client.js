@@ -98,6 +98,26 @@ export function getProfilePhotoValue(record = {}) {
   );
 }
 
+export function getProfileCoverValue(record = {}) {
+  if (!record || typeof record !== 'object') {
+    return '';
+  }
+
+  return firstNonEmpty(
+    safeSessionPhotoValue(record.cover_image),
+    safeSessionPhotoValue(record.cover_photo),
+    safeSessionPhotoValue(record.profile_cover),
+    safeSessionPhotoValue(record.profile_cover_image),
+    safeSessionPhotoValue(record.banner_image),
+    safeSessionPhotoValue(record.banner_photo),
+    safeSessionPhotoValue(record.employee_cover_image),
+    safeSessionPhotoValue(record.employee_cover_photo),
+    safeSessionPhotoValue(record.cover_url),
+    safeSessionPhotoValue(record.profile_cover_url),
+    safeSessionPhotoValue(record.banner_url),
+  );
+}
+
 export function withProfilePhotoAliases(record = {}) {
   if (!record || typeof record !== 'object') {
     return record;
@@ -105,6 +125,7 @@ export function withProfilePhotoAliases(record = {}) {
 
   const cloned = { ...record };
   const photo = getProfilePhotoValue(cloned);
+  const cover = getProfileCoverValue(cloned);
 
   /*
     Remove unsafe photo fields from frontend state.
@@ -129,6 +150,24 @@ export function withProfilePhotoAliases(record = {}) {
     }
   });
 
+  [
+    'cover_image',
+    'cover_photo',
+    'profile_cover',
+    'profile_cover_image',
+    'banner_image',
+    'banner_photo',
+    'employee_cover_image',
+    'employee_cover_photo',
+    'cover_url',
+    'profile_cover_url',
+    'banner_url',
+  ].forEach((key) => {
+    if (cloned[key] && !safeSessionPhotoValue(cloned[key])) {
+      delete cloned[key];
+    }
+  });
+
   if (photo) {
     cloned.avatar = photo;
     cloned.profile_photo = photo;
@@ -139,6 +178,24 @@ export function withProfilePhotoAliases(record = {}) {
     delete cloned.profile_photo;
     delete cloned.profile_picture;
     delete cloned.photo;
+  }
+
+  if (cover) {
+    cloned.cover_image = cover;
+    cloned.cover_photo = cover;
+    cloned.profile_cover = cover;
+    cloned.profile_cover_image = cover;
+    cloned.banner_image = cover;
+    cloned.banner_photo = cover;
+    cloned.cover_url = cover;
+  } else {
+    delete cloned.cover_image;
+    delete cloned.cover_photo;
+    delete cloned.profile_cover;
+    delete cloned.profile_cover_image;
+    delete cloned.banner_image;
+    delete cloned.banner_photo;
+    delete cloned.cover_url;
   }
 
   return cloned;
@@ -171,23 +228,33 @@ export function normalizeProfilePhotoUrl(value = '') {
   const apiRoot = String(API_BASE).replace(DEFAULT_API_PREFIX, '').replace(/\/+$/, '');
 
   /*
-    New uploaded profile photos are served from:
+    New uploaded profile photos/covers are served from:
     /api/v1/uploads/profile_photos/...
+    /api/v1/uploads/profile_covers/...
   */
-  if (raw.startsWith('/api/v1/uploads/profile_photos/')) {
+  if (
+    raw.startsWith('/api/v1/uploads/profile_photos/') ||
+    raw.startsWith('/api/v1/uploads/profile_covers/')
+  ) {
     return `${apiRoot}${raw}`;
   }
 
   /*
-    Backward compatibility for photos already saved as:
+    Backward compatibility:
     /uploads/profile_photos/...
-    uploads/profile_photos/...
+    /uploads/profile_covers/...
   */
-  if (raw.startsWith('/uploads/profile_photos/')) {
+  if (
+    raw.startsWith('/uploads/profile_photos/') ||
+    raw.startsWith('/uploads/profile_covers/')
+  ) {
     return `${apiBase}${raw}`;
   }
 
-  if (raw.startsWith('uploads/profile_photos/')) {
+  if (
+    raw.startsWith('uploads/profile_photos/') ||
+    raw.startsWith('uploads/profile_covers/')
+  ) {
     return `${apiBase}/${raw}`;
   }
 
@@ -204,6 +271,14 @@ export function normalizeProfilePhotoUrl(value = '') {
 
 export function getProfilePhotoUrl(record = {}) {
   return normalizeProfilePhotoUrl(getProfilePhotoValue(record));
+}
+
+export function normalizeProfileCoverUrl(value = '') {
+  return normalizeProfilePhotoUrl(value);
+}
+
+export function getProfileCoverUrl(record = {}) {
+  return normalizeProfileCoverUrl(getProfileCoverValue(record));
 }
 
 export function getInitials(name = '') {
@@ -242,6 +317,7 @@ export function normalizePerson(person = {}) {
   normalized.display_name = normalized.display_name || displayName;
   normalized.initials = getInitials(displayName);
   normalized.photo_url = getProfilePhotoUrl(normalized);
+  normalized.cover_url = getProfileCoverUrl(normalized);
 
   return normalized;
 }
@@ -905,6 +981,20 @@ export function buildProfilePhotoPayload(photoValue, extra = {}) {
   };
 }
 
+export function buildProfileCoverPayload(coverValue, extra = {}) {
+  const cover = safeSessionPhotoValue(coverValue);
+
+  return {
+    ...extra,
+    cover_image: cover,
+    cover_photo: cover,
+    profile_cover: cover,
+    profile_cover_image: cover,
+    banner_image: cover,
+    banner_photo: cover,
+  };
+}
+
 function compactSessionUser(user = {}, employee = {}) {
   const photo = safeSessionPhotoValue(
     getProfilePhotoValue(user) ||
@@ -918,30 +1008,42 @@ function compactSessionUser(user = {}, employee = {}) {
       '',
   );
 
+  const cover = safeSessionPhotoValue(
+    getProfileCoverValue(user) ||
+      getProfileCoverValue(employee) ||
+      user.cover_url ||
+      user.profile_cover_url ||
+      user.banner_url ||
+      employee.cover_url ||
+      employee.profile_cover_url ||
+      employee.banner_url ||
+      '',
+  );
+
   return {
     id: user.id || user._id || '',
     _id: user._id || user.id || '',
-      name:
-        user.name ||
-        user.full_name ||
-        user.display_name ||
-        employee.employee_name ||
-        employee.name ||
-        employee.full_name ||
-        '',
-      full_name: user.full_name || user.name || employee.full_name || employee.employee_name || '',
-      display_name:
-        user.display_name ||
-        user.name ||
-        user.full_name ||
-        employee.employee_name ||
-        employee.name ||
-        '',
-      employee_name: employee.employee_name || employee.name || user.name || user.full_name || '',
-      email: user.email || employee.email || employee.official_email || '',
-      gender: user.gender || user.sex || employee.gender || employee.sex || employee.employee_gender || '',
-      sex: user.sex || user.gender || employee.sex || employee.gender || employee.employee_gender || '',
-      role: user.role || '',
+    name:
+      user.name ||
+      user.full_name ||
+      user.display_name ||
+      employee.employee_name ||
+      employee.name ||
+      employee.full_name ||
+      '',
+    full_name: user.full_name || user.name || employee.full_name || employee.employee_name || '',
+    display_name:
+      user.display_name ||
+      user.name ||
+      user.full_name ||
+      employee.employee_name ||
+      employee.name ||
+      '',
+    employee_name: employee.employee_name || employee.name || user.name || user.full_name || '',
+    email: user.email || employee.email || employee.official_email || '',
+    gender: user.gender || user.sex || employee.gender || employee.sex || employee.employee_gender || '',
+    sex: user.sex || user.gender || employee.sex || employee.gender || employee.employee_gender || '',
+    role: user.role || '',
     roles: Array.isArray(user.roles) ? user.roles : [],
     tenant_id: user.tenant_id || employee.tenant_id || '',
     employee_id: user.employee_id || employee.id || employee._id || '',
@@ -954,6 +1056,13 @@ function compactSessionUser(user = {}, employee = {}) {
     profile_photo: photo,
     profile_picture: photo,
     photo,
+    cover_image: cover,
+    cover_photo: cover,
+    profile_cover: cover,
+    profile_cover_image: cover,
+    banner_image: cover,
+    banner_photo: cover,
+    cover_url: cover,
   };
 }
 
@@ -963,6 +1072,14 @@ function compactSessionEmployee(employee = {}) {
       employee.profile_photo_url ||
       employee.avatar_url ||
       employee.photo_url ||
+      '',
+  );
+
+  const cover = safeSessionPhotoValue(
+    getProfileCoverValue(employee) ||
+      employee.cover_url ||
+      employee.profile_cover_url ||
+      employee.banner_url ||
       '',
   );
 
@@ -1011,6 +1128,13 @@ function compactSessionEmployee(employee = {}) {
     profile_photo: photo,
     profile_picture: photo,
     photo,
+    cover_image: cover,
+    cover_photo: cover,
+    profile_cover: cover,
+    profile_cover_image: cover,
+    banner_image: cover,
+    banner_photo: cover,
+    cover_url: cover,
   };
 }
 
@@ -3905,6 +4029,43 @@ export function uploadEmployeeProfilePhoto(employeeId, file) {
   formData.append('photo', file);
 
   return api('/profile-photos/upload', {
+    method: 'POST',
+    body: formData,
+    timeoutMs: 60000,
+  });
+}
+
+export function updateUserProfileCover(userId, coverValue, extra = {}) {
+  return updateUser(userId, buildProfileCoverPayload(coverValue, extra));
+}
+
+export function updateEmployeeProfileCover(employeeId, coverValue, extra = {}) {
+  return updateCollectionItem(
+    'employees',
+    employeeId,
+    buildProfileCoverPayload(coverValue, extra),
+  );
+}
+
+export function updateMyEmployeeProfileCover(employeeId, coverValue, extra = {}) {
+  return updateEmployeeProfileCover(employeeId, coverValue, extra);
+}
+
+export function uploadEmployeeProfileCover(employeeId, file) {
+  if (!employeeId) {
+    return Promise.reject(new Error('Employee ID is required to upload cover image.'));
+  }
+
+  if (!file) {
+    return Promise.reject(new Error('Cover image file is required.'));
+  }
+
+  const formData = new FormData();
+
+  formData.append('employee_id', employeeId);
+  formData.append('cover', file);
+
+  return api('/profile-covers/upload', {
     method: 'POST',
     body: formData,
     timeoutMs: 60000,

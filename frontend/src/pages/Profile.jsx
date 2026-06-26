@@ -1,13 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   currentUser,
   currentEmployee,
   api,
   getInitials,
   getProfilePhotoUrl,
+  getProfileCoverUrl,
   refreshCurrentSession,
   buildProfilePhotoPayload,
+  buildProfileCoverPayload,
   uploadEmployeeProfilePhoto,
+  uploadEmployeeProfileCover,
 } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
@@ -76,42 +79,144 @@ function roleLabel(role = '') {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function isUnsafePhotoValue(value = '') {
-  const photo = String(value || '').trim();
+function firstValue(...values) {
+  for (const value of values) {
+    const cleaned = String(value ?? '').trim();
 
-  if (!photo) {
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  return '';
+}
+
+function titleCase(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function capabilityTitle(employee = {}, roles = []) {
+  if (
+    boolLabel(employee.is_team_leader) === 'Yes' ||
+    roles.includes('team_leader')
+  ) {
+    return 'Team Leader';
+  }
+
+  if (
+    boolLabel(employee.is_reporting_officer) === 'Yes' ||
+    roles.includes('reporting_officer') ||
+    roles.includes('manager') ||
+    roles.includes('ro')
+  ) {
+    return 'Reporting Officer';
+  }
+
+  if (boolLabel(employee.is_it_support_head) === 'Yes') {
+    return 'IT Support Head';
+  }
+
+  if (boolLabel(employee.is_it_support_member) === 'Yes') {
+    return 'IT Support Member';
+  }
+
+  const nonEmployeeRole = roles.find((role) => !['employee'].includes(String(role || '').toLowerCase()));
+
+  return nonEmployeeRole ? roleLabel(nonEmployeeRole) : '';
+}
+
+function profileDesignationLine(employee = {}, roles = []) {
+  const designation = titleCase(firstValue(
+    employee.designation,
+    employee.designation_name,
+    employee.job_title,
+    employee.title,
+    employee.position,
+    'Employee',
+  ));
+  const department = titleCase(firstValue(
+    employee.department,
+    employee.department_name,
+    employee.team,
+  ));
+  const capability = capabilityTitle(employee, roles);
+
+  if (designation && department && capability) {
+    return `${designation} ${department} - ${capability}`;
+  }
+
+  if (designation && department) {
+    return `${designation} ${department}`;
+  }
+
+  if (designation && capability) {
+    return `${designation} - ${capability}`;
+  }
+
+  return designation || capability || 'Employee';
+}
+
+function isUnsafeMediaValue(value = '') {
+  const media = String(value || '').trim();
+
+  if (!media) {
     return false;
   }
 
-  if (photo.startsWith('data:image') && photo.length > 5000) {
+  if (media.startsWith('data:image') && media.length > 5000) {
     return true;
   }
 
-  if (photo.length > 1000 && !photo.startsWith('http')) {
+  if (media.length > 1000 && !media.startsWith('http')) {
     return true;
   }
 
   return false;
 }
 
-function cleanPhotoValue(value = '') {
-  const photo = String(value || '').trim();
+function cleanMediaValue(value = '') {
+  const media = String(value || '').trim();
 
-  if (!photo || isUnsafePhotoValue(photo)) {
+  if (!media || isUnsafeMediaValue(media)) {
     return '';
   }
 
-  return photo;
+  return media;
 }
 
 function profilePhotoValue(record = {}) {
   return (
-    cleanPhotoValue(record.avatar) ||
-    cleanPhotoValue(record.profile_photo) ||
-    cleanPhotoValue(record.profile_picture) ||
-    cleanPhotoValue(record.photo) ||
-    cleanPhotoValue(record.image) ||
-    cleanPhotoValue(record.picture) ||
+    cleanMediaValue(record.avatar) ||
+    cleanMediaValue(record.profile_photo) ||
+    cleanMediaValue(record.profile_picture) ||
+    cleanMediaValue(record.photo) ||
+    cleanMediaValue(record.image) ||
+    cleanMediaValue(record.picture) ||
+    cleanMediaValue(record.employee_avatar) ||
+    cleanMediaValue(record.employee_profile_photo) ||
+    cleanMediaValue(record.profile_photo_url) ||
+    cleanMediaValue(record.avatar_url) ||
+    cleanMediaValue(record.photo_url) ||
+    ''
+  );
+}
+
+function profileCoverValue(record = {}) {
+  return (
+    cleanMediaValue(record.cover_image) ||
+    cleanMediaValue(record.cover_photo) ||
+    cleanMediaValue(record.profile_cover) ||
+    cleanMediaValue(record.profile_cover_image) ||
+    cleanMediaValue(record.banner_image) ||
+    cleanMediaValue(record.banner_photo) ||
+    cleanMediaValue(record.employee_cover_image) ||
+    cleanMediaValue(record.employee_cover_photo) ||
+    cleanMediaValue(record.cover_url) ||
+    cleanMediaValue(record.profile_cover_url) ||
+    cleanMediaValue(record.banner_url) ||
     ''
   );
 }
@@ -139,60 +244,209 @@ function capabilityLabel(employee = {}, roles = []) {
 }
 
 function employeeId(employee = {}) {
-  return employee._id || employee.employee_id_for_edit || employee.employee_ref_id || '';
+  return employee._id || employee.id || employee.employee_id_for_edit || employee.employee_ref_id || '';
 }
 
-function DetailIcon({ label = '' }) {
-  const first = String(label || 'I').trim().charAt(0).toUpperCase() || 'I';
+function mergeNonEmpty(base = {}, incoming = {}) {
+  const merged = { ...(base || {}) };
 
-  return <span className="profile-detail-icon">{first}</span>;
+  Object.entries(incoming || {}).forEach(([key, value]) => {
+    if (value !== null && value !== undefined && value !== '') {
+      merged[key] = value;
+    }
+  });
+
+  return merged;
 }
 
-function ProfileAvatar({ user = {}, employee = {}, photoValue = '' }) {
-  const name = user.name || employee.name || user.email || 'Employee';
-  const photo = cleanPhotoValue(photoValue) || profilePhotoValue(employee) || profilePhotoValue(user);
-  const photoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+function extractEmployeePayload(response) {
+  if (!response || typeof response !== 'object') {
+    return null;
+  }
 
+  return response.employee || response.item || response.data || response;
+}
+
+function buildEditForm(user = {}, employee = {}) {
+  return {
+    name: firstValue(
+      employee.employee_name,
+      employee.name,
+      employee.full_name,
+      user.name,
+      user.full_name,
+    ),
+    phone: firstValue(
+      employee.phone,
+      employee.mobile,
+      employee.contact,
+      employee.contact_number,
+    ),
+    personal_email: firstValue(
+      employee.personal_email,
+      employee.alternate_email,
+    ),
+    gender: firstValue(employee.gender, employee.sex),
+    date_of_birth: firstValue(employee.date_of_birth, employee.dob),
+    marital_status: firstValue(employee.marital_status),
+    blood_group: firstValue(employee.blood_group),
+    current_address: firstValue(employee.current_address, employee.address),
+    permanent_address: firstValue(employee.permanent_address),
+    college: firstValue(employee.college),
+    school: firstValue(employee.school),
+    qualification: firstValue(employee.qualification, employee.education),
+    emergency_contact_name: firstValue(
+      employee.emergency_contact_name,
+      employee.emergency_contact_person,
+    ),
+    emergency_contact_number: firstValue(
+      employee.emergency_contact_number,
+      employee.emergency_phone,
+    ),
+  };
+}
+
+function buildEmployeeProfileUpdatePayload(form = {}) {
+  const name = String(form.name || '').trim();
+  const phone = String(form.phone || '').trim();
+  const dateOfBirth = String(form.date_of_birth || '').trim();
+  const currentAddress = String(form.current_address || '').trim();
+  const qualification = String(form.qualification || '').trim();
+  const emergencyName = String(form.emergency_contact_name || '').trim();
+  const emergencyNumber = String(form.emergency_contact_number || '').trim();
+
+  return {
+    name,
+    employee_name: name,
+    full_name: name,
+    display_name: name,
+
+    phone,
+    mobile: phone,
+    contact: phone,
+    contact_number: phone,
+
+    personal_email: String(form.personal_email || '').trim(),
+    alternate_email: String(form.personal_email || '').trim(),
+
+    gender: String(form.gender || '').trim(),
+    sex: String(form.gender || '').trim(),
+
+    date_of_birth: dateOfBirth,
+    dob: dateOfBirth,
+
+    marital_status: String(form.marital_status || '').trim(),
+    blood_group: String(form.blood_group || '').trim(),
+
+    current_address: currentAddress,
+    address: currentAddress,
+    permanent_address: String(form.permanent_address || '').trim(),
+
+    college: String(form.college || '').trim(),
+    school: String(form.school || '').trim(),
+    qualification,
+    education: qualification,
+
+    emergency_contact_name: emergencyName,
+    emergency_contact_person: emergencyName,
+    emergency_contact_number: emergencyNumber,
+    emergency_phone: emergencyNumber,
+  };
+}
+
+function validateImageFile(file, maxMb, alerts, label) {
+  if (!file) {
+    return false;
+  }
+
+  if (!file.type.startsWith('image/')) {
+    alerts.warning(`Please choose a valid ${label}.`, 'Invalid File');
+    return false;
+  }
+
+  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+  if (!allowedTypes.includes(file.type.toLowerCase())) {
+    alerts.warning('Only JPG, JPEG, PNG, and WEBP images are allowed.', 'Unsupported Image');
+    return false;
+  }
+
+  if (file.size > 1024 * 1024 * maxMb) {
+    alerts.warning(`${label} size should be below ${maxMb}MB.`, 'File Too Large');
+    return false;
+  }
+
+  return true;
+}
+
+function EditIcon() {
   return (
-    <div className="profile-avatar-card">
-      <div className="profile-avatar-frame">
-        {photoUrl ? (
-          <img src={photoUrl} alt={name} />
-        ) : (
-          <span>{getInitials(name)}</span>
-        )}
-      </div>
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M4 20h4.4L19.7 8.7a2.1 2.1 0 0 0 0-3L18.3 4.3a2.1 2.1 0 0 0-3 0L4 15.6V20Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="m13.7 5.9 4.4 4.4" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
 
-      <div className="profile-avatar-meta">
-        <strong>{name}</strong>
-        <small>{employee.designation || 'Employee'}</small>
-      </div>
+function MailIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M4 6h16v12H4V6Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="m4 7 8 6 8-6" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function PhoneIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M6.6 3.8 9.8 7c.7.7.7 1.8.1 2.5l-1 1.2a13.4 13.4 0 0 0 4.4 4.4l1.2-1c.7-.6 1.8-.6 2.5.1l3.2 3.2c.7.7.7 1.8 0 2.5l-1.4 1.4c-.8.8-2 .9-3 .4A23.8 23.8 0 0 1 2.3 8.2c-.5-1-.4-2.2.4-3L4.1 3.8c.7-.7 1.8-.7 2.5 0Z"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+    </svg>
+  );
+}
+
+function DetailValue({ label, value }) {
+  return (
+    <div className="profile-field">
+      <span>{label}</span>
+      <strong>{displayValue(value)}</strong>
     </div>
   );
 }
 
-function ProfileTable({ title, subtitle = '', rows }) {
+function ProfileSection({ title, rows, onEdit }) {
   const visibleRows = rows.filter(([label]) => label);
 
   return (
-    <section className="profile-card">
+    <section className="profile-info-card">
       <div className="profile-section-head">
-        <div>
-          <span className="profile-section-kicker">Employee Record</span>
-          <h3>{title}</h3>
-          {subtitle ? <p>{subtitle}</p> : null}
-        </div>
+        <h3>{title}</h3>
+
+        {onEdit ? (
+          <button type="button" className="profile-edit-mini" onClick={onEdit}>
+            <EditIcon />
+            Edit
+          </button>
+        ) : null}
       </div>
 
-      <div className="profile-detail-grid">
+      <div className="profile-field-grid">
         {visibleRows.map(([label, value]) => (
-          <div className="profile-detail-card" key={label}>
-            <DetailIcon label={label} />
-            <div>
-              <span>{label}</span>
-              <strong>{displayValue(value)}</strong>
-            </div>
-          </div>
+          <DetailValue label={label} value={value} key={label} />
         ))}
       </div>
     </section>
@@ -204,13 +458,21 @@ export default function Profile() {
 
   const [user, setUser] = useState(currentUser());
   const [employee, setEmployee] = useState(currentEmployee());
+  const [hydrating, setHydrating] = useState(true);
 
   const userRoles = normalizeRoles(user);
   const initialPhoto = profilePhotoValue(employee) || profilePhotoValue(user);
+  const initialCover = profileCoverValue(employee) || profileCoverValue(user);
 
   const [photo, setPhoto] = useState(initialPhoto);
-  const [photoFile, setPhotoFile] = useState(null);
+  const [cover, setCover] = useState(initialCover);
+
   const [photoSaving, setPhotoSaving] = useState(false);
+  const [coverSaving, setCoverSaving] = useState(false);
+
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState(() => buildEditForm(user, employee));
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [form, setForm] = useState({
     current_password: '',
@@ -220,193 +482,292 @@ export default function Profile() {
 
   const [submitting, setSubmitting] = useState(false);
 
-  const mainName = user.name || employee.name || user.email || 'My Profile';
-  const mainRole = 'Employee';
+  const mainName = firstValue(
+    user.name,
+    user.full_name,
+    employee.employee_name,
+    employee.name,
+    employee.full_name,
+    user.email,
+    'My Profile',
+  );
+
+  const displayName = firstValue(
+    employee.display_name,
+    user.display_name,
+    user.full_name,
+    employee.employee_name,
+    mainName,
+  );
+
+  const mainRole = profileDesignationLine(employee, userRoles);
   const capabilities = capabilityLabel(employee, userRoles);
+
   const previewPhotoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
+  const previewCoverUrl = cover ? getProfileCoverUrl({ cover_image: cover }) : '';
 
-  const profileRows = useMemo(() => {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadLatestProfile() {
+      setHydrating(true);
+
+      try {
+        const sessionData = await refreshCurrentSession();
+
+        if (!isMounted) {
+          return;
+        }
+
+        const sessionUser = sessionData?.user
+          ? mergeNonEmpty(user, sessionData.user)
+          : user;
+
+        const sessionEmployee = sessionData?.employee
+          ? mergeNonEmpty(employee, sessionData.employee)
+          : employee;
+
+        setUser(sessionUser);
+        setEmployee(sessionEmployee);
+
+        const empId = employeeId(sessionEmployee);
+
+        if (empId) {
+          try {
+            const fullResponse = await api(`/employees/${empId}`);
+            const fullEmployee = extractEmployeePayload(fullResponse);
+
+            if (!isMounted || !fullEmployee) {
+              return;
+            }
+
+            const mergedEmployee = {
+              ...sessionEmployee,
+              ...fullEmployee,
+            };
+
+            setEmployee(mergedEmployee);
+            setPhoto(profilePhotoValue(mergedEmployee) || profilePhotoValue(sessionUser));
+            setCover(profileCoverValue(mergedEmployee) || profileCoverValue(sessionUser));
+            setEditForm(buildEditForm(sessionUser, mergedEmployee));
+            return;
+          } catch {
+            // Keep session data if the detail API is unavailable.
+          }
+        }
+
+        setPhoto(profilePhotoValue(sessionEmployee) || profilePhotoValue(sessionUser));
+        setCover(profileCoverValue(sessionEmployee) || profileCoverValue(sessionUser));
+        setEditForm(buildEditForm(sessionUser, sessionEmployee));
+      } finally {
+        if (isMounted) {
+          setHydrating(false);
+        }
+      }
+    }
+
+    loadLatestProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const primaryDetails = useMemo(() => {
     return [
-      ['Photo Status', photo ? 'Uploaded' : 'Not uploaded'],
-      ['Name', user.name || employee.name || ''],
-      ['Email', user.email || employee.email || ''],
-      ['Phone', employee.phone || ''],
-      ['Employee ID', employee.employee_id || employee.emp_code || ''],
-      ['Department', employee.department || ''],
-      ['Designation', employee.designation || ''],
+      ['Name', firstValue(employee.employee_name, employee.name, user.name)],
+      ['Display name', displayName],
+      ['DOB', firstValue(employee.date_of_birth, employee.dob, employee.birth_date)],
+      ['Gender', firstValue(employee.gender, employee.sex, employee.employee_gender)],
+      ['Marital Status', firstValue(employee.marital_status)],
+      ['Blood Group', firstValue(employee.blood_group)],
     ];
-  }, [employee, photo, user]);
+  }, [displayName, employee, user]);
 
-  const personalRows = [
-    ['Name', user.name || employee.name || ''],
-    ['Email', user.email || employee.email || ''],
-    ['Phone', employee.phone || ''],
-    ['Gender', employee.gender || ''],
-    ['Date Of Birth', employee.date_of_birth || ''],
-    ['Blood Group', employee.blood_group || ''],
-    ["Father's Name", employee.father_name || ''],
-    ['Religion', employee.religion || ''],
-    ['Marital Status', employee.marital_status || ''],
-    ['Language', employee.speak_language || ''],
-    ['Address', employee.address || ''],
-  ];
+  const contactDetails = useMemo(() => {
+    return [
+      ['Email', firstValue(employee.email, employee.official_email, user.email)],
+      ['Work email', firstValue(employee.work_email, employee.official_email, employee.email, user.email)],
+      ['Phone number', firstValue(employee.phone, employee.mobile, employee.contact, employee.contact_number)],
+      ['Work number', firstValue(employee.work_phone, employee.work_number, employee.office_phone)],
+      ['Emergency contact person', firstValue(employee.emergency_contact_name, employee.emergency_contact_person)],
+      ['Emergency contact number', firstValue(employee.emergency_contact_number, employee.emergency_phone)],
+    ];
+  }, [employee, user]);
 
-  const employmentRows = [
-    ['Employee ID', employee.employee_id || ''],
-    ['Employee Code', employee.emp_code || ''],
-    ['Company / Tenant', user.tenant_id || employee.tenant_id || ''],
-    ['Dashboard Role', mainRole],
+  const addressEducationDetails = useMemo(() => {
+    return [
+      ['Current address', firstValue(employee.current_address, employee.address)],
+      ['Permanent address', firstValue(employee.permanent_address)],
+      ['College', firstValue(employee.college)],
+      ['School', firstValue(employee.school)],
+      ['Qualification', firstValue(employee.qualification, employee.education)],
+    ];
+  }, [employee]);
+
+  const organizationDetails = useMemo(() => {
+    return [
+      ['Business unit', firstValue(
+        employee.business_unit,
+        employee.organisation,
+        employee.organization,
+        employee.organisation_name,
+        employee.organization_name,
+        user.tenant_id,
+        employee.tenant_id,
+      )],
+      ['Department', firstValue(employee.department, employee.department_name)],
+      ['Job title', titleCase(firstValue(employee.designation, employee.designation_name, employee.job_title, employee.title, employee.position))],
+      ['Work type', firstValue(employee.work_type, employee.employee_type, employee.job_type, employee.employment_type)],
+      ['Emp number', firstValue(employee.employee_id, employee.emp_code, employee.employee_code, employee.code)],
+      ['Date of joining', firstValue(employee.joining_date, employee.date_of_joining, employee.doj)],
+      ['Location', firstValue(employee.location, employee.office_location, employee.branch, employee.state)],
+      ['Reporting manager', firstValue(employee.reporting_manager_name, employee.reporting_officer_name, employee.manager_name, employee.team_leader_name)],
+      ['Shift', firstValue(employee.shift)],
+      ['Weekly off policy', firstValue(employee.weekly_off_policy, employee.weekly_off)],
+    ];
+  }, [employee, user]);
+
+  const employmentDetails = [
+    ['Dashboard Role', 'Employee'],
     ['Login Access', userRoles.map(roleLabel).join(', ')],
     ['Employee Capability', capabilities],
-    ['Profile Role', 'Employee'],
-    ['Department', employee.department || ''],
-    ['Designation', employee.designation || ''],
-    ['Branch', employee.branch || ''],
-    ['Shift', employee.shift || ''],
-    ['Joining Date', employee.joining_date || employee.doj || ''],
-    ['Employee Type', employee.employee_type || employee.job_type || ''],
-    ['Skill Level', employee.skill_level || ''],
-    ['Employment Status', employee.employment_status || employee.status || ''],
-    ['Project', employee.project || ''],
-    ['State', employee.state || ''],
+    ['Employment Status', firstValue(employee.employment_status, employee.status)],
+    ['Project', firstValue(employee.project, employee.project_name)],
+    ['State', firstValue(employee.state)],
   ];
 
   const salaryAndStatutoryRows = [
-    ['Gross Salary', employee.gross_salary || employee.salary || ''],
-    ['Payment Mode', employee.payment_mode || ''],
-    ['PAN No', employee.pan_no || ''],
-    ['Aadhar No', employee.aadhar_no || ''],
-    ['Employee UAN No', employee.employee_uan_no || ''],
-    ['Employee ESIC IP', employee.employee_esic_ip || ''],
+    ['Gross Salary', firstValue(employee.gross_salary, employee.salary)],
+    ['Payment Mode', firstValue(employee.payment_mode)],
+    ['PAN No', firstValue(employee.pan_no, employee.pan)],
+    ['Aadhar No', firstValue(employee.aadhar_no, employee.aadhaar_no, employee.aadhar)],
+    ['Employee UAN No', firstValue(employee.employee_uan_no, employee.uan_no)],
+    ['Employee ESIC IP', firstValue(employee.employee_esic_ip, employee.esic_ip)],
   ];
 
   const familyAndDisabilityRows = [
     ['Parents Senior Citizen?', boolLabel(employee.are_parents_senior_citizen)],
-    ['Number of Children', employee.number_of_children || ''],
-    ['Children in Hostel', employee.children_in_hostel || ''],
-    ['Disability Level', employee.disability_level || ''],
-    ['Dependent Disability Level', employee.dependent_disability_level || ''],
+    ['Number of Children', firstValue(employee.number_of_children)],
+    ['Children in Hostel', firstValue(employee.children_in_hostel)],
+    ['Disability Level', firstValue(employee.disability_level)],
+    ['Dependent Disability Level', firstValue(employee.dependent_disability_level)],
   ];
 
   const previousEmploymentRows = [
-    ['Previous Employer Name', employee.previous_employer_name || ''],
-    ['Previous Designation', employee.previous_designation || ''],
-    [
-      'Previous Employment From Date',
-      employee.previous_employment_tenure_from_date || '',
-    ],
-    [
-      'Previous Employment End Date',
-      employee.previous_employment_tenure_end_date || '',
-    ],
+    ['Previous Employer Name', firstValue(employee.previous_employer_name)],
+    ['Previous Designation', firstValue(employee.previous_designation)],
+    ['Previous Employment From Date', firstValue(employee.previous_employment_tenure_from_date)],
+    ['Previous Employment End Date', firstValue(employee.previous_employment_tenure_end_date)],
   ];
 
   const reportingRows = [
     ['Team Leader Capability', boolLabel(employee.is_team_leader)],
     ['Reporting Officer Capability', boolLabel(employee.is_reporting_officer)],
-    ['Team Leader ID', employee.team_leader_id || ''],
-    ['Team Leader Name', employee.team_leader_name || ''],
-    ['Reporting Officer ID', employee.reporting_officer_id || ''],
-    ['Reporting Officer Name', employee.reporting_officer_name || ''],
+    ['Team Leader Name', firstValue(employee.team_leader_name)],
+    ['Reporting Officer Name', firstValue(employee.reporting_officer_name)],
   ];
+
+  function syncProfileState(nextUser = user, nextEmployee = employee) {
+    const safeUser = nextUser || {};
+    const safeEmployee = nextEmployee || {};
+
+    setUser(safeUser);
+    setEmployee(safeEmployee);
+    setPhoto(profilePhotoValue(safeEmployee) || profilePhotoValue(safeUser));
+    setCover(profileCoverValue(safeEmployee) || profileCoverValue(safeUser));
+    setEditForm(buildEditForm(safeUser, safeEmployee));
+  }
 
   async function refreshProfileSession() {
     try {
-      const data = await refreshCurrentSession();
+      const sessionData = await refreshCurrentSession();
+      const sessionUser = sessionData?.user ? mergeNonEmpty(user, sessionData.user) : user;
+      const sessionEmployee = sessionData?.employee
+        ? mergeNonEmpty(employee, sessionData.employee)
+        : employee;
 
-      if (data.user) {
-        setUser(data.user);
+      const empId = employeeId(sessionEmployee);
+
+      if (empId) {
+        try {
+          const fullResponse = await api(`/employees/${empId}`);
+          const fullEmployee = extractEmployeePayload(fullResponse);
+
+          if (fullEmployee) {
+            const mergedEmployee = {
+              ...sessionEmployee,
+              ...fullEmployee,
+            };
+
+            syncProfileState(sessionUser, mergedEmployee);
+            return {
+              user: sessionUser,
+              employee: mergedEmployee,
+            };
+          }
+        } catch {
+          // Fallback to session data.
+        }
       }
 
-      if (data.employee) {
-        setEmployee(data.employee);
-        setPhoto(profilePhotoValue(data.employee) || profilePhotoValue(data.user));
-        setPhotoFile(null);
-      }
+      syncProfileState(sessionUser, sessionEmployee);
 
-      return data;
+      return {
+        user: sessionUser,
+        employee: sessionEmployee,
+      };
     } catch {
       return null;
     }
   }
 
-  function updatePhotoValue(value) {
-    const nextPhoto = String(value || '').trim();
-
-    setPhoto(nextPhoto);
-    setPhotoFile(null);
+  function setEditField(field, value) {
+    setEditForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
   }
 
-  function handlePhotoFileChange(event) {
+  async function handlePhotoFileChange(event) {
     const file = event.target.files?.[0];
 
     if (!file) {
       return;
     }
 
-    if (!file.type.startsWith('image/')) {
-      setPhotoFile(null);
+    if (!validateImageFile(file, 2, alerts, 'Profile photo')) {
       event.target.value = '';
-      alerts.warning('Please choose a valid image file.', 'Invalid File');
       return;
     }
 
-    if (file.size > 1024 * 1024 * 2) {
-      setPhotoFile(null);
-      event.target.value = '';
-      alerts.warning('Image size should be below 2MB.', 'File Too Large');
-      return;
-    }
-
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-
-    if (!allowedTypes.includes(file.type.toLowerCase())) {
-      setPhotoFile(null);
-      event.target.value = '';
-      alerts.warning('Only JPG, JPEG, PNG, and WEBP images are allowed.', 'Unsupported Image');
-      return;
-    }
-
-    setPhotoFile(file);
-    alerts.info(`${file.name} is ready. Click Save Photo to upload.`, 'Photo Selected');
-  }
-
-  async function saveProfilePhoto() {
     const empId = employeeId(employee);
-    const cleanPhoto = String(photo || '').trim();
 
     if (!empId) {
       alerts.error(
         'Employee profile ID was not found. Please ask HR/Admin to sync your employee profile.',
         'Profile Not Linked',
       );
+      event.target.value = '';
       return;
     }
 
     try {
       setPhotoSaving(true);
 
-      if (photoFile) {
-        const data = await uploadEmployeeProfilePhoto(empId, photoFile);
-        const uploadedPhoto = data.photo || data.photo_url || '';
+      const data = await uploadEmployeeProfilePhoto(empId, file);
+      const uploadedPhoto = data.photo || data.photo_url || '';
 
-        if (uploadedPhoto) {
-          setPhoto(uploadedPhoto);
-        }
+      if (uploadedPhoto) {
+        setPhoto(uploadedPhoto);
+      }
 
-        setPhotoFile(null);
-      } else {
-        if (isUnsafePhotoValue(cleanPhoto)) {
-          alerts.warning(
-            'This image value is too large/base64 and cannot be saved because it can slow down the dashboard. Please upload a photo file or paste a saved image URL/path.',
-            'Photo Value Too Large',
-          );
-          return;
-        }
+      const updatedEmployee = extractEmployeePayload(data);
 
-        await api(`/employees/${empId}`, {
-          method: 'PATCH',
-          body: JSON.stringify(buildProfilePhotoPayload(cleanPhoto)),
+      if (updatedEmployee) {
+        syncProfileState(user, {
+          ...employee,
+          ...updatedEmployee,
         });
       }
 
@@ -419,7 +780,204 @@ export default function Profile() {
       alerts.error(error.message || 'Unable to update profile photo.', 'Photo Update Failed');
     } finally {
       setPhotoSaving(false);
+      event.target.value = '';
     }
+  }
+
+  async function handleCoverFileChange(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (!validateImageFile(file, 5, alerts, 'Cover image')) {
+      event.target.value = '';
+      return;
+    }
+
+    const empId = employeeId(employee);
+
+    if (!empId) {
+      alerts.error(
+        'Employee profile ID was not found. Please ask HR/Admin to sync your employee profile.',
+        'Profile Not Linked',
+      );
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      setCoverSaving(true);
+
+      const data = await uploadEmployeeProfileCover(empId, file);
+      const uploadedCover = data.cover || data.cover_url || data.cover_image || '';
+
+      if (uploadedCover) {
+        setCover(uploadedCover);
+      }
+
+      const updatedEmployee = extractEmployeePayload(data);
+
+      if (updatedEmployee) {
+        syncProfileState(user, {
+          ...employee,
+          ...updatedEmployee,
+        });
+      }
+
+      await refreshProfileSession();
+
+      window.dispatchEvent(new Event('sds_hrms_profile_cover_updated'));
+
+      alerts.success('Cover image updated successfully.', 'Cover Saved');
+    } catch (error) {
+      alerts.error(error.message || 'Unable to update cover image.', 'Cover Update Failed');
+    } finally {
+      setCoverSaving(false);
+      event.target.value = '';
+    }
+  }
+
+  async function removeProfilePhoto() {
+    const empId = employeeId(employee);
+
+    if (!empId) {
+      alerts.error('Employee profile ID was not found.', 'Profile Not Linked');
+      return;
+    }
+
+    try {
+      setPhotoSaving(true);
+
+      await api(`/employees/${empId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(buildProfilePhotoPayload('')),
+      });
+
+      setPhoto('');
+
+      const clearedEmployee = {
+        ...employee,
+        avatar: '',
+        profile_photo: '',
+        profile_picture: '',
+        photo: '',
+        image: '',
+        picture: '',
+        profile_photo_url: '',
+        avatar_url: '',
+        photo_url: '',
+      };
+
+      setEmployee(clearedEmployee);
+      await refreshProfileSession();
+
+      window.dispatchEvent(new Event('sds_hrms_profile_photo_updated'));
+
+      alerts.success('Profile photo removed successfully.', 'Photo Removed');
+    } catch (error) {
+      alerts.error(error.message || 'Unable to remove profile photo.', 'Photo Remove Failed');
+    } finally {
+      setPhotoSaving(false);
+    }
+  }
+
+  async function removeProfileCover() {
+    const empId = employeeId(employee);
+
+    if (!empId) {
+      alerts.error('Employee profile ID was not found.', 'Profile Not Linked');
+      return;
+    }
+
+    try {
+      setCoverSaving(true);
+
+      await api(`/employees/${empId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(buildProfileCoverPayload('')),
+      });
+
+      setCover('');
+
+      const clearedEmployee = {
+        ...employee,
+        cover_image: '',
+        cover_photo: '',
+        profile_cover: '',
+        profile_cover_image: '',
+        banner_image: '',
+        banner_photo: '',
+        cover_url: '',
+        profile_cover_url: '',
+        banner_url: '',
+      };
+
+      setEmployee(clearedEmployee);
+      await refreshProfileSession();
+
+      window.dispatchEvent(new Event('sds_hrms_profile_cover_updated'));
+
+      alerts.success('Cover image removed successfully.', 'Cover Removed');
+    } catch (error) {
+      alerts.error(error.message || 'Unable to remove cover image.', 'Cover Remove Failed');
+    } finally {
+      setCoverSaving(false);
+    }
+  }
+
+  async function saveProfileDetails(event) {
+    event.preventDefault();
+
+    const empId = employeeId(employee);
+
+    if (!empId) {
+      alerts.error(
+        'Employee profile ID was not found. Please ask HR/Admin to sync your employee profile.',
+        'Profile Not Linked',
+      );
+      return;
+    }
+
+    if (!String(editForm.name || '').trim()) {
+      alerts.warning('Full name is required.', 'Missing Name');
+      return;
+    }
+
+    try {
+      setProfileSaving(true);
+
+      const payload = buildEmployeeProfileUpdatePayload(editForm);
+
+      const data = await api(`/employees/${empId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+
+      const updatedEmployee = extractEmployeePayload(data);
+
+      if (updatedEmployee) {
+        syncProfileState(user, {
+          ...employee,
+          ...updatedEmployee,
+        });
+      }
+
+      await refreshProfileSession();
+
+      setEditing(false);
+      alerts.success('Profile updated successfully.', 'Profile Saved');
+    } catch (error) {
+      alerts.error(error.message || 'Unable to update profile.', 'Profile Update Failed');
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  function cancelEditProfile() {
+    setEditForm(buildEditForm(user, employee));
+    setEditing(false);
   }
 
   async function submit(e) {
@@ -469,594 +1027,894 @@ export default function Profile() {
   }
 
   return (
-    <div className="page-grid profile-page">
+    <div className="page-grid profile-page profile-design-page">
       <style>{`
-        .profile-page {
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Pacifico&display=swap');
+
+        .profile-design-page {
           display: grid;
-          gap: 22px;
+          gap: 18px;
+          background: #f8fafc;
+          padding: 0 0 12px;
+          width: 100%;
+          max-width: 100%;
+          overflow-x: hidden;
+          font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
         }
 
-        .profile-page .profile-hero {
-          position: relative;
+        .profile-design-shell {
+          width: 100%;
+          max-width: 100%;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
           overflow: hidden;
-          border: 1px solid rgba(226, 232, 240, 0.9);
-          border-radius: 34px;
-          padding: 28px;
-          background:
-            radial-gradient(circle at 12% 8%, rgba(79,70,229,.18), transparent 34%),
-            radial-gradient(circle at 86% 0%, rgba(14,165,233,.14), transparent 32%),
-            radial-gradient(circle at 80% 92%, rgba(5,150,105,.12), transparent 35%),
-            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-          box-shadow: 0 22px 60px rgba(15, 23, 42, .08);
         }
 
-        .profile-hero::after {
+        .profile-cover {
+          position: relative;
+          height: clamp(130px, 22vw, 164px);
+          overflow: hidden;
+          background:
+            linear-gradient(135deg, rgba(15,23,42,.78), rgba(15,23,42,.58)),
+            radial-gradient(circle at 20% 0%, rgba(79,70,229,.22), transparent 34%),
+            radial-gradient(circle at 84% 4%, rgba(14,165,233,.16), transparent 36%),
+            linear-gradient(135deg, #111827, #374151);
+        }
+
+        .profile-cover img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .profile-cover::after {
           content: "";
           position: absolute;
-          width: 260px;
-          height: 260px;
-          right: -90px;
-          top: -90px;
-          border-radius: 999px;
-          background: rgba(79, 70, 229, .08);
+          inset: 0;
+          background: linear-gradient(180deg, rgba(15,23,42,.05), rgba(15,23,42,.18));
           pointer-events: none;
         }
 
-        .profile-hero-grid {
-          position: relative;
-          z-index: 1;
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr) auto;
-          gap: 22px;
-          align-items: center;
-        }
-
-        .profile-avatar-card {
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr);
-          gap: 16px;
-          align-items: center;
-          min-width: 0;
-        }
-
-        .profile-avatar-meta {
-          min-width: 0;
-        }
-
-        .profile-avatar-card strong {
-          display: block;
-          color: #0f172a;
-          font-size: 18px;
-          line-height: 1.2;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .profile-avatar-card small {
-          display: block;
-          margin-top: 5px;
-          color: #64748b;
-          font-weight: 800;
-        }
-
-        .profile-avatar-frame {
-          width: 104px;
-          height: 104px;
-          overflow: hidden;
-          border-radius: 32px;
+        .profile-cover-placeholder {
+          height: 100%;
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
-          color: #4f46e5;
-          border: 4px solid #ffffff;
-          box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
-          font-size: 28px;
-          font-weight: 950;
-          flex: 0 0 auto;
+          color: rgba(255,255,255,.24);
+          font-size: clamp(34px, 7vw, 56px);
+          font-weight: 900;
+          letter-spacing: -.08em;
         }
 
-        .profile-avatar-frame img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
-
-        .profile-identity h1 {
-          margin: 8px 0 8px;
-          color: #0f172a;
-          font-size: clamp(28px, 4vw, 42px);
-          line-height: 1.05;
-          letter-spacing: -0.045em;
-        }
-
-        .profile-identity p {
-          margin: 0;
-          color: #475569;
-          line-height: 1.55;
-          max-width: 720px;
-        }
-
-        .profile-chip-row {
+        .profile-cover-actions {
+          position: absolute;
+          z-index: 3;
+          right: 18px;
+          bottom: 18px;
           display: flex;
+          gap: 8px;
           flex-wrap: wrap;
-          gap: 9px;
-          margin-top: 14px;
         }
 
-        .profile-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 7px;
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          color: #334155;
-          font-size: 12px;
-          font-weight: 900;
-          box-shadow: 0 10px 22px rgba(15, 23, 42, .05);
-        }
-
-        .profile-chip.primary {
-          background: #eef2ff;
-          border-color: #c7d2fe;
-          color: #4338ca;
-        }
-
-        .profile-chip.success {
-          background: #ecfdf5;
-          border-color: #bbf7d0;
-          color: #047857;
-        }
-
-        .profile-hero-stat {
-          min-width: 185px;
-          border-radius: 24px;
-          padding: 18px;
-          background: rgba(255, 255, 255, .78);
-          border: 1px solid rgba(226, 232, 240, .95);
-          box-shadow: 0 16px 38px rgba(15, 23, 42, .06);
-        }
-
-        .profile-hero-stat span {
-          display: block;
-          color: #64748b;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .06em;
-        }
-
-        .profile-hero-stat strong {
-          display: block;
-          margin-top: 7px;
-          color: #0f172a;
-          font-size: 19px;
-          line-height: 1.25;
-        }
-
-        .profile-card {
-          border: 1px solid #e2e8f0;
-          border-radius: 28px;
-          background: #ffffff;
-          box-shadow: 0 18px 48px rgba(15, 23, 42, .06);
-          padding: 22px;
-        }
-
-        .profile-section-head {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          align-items: flex-start;
-          margin-bottom: 16px;
-          padding-bottom: 14px;
-          border-bottom: 1px solid #edf2f7;
-        }
-
-        .profile-section-kicker {
-          display: inline-flex;
-          width: fit-content;
-          border-radius: 999px;
-          padding: 6px 10px;
-          background: #eef2ff;
-          color: #4f46e5;
-          font-size: 11px;
-          font-weight: 950;
-          text-transform: uppercase;
-          letter-spacing: .08em;
-          margin-bottom: 8px;
-        }
-
-        .profile-section-head h3 {
-          margin: 0;
-          color: #0f172a;
-          font-size: 20px;
-          letter-spacing: -0.02em;
-        }
-
-        .profile-section-head p {
-          margin: 6px 0 0;
-          color: #64748b;
-          line-height: 1.55;
-          font-size: 13px;
-        }
-
-        .profile-detail-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .profile-detail-card {
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr);
-          gap: 11px;
-          align-items: start;
-          min-height: 84px;
-          border: 1px solid #e8eef7;
-          border-radius: 20px;
-          background:
-            radial-gradient(circle at 0% 0%, rgba(79,70,229,.05), transparent 40%),
-            #f8fafc;
-          padding: 14px;
-          transition: .18s ease;
-        }
-
-        .profile-detail-card:hover {
-          transform: translateY(-1px);
-          border-color: #c7d2fe;
-          background: #ffffff;
-          box-shadow: 0 14px 30px rgba(15, 23, 42, .06);
-        }
-
-        .profile-detail-icon {
-          width: 34px;
-          height: 34px;
-          border-radius: 13px;
+        .profile-media-btn {
           display: inline-flex;
           align-items: center;
           justify-content: center;
+          gap: 7px;
+          border: 1px solid rgba(226,232,240,.9);
+          border-radius: 6px;
+          padding: 8px 11px;
+          background: rgba(255,255,255,.92);
+          color: #0f172a;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+          box-shadow: 0 10px 20px rgba(15,23,42,.14);
+          backdrop-filter: blur(10px);
+          white-space: nowrap;
+        }
+
+        .profile-media-btn input {
+          display: none;
+        }
+
+        .profile-media-btn.danger {
+          background: rgba(254,242,242,.94);
+          border-color: #fecaca;
+          color: #b91c1c;
+        }
+
+        .profile-header {
+          position: relative;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 18px;
+          padding: 0 22px 18px;
+          border-bottom: 1px solid #eef2f7;
+          max-width: 100%;
+        }
+
+        .profile-avatar-wrap {
+          position: relative;
+          width: 98px;
+          height: 98px;
+          margin-top: -48px;
+          border-radius: 999px;
+          border: 4px solid #ffffff;
           background: #eef2ff;
           color: #4f46e5;
-          font-size: 13px;
-          font-weight: 950;
-        }
-
-        .profile-detail-card span {
-          display: block;
-          color: #64748b;
-          font-size: 12px;
-          font-weight: 900;
-          margin-bottom: 5px;
-        }
-
-        .profile-detail-card strong {
-          display: block;
-          color: #0f172a;
-          font-size: 14px;
-          line-height: 1.45;
-          word-break: break-word;
-        }
-
-        .profile-photo-panel {
-          display: grid;
-          grid-template-columns: 136px minmax(0, 1fr);
-          gap: 20px;
-          align-items: center;
-          border: 1px solid #e2e8f0;
-          border-radius: 24px;
-          background:
-            radial-gradient(circle at 0% 0%, rgba(79,70,229,.08), transparent 32%),
-            linear-gradient(135deg, #f8fafc, #ffffff);
-          padding: 18px;
-        }
-
-        .profile-photo-preview {
-          width: 124px;
-          height: 124px;
-          border-radius: 34px;
-          overflow: hidden;
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
-          border: 4px solid #ffffff;
-          box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
-          color: #4f46e5;
-          font-size: 30px;
-          font-weight: 950;
+          overflow: visible;
+          box-shadow: 0 8px 22px rgba(15,23,42,.15);
+          font-size: 28px;
+          font-weight: 900;
+          z-index: 4;
         }
 
-        .profile-photo-preview img {
+        .profile-avatar-wrap img {
           width: 100%;
           height: 100%;
           object-fit: cover;
           display: block;
+          border-radius: 999px;
         }
 
-        .profile-photo-controls {
-          display: grid;
-          gap: 12px;
+        .profile-avatar-wrap > span {
+          width: 100%;
+          height: 100%;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+        }
+
+        .profile-avatar-upload {
+          position: absolute;
+          right: -8px;
+          bottom: 6px;
+          z-index: 10;
+          width: 30px;
+          height: 30px;
+          border-radius: 999px;
+          border: 3px solid #ffffff;
+          background: #10b981;
+          color: #ffffff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-size: 15px;
+          line-height: 1;
+          box-shadow: 0 6px 14px rgba(15,23,42,.22);
+        }
+
+        .profile-avatar-upload input {
+          display: none;
+        }
+
+        .profile-main-info {
+          padding-top: 16px;
           min-width: 0;
         }
 
-        .profile-photo-controls input[type="text"] {
-          width: 100%;
-          border: 1px solid #dbe4f0;
-          border-radius: 16px;
-          background: #ffffff;
-          color: #0f172a;
-          padding: 12px 14px;
-          outline: none;
-          transition: .18s ease;
+        .profile-main-info h1 {
+          margin: 0;
+          color: #111827;
+          font-family: 'Pacifico', 'Brush Script MT', cursive;
+          font-size: clamp(24px, 4vw, 32px);
+          line-height: 1.25;
+          font-weight: 400;
+          letter-spacing: .01em;
+          overflow-wrap: anywhere;
         }
 
-        .profile-photo-controls input[type="text"]:focus {
-          border-color: #4f46e5;
-          box-shadow: 0 0 0 4px rgba(79, 70, 229, .12);
+        .profile-main-info p {
+          margin: 4px 0 12px;
+          color: #4f46e5;
+          font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+          font-size: 14px;
+          font-weight: 800;
+          letter-spacing: .01em;
         }
 
-        .profile-photo-actions {
+        .profile-inline-meta {
           display: flex;
           flex-wrap: wrap;
-          align-items: center;
-          gap: 10px;
+          gap: 10px 16px;
+          color: #6b7280;
+          font-size: 12px;
+          font-weight: 600;
+          max-width: 100%;
         }
 
-        .profile-file-btn {
+        .profile-inline-meta span {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .profile-inline-meta svg {
+          color: #94a3b8;
+          flex: 0 0 auto;
+        }
+
+        .profile-send-btn {
+          align-self: center;
+          border: 1px solid #facc15;
+          border-radius: 8px;
+          background: #fef3c7;
+          color: #713f12;
+          padding: 9px 14px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
-          border-radius: 999px;
-          background: #eef2ff;
-          color: #4f46e5;
-          padding: 10px 14px;
-          font-weight: 900;
-          cursor: pointer;
-          border: 1px solid #c7d2fe;
-        }
-
-        .profile-file-btn input {
-          display: none;
-        }
-
-        .profile-photo-controls small,
-        .profile-help-text {
-          color: #64748b;
-          line-height: 1.5;
-          font-size: 13px;
-        }
-
-        .profile-selected-file {
-          width: fit-content;
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: #ecfdf5;
-          color: #047857;
-          border: 1px solid #bbf7d0;
           font-size: 12px;
           font-weight: 900;
+          white-space: nowrap;
+          cursor: pointer;
         }
 
-        .profile-password-card form {
-          margin-top: 8px;
+        .profile-mini-row {
+          display: grid;
+          grid-template-columns: 160px minmax(0, 1fr);
+          border-bottom: 1px solid #eef2f7;
+        }
+
+        .profile-mini-item {
+          padding: 12px 22px;
+          border-right: 1px solid #eef2f7;
+          min-width: 0;
+        }
+
+        .profile-mini-item:last-child {
+          border-right: 0;
+        }
+
+        .profile-mini-item span {
+          display: block;
+          color: #94a3b8;
+          font-size: 11px;
+          font-weight: 700;
+          margin-bottom: 3px;
+        }
+
+        .profile-mini-item strong {
+          display: block;
+          color: #111827;
+          font-size: 12px;
+          font-weight: 800;
+          overflow-wrap: anywhere;
+        }
+
+        .profile-reporting-avatar {
+          display: none !important;
+        }
+
+        .profile-card-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+          margin-top: 18px;
+          width: 100%;
+          max-width: 100%;
+        }
+
+        .profile-info-card {
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 6px 18px rgba(15,23,42,.04);
+          overflow: hidden;
+          min-width: 0;
+        }
+
+        .profile-section-head {
+          min-height: 48px;
+          padding: 13px 17px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          border-bottom: 1px solid #eef2f7;
+        }
+
+        .profile-section-head h3 {
+          margin: 0;
+          color: #111827;
+          font-size: 15px;
+          font-weight: 900;
+          letter-spacing: -.01em;
+        }
+
+        .profile-edit-mini {
+          border: 1px solid #facc15;
+          border-radius: 8px;
+          background: #fffbeb;
+          color: #713f12;
+          padding: 6px 10px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          font-weight: 900;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .profile-field-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          column-gap: 22px;
+          row-gap: 16px;
+          padding: 18px;
+        }
+
+        .profile-field {
+          min-width: 0;
+        }
+
+        .profile-field span {
+          display: block;
+          color: #9ca3af;
+          font-size: 11px;
+          font-weight: 700;
+          margin-bottom: 5px;
+        }
+
+        .profile-field strong {
+          display: block;
+          color: #111827;
+          font-size: 12px;
+          line-height: 1.45;
+          font-weight: 700;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .profile-edit-card {
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 6px 18px rgba(15,23,42,.04);
+          padding: 18px;
+          min-width: 0;
+        }
+
+        .profile-edit-title {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 14px;
+          margin-bottom: 16px;
+          padding-bottom: 14px;
+          border-bottom: 1px solid #eef2f7;
+        }
+
+        .profile-edit-title h3 {
+          margin: 0;
+          color: #111827;
+          font-size: 16px;
+        }
+
+        .profile-edit-title p {
+          margin: 5px 0 0;
+          color: #6b7280;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .profile-edit-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 13px;
+        }
+
+        .profile-edit-grid label {
+          display: grid;
+          gap: 6px;
+          color: #4b5563;
+          font-size: 12px;
+          font-weight: 800;
+          min-width: 0;
+        }
+
+        .profile-edit-grid input,
+        .profile-edit-grid textarea {
+          width: 100%;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          background: #ffffff;
+          color: #111827;
+          padding: 10px 11px;
+          outline: none;
+          transition: .18s ease;
+          font: inherit;
+          min-width: 0;
+        }
+
+        .profile-edit-grid textarea {
+          min-height: 86px;
+          resize: vertical;
+        }
+
+        .profile-edit-grid input:focus,
+        .profile-edit-grid textarea:focus {
+          border-color: #4f46e5;
+          box-shadow: 0 0 0 3px rgba(79,70,229,.12);
+        }
+
+        .profile-edit-grid .span-3 {
+          grid-column: 1 / -1;
+        }
+
+        .profile-form-actions {
+          display: flex;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .profile-password-card {
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 6px 18px rgba(15,23,42,.04);
+          padding: 18px;
+          margin-top: 18px;
+          min-width: 0;
+        }
+
+        .profile-password-card h3 {
+          margin: 0 0 6px;
+          color: #111827;
+          font-size: 16px;
+        }
+
+        .profile-password-card p {
+          margin: 0 0 14px;
+          color: #6b7280;
+          font-size: 12px;
         }
 
         .profile-password-card input {
-          border-radius: 16px;
+          border-radius: 8px;
+        }
+
+        .profile-loading-note {
+          font-size: 12px;
+          color: #64748b;
+          padding: 8px 0 0;
         }
 
         @media (max-width: 1100px) {
-          .profile-hero-grid {
-            grid-template-columns: 1fr;
+          .profile-header {
+            grid-template-columns: auto minmax(0, 1fr);
           }
 
-          .profile-hero-stat {
-            min-width: 0;
+          .profile-send-btn {
+            grid-column: 1 / -1;
             width: fit-content;
           }
 
-          .profile-detail-grid {
+          .profile-card-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .profile-edit-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
-        @media (max-width: 760px) {
-          .profile-page .profile-hero,
-          .profile-card {
-            border-radius: 24px;
-            padding: 18px;
+        @media (max-width: 720px) {
+          .profile-design-page {
+            gap: 14px;
           }
 
-          .profile-detail-grid,
-          .profile-photo-panel {
+          .profile-cover {
+            height: 132px;
+          }
+
+          .profile-cover-actions {
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+          }
+
+          .profile-header {
             grid-template-columns: 1fr;
+            gap: 10px;
+            padding: 0 16px 16px;
           }
 
-          .profile-avatar-frame,
-          .profile-photo-preview {
+          .profile-avatar-wrap {
             width: 88px;
             height: 88px;
-            border-radius: 26px;
+            margin-top: -42px;
           }
 
-          .profile-hero-stat {
-            width: 100%;
+          .profile-main-info {
+            padding-top: 0;
           }
 
-          .profile-photo-actions button,
-          .profile-file-btn {
+          .profile-inline-meta {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+          }
+
+          .profile-mini-row,
+          .profile-field-grid,
+          .profile-edit-grid,
+          .profile-edit-grid .span-3 {
+            grid-template-columns: 1fr;
+            grid-column: auto;
+          }
+
+          .profile-mini-item {
+            border-right: 0;
+            border-bottom: 1px solid #eef2f7;
+            padding: 11px 16px;
+          }
+
+          .profile-mini-item:last-child {
+            border-bottom: 0;
+          }
+
+          .profile-section-head,
+          .profile-edit-title {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .profile-media-btn,
+          .profile-send-btn,
+          .profile-edit-mini,
+          .profile-form-actions button,
+          .profile-password-card button {
             width: 100%;
+            justify-content: center;
           }
         }
       `}</style>
 
-      <section className="profile-hero">
-        <div className="profile-hero-grid">
-          <ProfileAvatar user={user} employee={employee} photoValue={photo} />
+      <section className="profile-design-shell">
+        <div className="profile-cover">
+          {previewCoverUrl ? (
+            <img src={previewCoverUrl} alt={`${mainName} cover`} />
+          ) : (
+            <div className="profile-cover-placeholder">SDS</div>
+          )}
 
-          <div className="profile-identity">
-            <span className="kicker">My Profile</span>
+          <div className="profile-cover-actions">
+            <label className="profile-media-btn">
+              {coverSaving ? 'Uploading...' : 'Change Cover'}
+              <input
+                type="file"
+                accept="image/*"
+                disabled={coverSaving}
+                onChange={handleCoverFileChange}
+              />
+            </label>
 
-            <h1>{mainName}</h1>
-
-            <p>
-              A clean overview of your personal information, employment details,
-              reporting structure and HRMS access.
-            </p>
-
-            <div className="profile-chip-row">
-              <span className="profile-chip primary">{mainRole}</span>
-
-              {capabilities !== 'No additional capability' ? (
-                <span className="profile-chip success">{capabilities}</span>
-              ) : null}
-
-              {(user.tenant_id || employee.tenant_id) ? (
-                <span className="profile-chip">{user.tenant_id || employee.tenant_id}</span>
-              ) : null}
-
-              {(employee.department || employee.designation) ? (
-                <span className="profile-chip">
-                  {[employee.department, employee.designation].filter(Boolean).join(' • ')}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="profile-hero-stat">
-            <span>Employee Code</span>
-            <strong>{employee.employee_id || employee.emp_code || 'Not available'}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="profile-card">
-        <div className="profile-section-head">
-          <div>
-            <span className="profile-section-kicker">Photo</span>
-            <h3>Profile Photo</h3>
-            <p>
-              Choose a clear professional photo. It appears in your profile,
-              dashboard, topbar, project cards, team hierarchy and Super Admin User Control.
-            </p>
+            {cover ? (
+              <button
+                type="button"
+                className="profile-media-btn danger"
+                disabled={coverSaving}
+                onClick={removeProfileCover}
+              >
+                Remove
+              </button>
+            ) : null}
           </div>
         </div>
 
-        <div className="profile-photo-panel">
-          <div className="profile-photo-preview">
+        <div className="profile-header">
+          <div className="profile-avatar-wrap">
             {previewPhotoUrl ? (
               <img src={previewPhotoUrl} alt={mainName} />
             ) : (
               <span>{getInitials(mainName)}</span>
             )}
+
+            <label className="profile-avatar-upload" title="Change profile photo">
+              +
+              <input
+                type="file"
+                accept="image/*"
+                disabled={photoSaving}
+                onChange={handlePhotoFileChange}
+              />
+            </label>
           </div>
 
-          <div className="profile-photo-controls">
-            <input
-              type="text"
-              value={photo}
-              placeholder="Photo path will appear after upload"
-              onChange={(event) => updatePhotoValue(event.target.value)}
-            />
+          <div className="profile-main-info">
+            <h1>{mainName}</h1>
+            <p>{mainRole}</p>
 
-            <div className="profile-photo-actions">
-              <label className="profile-file-btn">
-                Choose Photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePhotoFileChange}
-                />
-              </label>
-
-              {photo && (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => updatePhotoValue('')}
-                  disabled={photoSaving}
-                >
-                  Remove
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="primary"
-                onClick={saveProfilePhoto}
-                disabled={photoSaving}
-              >
-                {photoSaving ? 'Saving...' : 'Save Photo'}
-              </button>
+            <div className="profile-inline-meta">
+              <span><MailIcon />{firstValue(employee.email, employee.official_email, user.email, '—')}</span>
+              <span><PhoneIcon />{firstValue(employee.phone, employee.mobile, '—')}</span>
+              <span>{firstValue(employee.employee_id, employee.emp_code, employee.employee_code, '—')}</span>
+              <span>{firstValue(employee.location, employee.branch, employee.state, '—')}</span>
             </div>
 
-            <small>
-              Accepted formats: JPG, JPEG, PNG and WEBP below 2MB. The backend stores
-              the uploaded file safely and keeps only the image path in MongoDB.
-            </small>
+            {hydrating ? (
+              <div className="profile-loading-note">Refreshing latest profile data...</div>
+            ) : null}
+          </div>
 
-            {photoFile && (
-              <div className="profile-selected-file">
-                Ready to upload: {photoFile.name}
-              </div>
-            )}
+          <button type="button" className="profile-send-btn" onClick={() => setEditing(true)}>
+            <EditIcon />
+            Edit Profile
+          </button>
+        </div>
+
+        <div className="profile-mini-row">
+          <div className="profile-mini-item">
+            <span>Department</span>
+            <strong>{firstValue(employee.department, employee.department_name, '—')}</strong>
+          </div>
+
+          <div className="profile-mini-item">
+            <span>Reporting manager</span>
+            <strong>
+              {firstValue(
+                employee.reporting_manager_name,
+                employee.reporting_officer_name,
+                employee.manager_name,
+                employee.team_leader_name,
+              ) ? (
+                <>
+                  {firstValue(
+                    employee.reporting_manager_name,
+                    employee.reporting_officer_name,
+                    employee.manager_name,
+                    employee.team_leader_name,
+                  )}
+                </>
+              ) : (
+                '—'
+              )}
+            </strong>
           </div>
         </div>
       </section>
 
-      <ProfileTable
-        title="Profile Summary"
-        subtitle="Quick view of your official identity and contact details."
-        rows={profileRows}
-      />
+      {editing ? (
+        <section className="profile-edit-card">
+          <div className="profile-edit-title">
+            <div>
+              <h3>Edit Personal Details</h3>
+              <p>
+                Employees can update safe personal details only. Official HR fields remain unchanged.
+              </p>
+            </div>
 
-      <ProfileTable
-        title="Personal Details"
-        subtitle="Personal information maintained in your employee record."
-        rows={personalRows}
-      />
-
-      <ProfileTable
-        title="Employment Details"
-        subtitle="Official role, department, branch and employment information."
-        rows={employmentRows}
-      />
-
-      <ProfileTable
-        title="Salary & Statutory Details"
-        subtitle="Salary, payment and statutory identification information."
-        rows={salaryAndStatutoryRows}
-      />
-
-      <ProfileTable
-        title="Family & Disability Details"
-        subtitle="Family-related and disability declaration details."
-        rows={familyAndDisabilityRows}
-      />
-
-      <ProfileTable
-        title="Previous Employment Details"
-        subtitle="Past employment history saved in the employee record."
-        rows={previousEmploymentRows}
-      />
-
-      <ProfileTable
-        title="Reporting Hierarchy"
-        subtitle="Your reporting structure and approval responsibilities."
-        rows={reportingRows}
-      />
-
-      <section className="profile-card profile-password-card">
-        <div className="profile-section-head">
-          <div>
-            <span className="profile-section-kicker">Security</span>
-            <h3>Request Password Change</h3>
-            <p>Your request will be sent to Super Admin for approval.</p>
+            <button
+              type="button"
+              className="secondary"
+              disabled={profileSaving}
+              onClick={cancelEditProfile}
+            >
+              Close
+            </button>
           </div>
-        </div>
+
+          <form onSubmit={saveProfileDetails} noValidate>
+            <div className="profile-edit-grid">
+              <label>
+                Full Name
+                <input
+                  value={editForm.name}
+                  onChange={(event) => setEditField('name', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Phone
+                <input
+                  value={editForm.phone}
+                  onChange={(event) => setEditField('phone', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Personal Email
+                <input
+                  type="email"
+                  value={editForm.personal_email}
+                  onChange={(event) => setEditField('personal_email', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Gender
+                <input
+                  value={editForm.gender}
+                  onChange={(event) => setEditField('gender', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Date Of Birth
+                <input
+                  type="date"
+                  value={editForm.date_of_birth}
+                  onChange={(event) => setEditField('date_of_birth', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Blood Group
+                <input
+                  value={editForm.blood_group}
+                  onChange={(event) => setEditField('blood_group', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Marital Status
+                <input
+                  value={editForm.marital_status}
+                  onChange={(event) => setEditField('marital_status', event.target.value)}
+                />
+              </label>
+
+              <label>
+                College
+                <input
+                  value={editForm.college}
+                  onChange={(event) => setEditField('college', event.target.value)}
+                />
+              </label>
+
+              <label>
+                School
+                <input
+                  value={editForm.school}
+                  onChange={(event) => setEditField('school', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Qualification
+                <input
+                  value={editForm.qualification}
+                  onChange={(event) => setEditField('qualification', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Emergency Contact Person
+                <input
+                  value={editForm.emergency_contact_name}
+                  onChange={(event) => setEditField('emergency_contact_name', event.target.value)}
+                />
+              </label>
+
+              <label>
+                Emergency Contact Number
+                <input
+                  value={editForm.emergency_contact_number}
+                  onChange={(event) => setEditField('emergency_contact_number', event.target.value)}
+                />
+              </label>
+
+              <label className="span-3">
+                Current Address
+                <textarea
+                  value={editForm.current_address}
+                  onChange={(event) => setEditField('current_address', event.target.value)}
+                />
+              </label>
+
+              <label className="span-3">
+                Permanent Address
+                <textarea
+                  value={editForm.permanent_address}
+                  onChange={(event) => setEditField('permanent_address', event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="profile-form-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={profileSaving}
+                onClick={cancelEditProfile}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                className="primary"
+                disabled={profileSaving}
+              >
+                {profileSaving ? 'Saving...' : 'Save Profile'}
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
+      <div className="profile-card-grid">
+        <ProfileSection
+          title="Primary Details"
+          rows={primaryDetails}
+          onEdit={() => setEditing(true)}
+        />
+
+        <ProfileSection
+          title="Contact Details"
+          rows={contactDetails}
+          onEdit={() => setEditing(true)}
+        />
+
+        <ProfileSection
+          title="Address & Education"
+          rows={addressEducationDetails}
+          onEdit={() => setEditing(true)}
+        />
+
+        <ProfileSection
+          title="Organization"
+          rows={organizationDetails}
+          onEdit={() => setEditing(true)}
+        />
+
+        <ProfileSection
+          title="Employment Details"
+          rows={employmentDetails}
+        />
+
+        <ProfileSection
+          title="Salary & Statutory Details"
+          rows={salaryAndStatutoryRows}
+        />
+
+        <ProfileSection
+          title="Family & Disability Details"
+          rows={familyAndDisabilityRows}
+        />
+
+        <ProfileSection
+          title="Previous Employment Details"
+          rows={previousEmploymentRows}
+        />
+
+        <ProfileSection
+          title="Reporting Hierarchy"
+          rows={reportingRows}
+        />
+      </div>
+
+      {photo ? (
+        <button
+          type="button"
+          className="secondary"
+          disabled={photoSaving}
+          onClick={removeProfilePhoto}
+          style={{ width: 'fit-content', maxWidth: '100%' }}
+        >
+          Remove Profile Photo
+        </button>
+      ) : null}
+
+      <section className="profile-password-card">
+        <h3>Request Password Change</h3>
+        <p>Your request will be sent to Super Admin for approval.</p>
 
         <form className="dynamic-form" onSubmit={submit} noValidate>
           <label>

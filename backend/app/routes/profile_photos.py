@@ -16,6 +16,7 @@ profile_photos_bp = Blueprint("profile_photos", __name__)
 
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
+MAX_PROFILE_COVER_BYTES = 5 * 1024 * 1024
 
 
 ADMIN_ROLES = {
@@ -118,8 +119,24 @@ def photo_alias_payload(photo_path):
     }
 
 
-def get_upload_root():
-    configured = current_app.config.get("PROFILE_PHOTO_UPLOAD_FOLDER")
+def cover_alias_payload(cover_path):
+    return {
+        "cover_image": cover_path,
+        "cover_photo": cover_path,
+        "profile_cover": cover_path,
+        "profile_cover_image": cover_path,
+        "banner_image": cover_path,
+        "banner_photo": cover_path,
+    }
+
+
+def get_upload_root(folder_type="profile_photos"):
+    if folder_type == "profile_covers":
+        configured = current_app.config.get("PROFILE_COVER_UPLOAD_FOLDER")
+        default_folder = "profile_covers"
+    else:
+        configured = current_app.config.get("PROFILE_PHOTO_UPLOAD_FOLDER")
+        default_folder = "profile_photos"
 
     if configured:
         upload_root = configured
@@ -128,7 +145,7 @@ def get_upload_root():
             current_app.root_path,
             "..",
             "uploads",
-            "profile_photos",
+            default_folder,
         )
 
     upload_root = os.path.abspath(upload_root)
@@ -226,12 +243,12 @@ def can_update_employee_photo(employee):
     return False
 
 
-def sync_photo_to_user(db, employee, photo_path):
-    if not employee:
+def sync_profile_media_to_user(db, employee, update_payload):
+    if not employee or not update_payload:
         return
 
-    update_payload = {
-        **photo_alias_payload(photo_path),
+    user_payload = {
+        **update_payload,
         "updated_at": datetime.utcnow(),
     }
 
@@ -241,7 +258,7 @@ def sync_photo_to_user(db, employee, photo_path):
     if user_obj_id:
         db.users.update_one(
             {"_id": user_obj_id},
-            {"$set": update_payload},
+            {"$set": user_payload},
         )
         return
 
@@ -254,8 +271,66 @@ def sync_photo_to_user(db, employee, photo_path):
                 "tenant_id": employee.get("tenant_id") or current_tenant_id(),
                 "is_deleted": {"$ne": True},
             },
-            {"$set": update_payload},
+            {"$set": user_payload},
         )
+
+
+def sync_photo_to_user(db, employee, photo_path):
+    sync_profile_media_to_user(db, employee, photo_alias_payload(photo_path))
+
+
+def sync_cover_to_user(db, employee, cover_path):
+    sync_profile_media_to_user(db, employee, cover_alias_payload(cover_path))
+
+
+def save_employee_image_file(file, employee, upload_folder_type, file_prefix, max_bytes, label):
+    if not file:
+        return "", f"{label} file is required"
+
+    original_filename = secure_filename(file.filename or "")
+
+    if not original_filename or not allowed_file(original_filename):
+        return "", "Only JPG, JPEG, PNG, and WEBP images are allowed"
+
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    if file_size > max_bytes:
+        size_mb = max_bytes // (1024 * 1024)
+        return "", f"{label} must be below {size_mb}MB"
+
+    employee_id = str(employee.get("_id"))
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    tenant_folder = secure_filename(str(tenant_id).lower()) or "sds"
+
+    upload_root = get_upload_root(upload_folder_type)
+    tenant_upload_dir = os.path.join(upload_root, tenant_folder)
+    os.makedirs(tenant_upload_dir, exist_ok=True)
+
+    fallback_ext = original_filename.rsplit(".", 1)[-1].lower()
+    temp_name = f"tmp_{uuid4().hex}.{fallback_ext}"
+    temp_path = os.path.join(tenant_upload_dir, temp_name)
+
+    file.save(temp_path)
+
+    detected_ext = detect_extension(temp_path, fallback_ext)
+
+    if detected_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+        return "", "Invalid image file"
+
+    final_name = f"employee_{employee_id}_{file_prefix}_{uuid4().hex}.{detected_ext}"
+    final_name = secure_filename(final_name)
+    final_path = os.path.join(tenant_upload_dir, final_name)
+
+    os.replace(temp_path, final_path)
+
+    return f"/api/v1/uploads/{upload_folder_type}/{tenant_folder}/{final_name}", ""
 
 
 @profile_photos_bp.post("/profile-photos/upload")
@@ -286,51 +361,17 @@ def upload_profile_photo():
         or request.files.get("image")
     )
 
-    if not file:
-        return jsonify({"message": "Photo file is required"}), 400
+    photo_path, error = save_employee_image_file(
+        file=file,
+        employee=employee,
+        upload_folder_type="profile_photos",
+        file_prefix="photo",
+        max_bytes=MAX_PROFILE_PHOTO_BYTES,
+        label="Profile photo",
+    )
 
-    original_filename = secure_filename(file.filename or "")
-
-    if not original_filename or not allowed_file(original_filename):
-        return jsonify({"message": "Only JPG, JPEG, PNG, and WEBP images are allowed"}), 400
-
-    file.seek(0, os.SEEK_END)
-    file_size = file.tell()
-    file.seek(0)
-
-    if file_size > MAX_PROFILE_PHOTO_BYTES:
-        return jsonify({"message": "Profile photo must be below 2MB"}), 400
-
-    tenant_id = employee.get("tenant_id") or current_tenant_id()
-    tenant_folder = secure_filename(str(tenant_id).lower()) or "sds"
-
-    upload_root = get_upload_root()
-    tenant_upload_dir = os.path.join(upload_root, tenant_folder)
-    os.makedirs(tenant_upload_dir, exist_ok=True)
-
-    fallback_ext = original_filename.rsplit(".", 1)[-1].lower()
-    temp_name = f"tmp_{uuid4().hex}.{fallback_ext}"
-    temp_path = os.path.join(tenant_upload_dir, temp_name)
-
-    file.save(temp_path)
-
-    detected_ext = detect_extension(temp_path, fallback_ext)
-
-    if detected_ext not in ALLOWED_IMAGE_EXTENSIONS:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-
-        return jsonify({"message": "Invalid image file"}), 400
-
-    final_name = f"employee_{employee_id}_{uuid4().hex}.{detected_ext}"
-    final_name = secure_filename(final_name)
-    final_path = os.path.join(tenant_upload_dir, final_name)
-
-    os.replace(temp_path, final_path)
-
-    photo_path = f"/api/v1/uploads/profile_photos/{tenant_folder}/{final_name}"
+    if error:
+        return jsonify({"message": error}), 400
 
     update_payload = {
         **photo_alias_payload(photo_path),
@@ -355,9 +396,86 @@ def upload_profile_photo():
     })
 
 
+@profile_photos_bp.post("/profile-covers/upload")
+@current_user_required
+def upload_profile_cover():
+    db = get_db()
+
+    employee_id = normalize_text(
+        request.form.get("employee_id")
+        or request.form.get("employeeId")
+        or request.form.get("id")
+    )
+
+    if not employee_id:
+        return jsonify({"message": "employee_id is required"}), 400
+
+    employee = find_employee(db, employee_id)
+
+    if not employee:
+        return jsonify({"message": "Employee not found"}), 404
+
+    if not can_update_employee_photo(employee):
+        return jsonify({"message": "You do not have permission to update this cover image"}), 403
+
+    file = (
+        request.files.get("cover")
+        or request.files.get("cover_image")
+        or request.files.get("photo")
+        or request.files.get("file")
+        or request.files.get("image")
+    )
+
+    cover_path, error = save_employee_image_file(
+        file=file,
+        employee=employee,
+        upload_folder_type="profile_covers",
+        file_prefix="cover",
+        max_bytes=MAX_PROFILE_COVER_BYTES,
+        label="Cover image",
+    )
+
+    if error:
+        return jsonify({"message": error}), 400
+
+    update_payload = {
+        **cover_alias_payload(cover_path),
+        "updated_at": datetime.utcnow(),
+        "updated_by": current_user_id(),
+    }
+
+    db.employees.update_one(
+        {"_id": employee["_id"]},
+        {"$set": update_payload},
+    )
+
+    updated_employee = db.employees.find_one({"_id": employee["_id"]})
+
+    sync_cover_to_user(db, updated_employee, cover_path)
+
+    return jsonify({
+        "message": "Cover image uploaded successfully",
+        "cover": cover_path,
+        "cover_url": cover_path,
+        "cover_image": cover_path,
+        "employee": clean_doc(updated_employee),
+    })
+
+
 @profile_photos_bp.get("/uploads/profile_photos/<tenant>/<filename>")
 def serve_profile_photo(tenant, filename):
-    upload_root = get_upload_root()
+    upload_root = get_upload_root("profile_photos")
+    tenant_folder = secure_filename(tenant)
+    safe_filename = secure_filename(filename)
+
+    directory = os.path.join(upload_root, tenant_folder)
+
+    return send_from_directory(directory, safe_filename)
+
+
+@profile_photos_bp.get("/uploads/profile_covers/<tenant>/<filename>")
+def serve_profile_cover(tenant, filename):
+    upload_root = get_upload_root("profile_covers")
     tenant_folder = secure_filename(tenant)
     safe_filename = secure_filename(filename)
 
