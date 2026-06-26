@@ -250,6 +250,7 @@ def find_employee(db, employee_id):
 
     return None
 
+
 def can_update_employee_photo(employee):
     if not employee:
         return False
@@ -311,37 +312,6 @@ def can_update_employee_photo(employee):
 
     return False
 
-
-def sync_photo_to_user(db, employee, photo_path):
-    if not employee:
-        return
-
-    user_payload = {
-        **update_payload,
-        "updated_at": datetime.utcnow(),
-    }
-
-    user_id = normalize_text(employee.get("user_id"))
-    user_obj_id = safe_object_id(user_id)
-
-    if user_obj_id:
-        db.users.update_one(
-            {"_id": user_obj_id},
-            {"$set": user_payload},
-        )
-        return
-
-    email = employee_email(employee)
-
-    if email:
-        db.users.update_one(
-            {
-                "email": email,
-                "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-                "is_deleted": {"$ne": True},
-            },
-            {"$set": user_payload},
-        )
 
 def sync_profile_media_to_user(db, employee, update_payload):
     if not employee or not update_payload:
