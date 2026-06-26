@@ -3430,6 +3430,447 @@ def unregister_notification_device():
         "registered": False,
     })
 
+#changes by atlanta
+# -----------------------------------------------------------------------------
+# Attendance reminder notification APIs
+# -----------------------------------------------------------------------------
+
+ATTENDANCE_REMINDER_SECRET = os.getenv("ATTENDANCE_REMINDER_SECRET", "").strip()
+
+ATTENDANCE_REMINDER_TZ_OFFSET_MINUTES = int(
+    os.getenv("ATTENDANCE_TIMEZONE_OFFSET_MINUTES", "330")
+)
+
+
+def attendance_reminder_now_local():
+    return datetime.utcnow() + timedelta(
+        minutes=ATTENDANCE_REMINDER_TZ_OFFSET_MINUTES
+    )
+
+
+def attendance_reminder_active_employee_query(tenant_id=""):
+    q = {
+        "is_deleted": {"$ne": True},
+        "status": {
+            "$nin": [
+                "Inactive",
+                "inactive",
+                "Resigned",
+                "resigned",
+                "Left",
+                "left",
+                "Terminated",
+                "terminated",
+                "Alumni",
+                "alumni",
+            ]
+        },
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    return q
+
+
+def attendance_reminder_active_user_query(tenant_id=""):
+    q = {
+        "is_deleted": {"$ne": True},
+        "is_active": {"$ne": False},
+        "status": {"$ne": "inactive"},
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    return q
+
+
+def attendance_reminder_employee_identifier_values(employee):
+    employee = employee or {}
+
+    values = [
+        normalize_text(employee.get("_id")),
+        normalize_text(employee.get("user_id")),
+        normalize_text(employee.get("employee_user_id")),
+        normalize_text(employee.get("employee_id")),
+        normalize_text(employee.get("employee_ref_id")),
+        normalize_text(employee.get("employee_code")),
+        normalize_text(employee.get("emp_code")),
+        normalize_text(employee.get("code")),
+        normalize_text(employee.get("email")),
+        normalize_text(employee.get("official_email")),
+    ]
+
+    return list(dict.fromkeys([value for value in values if value]))
+
+
+def attendance_reminder_user_for_employee(db, employee):
+    employee = employee or {}
+    tenant_id = normalize_text(employee.get("tenant_id"))
+
+    user_id = normalize_text(employee.get("user_id"))
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        user = db.users.find_one({
+            **attendance_reminder_active_user_query(tenant_id),
+            "_id": user_obj_id,
+        })
+
+        if user:
+            return user
+
+    lookup_values = attendance_reminder_employee_identifier_values(employee)
+    object_ids = [
+        safe_object_id(value)
+        for value in lookup_values
+        if safe_object_id(value)
+    ]
+
+    lookup_or = [
+        {"id": {"$in": lookup_values}},
+        {"user_id": {"$in": lookup_values}},
+        {"employee_id": {"$in": lookup_values}},
+        {"employee_ref_id": {"$in": lookup_values}},
+        {"employee_code": {"$in": lookup_values}},
+        {"emp_code": {"$in": lookup_values}},
+        {"code": {"$in": lookup_values}},
+        {"email": {"$in": [normalize_email(value) for value in lookup_values]}},
+        {"official_email": {"$in": [normalize_email(value) for value in lookup_values]}},
+        {"username": {"$in": [normalize_email(value) for value in lookup_values]}},
+    ]
+
+    if object_ids:
+        lookup_or.insert(0, {"_id": {"$in": object_ids}})
+
+    return db.users.find_one({
+        **attendance_reminder_active_user_query(tenant_id),
+        "$or": lookup_or,
+    })
+
+
+def attendance_reminder_today_log(db, employee, today):
+    tenant_id = normalize_text(employee.get("tenant_id"))
+    employee_values = attendance_reminder_employee_identifier_values(employee)
+
+    q = {
+        "date": today,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"employee_id": {"$in": employee_values}},
+            {"user_id": {"$in": employee_values}},
+            {"employee_code": {"$in": employee_values}},
+            {"emp_code": {"$in": employee_values}},
+        ],
+    }
+
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+
+    return db.attendance_logs.find_one(q)
+
+
+def attendance_reminder_has_value(value):
+    if value is None:
+        return False
+
+    if isinstance(value, str):
+        return value.strip() not in ["", "--", "null", "None"]
+
+    return True
+
+
+def attendance_reminder_key(kind, today, user_id):
+    return f"attendance_reminder:{kind}:{today}:{user_id}"
+
+
+def attendance_reminder_already_sent(db, tenant_id, user_id, reminder_key):
+    return db.notifications.find_one({
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "is_deleted": {"$ne": True},
+        "meta.attendance_reminder_key": reminder_key,
+    })
+
+
+def attendance_reminder_insert_notification(
+    db,
+    *,
+    tenant_id,
+    user,
+    employee,
+    title,
+    body,
+    kind,
+    today,
+    reminder_key,
+):
+    now = datetime.utcnow()
+    user_id = str(user["_id"])
+
+    doc = {
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_name_from_id(db, tenant_id),
+        "target_tenant_id": tenant_id,
+        "target_tenant_name": tenant_name_from_id(db, tenant_id),
+        "user_id": user_id,
+        "user_ids": [user_id],
+        "title": title,
+        "body": body,
+        "message": body,
+        "notification_type": "attendance_reminder",
+        "priority": "high",
+        "target": "attendance",
+        "target_scope": "selected_users",
+        "audience": "selected_users",
+        "show_popup": True,
+        "popup_seen": False,
+        "popup_seen_at": "",
+        "read": False,
+        "status": "unread",
+        "created_at": now,
+        "updated_at": now,
+        "created_by": "system",
+        "created_by_name": "Attendance Reminder",
+        "created_by_role": ["system"],
+        "is_deleted": False,
+        "meta": {
+            "attendance_reminder_key": reminder_key,
+            "attendance_reminder_kind": kind,
+            "attendance_date": today,
+            "target": "attendance",
+            "page": "attendance",
+            "employee_id": str(employee.get("_id") or ""),
+            "employee_code": employee_code(employee),
+            "employee_name": employee_display_name(employee),
+        },
+    }
+
+    result = db.notifications.insert_one(doc)
+    doc["_id"] = result.inserted_id
+
+    return doc
+
+
+def run_attendance_reminder_job(kind, tenant_id="", dry_run=False):
+    db = get_db()
+
+    now_local = attendance_reminder_now_local()
+    today = now_local.date().isoformat()
+
+    kind = normalize_text(kind).lower()
+    tenant_id = normalize_text(tenant_id)
+
+    if kind not in ["check_in", "check_out"]:
+        raise ValueError("kind must be check_in or check_out")
+
+    if kind == "check_in":
+        title = "Check-in reminder"
+        body = "Please check in before 09:50 AM to avoid being marked late."
+    else:
+        title = "Checkout reminder"
+        body = "It is after 06:00 PM. You can check out now."
+
+    employees = list(
+        db.employees.find(
+            attendance_reminder_active_employee_query(tenant_id),
+            {
+                "_id": 1,
+                "tenant_id": 1,
+                "user_id": 1,
+                "employee_user_id": 1,
+                "employee_id": 1,
+                "employee_ref_id": 1,
+                "employee_code": 1,
+                "emp_code": 1,
+                "code": 1,
+                "employee_name": 1,
+                "name": 1,
+                "email": 1,
+                "official_email": 1,
+                "department": 1,
+                "designation": 1,
+                "status": 1,
+                "is_deleted": 1,
+            },
+        ).limit(10000)
+    )
+
+    sent = []
+    skipped = {
+        "no_user": 0,
+        "no_active_device": 0,
+        "already_sent": 0,
+        "not_matching_condition": 0,
+    }
+
+    for employee in employees:
+        employee_tenant_id = normalize_text(employee.get("tenant_id")) or tenant_id or "sds"
+
+        user = attendance_reminder_user_for_employee(db, employee)
+
+        if not user:
+            skipped["no_user"] += 1
+            continue
+
+        user_id = str(user["_id"])
+
+        device_rows, _, _ = active_fcm_device_rows_for_users(
+            db,
+            [user_id],
+            tenant_id=employee_tenant_id,
+        )
+
+        if not device_rows:
+            skipped["no_active_device"] += 1
+            continue
+
+        attendance_log = attendance_reminder_today_log(db, employee, today)
+
+        has_checked_in = attendance_reminder_has_value(
+            attendance_log.get("check_in") if attendance_log else None
+        )
+
+        has_checked_out = attendance_reminder_has_value(
+            attendance_log.get("check_out") if attendance_log else None
+        )
+
+        if kind == "check_in":
+            should_notify = not has_checked_in
+        else:
+            should_notify = has_checked_in and not has_checked_out
+
+        if not should_notify:
+            skipped["not_matching_condition"] += 1
+            continue
+
+        reminder_key = attendance_reminder_key(kind, today, user_id)
+
+        if attendance_reminder_already_sent(
+            db,
+            employee_tenant_id,
+            user_id,
+            reminder_key,
+        ):
+            skipped["already_sent"] += 1
+            continue
+
+        if dry_run:
+            sent.append({
+                "user_id": user_id,
+                "employee_id": str(employee.get("_id")),
+                "employee_name": employee_display_name(employee),
+                "tenant_id": employee_tenant_id,
+                "dry_run": True,
+            })
+            continue
+
+        doc = attendance_reminder_insert_notification(
+            db,
+            tenant_id=employee_tenant_id,
+            user=user,
+            employee=employee,
+            title=title,
+            body=body,
+            kind=kind,
+            today=today,
+            reminder_key=reminder_key,
+        )
+
+        fcm_result = send_fcm_to_users(
+            db,
+            [user_id],
+            title,
+            body,
+            meta={
+                "target": "attendance",
+                "page": "attendance",
+                "type": "attendance_reminder",
+                "notification_type": "attendance_reminder",
+                "priority": "high",
+                "link_id": str(doc["_id"]),
+                "link_type": "attendance_reminder",
+            },
+            tenant_id=employee_tenant_id,
+        )
+
+        db.notifications.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "fcm_result": fcm_result,
+                    "fcm_sent_at": datetime.utcnow(),
+                }
+            },
+        )
+
+        sent.append({
+            "notification_id": str(doc["_id"]),
+            "user_id": user_id,
+            "employee_id": str(employee.get("_id")),
+            "employee_name": employee_display_name(employee),
+            "tenant_id": employee_tenant_id,
+            "fcm": fcm_result,
+        })
+
+    return {
+        "ok": True,
+        "kind": kind,
+        "date": today,
+        "local_time": now_local.isoformat(),
+        "tenant_id": tenant_id,
+        "dry_run": dry_run,
+        "checked_employees": len(employees),
+        "sent_count": len(sent),
+        "sent": sent[:100],
+        "skipped": skipped,
+    }
+
+
+@workflow_bp.post("/attendance-reminders/run")
+def attendance_reminders_run():
+    if not ATTENDANCE_REMINDER_SECRET:
+        return jsonify({
+            "message": "ATTENDANCE_REMINDER_SECRET is not configured in backend .env"
+        }), 500
+
+    provided_secret = normalize_text(
+        request.headers.get("X-CRON-SECRET")
+        or request.args.get("secret")
+    )
+
+    data = request.get_json(silent=True) or {}
+
+    if not provided_secret:
+        provided_secret = normalize_text(data.get("secret"))
+
+    if provided_secret != ATTENDANCE_REMINDER_SECRET:
+        return jsonify({"message": "Unauthorized reminder trigger"}), 403
+
+    kind = normalize_text(
+        data.get("kind")
+        or request.args.get("kind")
+    ).lower()
+
+    tenant_id = normalize_text(
+        data.get("tenant_id")
+        or request.args.get("tenant_id")
+    )
+
+    dry_run = truthy(data.get("dry_run") or request.args.get("dry_run"))
+
+    try:
+        result = run_attendance_reminder_job(
+            kind=kind,
+            tenant_id=tenant_id,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    return jsonify(result)
+
 @workflow_bp.get("/notifications/options")
 @current_user_required
 def notification_options():

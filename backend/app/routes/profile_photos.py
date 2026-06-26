@@ -188,32 +188,67 @@ def detect_extension(file_path, fallback_ext):
 
 
 def find_employee(db, employee_id):
-    employee_obj_id = safe_object_id(employee_id)
+    employee_id = normalize_text(employee_id)
 
-    if not employee_obj_id:
+    if not employee_id:
         return None
 
-    query = {
-        "_id": employee_obj_id,
+    base_query = {
         "is_deleted": {"$ne": True},
     }
 
     if not is_admin_user():
-        query["tenant_id"] = current_tenant_id()
+        base_query["tenant_id"] = current_tenant_id()
 
-    employee = db.employees.find_one(query)
+    employee_obj_id = safe_object_id(employee_id)
+
+    if employee_obj_id:
+        employee = db.employees.find_one({
+            **base_query,
+            "_id": employee_obj_id,
+        })
+
+        if employee:
+            return employee
+
+    lookup_or = [
+        {"employee_id": employee_id},
+        {"employee_code": employee_id},
+        {"emp_code": employee_id},
+        {"code": employee_id},
+        {"user_id": employee_id},
+        {"email": employee_id.lower()},
+        {"official_email": employee_id.lower()},
+    ]
+
+    employee = db.employees.find_one({
+        **base_query,
+        "$or": lookup_or,
+    })
 
     if employee:
         return employee
 
     if is_admin_user():
-        return db.employees.find_one({
-            "_id": employee_obj_id,
+        admin_base_query = {
             "is_deleted": {"$ne": True},
+        }
+
+        if employee_obj_id:
+            employee = db.employees.find_one({
+                **admin_base_query,
+                "_id": employee_obj_id,
+            })
+
+            if employee:
+                return employee
+
+        return db.employees.find_one({
+            **admin_base_query,
+            "$or": lookup_or,
         })
 
     return None
-
 
 def can_update_employee_photo(employee):
     if not employee:
@@ -235,13 +270,78 @@ def can_update_employee_photo(employee):
     user_employee_id = normalize_text(
         current_user.get("employee_id")
         or current_user.get("employee_ref_id")
+        or current_user.get("employee_code")
+        or current_user.get("emp_code")
+        or current_user.get("code")
     )
 
-    if user_employee_id and user_employee_id == str(employee.get("_id")):
+    employee_identifiers = {
+        normalize_text(employee.get("_id")),
+        normalize_text(employee.get("employee_id")),
+        normalize_text(employee.get("employee_code")),
+        normalize_text(employee.get("emp_code")),
+        normalize_text(employee.get("code")),
+        normalize_text(employee.get("user_id")),
+    }
+
+    employee_identifiers = {
+        item for item in employee_identifiers if item
+    }
+
+    if user_employee_id and user_employee_id in employee_identifiers:
+        return True
+
+    user_email = normalize_text(
+        current_user.get("email")
+        or current_user.get("official_email")
+        or current_user.get("username")
+    ).lower()
+
+    employee_emails = {
+        normalize_text(employee.get("email")).lower(),
+        normalize_text(employee.get("official_email")).lower(),
+    }
+
+    employee_emails = {
+        item for item in employee_emails if item
+    }
+
+    if user_email and user_email in employee_emails:
         return True
 
     return False
 
+
+def sync_photo_to_user(db, employee, photo_path):
+    if not employee:
+        return
+
+    user_payload = {
+        **update_payload,
+        "updated_at": datetime.utcnow(),
+    }
+
+    user_id = normalize_text(employee.get("user_id"))
+    user_obj_id = safe_object_id(user_id)
+
+    if user_obj_id:
+        db.users.update_one(
+            {"_id": user_obj_id},
+            {"$set": user_payload},
+        )
+        return
+
+    email = employee_email(employee)
+
+    if email:
+        db.users.update_one(
+            {
+                "email": email,
+                "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+                "is_deleted": {"$ne": True},
+            },
+            {"$set": user_payload},
+        )
 
 def sync_profile_media_to_user(db, employee, update_payload):
     if not employee or not update_payload:
