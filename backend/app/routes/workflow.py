@@ -2177,6 +2177,35 @@ def scoped_leave_query(db, leave_obj_id):
     q["$or"] = scope_or
     return q
 
+
+
+def enrich_leave_request_docs_for_current_user(db, items):
+    enriched_items = []
+
+    for item in items:
+        raw_item = dict(item or {})
+        enriched = enrich_leave_request_doc(raw_item)
+        status = normalize_status(enriched.get("status"))
+        is_pending = status in ["", "pending", "submitted", "in_review"]
+        can_decide = bool(is_pending and reviewer_can_decide_leave(db, raw_item))
+
+        enriched["can_decide"] = can_decide
+        enriched["is_current_approver"] = can_decide
+        enriched["decision_allowed"] = can_decide
+
+        if is_pending and not can_decide:
+            enriched["decision_block_reason"] = (
+                "Pending with assigned approver. You can view this request, "
+                "but cannot approve or reject it."
+            )
+        else:
+            enriched["decision_block_reason"] = ""
+
+        enriched_items.append(enriched)
+
+    return enriched_items
+
+
 def get_leave_balance(db, employee, leave_type):
     leave_type = normalize_leave_type(leave_type)
 
@@ -4892,7 +4921,7 @@ def list_leave_requests():
         .limit(1000)
     )
 
-    return jsonify({"items": clean_doc(enrich_leave_request_docs(items))})
+    return jsonify({"items": clean_doc(enrich_leave_request_docs_for_current_user(db, items))})
 
 
 @workflow_bp.post("/leave_requests/apply")

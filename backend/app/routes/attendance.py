@@ -1752,6 +1752,256 @@ def check_out():
         "compoff": clean_doc(compoff),
     })
 
+def month_start_from_query(value=None):
+    raw_value = normalize_text(value)
+
+    if not raw_value:
+        today = today_local()
+        return date(today.year, today.month, 1)
+
+    try:
+        parsed = datetime.strptime(raw_value, "%Y-%m").date()
+        return date(parsed.year, parsed.month, 1)
+    except Exception:
+        parsed_date = parse_date(raw_value)
+
+        if parsed_date:
+            return date(parsed_date.year, parsed_date.month, 1)
+
+    today = today_local()
+    return date(today.year, today.month, 1)
+
+
+def add_months(value, months):
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+
+    return date(year, month, 1)
+
+
+def month_end(value):
+    return add_months(value, 1) - timedelta(days=1)
+
+
+def month_label(value):
+    return value.strftime("%B %Y")
+
+
+def date_range_each_day(start_date, end_date):
+    if not start_date or not end_date or end_date < start_date:
+        return
+
+    cursor = start_date
+
+    while cursor <= end_date:
+        yield cursor
+        cursor += timedelta(days=1)
+
+
+def is_working_day_for_employee(db, employee, check_date):
+    return not holiday_info_for_employee(db, employee, check_date).get("is_holiday")
+
+
+def approved_leave_weight_by_date(db, employee, period_start, period_end):
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    employee_id = str(employee["_id"])
+
+    rows = list(db.leave_requests.find({
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "status": "approved",
+        "approval_stage": "approved",
+        "from_date": {"$lte": period_end.isoformat()},
+        "to_date": {"$gte": period_start.isoformat()},
+        "is_deleted": {"$ne": True},
+    }))
+
+    leave_by_date = {}
+
+    for row in rows:
+        from_date = parse_date(row.get("from_date"))
+        to_date = parse_date(row.get("to_date") or row.get("upto_date")) or from_date
+
+        if not from_date or not to_date:
+            continue
+
+        overlap_start = max(from_date, period_start)
+        overlap_end = min(to_date, period_end)
+
+        if overlap_end < overlap_start:
+            continue
+
+        is_half_day = (
+            truthy(row.get("is_half_day"))
+            or normalize_text(row.get("day_type")).lower() == "half_day"
+        )
+
+        try:
+            leave_days = float(row.get("leave_days", 0) or 0)
+        except Exception:
+            leave_days = 0.0
+
+        single_day_half = overlap_start == overlap_end and (
+            is_half_day or leave_days == 0.5
+        )
+
+        for cursor in date_range_each_day(overlap_start, overlap_end):
+            if not is_working_day_for_employee(db, employee, cursor):
+                continue
+
+            weight = 0.5 if single_day_half else 1.0
+            date_key = cursor.isoformat()
+
+            leave_by_date[date_key] = min(
+                1.0,
+                float(leave_by_date.get(date_key, 0.0) or 0.0) + weight,
+            )
+
+    return leave_by_date
+
+
+def attendance_month_summary_for_employee(
+    db,
+    employee,
+    selected_month,
+    today_reference=None,
+):
+    today_reference = today_reference or today_local()
+
+    period_start = selected_month
+    period_end = month_end(selected_month)
+
+    if (
+        selected_month.year == today_reference.year
+        and selected_month.month == today_reference.month
+    ):
+        counted_until = min(period_end, today_reference)
+    elif period_start > today_reference:
+        counted_until = period_start - timedelta(days=1)
+    else:
+        counted_until = period_end
+
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    employee_id = str(employee["_id"])
+
+    attendance_rows = list(db.attendance_logs.find({
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "date": {
+            "$gte": period_start.isoformat(),
+            "$lte": period_end.isoformat(),
+        },
+        "is_deleted": {"$ne": True},
+    }))
+
+    attended_dates = set()
+    late_dates = set()
+
+    for row in attendance_rows:
+        row_date = normalize_text(row.get("date"))
+
+        if not row_date:
+            continue
+
+        attended_dates.add(row_date)
+
+        status = normalize_text(row.get("status")).lower()
+
+        if status == "late" or truthy(row.get("is_late")):
+            late_dates.add(row_date)
+
+    working_dates = []
+
+    if counted_until >= period_start:
+        for cursor in date_range_each_day(period_start, counted_until):
+            if is_working_day_for_employee(db, employee, cursor):
+                working_dates.append(cursor.isoformat())
+
+    leave_by_date = (
+        approved_leave_weight_by_date(
+            db,
+            employee,
+            period_start,
+            counted_until,
+        )
+        if counted_until >= period_start
+        else {}
+    )
+
+    leave_days = 0.0
+    absent_days = 0.0
+
+    for working_date in working_dates:
+        leave_weight = float(leave_by_date.get(working_date, 0.0) or 0.0)
+        leave_days += leave_weight
+
+        if working_date in attended_dates:
+            continue
+
+        absent_days += max(0.0, 1.0 - leave_weight)
+
+    return {
+        "month": selected_month.strftime("%Y-%m"),
+        "month_label": month_label(selected_month),
+        "present_days": len(attended_dates),
+        "late_days": len(late_dates),
+        "absent_days": absent_days,
+        "leave_days": leave_days,
+        "working_days": len(working_dates),
+        "counted_until": counted_until.isoformat()
+        if counted_until >= period_start
+        else "",
+    }
+
+
+@attendance_bp.get("/monthly-summary")
+@current_user_required
+def monthly_summary():
+    db = get_db()
+    e = emp(db)
+
+    if not e:
+        return jsonify({"message": "Employee profile not found"}), 404
+
+    selected_month = month_start_from_query(
+        request.args.get("month")
+        or request.args.get("period")
+    )
+
+    try:
+        history_months = int(request.args.get("history_months", 6))
+    except Exception:
+        history_months = 6
+
+    history_months = max(1, min(history_months, 12))
+    today_reference = today_local()
+
+    current_month = attendance_month_summary_for_employee(
+        db,
+        e,
+        selected_month,
+        today_reference=today_reference,
+    )
+
+    previous_months = []
+
+    for offset in range(1, history_months + 1):
+        previous_month = add_months(selected_month, -offset)
+
+        previous_months.append(
+            attendance_month_summary_for_employee(
+                db,
+                e,
+                previous_month,
+                today_reference=today_reference,
+            )
+        )
+
+    return jsonify({
+        "current_month": current_month,
+        "previous_months": previous_months,
+    })
 
 @attendance_bp.get("/my")
 @current_user_required
