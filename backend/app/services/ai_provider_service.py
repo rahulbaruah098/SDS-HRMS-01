@@ -938,6 +938,68 @@ def _gemini_audio_response_bytes(audio_bytes: bytes, mime_type: str) -> Tuple[by
     return _pcm_to_wav_bytes(audio_bytes, channels=1, rate=rate, sample_width=2), "audio/wav"
 
 
+
+def _normalize_gemini_tts_model_name(model: str) -> str:
+    # FILE_NINETEEN_GEMINI_TTS_VOICE_MODEL_REQUEST_FIX
+    # The model list API returns names like "models/gemini-2.5-flash-preview-tts",
+    # but generateContent URL expects only "gemini-2.5-flash-preview-tts"
+    # after /models/.
+    value = str(model or "").strip()
+
+    if value.startswith("models/"):
+        value = value.split("/", 1)[1].strip()
+
+    return value
+
+
+def _select_gemini_tts_voice(requested_voice: str = "") -> str:
+    # Frontend/Sarvam may send "ritu", but Gemini TTS needs prebuilt voices
+    # such as Kore, Puck, Charon, Fenrir, Aoede, etc.
+    valid_voices = {
+        "Achernar",
+        "Achird",
+        "Algenib",
+        "Algieba",
+        "Alnilam",
+        "Aoede",
+        "Autonoe",
+        "Callirrhoe",
+        "Charon",
+        "Despina",
+        "Enceladus",
+        "Erinome",
+        "Fenrir",
+        "Gacrux",
+        "Iapetus",
+        "Kore",
+        "Laomedeia",
+        "Leda",
+        "Orus",
+        "Puck",
+        "Pulcherrima",
+        "Rasalgethi",
+        "Sadachbia",
+        "Sadaltager",
+        "Schedar",
+        "Sulafat",
+        "Umbriel",
+        "Vindemiatrix",
+        "Zephyr",
+        "Zubenelgenubi",
+    }
+
+    env_voice = str(_env("GEMINI_TTS_VOICE", "Kore") or "Kore").strip()
+    voice = str(requested_voice or "").strip()
+
+    if voice in valid_voices:
+        return voice
+
+    if env_voice in valid_voices:
+        return env_voice
+
+    return "Kore"
+
+
 def _gemini_text_to_speech(
     text: str,
     voice: str = "",
@@ -980,7 +1042,7 @@ def _gemini_text_to_speech(
     model_candidates = []
 
     for candidate in [primary_model, *str(fallback_models_raw or "").split(",")]:
-        candidate = str(candidate or "").strip()
+        candidate = _normalize_gemini_tts_model_name(candidate)
 
         if candidate and candidate not in model_candidates:
             model_candidates.append(candidate)
@@ -989,10 +1051,7 @@ def _gemini_text_to_speech(
         model_candidates = ["gemini-2.5-flash-preview-tts"]
 
     request_timeout = timeout or _env_int("AI_TTS_TIMEOUT_SECONDS", 45)
-    selected_voice = str(voice or _env("GEMINI_TTS_VOICE", "Kore") or "Kore").strip()
-
-    if not re.match(r"^[A-Za-z0-9_-]{2,40}$", selected_voice):
-        selected_voice = "Kore"
+    selected_voice = _select_gemini_tts_voice(voice)
 
     prompt = (
         "Speak naturally in clear Indian English as Saya, a warm SDS HRMS assistant. "
@@ -1026,13 +1085,18 @@ def _gemini_text_to_speech(
     last_model = ""
 
     for model in model_candidates:
+        payload_for_model = {
+            **payload,
+            "model": model,
+        }
+
         response = requests.post(
             f"{api_base}/models/{model}:generateContent",
             headers={
                 "Content-Type": "application/json",
                 "x-goog-api-key": api_key,
             },
-            json=payload,
+            json=payload_for_model,
             timeout=request_timeout,
         )
 
@@ -1147,6 +1211,7 @@ def ai_provider_status() -> Dict[str, Any]:
         "sarvam_tts_model": _env("SARVAM_TTS_MODEL", "bulbul:v3"),
         "gemini_tts_model": _env("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
         "gemini_tts_model_fallbacks": _env("GEMINI_TTS_MODEL_FALLBACKS", "gemini-2.5-flash-preview-tts,gemini-2.5-pro-preview-tts"),
+        "gemini_tts_voice": _env("GEMINI_TTS_VOICE", "Kore"),
     }
 
 
