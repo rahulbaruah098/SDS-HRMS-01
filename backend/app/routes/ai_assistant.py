@@ -98,7 +98,7 @@ def _guess_audio_mime(filename="", uploaded_mime=""):
     if uploaded.startswith("audio/") or uploaded in ["video/webm", "video/mp4"]:
         return uploaded
 
-    guessed, _ = mimetypes.guess_type(filename or "eve-audio.webm")
+    guessed, _ = mimetypes.guess_type(filename or "saya-audio.webm")
 
     if guessed:
         return guessed
@@ -198,7 +198,7 @@ def _build_voice_transcription_prompt(user_context):
         "Transcribe this audio into plain text only.",
         "If there is no clear speech, return empty text only.",
         "Do not answer the user. Do not explain. Do not add markdown.",
-        "Context: SDS HRMS voice assistant Eve. Wake phrases: Hey Eve, Hi Eve, Hello Eve, Eve.",
+        "Context: SDS HRMS voice assistant Saya. Wake phrases: Hey Saya, Hi Saya, Hello Saya, Saya, Saaya, Saiya, Sayaa. Also preserve old temporary wake phrases: Hey Eve, Hi Eve, Eve.",
         "Preserve HRMS terms: CL, EL, WFH, attendance, leave, handover, reporting officer, team leader.",
         "Preserve Indian and Assamese names carefully.",
         f"Logged-in employee: {employee_name}.",
@@ -214,6 +214,13 @@ def _voice_transcription_hints(user_context):
     hints = [
         "SDS",
         "HRMS",
+        "Saya",
+        "Hey Saya",
+        "Hi Saya",
+        "Hello Saya",
+        "Saaya",
+        "Saiya",
+        "Sayaa",
         "Eve",
         "Hey Eve",
         "CL",
@@ -275,7 +282,7 @@ def _build_tts_prompt(text):
     clean_text = _normalize_tts_text(text)
 
     return (
-        "Speak naturally in clear Indian English as Eve, a warm SDS HRMS assistant. "
+        "Speak naturally in clear Indian English as Saya, a warm SDS HRMS assistant. "
         "Use a calm professional tone. Do not sound robotic. "
         "Pronounce Indian names carefully.\n\n"
         f"{clean_text}"
@@ -929,7 +936,7 @@ def voice_context():
 
     return jsonify({
         "success": True,
-        "wake_word": "hey eve",
+        "wake_word": "hey saya",
         "employee_name": employee_name,
         "name": employee_name,
         "display_name": employee_name,
@@ -1036,7 +1043,7 @@ def transcribe_voice():
             "success": False,
             "error": "Voice transcription failed",
             "message": (
-                "Speech-to-text quota reached. Eve voice has been paused temporarily."
+                "Speech-to-text quota reached. Saya voice has been paused temporarily."
                 if exc.quota_exceeded
                 else str(exc)
             ),
@@ -1114,12 +1121,12 @@ def speak_voice():
             audio_bytes,
             mimetype=response_mime_type,
             headers={
-                "Content-Disposition": f"inline; filename=eve-response.{extension}",
-                "Cache-Control": "no-store",
-                "X-Eve-Voice": requested_voice,
-                "X-Eve-Provider": speech_result.get("provider") or provider_name,
-                "X-Eve-Model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
-                "X-Eve-Latency-Ms": str(speech_result.get("latency_ms") or ""),
+            "Content-Disposition": f"inline; filename=saya-response.{extension}",
+            "Cache-Control": "no-store",
+            "X-Saya-Voice": requested_voice,
+            "X-Saya-Provider": speech_result.get("provider") or provider_name,
+            "X-Saya-Model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
+            "X-Saya-Latency-Ms": str(speech_result.get("latency_ms") or ""),
             },
         )
 
@@ -1138,7 +1145,7 @@ def speak_voice():
             "success": False,
             "error": "Voice generation failed",
             "message": (
-                "Text-to-speech quota reached. Eve voice has been paused temporarily."
+                "Text-to-speech quota reached. Saya voice has been paused temporarily."
                 if exc.quota_exceeded
                 else str(exc)
             ),

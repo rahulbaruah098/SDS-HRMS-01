@@ -46,7 +46,7 @@ const PROJECT_MODULES = [
 const WELCOME_MESSAGE = {
   role: "assistant",
   text:
-    "Hi, I am your SDS HRMS Assistant. Ask me about HRMS workflows, leave, attendance, assets, reports, notifications, approvals, policies, or ask me to draft emails, leave reasons, messages, and other professional text.",
+    "Hi, I am Saya, your SDS HRMS Assistant. Ask me about HRMS workflows, leave, attendance, assets, reports, notifications, approvals, policies, or ask me to draft emails, leave reasons, messages, and other professional text.",
 };
 
 function getSpeechRecognition() {
@@ -249,74 +249,48 @@ function speakText(text, onEnd) {
   };
 }
 
-function primeIosNativeSpeech() {
-  // FINAL_IPHONE_SPEECH_UNLOCK_ON_TAP_FIX
-  // This runs directly after the user taps Eve/mic.
-  // It primes iOS speechSynthesis so the later AI answer can talk back.
-  if (!isIosDevice()) return;
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-
-  try {
-    const utterance = new SpeechSynthesisUtterance(".");
-    utterance.lang = "en-IN";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.volume = 0.01;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-    window.speechSynthesis.resume?.();
-  } catch {
-    // Best effort only.
-  }
-}
-
-const DEFAULT_WAKE_WORD = "hey eve";
+const DEFAULT_WAKE_WORD = "hey saya";
 const FINAL_IPHONE_WAKE_AND_AUDIO_STABILITY_FIX = true;
+const FINAL_ASSISTANT_NAME_SAYA_FIX = true;
+const FILE_ONE_SAYA_WAKE_MOBILE_FIX = true;
 
 const WAKE_WORD_VARIANTS = [
-  // FINAL_WAKE_WORD_VARIANTS_FIX
-  // Keep many short/phonetic variants because mobile STT often hears Eve differently.
+  // FINAL_SAYA_WAKE_WORD_VARIANTS_FIX
+  // Primary assistant name is Saya. Keep phonetic variants because mobile STT often hears it differently.
+  "hey saya",
+  "hi saya",
+  "hello saya",
+  "okay saya",
+  "ok saya",
+  "saya",
+  "saaya",
+  "saiya",
+  "saiyaa",
+  "sayaa",
+  "say a",
+  "sayaah",
+  "saiyaah",
+  "sai",
+  "sya",
+  "sayya",
+  "sayiya",
+  "saya ji",
+  "hey saaya",
+  "hi saaya",
+  "hello saaya",
+  "hey saiya",
+  "hi saiya",
+  "hello saiya",
+  "hey sayaa",
+  "hi sayaa",
+  "hello sayaa",
+  // Temporary legacy Eve support. Remove later only after all users know the new name.
   "hey eve",
   "hi eve",
   "hello eve",
-  "okay eve",
-  "ok eve",
   "eve",
-  "ev",
   "evie",
   "eevee",
-  "ivy",
-  "evey",
-  "evi",
-  "evy",
-  "evee",
-  "eave",
-  "heave",
-  "efve",
-  "evfe",
-  "evve",
-  "e v",
-  "hay eve",
-  "hai eve",
-  "hii eve",
-  "hey eave",
-  "hi eave",
-  "hello eave",
-  "hey evie",
-  "hi evie",
-  "hello evie",
-  "hey eevee",
-  "hi eevee",
-  "hello eevee",
-  "hey ivy",
-  "hi ivy",
-  "hello ivy",
-  "hey evi",
-  "hi evi",
-  "hello evi",
-  "hey evy",
-  "hi evy",
-  "hello evy",
 ];
 
 function normalizeVoiceText(value) {
@@ -616,7 +590,7 @@ export default function AiAssistantWidget() {
   const [autoWakeActive, setAutoWakeActive] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [manualChatOpen, setManualChatOpen] = useState(false);
-  const [siriStatus, setSiriStatus] = useState("Click once to activate Eve voice");
+  const [siriStatus, setSiriStatus] = useState("Click once to activate Saya voice");
   const [lastVoiceTranscript, setLastVoiceTranscript] = useState("");
   const [voiceLevel, setVoiceLevel] = useState(0);
 
@@ -976,7 +950,7 @@ export default function AiAssistantWidget() {
 
     setManualChatOpen(false);
     setVoiceHint(
-      `Voice service quota is cooling down. Try Eve voice again in ${remainingSeconds} seconds. You can still type manually.`
+      `Voice service quota is cooling down. Try Saya voice again in ${remainingSeconds} seconds. You can still type manually.`
     );
 
     return true;
@@ -1012,7 +986,7 @@ export default function AiAssistantWidget() {
     setManualChatOpen(false);
     setVoiceError("");
     setVoiceHint(
-      `Voice service ${source} quota reached. Eve voice is paused for ${retrySeconds} seconds. You can still type manually.`
+      `Voice service ${source} quota reached. Saya voice is paused for ${retrySeconds} seconds. You can still type manually.`
     );
   }
 
@@ -1077,8 +1051,13 @@ export default function AiAssistantWidget() {
       Boolean(pendingAttendanceActionRef.current) ||
       Boolean(voiceConversationModeRef.current);
 
+    // FINAL_ANDROID_SAYA_WAKE_LOOP_FIX
+    // Android/desktop can keep restarting short recognition sessions for wake-word listening.
+    // iPhone cannot reliably do passive browser wake-word listening, so iPhone stays one-tap.
+    const shouldListenForWakeWord = Boolean(autoWakeModeRef.current) && !isIosDevice();
+
     if (!autoWakeModeRef.current) return;
-    if (!shouldListenForOneReply) return;
+    if (!shouldListenForOneReply && !shouldListenForWakeWord) return;
     if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
     if (loadingRef.current) return;
     if (isSpeakingRef.current) return;
@@ -1090,13 +1069,15 @@ export default function AiAssistantWidget() {
         Boolean(pendingAttendanceActionRef.current) ||
         Boolean(voiceConversationModeRef.current);
 
+      const stillNeedsWakeWord = Boolean(autoWakeModeRef.current) && !isIosDevice();
+
       if (!autoWakeModeRef.current) return;
-      if (!stillNeedsOneReply) return;
+      if (!stillNeedsOneReply && !stillNeedsWakeWord) return;
       if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
       if (loadingRef.current) return;
       if (isSpeakingRef.current) return;
 
-      oneShotVoiceModeRef.current = true;
+      oneShotVoiceModeRef.current = Boolean(stillNeedsOneReply);
       beginListening();
     }, delay);
   }
@@ -1159,7 +1140,7 @@ export default function AiAssistantWidget() {
     isSpeakingRef.current = true;
     setListening(false);
     listeningRef.current = false;
-    setVoiceHint("Eve is responding...");
+    setVoiceHint("Saya is responding...");
 
     const wordCount = cleanText.split(/\s+/).filter(Boolean).length || 1;
     const safetyMs = Math.max(14000, Math.min(90000, wordCount * 720 + 9000));
@@ -1168,11 +1149,11 @@ export default function AiAssistantWidget() {
       finishSpeech();
     }, safetyMs);
 
-if (isIosDevice()) {
-      // FINAL_IPHONE_NATIVE_TALKBACK_ONLY_FIX
-      // iPhone Safari/Chrome must NOT use generated audio for talk-back.
-      // Use native iOS speechSynthesis after the user taps Eve/mic once.
-      setVoiceHint("Eve is speaking...");
+    if (isIosDevice()) {
+      // FINAL_IPHONE_SAYA_NATIVE_TALKBACK_FIX
+      // Do not use generated audio on iPhone browser. Safari/Chrome on iOS often block it after async AI replies.
+      // Native speechSynthesis is the reliable automatic talk-back path after the user taps Saya/mic once.
+      setVoiceHint("Saya is speaking...");
 
       try {
         window.speechSynthesis?.cancel?.();
@@ -1216,7 +1197,7 @@ if (isIosDevice()) {
 
   }
 
-  function appendWakeGreeting(greeting, userText = "Hey Eve") {
+  function appendWakeGreeting(greeting, userText = "Hey Saya") {
     setMessages((prev) => {
       const alreadyGreeted =
         prev.length >= 2 &&
@@ -1290,7 +1271,6 @@ if (isIosDevice()) {
     setVoiceError("");
     lastVoiceActivationAtRef.current = Date.now();
 
-    primeIosNativeSpeech();
     await unlockIosAudioPlayback();
     await refreshVoiceContextIfNeeded(true);
     await startVoiceMeter();
@@ -1323,7 +1303,7 @@ if (isIosDevice()) {
       setMessage("");
       setLastVoiceTranscript(transcript);
       setSiriStatus(`Heard: ${transcript}`);
-      setVoiceHint('Listening in the background. Say "Hey Eve" to open the assistant.');
+      setVoiceHint('Listening in the background. Say "Hey Saya" to open the assistant.');
       scheduleListeningRestart(700);
       return;
     }
@@ -1346,7 +1326,7 @@ if (isIosDevice()) {
       setMessage("");
       setLastVoiceTranscript("");
       setSiriStatus(greeting);
-      setVoiceHint("Eve is active. Speak your HRMS command now.");
+      setVoiceHint("Saya is active. Speak your HRMS command now.");
       // FINAL_NO_EMPTY_WAKE_GREETING_AUDIO_FIX
       // Keep listening instead of trying to speak a greeting on iPhone/mobile.
       scheduleListeningRestart(250);
@@ -1470,7 +1450,7 @@ if (isIosDevice()) {
         }
 
         if (error?.code === 1) {
-          reject(new Error("Location permission is blocked. Please allow location permission, then ask Eve to check in again."));
+          reject(new Error("Location permission is blocked. Please allow location permission, then ask Saya to check in again."));
           return;
         }
 
@@ -1975,7 +1955,7 @@ if (isIosDevice()) {
         setVoiceHint(
           voiceConversationModeRef.current
             ? "Listening for your voice reply..."
-            : 'Listening now. Say "Hey Eve", then speak your command clearly.'
+            : 'Listening now. Say "Hey Saya", then speak your command clearly.'
         );
       };
 
@@ -2218,10 +2198,10 @@ if (isIosDevice()) {
   function rememberPendingIosVoice(audioUrl, onEnd) {
     // IPHONE_AUTO_NATIVE_SPEECH_FIX:
     // Do not show a manual Play button as the normal iPhone flow.
-    // iPhone should use native speechSynthesis after the user taps Hey Eve/mic.
+    // iPhone should use native speechSynthesis after the user taps Hey Saya/mic.
     iosPendingVoiceRef.current = { audioUrl: "", onEnd: null };
     setIosVoicePlayRequest(null);
-    setVoiceHint("Eve answer is shown on screen. iPhone could not play browser voice.");
+    setVoiceHint("Saya answer is shown on screen. iPhone could not play browser voice.");
 
     if (typeof onEnd === "function") {
       onEnd();
@@ -2312,12 +2292,12 @@ if (isIosDevice()) {
         iosTtsSourceRef.current = null;
       }
 
-      setVoiceHint("Eve is speaking...");
+      setVoiceHint("Saya is speaking...");
 
       const response = await fetch(audioUrl);
 
       if (!response.ok) {
-        throw new Error("Could not load generated Eve voice.");
+        throw new Error("Could not load generated Saya voice.");
       }
 
       const audioBuffer = await response.arrayBuffer();
@@ -2342,8 +2322,8 @@ if (isIosDevice()) {
 
       source.start(0);
     } catch (error) {
-      console.warn("iPhone WebAudio Eve voice failed", error);
-      setVoiceHint("Eve answer is shown on screen. iPhone audio output was blocked.");
+      console.warn("iPhone WebAudio Saya voice failed", error);
+      setVoiceHint("Saya answer is shown on screen. iPhone audio output was blocked.");
       finish();
     }
   }
@@ -2358,7 +2338,7 @@ if (isIosDevice()) {
     }
 
     setIosVoicePlayRequest(null);
-    setVoiceHint("Eve is speaking...");
+    setVoiceHint("Saya is speaking...");
 
     try {
       await unlockIosAudioPlayback();
@@ -2400,7 +2380,7 @@ if (isIosDevice()) {
     currentAudioUrlRef.current = audioUrl;
 
     audio.onplaying = () => {
-      setVoiceHint("Eve is speaking...");
+      setVoiceHint("Saya is speaking...");
     };
 
     audio.onended = finish;
@@ -2458,7 +2438,7 @@ if (isIosDevice()) {
 
     audio.onplaying = () => {
       clearPendingIosVoice();
-      setVoiceHint("Eve is speaking...");
+      setVoiceHint("Saya is speaking...");
     };
 
     audio.onended = finish;
@@ -2469,7 +2449,7 @@ if (isIosDevice()) {
       }
 
       if (isIosDevice()) {
-        setVoiceHint("Eve answer is shown on screen. iPhone could not play the generated voice.");
+        setVoiceHint("Saya answer is shown on screen. iPhone could not play generated audio.");
       }
 
       finish();
@@ -2491,7 +2471,7 @@ if (isIosDevice()) {
         }
 
         if (isIosDevice()) {
-          setVoiceHint("Eve answer is shown on screen. iPhone blocked automatic voice playback.");
+          setVoiceHint("Saya answer is shown on screen. iPhone blocked automatic voice playback.");
         }
 
         finish();
@@ -2758,7 +2738,7 @@ if (isIosDevice()) {
   function startListening() {
     if (listeningRef.current || isStartingRecognitionRef.current) {
       stopVoiceSession();
-      setVoiceHint("Voice listening stopped. Tap mic or Hey Eve again to reactivate.");
+      setVoiceHint("Voice listening stopped. Tap mic or Hey Saya again to reactivate.");
       return;
     }
 
@@ -2775,7 +2755,6 @@ if (isIosDevice()) {
     lastVoiceActivationAtRef.current = Date.now();
     oneShotVoiceModeRef.current = true;
     geminiLoopActiveRef.current = true;
-    primeIosNativeSpeech();
     unlockIosAudioPlayback();
     startVoiceMeter();
     beginListening();
@@ -2799,7 +2778,7 @@ if (isIosDevice()) {
     stopVoiceMeter();
     voiceQuotaDisabledUntilRef.current = 0;
     setManualChatOpen(false);
-    setSiriStatus("Click once to activate Eve voice");
+    setSiriStatus("Click once to activate Saya voice");
     setLastVoiceTranscript("");
     setMessages([WELCOME_MESSAGE]);
     setMessage("");
@@ -2918,7 +2897,7 @@ if (isIosDevice()) {
                 ) : (
                   <>
                     <small>Ready</small>
-                    <strong>{eveActive ? siriStatus : "Click Eve once to activate voice"}</strong>
+                    <strong>{eveActive ? siriStatus : "Click Saya once to activate voice"}</strong>
                     <span>Manual typing opens the full chat. Voice stays in Siri mode.</span>
                   </>
                 )}
@@ -3049,7 +3028,7 @@ if (isIosDevice()) {
                 onClick={playPendingIosVoice}
               >
                 <Volume2 size={16} />
-                Play Eve voice
+                Play Saya voice
               </button>
             </div>
           )}
@@ -3086,7 +3065,7 @@ if (isIosDevice()) {
                     sendMessage();
                   }
                 }}
-                placeholder={listening ? 'Speak your command...' : 'Ask me anything or tap Hey Eve...'}
+                placeholder={listening ? 'Speak your command...' : 'Ask me anything or tap Hey Saya...'}
                 rows={3}
               />
 
@@ -3107,7 +3086,7 @@ if (isIosDevice()) {
                   disabled={loading}
                 >
                   <Volume2 size={16} />
-                  Hey Eve
+                  Hey Saya
                 </button>
 
                 <button
@@ -3130,7 +3109,7 @@ if (isIosDevice()) {
             </div>
 
             <div className="ai-assistant-footer">
-              <span>{autoWakeActive ? 'Eve is active in this browser session' : 'Click once to activate Eve voice'}</span>
+              <span>{autoWakeActive ? 'Saya is active in this browser session' : 'Click once to activate Saya voice'}</span>
               <span>Enter to send</span>
             </div>
           </div>
@@ -4016,3 +3995,5 @@ if (isIosDevice()) {
     </>
   );
 }
+
+

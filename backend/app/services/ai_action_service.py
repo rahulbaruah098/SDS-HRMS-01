@@ -313,7 +313,7 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
     return db[ACTION_COLLECTION].find_one({"_id": inserted.inserted_id})
 
 def detect_action_intent(question):
-    text = _lower(question)
+    text = _strip_assistant_wake_words(_normalize_option_text(_strip_voice_instruction_suffix(question)))
 
     # These are information questions, not action-start commands.
     # Example: "How to apply leave?" should explain workflow,
@@ -3058,7 +3058,7 @@ def _apply_leave_continue(pending, question, user_context=None):
                         "I could not submit your leave request.\n\n"
                         f"Reason: {str(error)}\n\n"
                         "I have cleared this failed leave setup so Eve will not continue the old details.\n"
-                        "Please start again by saying: Hey Eve apply casual leave for tomorrow."
+                        "Please start again by saying: Hey Saya apply casual leave for tomorrow."
                     )
                 }
 
@@ -3602,19 +3602,78 @@ def _reminder_continue(pending, question, user_context=None):
 # AI Attendance Actions: Check-in / Check-out
 # ---------------------------------------------------------------------------
 
+def _strip_assistant_wake_words(value):
+    """
+    FILE_FOUR_SAYA_ACTION_WAKE_FIX
+    Removes Saya/Eve wake phrase if the backend receives the full voice text.
+    Example: "hey saya check in" -> "check in".
+    """
+    clean = str(value or "").strip().lower()
+
+    if not clean:
+        return ""
+
+    wake_phrases = [
+        "hey saya",
+        "hi saya",
+        "hello saya",
+        "okay saya",
+        "ok saya",
+        "saya",
+        "saaya",
+        "saiya",
+        "saiyaa",
+        "sayaa",
+        "say a",
+        "sayaah",
+        "saiyaah",
+        "hey saaya",
+        "hi saaya",
+        "hello saaya",
+        "hey saiya",
+        "hi saiya",
+        "hello saiya",
+        "hey sayaa",
+        "hi sayaa",
+        "hello sayaa",
+
+        # Temporary legacy Eve support.
+        "hey eve",
+        "hi eve",
+        "hello eve",
+        "okay eve",
+        "ok eve",
+        "eve",
+        "evie",
+        "eevee",
+    ]
+
+    for phrase in sorted(wake_phrases, key=len, reverse=True):
+        if clean == phrase:
+            return ""
+
+        prefix = f"{phrase} "
+
+        if clean.startswith(prefix):
+            return clean[len(prefix):].strip()
+
+    return clean
+
+
 def _detect_attendance_action_intent(question):
     """
-    Detects Eve attendance commands before the normal AI knowledge fallback.
+    Detects Saya attendance commands before the normal AI knowledge fallback.
 
     Supported examples:
-    - Hey Eve check in
+    - Hey Saya check in
+    - Legacy supported temporarily: Hey Eve check in
     - Please punch in
     - Mark my attendance
     - Check out
     - Punch out
     """
 
-    clean = _normalize_option_text(_strip_voice_instruction_suffix(question))
+    clean = _strip_assistant_wake_words(_normalize_option_text(_strip_voice_instruction_suffix(question)))
 
     if not clean:
         return ""

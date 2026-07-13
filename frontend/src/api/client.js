@@ -4829,7 +4829,7 @@ export async function getAiAssistantVoiceContext() {
 
     return {
       success: Boolean(response?.success),
-      wake_word: String(response?.wake_word || "hey eve").trim().toLowerCase(),
+      wake_word: String(response?.wake_word || "hey saya").trim().toLowerCase(),
       employee_name: employeeName,
       name: employeeName,
       display_name: employeeName,
@@ -4869,7 +4869,7 @@ export async function getAiAssistantVoiceContext() {
 
     return {
       success: false,
-      wake_word: "hey eve",
+      wake_word: "hey saya",
       employee_name: employeeName,
       name: employeeName,
       display_name: employeeName,
@@ -4934,7 +4934,7 @@ export async function askAiAssistant(message, history = [], options = {}) {
         message: cleanMessage,
         history: safeHistory,
 
-        // Used by Eve AI attendance actions.
+        // Used by Saya AI attendance actions.
         // Backend can pass this into attendance check-in/check-out payload.
         client_context: {
           attendance_location: attendanceLocation,
@@ -5015,14 +5015,14 @@ export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
   const filename =
     options.filename ||
     (audioBlob.type && audioBlob.type.includes('wav')
-      ? 'eve-audio.wav'
+      ? 'saya-audio.wav'
       : audioBlob.type && audioBlob.type.includes('mp4')
-        ? 'eve-audio.mp4'
+        ? 'saya-audio.mp4'
         : audioBlob.type && audioBlob.type.includes('mpeg')
-          ? 'eve-audio.mp3'
+          ? 'saya-audio.mp3'
           : audioBlob.type && audioBlob.type.includes('ogg')
-            ? 'eve-audio.ogg'
-            : 'eve-audio.webm');
+            ? 'saya-audio.ogg'
+            : 'saya-audio.webm');
 
   formData.append('audio', audioBlob, filename);
 
@@ -5073,7 +5073,7 @@ export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
   }
 
   if (response.status === 403) {
-    throw new Error('You do not have permission to use Eve voice.');
+    throw new Error('You do not have permission to use Saya voice.');
   }
 
   if (!response.ok || !data?.success) {
@@ -5103,7 +5103,7 @@ export async function speakAiAssistantText(text, options = {}) {
   const cleanText = String(text || '').trim();
 
   if (!cleanText) {
-    throw new Error('Text is required for Eve voice.');
+    throw new Error('Text is required for Saya voice.');
   }
 
   const requestedVoice = String(options.voice || '').trim();
@@ -5151,7 +5151,7 @@ export async function speakAiAssistantText(text, options = {}) {
   }
 
   if (response.status === 403) {
-    throw new Error('You do not have permission to use Eve voice.');
+    throw new Error('You do not have permission to use Saya voice.');
   }
 
   if (!response.ok) {
@@ -5186,7 +5186,11 @@ export async function speakAiAssistantText(text, options = {}) {
   }
 
   const audioUrl = URL.createObjectURL(audioBlob);
-  const provider = response.headers.get('X-AI-Provider') || response.headers.get('X-Eve-Provider') || 'sarvam';
+  const provider =
+  response.headers.get('X-AI-Provider') ||
+  response.headers.get('X-Saya-Provider') ||
+  response.headers.get('X-Eve-Provider') ||
+  'sarvam';
 
   return {
     success: true,
@@ -5196,6 +5200,10 @@ export async function speakAiAssistantText(text, options = {}) {
     audio_url: audioUrl,
     url: audioUrl,
     mime_type: audioBlob.type || response.headers.get('content-type') || 'audio/mpeg',
-    voice: response.headers.get('X-Eve-Voice') || sarvamVoice,
+    voice:
+  response.headers.get('X-Saya-Voice') ||
+  response.headers.get('X-Eve-Voice') ||
+  sarvamVoice,
   };
 }
+
