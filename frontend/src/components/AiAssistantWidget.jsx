@@ -1214,10 +1214,12 @@ export default function AiAssistantWidget() {
       finishSpeech();
     }, safetyMs);
 
-        if (isIosDevice()) {
-      // FILE_TWELVE_IOS_NATIVE_SPEECH_ONLY_FIX
-      // Root cause: iPhone browser often blocks generated audio/autoplay after async AI calls.
-      // For iPhone web, use native speechSynthesis after the user taps Saya/mic.
+            if (isMobileBrowser()) {
+      // FILE_THIRTEEN_MOBILE_NATIVE_SPEECH_NO_TTS_ENDPOINT_FIX
+      // Root cause confirmed from AWS logs:
+      // /transcribe returns 200 and /chat returns 200, but /speak returns 429 quota.
+      // Therefore mobile must not depend on generated TTS endpoint.
+      // Use native browser speech directly on Android/iPhone mobile.
       setVoiceHint("Saya is speaking...");
 
       try {
@@ -1907,7 +1909,13 @@ export default function AiAssistantWidget() {
 
       if (options?.voiceInput) {
         setSiriStatus(answer);
-        setManualChatOpen(false);
+
+        if (isMobileBrowser()) {
+          setManualChatOpen(true);
+          setOpen(true);
+        } else {
+          setManualChatOpen(false);
+        }
       }
 
       setMessages((prev) => [
@@ -1957,7 +1965,13 @@ export default function AiAssistantWidget() {
 
       if (options?.voiceInput) {
         setSiriStatus(errorMessage);
-        setManualChatOpen(false);
+
+        if (isMobileBrowser()) {
+          setManualChatOpen(true);
+          setOpen(true);
+        } else {
+          setManualChatOpen(false);
+        }
       }
 
       setMessages((prev) => [
