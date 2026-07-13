@@ -995,10 +995,25 @@ export default function AiAssistantWidget() {
 
     setManualChatOpen(false);
     setVoiceHint(
-      `Voice service quota is cooling down. Try Saya voice again in ${remainingSeconds} seconds. You can still type manually.`
+      `Voice understanding quota is cooling down. Try Saya voice again in ${remainingSeconds} seconds. You can still type manually.`
     );
 
     return true;
+  }
+
+  function handleTtsQuotaFallback(cleanText, finishSpeech) {
+    // FILE_TEN_TTS_QUOTA_FALLBACK_FIX
+    // TTS quota failure should not disable the whole voice assistant.
+    // Only generated Saya voice failed; microphone/STT can still continue.
+    setVoiceError("");
+    setManualChatOpen(false);
+    setVoiceHint("Generated Saya voice quota reached. Using browser voice temporarily.");
+
+    try {
+      speakText(cleanText, finishSpeech);
+    } catch {
+      finishSpeech();
+    }
   }
 
   function pauseVoiceForQuota(error, source = "voice") {
@@ -1031,7 +1046,7 @@ export default function AiAssistantWidget() {
     setManualChatOpen(false);
     setVoiceError("");
     setVoiceHint(
-      `Voice service ${source} quota reached. Saya voice is paused for ${retrySeconds} seconds. You can still type manually.`
+      `Voice understanding ${source} quota reached. Saya voice is paused for ${retrySeconds} seconds. You can still type manually.`
     );
   }
 
@@ -1136,7 +1151,7 @@ export default function AiAssistantWidget() {
     const cleanText = String(text || "").trim();
 
     if (Date.now() < voiceQuotaDisabledUntilRef.current) {
-      setVoiceHint("Voice service quota is cooling down. You can still type manually.");
+      setVoiceHint("Voice understanding quota is cooling down. You can still type manually.");
       setManualChatOpen(false);
 
       if (typeof onEnd === "function") {
@@ -1231,12 +1246,7 @@ export default function AiAssistantWidget() {
       })
       .catch((error) => {
         if (isVoiceQuotaError(error)) {
-          pauseVoiceForQuota(error, "TTS");
-
-          if (typeof onEnd === "function") {
-            onEnd();
-          }
-
+          handleTtsQuotaFallback(cleanText, finishSpeech);
           return;
         }
 
@@ -2593,6 +2603,30 @@ export default function AiAssistantWidget() {
     }, delay);
   }
 
+  async function ensureMobileVoiceStream() {
+    // FILE_ELEVEN_MOBILE_STT_STREAM_FIX
+    // Mobile browsers can fail the visual voice meter but still allow direct recording.
+    // Do not leave the UI stuck on Listening if no stream exists.
+    if (audioStreamRef.current) {
+      return audioStreamRef.current;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Microphone recording is not available in this browser.");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    audioStreamRef.current = stream;
+    return stream;
+  }
+
   async function startGeminiVoiceLoop() {
     if (!geminiLoopActiveRef.current) return;
     if (!autoWakeModeRef.current) return;
@@ -2614,9 +2648,34 @@ export default function AiAssistantWidget() {
 
     await startVoiceMeter();
 
-    const stream = audioStreamRef.current;
+    let stream = audioStreamRef.current;
 
     if (!stream) {
+      try {
+        stream = await ensureMobileVoiceStream();
+      } catch (error) {
+        const message =
+          error?.message ||
+          "Microphone permission is required. Please allow microphone access and tap Saya again.";
+
+        setVoiceError(message);
+        setVoiceHint(message);
+        setSiriStatus(message);
+        setListening(false);
+        listeningRef.current = false;
+        geminiLoopActiveRef.current = false;
+        return;
+      }
+    }
+
+    if (!stream) {
+      const message = "Microphone could not start. Please allow microphone access and tap Saya again.";
+      setVoiceError(message);
+      setVoiceHint(message);
+      setSiriStatus(message);
+      setListening(false);
+      listeningRef.current = false;
+      geminiLoopActiveRef.current = false;
       return;
     }
 
@@ -2680,6 +2739,9 @@ export default function AiAssistantWidget() {
         }
       };
 
+      setVoiceHint("Listening... speak now.");
+      setSiriStatus("Listening... speak now.");
+
       recorder.start();
 
       const mobileChunkMs = getMobileVoiceChunkMs();
@@ -2698,19 +2760,39 @@ export default function AiAssistantWidget() {
           mediaRecorderRef.current = null;
         }
       }, chunkMs);
-    } catch {
+    } catch (error) {
       mediaRecorderRef.current = null;
       setListening(false);
       listeningRef.current = false;
 
-      if (pendingAttendanceActionRef.current || voiceConversationModeRef.current) {
+      const message =
+        error?.message ||
+        "Mobile voice recording could not start. Please allow microphone access and try again.";
+
+      setVoiceError(message);
+      setVoiceHint(message);
+      setSiriStatus(message);
+
+      if (
+        pendingAttendanceActionRef.current ||
+        voiceConversationModeRef.current ||
+        oneShotVoiceModeRef.current ||
+        autoWakeModeRef.current
+      ) {
         scheduleGeminiVoiceLoop(1200);
       }
     }
   }
 
   async function transcribeGeminiAudioBlob(audioBlob) {
-    if (!audioBlob || audioBlob.size < 1000) return;
+    if (!audioBlob || audioBlob.size < 1000) {
+      const message = "I could not capture your voice clearly. Tap Saya again and speak closer to the phone.";
+      setVoiceHint(message);
+      setSiriStatus(message);
+      setListening(false);
+      listeningRef.current = false;
+      return;
+    }
     if (isSpeakingRef.current || loadingRef.current) return;
     if (Date.now() < voiceQuotaDisabledUntilRef.current) return;
 
