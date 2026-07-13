@@ -1258,47 +1258,40 @@ export default function AiAssistantWidget() {
     }, safetyMs);
 
             if (isMobileBrowser()) {
-      // FILE_THIRTEEN_MOBILE_NATIVE_SPEECH_NO_TTS_ENDPOINT_FIX
-      // Root cause confirmed from AWS logs:
-      // /transcribe returns 200 and /chat returns 200, but /speak returns 429 quota.
-      // Therefore mobile must not depend on generated TTS endpoint.
-      // Use native browser speech directly on Android/iPhone mobile.
+      // FILE_TWENTY_MOBILE_GENERATED_TTS_RESTORE_FIX
+      // Backend /api/v1/ai-assistant/speak is now fixed and returns 200 with Gemini TTS.
+      // Mobile browser speechSynthesis was silent on Android/iPhone, so restore generated Saya voice for mobile.
       lastSpeakableAnswerRef.current = cleanText;
       setMobileReplayText("");
-      // FILE_FIFTEEN_MOBILE_AUTO_TALKBACK_AUDIO_FOCUS_FIX
-      // Release microphone/audio focus before speaking.
-      // On mobile browsers, keeping the mic stream active can stop audible talk-back.
+
       stopGeminiRecording({ stopLoop: false });
       stopVoiceMeter();
       setListening(false);
       listeningRef.current = false;
+      setVoiceHint("Generating Saya voice...");
 
-      setVoiceHint("Saya is speaking...");
+      speakAiAssistantText(cleanText, {
+        voice: options.voice || "Kore",
+        timeoutMs: 30000,
+      })
+        .then((voiceResponse) => {
+          const audioUrl = voiceResponse?.audio_url || voiceResponse?.url;
 
-      try {
-        window.speechSynthesis?.cancel?.();
-        window.speechSynthesis?.resume?.();
-      } catch {
-        // ignore
-      }
+          if (!audioUrl) {
+            setVoiceHint("Saya is speaking...");
+            speakText(cleanText, finishSpeech);
+            return;
+          }
 
-      const speakMobileAnswer = () => {
-        try {
-          window.speechSynthesis?.cancel?.();
-          window.speechSynthesis?.resume?.();
-        } catch {
-          // ignore
-        }
-
-        speakText(cleanText, finishSpeech);
-      };
-
-      if (mobileSpeechUnlockedRef.current) {
-        setTimeout(speakMobileAnswer, 220);
-      } else {
-        primeMobileSpeechSynthesis();
-        setTimeout(speakMobileAnswer, 420);
-      }
+          setVoiceHint("Saya is speaking...");
+          playGeneratedVoice(audioUrl, finishSpeech, {
+            allowManualIosPlay: false,
+          });
+        })
+        .catch(() => {
+          setVoiceHint("Saya is speaking...");
+          speakText(cleanText, finishSpeech);
+        });
 
       return;
     }
