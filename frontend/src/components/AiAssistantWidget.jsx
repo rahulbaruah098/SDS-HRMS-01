@@ -334,6 +334,51 @@ function stripWakeWord(text) {
   return cleaned.replace(/\s+/g, " ").trim();
 }
 
+function isLikelyMisheardSayaWakeOnly(value) {
+  // FILE_NINE_SAYA_WAKE_GREETING_FIX
+  // Mobile STT sometimes hears "Hey Saya" as "thank you" or similar.
+  // Treat these as wake-only only inside active voice mode / just after mic tap.
+  const text = normalizeVoiceText(value);
+
+  if (!text) return false;
+
+  const wakeOnlyMatches = [
+    "thank you",
+    "thankyou",
+    "thank u",
+    "thanks you",
+    "saya",
+    "saaya",
+    "saiya",
+    "sayaa",
+    "shaya",
+    "zaya",
+    "hey saya",
+    "hi saya",
+    "hello saya",
+    "he saya",
+    "hai saya",
+    "hii saya",
+    "hey saaya",
+    "hi saaya",
+    "hey saiya",
+    "hi saiya",
+    "hey sayaa",
+    "hi sayaa",
+    "hey shaya",
+    "hi shaya",
+    "hey zaya",
+    "hi zaya",
+  ];
+
+  if (wakeOnlyMatches.includes(text)) {
+    return true;
+  }
+
+  return /^(hey|hi|hello|ok|okay)\s+(saya|saaya|saiya|sayaa|shaya|zaya)$/.test(text);
+}
+
+
 function getTimeGreeting() {
   const hour = new Date().getHours();
 
@@ -1049,7 +1094,9 @@ export default function AiAssistantWidget() {
 
     const shouldListenForOneReply =
       Boolean(pendingAttendanceActionRef.current) ||
-      Boolean(voiceConversationModeRef.current);
+      Boolean(voiceConversationModeRef.current) ||
+      Boolean(oneShotVoiceModeRef.current) ||
+      Boolean(autoWakeModeRef.current);
 
     // FINAL_ANDROID_SAYA_WAKE_LOOP_FIX
     // Android/desktop can keep restarting short recognition sessions for wake-word listening.
@@ -1067,7 +1114,9 @@ export default function AiAssistantWidget() {
 
       const stillNeedsOneReply =
         Boolean(pendingAttendanceActionRef.current) ||
-        Boolean(voiceConversationModeRef.current);
+        Boolean(voiceConversationModeRef.current) ||
+        Boolean(oneShotVoiceModeRef.current) ||
+        Boolean(autoWakeModeRef.current);
 
       const stillNeedsWakeWord = Boolean(autoWakeModeRef.current) && !isIosDevice();
 
@@ -1288,7 +1337,6 @@ export default function AiAssistantWidget() {
 
     const context = await refreshVoiceContextIfNeeded();
     const wakeWord = context?.wake_word || DEFAULT_WAKE_WORD;
-    const hasWakeWord = transcriptHasWakeWord(transcript, wakeWord);
 
     const recentlyActivatedByClick =
       Date.now() - lastVoiceActivationAtRef.current < 12000;
@@ -1298,6 +1346,13 @@ export default function AiAssistantWidget() {
       Boolean(voiceConversationModeRef.current) ||
       Boolean(oneShotVoiceModeRef.current) ||
       Boolean(autoWakeModeRef.current);
+
+    const likelyMisheardSayaWakeOnly =
+      (recentlyActivatedByClick || waitingForOneVoiceReply || autoWakeModeRef.current) &&
+      isLikelyMisheardSayaWakeOnly(transcript);
+
+    const hasWakeWord =
+      transcriptHasWakeWord(transcript, wakeWord) || likelyMisheardSayaWakeOnly;
 
     if (!hasWakeWord && !waitingForOneVoiceReply && !recentlyActivatedByClick) {
       setMessage("");
@@ -1315,7 +1370,9 @@ export default function AiAssistantWidget() {
     setLastVoiceTranscript(transcript);
 
     const greeting = buildWakeGreeting(context);
-    const commandText = hasWakeWord ? stripWakeWord(transcript) : transcript;
+    const commandText = likelyMisheardSayaWakeOnly
+      ? ""
+      : (hasWakeWord ? stripWakeWord(transcript) : transcript);
 
     if (hasWakeWord) {
       voiceConversationModeRef.current = true;
@@ -1326,10 +1383,15 @@ export default function AiAssistantWidget() {
       setMessage("");
       setLastVoiceTranscript("");
       setSiriStatus(greeting);
-      setVoiceHint("Saya is active. Speak your HRMS command now.");
-      // FINAL_NO_EMPTY_WAKE_GREETING_AUDIO_FIX
-      // Keep listening instead of trying to speak a greeting on iPhone/mobile.
-      scheduleListeningRestart(250);
+      setVoiceHint("Saya is greeting...");
+      appendWakeGreeting(greeting, "Hey Saya");
+
+      stopRecognition({ suppressRestart: true });
+
+      speakAssistantText(greeting, {
+        restartAfterSpeech: true,
+      });
+
       return;
     }
 
@@ -2609,7 +2671,9 @@ export default function AiAssistantWidget() {
 
         const shouldContinueForOneReply =
           Boolean(pendingAttendanceActionRef.current) ||
-          Boolean(voiceConversationModeRef.current);
+          Boolean(voiceConversationModeRef.current) ||
+          Boolean(oneShotVoiceModeRef.current) ||
+          Boolean(autoWakeModeRef.current);
 
         if (shouldProcess && shouldContinueForOneReply && !isSpeakingRef.current && !loadingRef.current) {
           scheduleGeminiVoiceLoop(500);
