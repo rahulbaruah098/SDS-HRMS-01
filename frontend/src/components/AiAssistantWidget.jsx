@@ -1263,7 +1263,15 @@ export default function AiAssistantWidget() {
       // Therefore mobile must not depend on generated TTS endpoint.
       // Use native browser speech directly on Android/iPhone mobile.
       lastSpeakableAnswerRef.current = cleanText;
-      setMobileReplayText(cleanText);
+      setMobileReplayText("");
+      // FILE_FIFTEEN_MOBILE_AUTO_TALKBACK_AUDIO_FOCUS_FIX
+      // Release microphone/audio focus before speaking.
+      // On mobile browsers, keeping the mic stream active can stop audible talk-back.
+      stopGeminiRecording({ stopLoop: false });
+      stopVoiceMeter();
+      setListening(false);
+      listeningRef.current = false;
+
       setVoiceHint("Saya is speaking...");
 
       try {
@@ -3263,7 +3271,7 @@ export default function AiAssistantWidget() {
                 onClick={replayLastSayaVoice}
               >
                 <Volume2 size={16} />
-                Play Saya voice
+                
               </button>
             </div>
           )}
@@ -3276,7 +3284,7 @@ export default function AiAssistantWidget() {
                 onClick={playPendingIosVoice}
               >
                 <Volume2 size={16} />
-                Play Saya voice
+                
               </button>
             </div>
           )}
