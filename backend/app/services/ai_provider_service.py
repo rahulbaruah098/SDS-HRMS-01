@@ -967,7 +967,27 @@ def _gemini_text_to_speech(
         clean_text = clean_text[:max_chars].rsplit(" ", 1)[0].strip() or clean_text[:max_chars]
 
     api_base = _env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-    model = _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+
+    # FILE_EIGHTEEN_GEMINI_TTS_MODEL_FALLBACK_FIX
+    # Some API keys may not have access to the newest TTS model yet.
+    # Try the configured model first, then fallback to documented Gemini TTS preview models.
+    primary_model = _env("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+    fallback_models_raw = _env(
+        "GEMINI_TTS_MODEL_FALLBACKS",
+        "gemini-2.5-flash-preview-tts,gemini-2.5-pro-preview-tts"
+    )
+
+    model_candidates = []
+
+    for candidate in [primary_model, *str(fallback_models_raw or "").split(",")]:
+        candidate = str(candidate or "").strip()
+
+        if candidate and candidate not in model_candidates:
+            model_candidates.append(candidate)
+
+    if not model_candidates:
+        model_candidates = ["gemini-2.5-flash-preview-tts"]
+
     request_timeout = timeout or _env_int("AI_TTS_TIMEOUT_SECONDS", 45)
     selected_voice = str(voice or _env("GEMINI_TTS_VOICE", "Kore") or "Kore").strip()
 
@@ -1002,31 +1022,55 @@ def _gemini_text_to_speech(
         },
     }
 
-    response = requests.post(
-        f"{api_base}/models/{model}:generateContent",
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        },
-        json=payload,
-        timeout=request_timeout,
-    )
+    last_response = None
+    last_model = ""
 
-    if not response.ok:
-        _raise_provider_error("gemini", response, "Gemini text-to-speech failed.")
-
-    data = _json_response(response, "gemini")
-    audio_bytes, mime_type = _extract_gemini_tts_audio(data)
-
-    if not audio_bytes:
-        raise AiProviderError(
-            "Gemini returned no TTS audio.",
-            provider="gemini",
-            status_code=502,
-            details=_safe_str(data)[:1000],
+    for model in model_candidates:
+        response = requests.post(
+            f"{api_base}/models/{model}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json=payload,
+            timeout=request_timeout,
         )
 
-    return _gemini_audio_response_bytes(audio_bytes, mime_type)
+        if not response.ok:
+            last_response = response
+            last_model = model
+
+            # 400/403/404 usually means this key/model combination is not available.
+            # Continue to the fallback TTS model instead of failing immediately.
+            if response.status_code in {400, 403, 404}:
+                continue
+
+            _raise_provider_error("gemini", response, f"Gemini text-to-speech failed using model {model}.")
+
+        data = _json_response(response, "gemini")
+        audio_bytes, mime_type = _extract_gemini_tts_audio(data)
+
+        if not audio_bytes:
+            last_model = model
+            continue
+
+        return _gemini_audio_response_bytes(audio_bytes, mime_type)
+
+    if last_response is not None:
+        _raise_provider_error(
+            "gemini",
+            last_response,
+            "Gemini text-to-speech failed for all configured models: "
+            + ", ".join(model_candidates)
+            + f". Last attempted model: {last_model}.",
+        )
+
+    raise AiProviderError(
+        "Gemini returned no TTS audio for any configured model.",
+        provider="gemini",
+        status_code=502,
+        details=", ".join(model_candidates),
+    )
 
 
 def synthesize_ai_speech(
@@ -1101,7 +1145,8 @@ def ai_provider_status() -> Dict[str, Any]:
         "groq_model": _env("GROQ_CHAT_MODEL", "openai/gpt-oss-20b"),
         "deepgram_model": _env("DEEPGRAM_STT_MODEL", "nova-2"),
         "sarvam_tts_model": _env("SARVAM_TTS_MODEL", "bulbul:v3"),
-        "gemini_tts_model": _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+        "gemini_tts_model": _env("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
+        "gemini_tts_model_fallbacks": _env("GEMINI_TTS_MODEL_FALLBACKS", "gemini-2.5-flash-preview-tts,gemini-2.5-pro-preview-tts"),
     }
 
 
