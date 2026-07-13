@@ -725,6 +725,9 @@ export default function AiAssistantWidget() {
   const iosAudioUnlockedRef = useRef(false);
   const lastSpeakableAnswerRef = useRef("");
   const mobileSpeechUnlockedRef = useRef(false);
+  const lastMobileGeneratedTtsTextRef = useRef("");
+  const lastMobileGeneratedTtsAtRef = useRef(0);
+  const lastWakeGreetingTtsAtRef = useRef(0);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -1190,6 +1193,30 @@ export default function AiAssistantWidget() {
     }, delay);
   }
 
+  function shouldSkipDuplicateMobileGeneratedTts(value) {
+    // FILE_TWENTY_ONE_MOBILE_TTS_DUPLICATE_GUARD_FIX
+    // AWS logs showed mobile /speak returning 200 first, then repeated 429.
+    // That means generated TTS works, but duplicate/repeated calls are exhausting rate limits.
+    if (!isMobileBrowser()) return false;
+
+    const key = normalizeVoiceText(value).slice(0, 260);
+    const now = Date.now();
+
+    if (!key) return false;
+
+    if (
+      lastMobileGeneratedTtsTextRef.current === key &&
+      now - lastMobileGeneratedTtsAtRef.current < 25000
+    ) {
+      return true;
+    }
+
+    lastMobileGeneratedTtsTextRef.current = key;
+    lastMobileGeneratedTtsAtRef.current = now;
+
+    return false;
+  }
+
   function speakAssistantText(text, options = {}) {
     const { restartAfterSpeech = true, onEnd } = options;
     const cleanText = String(text || "").trim();
@@ -1270,6 +1297,12 @@ export default function AiAssistantWidget() {
       listeningRef.current = false;
       setVoiceHint("Generating Saya voice...");
 
+      if (shouldSkipDuplicateMobileGeneratedTts(cleanText)) {
+        setVoiceHint("");
+        finishSpeech();
+        return;
+      }
+
       speakAiAssistantText(cleanText, {
         voice: options.voice || "Kore",
         timeoutMs: 30000,
@@ -1288,7 +1321,12 @@ export default function AiAssistantWidget() {
             allowManualIosPlay: false,
           });
         })
-        .catch(() => {
+        .catch((error) => {
+          if (isVoiceQuotaError(error)) {
+            pauseVoiceForQuota(error, "TTS");
+            return;
+          }
+
           setVoiceHint("Saya is speaking...");
           speakText(cleanText, finishSpeech);
         });
@@ -1506,6 +1544,16 @@ export default function AiAssistantWidget() {
       appendWakeGreeting(greeting, "Hey Saya");
 
       stopRecognition({ suppressRestart: true });
+
+      const wakeGreetingNow = Date.now();
+
+      if (wakeGreetingNow - lastWakeGreetingTtsAtRef.current < 25000) {
+        setVoiceHint("Saya is already active. Speak your command.");
+        scheduleListeningRestart(700);
+        return;
+      }
+
+      lastWakeGreetingTtsAtRef.current = wakeGreetingNow;
 
       speakAssistantText(greeting, {
         restartAfterSpeech: true,
