@@ -96,10 +96,11 @@ function isMobileSafari() {
 function supportsReliableBrowserSpeechRecognition() {
   if (typeof window === "undefined") return false;
 
-  // FINAL_ANDROID_WAKE_WORD_FIX
-  // Android Chrome supports SpeechRecognition more reliably than iPhone.
-  // Keep iPhone on one-tap voice mode, but allow Android/web wake-word recognition.
-  if (isIosDevice()) return false;
+  // FILE_TWELVE_FORCE_MOBILE_BACKEND_STT_FIX
+  // Root cause: Android Chrome SpeechRecognition can turn the mic on/off
+  // without returning a final transcript. So mobile must use MediaRecorder
+  // + backend STT instead. Keep browser SpeechRecognition only for desktop.
+  if (isMobileBrowser()) return false;
 
   return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
@@ -1213,10 +1214,10 @@ export default function AiAssistantWidget() {
       finishSpeech();
     }, safetyMs);
 
-    if (isIosDevice()) {
-      // FINAL_IPHONE_SAYA_NATIVE_TALKBACK_FIX
-      // Do not use generated audio on iPhone browser. Safari/Chrome on iOS often block it after async AI replies.
-      // Native speechSynthesis is the reliable automatic talk-back path after the user taps Saya/mic once.
+        if (isIosDevice()) {
+      // FILE_TWELVE_IOS_NATIVE_SPEECH_ONLY_FIX
+      // Root cause: iPhone browser often blocks generated audio/autoplay after async AI calls.
+      // For iPhone web, use native speechSynthesis after the user taps Saya/mic.
       setVoiceHint("Saya is speaking...");
 
       try {
