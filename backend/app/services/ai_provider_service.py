@@ -1,8 +1,10 @@
 import base64
 import json
+import io
 import os
 import re
 import time
+import wave
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -856,6 +858,177 @@ def _sarvam_text_to_speech(
     return audio_bytes, mime_type
 
 
+
+def _pcm_to_wav_bytes(pcm_bytes: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
+    buffer = io.BytesIO()
+
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(rate)
+        wav_file.writeframes(pcm_bytes)
+
+    return buffer.getvalue()
+
+
+def _extract_gemini_tts_audio(data: Dict[str, Any]) -> Tuple[bytes, str]:
+    candidates = data.get("candidates") or []
+
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+
+        for part in parts:
+            inline_data = (
+                part.get("inlineData")
+                or part.get("inline_data")
+                or {}
+            )
+
+            audio_b64 = inline_data.get("data")
+
+            if not audio_b64:
+                continue
+
+            mime_type = (
+                inline_data.get("mimeType")
+                or inline_data.get("mime_type")
+                or "audio/L16;codec=pcm;rate=24000"
+            )
+
+            try:
+                return base64.b64decode(audio_b64), str(mime_type)
+            except Exception as exc:
+                raise AiProviderError(
+                    "Gemini TTS returned invalid base64 audio.",
+                    provider="gemini",
+                    status_code=502,
+                    details=_safe_str(data)[:1000],
+                ) from exc
+
+    return b"", ""
+
+
+def _gemini_audio_response_bytes(audio_bytes: bytes, mime_type: str) -> Tuple[bytes, str]:
+    mime = str(mime_type or "").lower()
+
+    if not audio_bytes:
+        return b"", "audio/wav"
+
+    if "wav" in mime or "wave" in mime:
+        return audio_bytes, "audio/wav"
+
+    if "mpeg" in mime or "mp3" in mime:
+        return audio_bytes, "audio/mpeg"
+
+    if "ogg" in mime:
+        return audio_bytes, "audio/ogg"
+
+    rate = 24000
+    rate_match = re.search(r"rate=([0-9]+)", mime)
+
+    if rate_match:
+        try:
+            rate = int(rate_match.group(1))
+        except Exception:
+            rate = 24000
+
+    # Gemini TTS usually returns raw PCM/L16 audio.
+    # Browsers need a playable WAV container.
+    return _pcm_to_wav_bytes(audio_bytes, channels=1, rate=rate, sample_width=2), "audio/wav"
+
+
+def _gemini_text_to_speech(
+    text: str,
+    voice: str = "",
+    language_code: str = "",
+    timeout: Optional[int] = None,
+) -> Tuple[bytes, str]:
+    # FILE_SEVENTEEN_GEMINI_TTS_PROVIDER_FIX
+    # Adds real Gemini TTS support. Earlier synthesize_ai_speech only supported Sarvam,
+    # so AI_TTS_PROVIDER=gemini always returned 500.
+    api_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY") or _env("GOOGLE_GEMINI_API_KEY")
+
+    if not api_key:
+        raise AiProviderError(
+            "GEMINI_API_KEY is missing in backend/.env.",
+            provider="gemini",
+            status_code=500,
+        )
+
+    clean_text = str(text or "").strip()
+
+    if not clean_text:
+        return b"", "audio/wav"
+
+    max_chars = _env_int("GEMINI_TTS_MAX_CHARS", 1800)
+
+    if len(clean_text) > max_chars:
+        clean_text = clean_text[:max_chars].rsplit(" ", 1)[0].strip() or clean_text[:max_chars]
+
+    api_base = _env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    model = _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+    request_timeout = timeout or _env_int("AI_TTS_TIMEOUT_SECONDS", 45)
+    selected_voice = str(voice or _env("GEMINI_TTS_VOICE", "Kore") or "Kore").strip()
+
+    if not re.match(r"^[A-Za-z0-9_-]{2,40}$", selected_voice):
+        selected_voice = "Kore"
+
+    prompt = (
+        "Speak naturally in clear Indian English as Saya, a warm SDS HRMS assistant. "
+        "Use a calm professional tone. Pronounce HRMS, SDS, CL, EL, WFH, leave and attendance clearly. "
+        f"{clean_text}"
+    )
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": selected_voice,
+                    }
+                }
+            },
+        },
+    }
+
+    response = requests.post(
+        f"{api_base}/models/{model}:generateContent",
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+        json=payload,
+        timeout=request_timeout,
+    )
+
+    if not response.ok:
+        _raise_provider_error("gemini", response, "Gemini text-to-speech failed.")
+
+    data = _json_response(response, "gemini")
+    audio_bytes, mime_type = _extract_gemini_tts_audio(data)
+
+    if not audio_bytes:
+        raise AiProviderError(
+            "Gemini returned no TTS audio.",
+            provider="gemini",
+            status_code=502,
+            details=_safe_str(data)[:1000],
+        )
+
+    return _gemini_audio_response_bytes(audio_bytes, mime_type)
+
+
 def synthesize_ai_speech(
     text: str,
     voice: str = "",
@@ -876,27 +1049,43 @@ def synthesize_ai_speech(
             "reason": "empty_text",
         }
 
-    if provider != "sarvam":
-        raise AiProviderError(
-            f"Unsupported AI_TTS_PROVIDER: {provider}",
-            provider=provider,
-            status_code=500,
+    if provider == "sarvam":
+        audio_bytes, mime_type = _sarvam_text_to_speech(
+            text=text,
+            voice=voice,
+            language_code=language_code,
+            timeout=timeout,
         )
 
-    audio_bytes, mime_type = _sarvam_text_to_speech(
-        text=text,
-        voice=voice,
-        language_code=language_code,
-        timeout=timeout,
-    )
+        return {
+            "success": True,
+            "provider": "sarvam",
+            "audio_bytes": audio_bytes,
+            "mime_type": mime_type,
+            "latency_ms": int((time.time() - started_at) * 1000),
+        }
 
-    return {
-        "success": True,
-        "provider": "sarvam",
-        "audio_bytes": audio_bytes,
-        "mime_type": mime_type,
-        "latency_ms": int((time.time() - started_at) * 1000),
-    }
+    if provider == "gemini":
+        audio_bytes, mime_type = _gemini_text_to_speech(
+            text=text,
+            voice=voice,
+            language_code=language_code,
+            timeout=timeout,
+        )
+
+        return {
+            "success": True,
+            "provider": "gemini",
+            "audio_bytes": audio_bytes,
+            "mime_type": mime_type,
+            "latency_ms": int((time.time() - started_at) * 1000),
+        }
+
+    raise AiProviderError(
+        f"Unsupported AI_TTS_PROVIDER: {provider}",
+        provider=provider,
+        status_code=500,
+    )
 
 
 def ai_provider_status() -> Dict[str, Any]:
@@ -912,6 +1101,7 @@ def ai_provider_status() -> Dict[str, Any]:
         "groq_model": _env("GROQ_CHAT_MODEL", "openai/gpt-oss-20b"),
         "deepgram_model": _env("DEEPGRAM_STT_MODEL", "nova-2"),
         "sarvam_tts_model": _env("SARVAM_TTS_MODEL", "bulbul:v3"),
+        "gemini_tts_model": _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
     }
 
 
