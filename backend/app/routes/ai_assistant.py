@@ -2,6 +2,7 @@ import base64
 import io
 import mimetypes
 import os
+import hashlib
 import re
 import wave
 from datetime import datetime
@@ -1064,6 +1065,102 @@ def transcribe_voice():
         }), 500
 
 
+
+def _tts_cache_dir():
+    # FILE_TWENTY_TWO_TTS_AUDIO_CACHE_FIX
+    # Cache generated Saya voice audio to reduce repeated Gemini/Sarvam TTS quota usage.
+    base_dir = os.getenv("AI_TTS_CACHE_DIR") or os.path.join(os.getcwd(), "instance", "ai_tts_cache")
+
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    return base_dir
+
+
+def _tts_cache_key(text, provider, voice, model):
+    raw = "|".join([
+        str(provider or ""),
+        str(voice or ""),
+        str(model or ""),
+        str(text or "").strip(),
+    ])
+
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _tts_cache_paths(cache_key, mime_type="audio/wav"):
+    extension = "wav"
+
+    mime = str(mime_type or "").lower()
+
+    if "mpeg" in mime or "mp3" in mime:
+        extension = "mp3"
+    elif "ogg" in mime:
+        extension = "ogg"
+    elif "webm" in mime:
+        extension = "webm"
+
+    cache_dir = _tts_cache_dir()
+
+    return (
+        os.path.join(cache_dir, f"{cache_key}.{extension}"),
+        os.path.join(cache_dir, f"{cache_key}.meta"),
+        extension,
+    )
+
+
+def _read_tts_cache(cache_key):
+    cache_dir = _tts_cache_dir()
+
+    try:
+        for file_name in os.listdir(cache_dir):
+            if not file_name.startswith(cache_key + "."):
+                continue
+
+            if file_name.endswith(".meta"):
+                continue
+
+            audio_path = os.path.join(cache_dir, file_name)
+            meta_path = os.path.join(cache_dir, f"{cache_key}.meta")
+
+            if not os.path.isfile(audio_path):
+                continue
+
+            mime_type = "audio/wav"
+
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as meta_file:
+                        mime_type = (meta_file.read() or mime_type).strip() or mime_type
+                except Exception:
+                    pass
+
+            with open(audio_path, "rb") as audio_file:
+                return audio_file.read(), mime_type, file_name.rsplit(".", 1)[-1]
+    except Exception:
+        return None
+
+    return None
+
+
+def _write_tts_cache(cache_key, audio_bytes, mime_type):
+    if not audio_bytes:
+        return
+
+    try:
+        audio_path, meta_path, _extension = _tts_cache_paths(cache_key, mime_type)
+
+        with open(audio_path, "wb") as audio_file:
+            audio_file.write(audio_bytes)
+
+        with open(meta_path, "w", encoding="utf-8") as meta_file:
+            meta_file.write(str(mime_type or "audio/wav"))
+    except Exception:
+        pass
+
+
 @ai_assistant_bp.post("/speak")
 @current_user_required
 def speak_voice():
@@ -1095,6 +1192,30 @@ def speak_voice():
         if not re.match(r"^[A-Za-z0-9_-]{2,40}$", requested_voice):
             requested_voice = GEMINI_TTS_VOICE
 
+    provider_model = (
+        os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+        if provider_name == "gemini"
+        else os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
+    )
+
+    cache_key = _tts_cache_key(text, provider_name, requested_voice, provider_model)
+    cached_audio = _read_tts_cache(cache_key)
+
+    if cached_audio:
+        cached_bytes, cached_mime_type, cached_extension = cached_audio
+
+        return Response(
+            cached_bytes,
+            mimetype=cached_mime_type,
+            headers={
+                "Content-Disposition": f"inline; filename=saya-response-cached.{cached_extension}",
+                "Cache-Control": "public, max-age=86400",
+                "X-Saya-Provider": provider_name,
+                "X-Saya-Voice": str(requested_voice),
+                "X-Saya-Cache": "HIT",
+            },
+        )
+
     try:
         speech_result = synthesize_ai_speech(
             text=text,
@@ -1117,6 +1238,8 @@ def speak_voice():
         if response_mime_type == "audio/ogg":
             extension = "ogg"
 
+        _write_tts_cache(cache_key, audio_bytes, response_mime_type)
+
         return Response(
             audio_bytes,
             mimetype=response_mime_type,
@@ -1127,6 +1250,7 @@ def speak_voice():
             "X-Saya-Provider": speech_result.get("provider") or provider_name,
             "X-Saya-Model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
             "X-Saya-Latency-Ms": str(speech_result.get("latency_ms") or ""),
+                "X-Saya-Cache": "MISS",
             },
         )
 
