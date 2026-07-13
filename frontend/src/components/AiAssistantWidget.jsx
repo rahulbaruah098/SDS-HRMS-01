@@ -292,7 +292,27 @@ const WAKE_WORD_VARIANTS = [
   "eve",
   "evie",
   "eevee",
-];
+
+  "bisa ya",
+  "besa ya",
+  "visa ya",
+  "vissa ya",
+  "bisha ya",
+  "visha ya",
+  "bisaya",
+  "besaia",
+  "visaya",
+  "vishaya",
+  "bisa",
+  "besa",
+  "visa",
+  "bisha",
+  "visha",
+  "bi saya",
+  "be saya",
+  "vi saya",
+  "b say a",
+  "bee saya",];
 
 function normalizeVoiceText(value) {
   return String(value || "")
@@ -370,7 +390,27 @@ function isLikelyMisheardSayaWakeOnly(value) {
     "hi shaya",
     "hey zaya",
     "hi zaya",
-  ];
+  
+    "bisa ya",
+    "besa ya",
+    "visa ya",
+    "vissa ya",
+    "bisha ya",
+    "visha ya",
+    "bisaya",
+    "besaia",
+    "visaya",
+    "vishaya",
+    "bisa",
+    "besa",
+    "visa",
+    "bisha",
+    "visha",
+    "bi saya",
+    "be saya",
+    "vi saya",
+    "b say a",
+    "bee saya",];
 
   if (wakeOnlyMatches.includes(text)) {
     return true;
@@ -639,6 +679,7 @@ export default function AiAssistantWidget() {
   const [siriStatus, setSiriStatus] = useState("Click once to activate Saya voice");
   const [lastVoiceTranscript, setLastVoiceTranscript] = useState("");
   const [voiceLevel, setVoiceLevel] = useState(0);
+  const [mobileReplayText, setMobileReplayText] = useState("");
 
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -682,6 +723,7 @@ export default function AiAssistantWidget() {
   const speakingSafetyTimerRef = useRef(null);
   const oneShotVoiceModeRef = useRef(false);
   const iosAudioUnlockedRef = useRef(false);
+  const lastSpeakableAnswerRef = useRef("");
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -1220,6 +1262,8 @@ export default function AiAssistantWidget() {
       // /transcribe returns 200 and /chat returns 200, but /speak returns 429 quota.
       // Therefore mobile must not depend on generated TTS endpoint.
       // Use native browser speech directly on Android/iPhone mobile.
+      lastSpeakableAnswerRef.current = cleanText;
+      setMobileReplayText(cleanText);
       setVoiceHint("Saya is speaking...");
 
       try {
@@ -2896,6 +2940,37 @@ export default function AiAssistantWidget() {
     }
   }
 
+  function replayLastSayaVoice() {
+    // FILE_FOURTEEN_MOBILE_REPLAY_SAYA_VOICE_FIX
+    // Some mobile browsers show speechSynthesis as active but produce no sound.
+    // A user-tapped replay button is the reliable browser-safe fallback.
+    const replayText = String(
+      lastSpeakableAnswerRef.current ||
+        mobileReplayText ||
+        siriStatus ||
+        ""
+    ).trim();
+
+    if (!replayText) {
+      setVoiceHint("No Saya voice answer is available to replay yet.");
+      return;
+    }
+
+    setVoiceError("");
+    setVoiceHint("Saya is speaking...");
+
+    try {
+      window.speechSynthesis?.cancel?.();
+      window.speechSynthesis?.resume?.();
+    } catch {
+      // ignore
+    }
+
+    speakText(replayText, () => {
+      setVoiceHint("");
+    });
+  }
+
   function startListening() {
     if (listeningRef.current || isStartingRecognitionRef.current) {
       stopVoiceSession();
@@ -3177,8 +3252,20 @@ export default function AiAssistantWidget() {
 
           {voiceError && <div className="ai-voice-error">{voiceError}</div>}
 
-          {voiceHint && !voiceError && (
-            <div className="ai-voice-hint">{voiceHint}</div>
+          $1
+
+          {/* FILE_FOURTEEN_RENDER_MOBILE_REPLAY_BUTTON */}
+          {mobileReplayText && !loading && !voiceError && (
+            <div className="ai-ios-play-wrap">
+              <button
+                type="button"
+                className="ai-ios-play-voice-btn"
+                onClick={replayLastSayaVoice}
+              >
+                <Volume2 size={16} />
+                Play Saya voice
+              </button>
+            </div>
           )}
 
           {false && iosVoicePlayRequest && !voiceError && (
