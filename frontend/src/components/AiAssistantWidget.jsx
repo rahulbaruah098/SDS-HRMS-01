@@ -3260,8 +3260,6 @@ export default function AiAssistantWidget() {
 
           {voiceError && <div className="ai-voice-error">{voiceError}</div>}
 
-          $1
-
           {/* FILE_FOURTEEN_RENDER_MOBILE_REPLAY_BUTTON */}
           {mobileReplayText && !loading && !voiceError && (
             <div className="ai-ios-play-wrap">
