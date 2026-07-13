@@ -1104,9 +1104,11 @@ def _gemini_text_to_speech(
             last_response = response
             last_model = model
 
+            # FILE_TWENTY_THREE_GEMINI_TTS_429_FALLBACK_FIX
             # 400/403/404 usually means this key/model combination is not available.
-            # Continue to the fallback TTS model instead of failing immediately.
-            if response.status_code in {400, 403, 404}:
+            # 429 means the selected model quota/rate limit is exhausted.
+            # Continue to another TTS model before failing.
+            if response.status_code in {400, 403, 404, 429}:
                 continue
 
             _raise_provider_error("gemini", response, f"Gemini text-to-speech failed using model {model}.")
