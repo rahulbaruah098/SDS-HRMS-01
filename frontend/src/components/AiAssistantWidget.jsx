@@ -724,6 +724,7 @@ export default function AiAssistantWidget() {
   const oneShotVoiceModeRef = useRef(false);
   const iosAudioUnlockedRef = useRef(false);
   const lastSpeakableAnswerRef = useRef("");
+  const mobileSpeechUnlockedRef = useRef(false);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -1281,7 +1282,24 @@ export default function AiAssistantWidget() {
         // ignore
       }
 
-      speakText(cleanText, finishSpeech);
+      const speakMobileAnswer = () => {
+        try {
+          window.speechSynthesis?.cancel?.();
+          window.speechSynthesis?.resume?.();
+        } catch {
+          // ignore
+        }
+
+        speakText(cleanText, finishSpeech);
+      };
+
+      if (mobileSpeechUnlockedRef.current) {
+        setTimeout(speakMobileAnswer, 220);
+      } else {
+        primeMobileSpeechSynthesis();
+        setTimeout(speakMobileAnswer, 420);
+      }
+
       return;
     }
 
@@ -1362,6 +1380,48 @@ export default function AiAssistantWidget() {
     }
   }
 
+  function primeMobileSpeechSynthesis() {
+    // FILE_SIXTEEN_MOBILE_SPEECH_PRIME_FIX
+    // Mobile browsers often block speechSynthesis after async API calls
+    // unless the speech engine is touched during the user's mic/button tap.
+    if (!isMobileBrowser()) return;
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume?.();
+
+      const unlockUtterance = new SpeechSynthesisUtterance(".");
+      unlockUtterance.lang = "en-IN";
+      unlockUtterance.rate = 1;
+      unlockUtterance.pitch = 1;
+      unlockUtterance.volume = 0.01;
+
+      unlockUtterance.onend = () => {
+        mobileSpeechUnlockedRef.current = true;
+      };
+
+      unlockUtterance.onerror = () => {
+        mobileSpeechUnlockedRef.current = true;
+      };
+
+      window.speechSynthesis.speak(unlockUtterance);
+
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.resume?.();
+        } catch {
+          // ignore
+        }
+
+        mobileSpeechUnlockedRef.current = true;
+      }, 180);
+    } catch {
+      mobileSpeechUnlockedRef.current = false;
+    }
+  }
+
   async function activateEve() {
     if (showVoiceQuotaCooldownHint()) {
       return;
@@ -1383,6 +1443,7 @@ export default function AiAssistantWidget() {
     setSiriStatus("Listening. Speak your command now.");
     setVoiceHint('Listening now. Say "check in", "check out", or ask your HRMS question.');
     setVoiceError("");
+    primeMobileSpeechSynthesis();
     lastVoiceActivationAtRef.current = Date.now();
 
     await unlockIosAudioPlayback();
@@ -2994,6 +3055,7 @@ export default function AiAssistantWidget() {
     setEveActive(true);
     setManualChatOpen(false);
     setVoiceError("");
+    primeMobileSpeechSynthesis();
     setSiriStatus("Listening. Speak your command now.");
     setVoiceHint('Listening now. Say "check in", "check out", or ask your HRMS question.');
     lastVoiceActivationAtRef.current = Date.now();
