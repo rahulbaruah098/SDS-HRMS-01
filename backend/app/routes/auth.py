@@ -4,6 +4,7 @@ from werkzeug.security import check_password_hash
 from app.extensions import get_db
 from app.utils.auth import issue_token, current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.services.tenant_service import build_tenant_context, ensure_sds_tenant
 
 
 auth_bp = Blueprint("auth", __name__)
@@ -200,6 +201,32 @@ def sanitize_user_for_response(user):
     apply_profile_photo_aliases(safe_user)
 
     return safe_user
+
+
+def build_auth_tenant_payload(db, user):
+    """
+    Builds SaaS tenant/subscription data for login and /me responses.
+
+    Login is intentionally not blocked here. If a demo has expired, the
+    frontend will receive the subscription status and redirect the company
+    user to Billing/Upgrade, while SDS lifetime users continue normally.
+    """
+
+    ensure_sds_tenant(db, current_app.config)
+
+    tenant_context = build_tenant_context(
+        db,
+        user=user,
+        config=current_app.config,
+    )
+
+    return {
+        "tenant": clean_doc(tenant_context.get("tenant")),
+        "subscription": clean_doc(tenant_context.get("subscription")),
+        "is_platform_superadmin": bool(
+            tenant_context.get("is_platform_superadmin")
+        ),
+    }
 
 
 def employee_snapshot(employee, user=None):
@@ -505,10 +532,15 @@ def login():
 
     audit("login", "users", user["_id"], {"email": email})
 
+    tenant_payload = build_auth_tenant_payload(db, user)
+
     return jsonify({
         "token": token,
         "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
+        "tenant": tenant_payload["tenant"],
+        "subscription": tenant_payload["subscription"],
+        "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
     })
 
 

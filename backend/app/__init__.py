@@ -5,6 +5,7 @@ import os
 from .config import Config
 from .extensions import init_db
 from .routes.auth import auth_bp
+from .routes.demo_requests import demo_requests_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
 from .routes.workflow import workflow_bp
@@ -113,6 +114,12 @@ def create_app():
     # Auth/session APIs:
     # login, current user, employee profile snapshot, capability sync.
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
+
+    # YourComate SaaS demo request APIs:
+    # apply for demo registration, send/verify/resend OTP,
+    # Superadmin approve/reject demo requests, and email demo admin credentials.
+    # Keep this early because it is used from the public login/demo registration flow.
+    app.register_blueprint(demo_requests_bp, url_prefix="/api/v1/demo-requests")
 
     # Dashboard APIs:
     # Super Admin, Admin/HR/Finance, and Employee dashboard.
@@ -256,6 +263,7 @@ def create_app():
             },
             "modules": [
                 "Authentication",
+                "SaaS Demo Requests",
                 "Dashboard",
                 "Employee Master",
                 "Attendance",
@@ -290,6 +298,7 @@ def create_app():
                 "enabled": True,
                 "allowed_origins": allowed_origins,
             },
+            "saas_demo_requests_module": True,
             "attendance_module": True,
             "direct_attendance_modes": ["office", "wfh", "field"],
             "field_attendance_requires": ["field_location", "field_photo", "location_metadata"],
@@ -327,6 +336,7 @@ def create_app():
             ],
             "route_order": [
                 "auth",
+                "demo_requests",
                 "dashboard",
                 "attendance",
                 "projects",

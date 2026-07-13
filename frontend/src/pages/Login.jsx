@@ -12,6 +12,15 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  function openDemoRegistration() {
+    try {
+      window.history.pushState({}, '', '/apply-demo-registration');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch {
+      window.location.href = '/apply-demo-registration';
+    }
+  }
+
   async function submit(e) {
     e.preventDefault();
     const email = form.email.trim();
@@ -661,6 +670,64 @@ export default function Login({ onLogin }) {
             cursor: not-allowed;
           }
 
+          .sds-demo-entry {
+            margin-top: 4px;
+            padding: 14px;
+            border-radius: 20px;
+            background:
+              radial-gradient(circle at top right, rgba(20, 184, 166, 0.16), transparent 42%),
+              linear-gradient(135deg, #ecfeff, #f8fafc);
+            border: 1px solid #bae6fd;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 14px;
+            align-items: center;
+          }
+
+          .sds-demo-entry b {
+            display: block;
+            color: #0f172a;
+            font-size: 13px;
+            margin-bottom: 3px;
+          }
+
+          .sds-demo-entry span {
+            display: block;
+            color: #64748b;
+            font-size: 11px;
+            line-height: 1.45;
+          }
+
+          .sds-demo-btn {
+            border: 0;
+            border-radius: 15px;
+            padding: 11px 14px;
+            background: linear-gradient(135deg, #0f766e, #0284c7);
+            color: #ffffff;
+            font-size: 12px;
+            font-weight: 950;
+            white-space: nowrap;
+            cursor: pointer;
+            box-shadow: 0 14px 28px rgba(14, 116, 144, 0.20);
+            transition: 0.2s ease;
+          }
+
+          .sds-demo-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 18px 34px rgba(14, 116, 144, 0.26);
+          }
+
+          .sds-demo-note {
+            margin-top: 9px;
+            color: #64748b;
+            font-size: 10.5px;
+            line-height: 1.45;
+          }
+
+          .sds-demo-note strong {
+            color: #0f172a;
+          }
+
           .sds-login-meta {
             margin-top: 18px;
             padding: 15px;
@@ -809,6 +876,14 @@ export default function Login({ onLogin }) {
             .sds-role-badge {
               width: 100%;
               text-align: left;
+            }
+
+            .sds-demo-entry {
+              grid-template-columns: 1fr;
+            }
+
+            .sds-demo-btn {
+              width: 100%;
             }
           }
 
@@ -1095,6 +1170,24 @@ export default function Login({ onLogin }) {
               <button type="submit" className="sds-login-btn" disabled={loading}>
                 {loading ? 'Opening dashboard...' : 'Enter Dashboard'}
               </button>
+
+              <div className="sds-demo-entry">
+                <div>
+                  <b>Want to use YourComate HRMS for your company?</b>
+                  <span>Apply for a demo registration. Your company email will be verified by OTP before Superadmin approval.</span>
+                  <div className="sds-demo-note">
+                    <strong>Demo access:</strong> 30 days, 10 employees, Attendance, Apply Leave and Projects modules.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="sds-demo-btn"
+                  onClick={openDemoRegistration}
+                >
+                  Apply for Demo Registration
+                </button>
+              </div>
             </form>
 
             <div className="sds-login-meta">
