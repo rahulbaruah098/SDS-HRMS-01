@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request, g
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
+from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 
@@ -345,7 +346,7 @@ def build_asset_stats(items):
 
 @assets_bp.get("")
 @assets_bp.get("/")
-@current_user_required
+@tenant_module_required("assets")
 def list_assets():
     db = get_db()
     query = asset_scope_query(db)
@@ -424,7 +425,7 @@ def list_assets():
 
 
 @assets_bp.get("/employee-options")
-@current_user_required
+@tenant_module_required("assets")
 def employee_options():
     if not is_hr_user():
         return jsonify({
@@ -469,7 +470,7 @@ def employee_options():
 
 @assets_bp.post("")
 @assets_bp.post("/")
-@current_user_required
+@tenant_module_required("assets")
 def create_asset():
     db = get_db()
     data = get_request_payload()
@@ -545,7 +546,7 @@ def create_asset():
 
 
 @assets_bp.patch("/<asset_id>")
-@current_user_required
+@tenant_module_required("assets")
 def update_asset(asset_id):
     if not is_hr_user():
         return jsonify({
@@ -631,7 +632,7 @@ def update_asset(asset_id):
 
 
 @assets_bp.delete("/<asset_id>")
-@current_user_required
+@tenant_module_required("assets")
 def delete_asset(asset_id):
     if not is_hr_user():
         return jsonify({
@@ -680,7 +681,7 @@ def delete_asset(asset_id):
 
 
 @assets_bp.get("/report")
-@current_user_required
+@tenant_module_required("assets")
 def asset_report():
     if not is_hr_user():
         return jsonify({

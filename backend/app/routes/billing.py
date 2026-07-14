@@ -153,7 +153,44 @@ def billing_summary():
         return jsonify({
             "ok": True,
             "company": clean_doc(company),
+            "tenant": clean_doc(company),
+            "subscription": clean_doc(summary),
             "billing": clean_doc(summary),
+
+            # Flat fields are kept for the Billing.jsx page.
+            "tenant_id": summary.get("tenant_id"),
+            "tenant_code": summary.get("tenant_code"),
+            "company_name": summary.get("company_name"),
+            "company_email": company.get("company_email") or company.get("contact_email") or company.get("email"),
+            "status": summary.get("status"),
+            "plan": summary.get("plan"),
+            "plan_type": summary.get("plan_type"),
+            "plan_label": summary.get("plan_label"),
+            "subscription_status": summary.get("subscription_status"),
+            "trial_status": summary.get("trial_status"),
+            "trial_start_date": summary.get("trial_start_date"),
+            "trial_end_date": summary.get("trial_end_date"),
+            "subscription_start_date": company.get("subscription_start_date"),
+            "subscription_end_date": company.get("subscription_end_date"),
+            "trial_days_left": summary.get("trial_days_left"),
+            "days_left": summary.get("trial_days_left"),
+            "employee_count": summary.get("employee_count"),
+            "employees_used": summary.get("employee_count"),
+            "employee_limit": summary.get("employee_limit"),
+            "allowed_modules": summary.get("allowed_modules") or [],
+            "is_sds_company": summary.get("is_sds_company"),
+            "has_lifetime_access": summary.get("is_lifetime"),
+            "is_lifetime": summary.get("is_lifetime"),
+            "is_demo_company": summary.get("is_demo_company"),
+            "is_paid_company": summary.get("is_paid_company"),
+            "is_expired": summary.get("is_expired"),
+            "is_suspended": summary.get("is_suspended"),
+            "requires_payment": summary.get("requires_payment"),
+            "billing_page_path": summary.get("billing_page_path"),
+            "checkout": clean_doc(summary.get("checkout") or {}),
+            "plan_amount": (summary.get("checkout") or {}).get("plan_amount"),
+            "amount": (summary.get("checkout") or {}).get("plan_amount"),
+            "currency": (summary.get("checkout") or {}).get("currency"),
         })
     except Exception as exc:
         return error_response(exc)
@@ -190,10 +227,42 @@ def create_order():
             },
         )
 
+        checkout = order.get("checkout") or {}
+
         return jsonify({
             "ok": True,
             "message": "Payment order created successfully.",
-            "order": clean_doc(order),
+
+            # Local order fields.
+            "local_order_id": order.get("order_id"),
+            "order_id": order.get("order_id"),
+
+            # Razorpay public fields expected by Billing.jsx.
+            "key_id": checkout.get("key_id"),
+            "razorpay_key_id": checkout.get("key_id"),
+            "razorpay_order_id": order.get("razorpay_order_id"),
+            "amount": checkout.get("amount"),
+            "amount_rupees": checkout.get("amount_rupees"),
+            "currency": checkout.get("currency"),
+            "description": checkout.get("description"),
+            "prefill": checkout.get("prefill") or {},
+            "notes": checkout.get("notes") or {},
+
+            # The order object is shaped like a Razorpay checkout order.
+            "order": clean_doc({
+                "id": order.get("razorpay_order_id"),
+                "razorpay_order_id": order.get("razorpay_order_id"),
+                "key_id": checkout.get("key_id"),
+                "amount": checkout.get("amount"),
+                "amount_rupees": checkout.get("amount_rupees"),
+                "currency": checkout.get("currency"),
+                "description": checkout.get("description"),
+                "prefill": checkout.get("prefill") or {},
+                "notes": checkout.get("notes") or {},
+            }),
+
+            # Full service response remains available for debugging/admin usage.
+            "raw_order": clean_doc(order),
         }), 201
     except Exception as exc:
         return error_response(exc)
@@ -234,9 +303,23 @@ def verify_payment():
             },
         )
 
+        billing = result.get("billing") or {}
+
         return jsonify({
             "ok": True,
+            "message": result.get("message") or "Payment verified successfully. Full HRMS access is now active.",
             **clean_doc(result),
+
+            # Flat fields help frontend refresh status immediately after payment.
+            "subscription": clean_doc(result.get("subscription") or billing),
+            "billing": clean_doc(billing),
+            "tenant_id": billing.get("tenant_id"),
+            "company_name": billing.get("company_name"),
+            "status": billing.get("status"),
+            "plan_type": billing.get("plan_type"),
+            "subscription_status": billing.get("subscription_status"),
+            "is_paid_company": billing.get("is_paid_company"),
+            "requires_payment": billing.get("requires_payment"),
         })
     except Exception as exc:
         return error_response(exc)

@@ -5,6 +5,7 @@ from datetime import datetime
 from app.extensions import get_db
 from app.utils.auth import current_user_required, roles_required, audit
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import tenant_module_required
 
 
 grievances_bp = Blueprint("grievances", __name__)
@@ -258,6 +259,7 @@ def public_grievance_doc(doc, reveal_identity=False):
 
 
 @grievances_bp.get("/options")
+@tenant_module_required("grievances")
 @current_user_required
 def grievance_options():
     return jsonify({
@@ -268,6 +270,7 @@ def grievance_options():
 
 
 @grievances_bp.get("/profile")
+@tenant_module_required("grievances")
 @current_user_required
 def grievance_profile():
     db = get_db()
@@ -281,6 +284,7 @@ def grievance_profile():
 
 
 @grievances_bp.post("")
+@tenant_module_required("grievances")
 @current_user_required
 def create_grievance():
     db = get_db()
@@ -385,6 +389,7 @@ def create_grievance():
 
 
 @grievances_bp.get("/my")
+@tenant_module_required("grievances")
 @current_user_required
 def my_grievances():
     db = get_db()
@@ -418,6 +423,7 @@ def my_grievances():
 
 
 @grievances_bp.get("")
+@tenant_module_required("grievances")
 @roles_required("super_admin", "admin", "hr_admin", "hr_manager", "hr")
 def list_grievances():
     db = get_db()
@@ -456,6 +462,7 @@ def list_grievances():
 
 
 @grievances_bp.get("/<grievance_id>")
+@tenant_module_required("grievances")
 @current_user_required
 def grievance_detail(grievance_id):
     db = get_db()
@@ -492,6 +499,7 @@ def grievance_detail(grievance_id):
 
 
 @grievances_bp.patch("/<grievance_id>/status")
+@tenant_module_required("grievances")
 @roles_required("super_admin", "admin", "hr_admin", "hr_manager", "hr")
 def update_grievance_status(grievance_id):
     db = get_db()

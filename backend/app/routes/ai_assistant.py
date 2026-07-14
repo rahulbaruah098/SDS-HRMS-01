@@ -19,6 +19,7 @@ from app.services.ai_provider_service import (
     transcribe_ai_audio,
 )
 from app.utils.auth import current_user_required, roles_required, normalize_roles
+from app.middleware.tenant_guard import tenant_module_required
 
 
 ai_assistant_bp = Blueprint("ai_assistant", __name__)
@@ -871,7 +872,7 @@ def _build_ai_user_context(current_user):
 
 
 @ai_assistant_bp.post("/chat")
-@current_user_required
+@tenant_module_required("ai_assistant")
 def chat():
     data = request.get_json(silent=True) or {}
 
@@ -908,7 +909,7 @@ def chat():
         }), 500
 
 @ai_assistant_bp.get("/voice-context")
-@current_user_required
+@tenant_module_required("ai_assistant")
 def voice_context():
     current_user = getattr(g, "current_user", {}) or {}
     user_context = _build_ai_user_context(current_user)
@@ -949,7 +950,7 @@ def voice_context():
 
 
 @ai_assistant_bp.post("/transcribe")
-@current_user_required
+@tenant_module_required("ai_assistant")
 def transcribe_voice():
     """
     Provider-powered speech-to-text for Eve.
@@ -1162,7 +1163,7 @@ def _write_tts_cache(cache_key, audio_bytes, mime_type):
 
 
 @ai_assistant_bp.post("/speak")
-@current_user_required
+@tenant_module_required("ai_assistant")
 def speak_voice():
     """
     Provider-powered text-to-speech for Eve.
@@ -1291,6 +1292,7 @@ def speak_voice():
 
 
 @ai_assistant_bp.post("/seed")
+@tenant_module_required("ai_assistant")
 @roles_required(
     "super_admin",
     "admin",

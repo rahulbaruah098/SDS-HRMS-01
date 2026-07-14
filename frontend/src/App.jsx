@@ -1,9 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { currentUser, getTodayCelebrations } from './api/client';
-import { canAccessModule } from './data/modules';
+import {
+  canAccessModule,
+  hasFullSaasAccess,
+  isExpiredOrSuspendedTenant,
+} from './data/modules';
 
 import AppLayout from './layouts/AppLayout';
 import Login from './pages/Login';
+import ApplyDemoRegistration from './pages/ApplyDemoRegistration.jsx';
+import Billing from './pages/Billing.jsx';
+import SubscriptionExpired from './pages/SubscriptionExpired.jsx';
+import DemoRequests from './pages/DemoRequests.jsx';
+import Subscriptions from './pages/Subscriptions.jsx';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import EmployeeDashboard from './pages/EmployeeDashboard';
@@ -60,6 +69,60 @@ const EMPLOYEE_CAPABILITY_ROLES = [
 const PAGE_ALIASES = {
   home: 'dashboard',
   dashboard_home: 'dashboard',
+
+  billing: 'billing',
+  upgrade: 'billing',
+  subscription: 'billing',
+  subscribe: 'billing',
+  payment: 'billing',
+  razorpay: 'billing',
+  'billing-page': 'billing',
+  'upgrade-page': 'billing',
+  'subscription-page': 'billing',
+
+  subscription_expired: 'subscription_expired',
+  trial_expired: 'subscription_expired',
+  demo_expired: 'subscription_expired',
+  expired_subscription: 'subscription_expired',
+  expired_demo: 'subscription_expired',
+
+  'subscription-expired': 'subscription_expired',
+  'trial-expired': 'subscription_expired',
+  'demo-expired': 'subscription_expired',
+  'expired-subscription': 'subscription_expired',
+  'expired-demo': 'subscription_expired',
+
+  demo_request: 'demo_requests',
+  demo_requests: 'demo_requests',
+  demo_application: 'demo_requests',
+  demo_applications: 'demo_requests',
+  saas_demo_request: 'demo_requests',
+  saas_demo_requests: 'demo_requests',
+  company_demo_requests: 'demo_requests',
+  company_demo_applications: 'demo_requests',
+
+  'demo-request': 'demo_requests',
+  'demo-requests': 'demo_requests',
+  'demo-application': 'demo_requests',
+  'demo-applications': 'demo_requests',
+  'saas-demo-request': 'demo_requests',
+  'saas-demo-requests': 'demo_requests',
+  'company-demo-requests': 'demo_requests',
+  'company-demo-applications': 'demo_requests',
+
+  subscriptions: 'subscriptions',
+  subscription_management: 'subscriptions',
+  saas_subscriptions: 'subscriptions',
+  billing_management: 'subscriptions',
+  payment_management: 'subscriptions',
+  payments: 'subscriptions',
+  razorpay_orders: 'subscriptions',
+
+  'subscription-management': 'subscriptions',
+  'saas-subscriptions': 'subscriptions',
+  'billing-management': 'subscriptions',
+  'payment-management': 'subscriptions',
+  'razorpay-orders': 'subscriptions',
 
   employee: 'employees',
   employees: 'employees',
@@ -384,6 +447,50 @@ function applyProfilePhotoAliases(payload = {}, photoValue = '') {
   return payload;
 }
 
+function getBrowserPathname() {
+  if (typeof window === 'undefined') {
+    return '/';
+  }
+
+  return window.location.pathname || '/';
+}
+
+function isApplyDemoRegistrationPath(pathname) {
+  const path = String(pathname || '/').trim().toLowerCase();
+
+  return path === '/apply-demo-registration' || path === '/apply-demo-registration/';
+}
+
+function isBillingPath(pathname) {
+  const path = String(pathname || '/').trim().toLowerCase();
+
+  return (
+    path === '/billing' ||
+    path === '/billing/' ||
+    path === '/upgrade' ||
+    path === '/upgrade/' ||
+    path === '/subscription' ||
+    path === '/subscription/' ||
+    path === '/subscribe' ||
+    path === '/subscribe/' ||
+    path === '/payment' ||
+    path === '/payment/'
+  );
+}
+
+function isSubscriptionExpiredPath(pathname) {
+  const path = String(pathname || '/').trim().toLowerCase();
+
+  return (
+    path === '/subscription-expired' ||
+    path === '/subscription-expired/' ||
+    path === '/trial-expired' ||
+    path === '/trial-expired/' ||
+    path === '/demo-expired' ||
+    path === '/demo-expired/'
+  );
+}
+
 function readStoredEmployee() {
   try {
     return JSON.parse(localStorage.getItem('sds_hrms_employee') || '{}');
@@ -511,6 +618,42 @@ function PageRouter({ page, user, setPage }) {
     );
   }
 
+  if (normalizedPage === 'billing') {
+    if (hasFullSaasAccess(safeUser)) {
+      return <DashboardRouter user={safeUser} setPage={setPage} />;
+    }
+
+    return <Billing setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'subscription_expired') {
+    if (!isExpiredOrSuspendedTenant(safeUser)) {
+      return <DashboardRouter user={safeUser} setPage={setPage} />;
+    }
+
+    return <SubscriptionExpired setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'demo_requests') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!userRoles.includes('super_admin')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <DemoRequests setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'subscriptions') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!userRoles.includes('super_admin')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <Subscriptions setPage={setPage} user={safeUser} />;
+  }
+
   if (!canAccessModule(safeUser, normalizedPage)) {
     return <UnauthorizedPage setPage={setPage} />;
   }
@@ -632,6 +775,16 @@ export default function App() {
 
   const [user, setUser] = useState(initialUser);
   const [page, setPage] = useState(() => {
+    const pathname = getBrowserPathname();
+
+    if (isBillingPath(pathname)) {
+      return 'billing';
+    }
+
+    if (isSubscriptionExpiredPath(pathname)) {
+      return 'subscription_expired';
+    }
+
     try {
       const hiddenPage = localStorage.getItem('sds_hrms_hidden_page');
 
@@ -646,6 +799,7 @@ export default function App() {
     return 'dashboard';
   });
   const [celebrations, setCelebrations] = useState([]);
+  const [currentPath, setCurrentPath] = useState(() => getBrowserPathname());
 
   const normalizedUser = useMemo(() => {
     if (!user) {
@@ -656,6 +810,128 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
+  const isDemoRegistrationRoute = useMemo(
+    () => isApplyDemoRegistrationPath(currentPath),
+    [currentPath],
+  );
+
+  useEffect(() => {
+    function syncPath() {
+      setCurrentPath(getBrowserPathname());
+    }
+
+    window.addEventListener('popstate', syncPath);
+
+    return () => {
+      window.removeEventListener('popstate', syncPath);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!normalizedUser || !isDemoRegistrationRoute) {
+      return;
+    }
+
+    try {
+      window.history.replaceState({}, '', '/');
+      setCurrentPath('/');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }, [isDemoRegistrationRoute, normalizedUser]);
+
+  useEffect(() => {
+    if (!normalizedUser || !isBillingPath(currentPath)) {
+      return;
+    }
+
+    if (hasFullSaasAccess(normalizedUser)) {
+      setPage('dashboard');
+
+      try {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } catch {
+        // Ignore browser history errors.
+      }
+
+      return;
+    }
+
+    setPage('billing');
+  }, [currentPath, normalizedUser]);
+
+  useEffect(() => {
+    if (!normalizedUser || !isSubscriptionExpiredPath(currentPath)) {
+      return;
+    }
+
+    if (!isExpiredOrSuspendedTenant(normalizedUser)) {
+      setPage('dashboard');
+
+      try {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } catch {
+        // Ignore browser history errors.
+      }
+
+      return;
+    }
+
+    setPage('subscription_expired');
+  }, [currentPath, normalizedUser]);
+
+    useEffect(() => {
+    if (!normalizedUser) {
+      return;
+    }
+
+    if (!isExpiredOrSuspendedTenant(normalizedUser)) {
+      return;
+    }
+
+    if (normalizedPage === 'billing' || normalizedPage === 'subscription_expired') {
+      return;
+    }
+
+    setPage('subscription_expired');
+
+    try {
+      window.history.replaceState({}, '', '/subscription-expired');
+      setCurrentPath('/subscription-expired');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }, [normalizedUser, normalizedPage]);
+
+  useEffect(() => {
+    if (!normalizedUser) {
+      return;
+    }
+
+    if (normalizedPage === 'billing' && hasFullSaasAccess(normalizedUser)) {
+      setPage('dashboard');
+
+      try {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } catch {
+        // Ignore browser history errors.
+      }
+    }
+
+    if (normalizedPage === 'subscription_expired' && !isExpiredOrSuspendedTenant(normalizedUser)) {
+      setPage('dashboard');
+
+      try {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } catch {
+        // Ignore browser history errors.
+      }
+    }
+  }, [normalizedUser, normalizedPage]);
 
   function handleSetUser(nextUser) {
     if (!nextUser) {
@@ -678,6 +954,15 @@ export default function App() {
         employee_summary: nextEmployee,
       }),
     );
+
+    try {
+      if (isApplyDemoRegistrationPath(getBrowserPathname())) {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      }
+    } catch {
+      // Ignore browser history errors.
+    }
 
     setPage('dashboard');
   }
@@ -706,13 +991,41 @@ export default function App() {
       return;
     }
 
+    if (normalizedPage === 'billing') {
+      return;
+    }
+
+    if (normalizedPage === 'subscription_expired') {
+      return;
+    }
+
+    if (normalizedPage === 'demo_requests') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!userRoles.includes('super_admin')) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'subscriptions') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!userRoles.includes('super_admin')) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
     if (normalizedPage !== 'dashboard' && !canAccessModule(normalizedUser, normalizedPage)) {
       setPage('dashboard');
     }
   }, [page, normalizedPage, normalizedUser]);
 
   useEffect(() => {
-    if (!normalizedUser) {
+    if (!normalizedUser || !hasFullSaasAccess(normalizedUser)) {
       setCelebrations([]);
       return;
     }
@@ -741,6 +1054,14 @@ export default function App() {
   }, [normalizedUser]);
 
 if (!normalizedUser) {
+  if (isDemoRegistrationRoute) {
+    return (
+      <CustomAlertProvider>
+        <ApplyDemoRegistration />
+      </CustomAlertProvider>
+    );
+  }
+
   return (
     <CustomAlertProvider>
       <Login onLogin={handleSetUser} />
@@ -763,8 +1084,11 @@ return (
       />
     </AppLayout>
 
-    <CelebrationPopup celebrations={celebrations} />
-    <AiAssistantWidget />
+    {hasFullSaasAccess(normalizedUser) ? (
+      <CelebrationPopup celebrations={celebrations} />
+    ) : null}
+
+    {hasFullSaasAccess(normalizedUser) ? <AiAssistantWidget /> : null}
   </CustomAlertProvider>
 );
 }

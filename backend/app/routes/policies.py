@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required, roles_required, audit
+from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 
@@ -118,7 +119,7 @@ def policy_base_query():
 
 
 @policies_bp.get("/policies")
-@current_user_required
+@tenant_module_required("policies")
 def list_policies():
     db = get_db()
 
@@ -171,6 +172,7 @@ def list_policies():
 
 
 @policies_bp.post("/policies")
+@tenant_module_required("policies")
 @roles_required("hr", "hr_admin", "hr_manager")
 def upload_policy():
     db = get_db()
@@ -259,7 +261,7 @@ def upload_policy():
 
 
 @policies_bp.get("/policies/<policy_id>")
-@current_user_required
+@tenant_module_required("policies")
 def get_policy(policy_id):
     policy_obj_id = safe_object_id(policy_id)
 
@@ -282,6 +284,7 @@ def get_policy(policy_id):
 
 #changes by atlanta
 @policies_bp.patch("/policies/<policy_id>")
+@tenant_module_required("policies")
 @roles_required("hr", "hr_admin", "hr_manager")
 def update_policy(policy_id):
     policy_obj_id = safe_object_id(policy_id)
@@ -403,6 +406,7 @@ def update_policy(policy_id):
 
 #changes by atlanta
 @policies_bp.patch("/policies/<policy_id>/disable")
+@tenant_module_required("policies")
 @roles_required("hr", "hr_admin", "hr_manager")
 def disable_policy(policy_id):
     policy_obj_id = safe_object_id(policy_id)
@@ -443,7 +447,7 @@ def disable_policy(policy_id):
     })
 
 @policies_bp.get("/policies/<policy_id>/download")
-@current_user_required
+@tenant_module_required("policies")
 def download_policy(policy_id):
     policy_obj_id = safe_object_id(policy_id)
 

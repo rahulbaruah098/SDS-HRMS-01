@@ -995,7 +995,7 @@ export function buildProfileCoverPayload(coverValue, extra = {}) {
   };
 }
 
-function compactSessionUser(user = {}, employee = {}) {
+function compactSessionUser(user = {}, employee = {}, saas = {}) {
   const photo = safeSessionPhotoValue(
     getProfilePhotoValue(user) ||
       getProfilePhotoValue(employee) ||
@@ -1019,7 +1019,42 @@ function compactSessionUser(user = {}, employee = {}) {
       employee.banner_url ||
       '',
   );
+    const tenant = saas.tenant || user.tenant || {};
+  const subscription = saas.subscription || user.subscription || {};
 
+  const tenantId =
+    user.tenant_id ||
+    employee.tenant_id ||
+    saas.tenant_id ||
+    tenant._id ||
+    tenant.id ||
+    '';
+
+  const companyId =
+    user.company_id ||
+    employee.company_id ||
+    saas.company_id ||
+    tenant.company_id ||
+    tenant._id ||
+    tenant.id ||
+    tenantId ||
+    '';
+
+  const tenantCode =
+    user.tenant_code ||
+    employee.tenant_code ||
+    saas.tenant_code ||
+    tenant.tenant_code ||
+    tenant.code ||
+    '';
+
+  const companyName =
+    user.company_name ||
+    employee.company_name ||
+    saas.company_name ||
+    tenant.company_name ||
+    tenant.name ||
+    '';
   return {
     id: user.id || user._id || '',
     _id: user._id || user.id || '',
@@ -1045,7 +1080,18 @@ function compactSessionUser(user = {}, employee = {}) {
     sex: user.sex || user.gender || employee.sex || employee.gender || employee.employee_gender || '',
     role: user.role || '',
     roles: Array.isArray(user.roles) ? user.roles : [],
-    tenant_id: user.tenant_id || employee.tenant_id || '',
+    tenant_id: tenantId,
+    company_id: companyId,
+    tenant_code: tenantCode,
+    company_name: companyName,
+    tenant,
+    subscription,
+    is_platform_superadmin: Boolean(
+      saas.is_platform_superadmin ||
+        user.is_platform_superadmin ||
+        user.role === 'super_admin' ||
+        (Array.isArray(user.roles) && user.roles.includes('super_admin')),
+    ),
     employee_id: user.employee_id || employee.id || employee._id || '',
     employee_code: user.employee_code || employee.employee_code || '',
     department_id: user.department_id || employee.department_id || '',
@@ -1157,7 +1203,13 @@ export function setSession(data = {}) {
 
   safeSetLocalStorage(
     'sds_hrms_user',
-    JSON.stringify(compactSessionUser(user, employee)),
+    JSON.stringify(
+      compactSessionUser(user, employee, {
+        tenant: data.tenant || {},
+        subscription: data.subscription || {},
+        is_platform_superadmin: data.is_platform_superadmin,
+      }),
+    ),
   );
 
   safeSetLocalStorage(
@@ -1250,6 +1302,81 @@ function getConnectionErrorMessage() {
     'Check that Flask is running on port 5000 and backend CORS allows this frontend origin.',
   ].join(' ');
 }
+
+const SAAS_EXPIRED_ERROR_CODES = new Set([
+  'tenant_expired',
+  'subscription_expired',
+  'trial_expired',
+  'demo_expired',
+]);
+
+const SAAS_BILLING_ERROR_CODES = new Set([
+  'module_not_in_demo_plan',
+  'employee_limit_reached',
+  'tenant_suspended',
+]);
+
+function normalizeErrorCode(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
+function isBillingApiPath(path = '') {
+  const value = String(path || '').toLowerCase();
+
+  return (
+    value.includes('/billing') ||
+    value.includes('/auth/login') ||
+    value.includes('/auth/me') ||
+    value.includes('/demo-requests')
+  );
+}
+
+function redirectForSaasRestriction(path = '', data = {}, status = 0) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (isBillingApiPath(path)) {
+    return;
+  }
+
+  const code = normalizeErrorCode(data.code || data.error_code || data.reason);
+  const currentPath = String(window.location.pathname || '').toLowerCase();
+
+  if (SAAS_EXPIRED_ERROR_CODES.has(code) || status === 402) {
+    if (
+      currentPath !== '/subscription-expired' &&
+      currentPath !== '/trial-expired' &&
+      currentPath !== '/demo-expired'
+    ) {
+      window.location.assign('/subscription-expired');
+    }
+
+    return;
+  }
+
+  if (SAAS_BILLING_ERROR_CODES.has(code)) {
+    if (currentPath !== '/billing') {
+      window.location.assign('/billing');
+    }
+  }
+}
+
+function buildApiError(data = {}, status = 0, fallbackMessage = 'Request failed.') {
+  const error = new Error(data.message || fallbackMessage);
+
+  error.status = status;
+  error.code = data.code || data.error_code || '';
+  error.meta = data.meta || {};
+  error.payload = data;
+
+  return error;
+}
+
 
 function createAiProviderError(response, data = {}, fallbackMessage = 'AI request failed.') {
   const provider = String(
@@ -1419,15 +1546,39 @@ export async function api(path, options = {}) {
 
   if (response.status === 401) {
     clearSession();
-    throw new Error(data.message || 'Session expired. Please login again.');
+    throw buildApiError(
+      data,
+      response.status,
+      'Session expired. Please login again.',
+    );
+  }
+
+  if (response.status === 402) {
+    redirectForSaasRestriction(path, data, response.status);
+
+    throw buildApiError(
+      data,
+      response.status,
+      'Your demo/subscription has expired. Please upgrade to continue.',
+    );
   }
 
   if (response.status === 403) {
-    throw new Error(data.message || 'You do not have permission to perform this action.');
+    redirectForSaasRestriction(path, data, response.status);
+
+    throw buildApiError(
+      data,
+      response.status,
+      'You do not have permission to perform this action.',
+    );
   }
 
   if (!response.ok) {
-    throw new Error(data.message || `API Error ${response.status}`);
+    throw buildApiError(
+      data,
+      response.status,
+      `API Error ${response.status}`,
+    );
   }
 
   return data;
@@ -1455,6 +1606,9 @@ export async function refreshCurrentSession() {
     token: getToken(),
     user: data.user || {},
     employee: data.employee || {},
+    tenant: data.tenant || {},
+    subscription: data.subscription || {},
+    is_platform_superadmin: data.is_platform_superadmin,
   });
 
   return data;

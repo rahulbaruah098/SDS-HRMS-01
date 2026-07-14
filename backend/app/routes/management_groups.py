@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, g
 from app.extensions import get_db
 from app.utils.auth import current_user_required, normalize_roles, audit
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import tenant_module_required
 
 
 management_groups_bp = Blueprint("management_groups", __name__)
@@ -294,7 +295,7 @@ def meeting_query_for_group(group_id):
 
 
 @management_groups_bp.get("")
-@current_user_required
+@tenant_module_required("management_groups")
 def get_management_group():
     db = get_db()
     group = ensure_management_group(db)
@@ -320,7 +321,7 @@ def get_management_group():
 
 
 @management_groups_bp.get("/employee-options")
-@current_user_required
+@tenant_module_required("management_groups")
 def management_group_employee_options():
     db = get_db()
     group = ensure_management_group(db)
@@ -369,7 +370,7 @@ def management_group_employee_options():
 
 
 @management_groups_bp.put("/members")
-@current_user_required
+@tenant_module_required("management_groups")
 def update_management_group_members():
     db = get_db()
     group = ensure_management_group(db)
@@ -452,7 +453,7 @@ def update_management_group_members():
 
 
 @management_groups_bp.post("/meetings")
-@current_user_required
+@tenant_module_required("management_groups")
 def create_management_group_meeting():
     db = get_db()
     group = ensure_management_group(db)
@@ -566,7 +567,7 @@ def create_management_group_meeting():
 
 
 @management_groups_bp.get("/meetings")
-@current_user_required
+@tenant_module_required("management_groups")
 def list_management_group_meetings():
     db = get_db()
     group = ensure_management_group(db)
@@ -615,7 +616,7 @@ def list_management_group_meetings():
 
 
 @management_groups_bp.get("/meetings/<meeting_id>")
-@current_user_required
+@tenant_module_required("management_groups")
 def get_management_group_meeting(meeting_id):
     db = get_db()
     group = ensure_management_group(db)
@@ -651,7 +652,7 @@ def get_management_group_meeting(meeting_id):
 
 
 @management_groups_bp.put("/meetings/<meeting_id>/minutes")
-@current_user_required
+@tenant_module_required("management_groups")
 def update_management_group_minutes(meeting_id):
     db = get_db()
     group = ensure_management_group(db)
@@ -730,7 +731,7 @@ def update_management_group_minutes(meeting_id):
 
 
 @management_groups_bp.patch("/meetings/<meeting_id>/assign-minutes")
-@current_user_required
+@tenant_module_required("management_groups")
 def assign_management_group_minutes_writer(meeting_id):
     db = get_db()
     group = ensure_management_group(db)
@@ -808,7 +809,7 @@ def assign_management_group_minutes_writer(meeting_id):
 
 
 @management_groups_bp.delete("/meetings/<meeting_id>")
-@current_user_required
+@tenant_module_required("management_groups")
 def delete_management_group_meeting(meeting_id):
     db = get_db()
     group = ensure_management_group(db)

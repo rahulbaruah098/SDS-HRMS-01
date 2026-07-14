@@ -6,6 +6,7 @@ from bson import ObjectId
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required, roles_required, audit
+from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 
@@ -1300,7 +1301,7 @@ def can_decide_mode_request(db, request_doc):
 
 
 @attendance_bp.get("/status")
-@current_user_required
+@tenant_module_required("attendance")
 def attendance_status():
     db = get_db()
     e = emp(db)
@@ -1374,7 +1375,7 @@ def attendance_status():
 
 
 @attendance_bp.post("/check-in")
-@current_user_required
+@tenant_module_required("attendance")
 def check_in():
     db = get_db()
     e = emp(db)
@@ -1613,7 +1614,7 @@ def check_in():
 
 
 @attendance_bp.post("/check-out")
-@current_user_required
+@tenant_module_required("attendance")
 def check_out():
     db = get_db()
     e = emp(db)
@@ -1956,7 +1957,7 @@ def attendance_month_summary_for_employee(
 
 
 @attendance_bp.get("/monthly-summary")
-@current_user_required
+@tenant_module_required("attendance")
 def monthly_summary():
     db = get_db()
     e = emp(db)
@@ -2004,7 +2005,7 @@ def monthly_summary():
     })
 
 @attendance_bp.get("/my")
-@current_user_required
+@tenant_module_required("attendance")
 def my():
     db = get_db()
     e = emp(db)
@@ -2030,6 +2031,7 @@ def my():
 
 @attendance_bp.get("/report")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def report():
     db = get_db()
 
@@ -2344,6 +2346,7 @@ def report():
 
 @attendance_bp.patch("/<attendance_id>/verify")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def verify(attendance_id):
     attendance_obj_id = safe_object_id(attendance_id)
 
@@ -2394,6 +2397,7 @@ def verify(attendance_id):
 
 @attendance_bp.get("/holidays")
 @roles_required(*HOLIDAY_VIEWER_ROLES)
+@tenant_module_required("attendance")
 def list_holidays():
     db = get_db()
     roles = current_user_roles()
@@ -2463,6 +2467,7 @@ def list_holidays():
 
 @attendance_bp.post("/holidays")
 @roles_required(*HOLIDAY_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def create_holiday():
     db = get_db()
     data = request.get_json(silent=True) or {}
@@ -2530,6 +2535,7 @@ def create_holiday():
 
 @attendance_bp.patch("/holidays/<holiday_id>")
 @roles_required(*HOLIDAY_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def update_holiday(holiday_id):
     holiday_obj_id = safe_object_id(holiday_id)
 
@@ -2605,6 +2611,7 @@ def update_holiday(holiday_id):
 
 @attendance_bp.delete("/holidays/<holiday_id>")
 @roles_required(*HOLIDAY_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def delete_holiday(holiday_id):
     holiday_obj_id = safe_object_id(holiday_id)
 
@@ -2642,7 +2649,7 @@ def delete_holiday(holiday_id):
 
 
 @attendance_bp.post("/holiday-work-requests")
-@current_user_required
+@tenant_module_required("attendance")
 def create_holiday_work_request():
     db = get_db()
     e = emp(db)
@@ -2746,7 +2753,7 @@ def create_holiday_work_request():
 
 
 @attendance_bp.get("/my-holiday-work-requests")
-@current_user_required
+@tenant_module_required("attendance")
 def my_holiday_work_requests():
     db = get_db()
     e = emp(db)
@@ -2770,6 +2777,7 @@ def my_holiday_work_requests():
 
 @attendance_bp.get("/holiday-work-requests")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def list_holiday_work_requests():
     db = get_db()
     roles = current_user_roles()
@@ -2821,6 +2829,7 @@ def list_holiday_work_requests():
 
 @attendance_bp.patch("/holiday-work-requests/<request_id>/decision")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def decide_holiday_work_request(request_id):
     request_obj_id = safe_object_id(request_id)
 
@@ -2964,6 +2973,7 @@ def decide_holiday_work_request(request_id):
 
 @attendance_bp.get("/team-field-attendance")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def team_field_attendance():
     db = get_db()
     roles = current_user_roles()
@@ -3023,7 +3033,7 @@ def team_field_attendance():
 
 
 @attendance_bp.post("/mode-requests")
-@current_user_required
+@tenant_module_required("attendance")
 def create_mode_request():
     db = get_db()
     e = emp(db)
@@ -3128,6 +3138,7 @@ def create_mode_request():
 
 @attendance_bp.get("/mode-requests")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def list_mode_requests():
     db = get_db()
     roles = current_user_roles()
@@ -3202,7 +3213,7 @@ def list_mode_requests():
 
 
 @attendance_bp.get("/my-mode-requests")
-@current_user_required
+@tenant_module_required("attendance")
 def my_mode_requests():
     db = get_db()
     e = emp(db)
@@ -3232,6 +3243,7 @@ def my_mode_requests():
 
 @attendance_bp.patch("/mode-requests/<request_id>/decision")
 @roles_required(*ATTENDANCE_MANAGER_ROLES)
+@tenant_module_required("attendance")
 def decide_mode_request(request_id):
     request_obj_id = safe_object_id(request_id)
 
@@ -3395,7 +3407,7 @@ def decide_mode_request(request_id):
 
 
 @attendance_bp.get("/compoffs")
-@current_user_required
+@tenant_module_required("attendance")
 def my_compoffs():
     db = get_db()
     e = emp(db)
@@ -3421,7 +3433,7 @@ def my_compoffs():
 
 
 @attendance_bp.post("/compoffs/<compoff_id>/claim")
-@current_user_required
+@tenant_module_required("attendance")
 def claim_compoff(compoff_id):
     compoff_obj_id = safe_object_id(compoff_id)
 

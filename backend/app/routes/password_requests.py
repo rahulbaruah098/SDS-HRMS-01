@@ -5,10 +5,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required, roles_required, audit
+from app.middleware.tenant_guard import platform_superadmin_required, tenant_module_required
 from app.utils.serializers import clean_doc
 
 
 password_requests_bp = Blueprint("password_requests", __name__)
+
+
+# SaaS note:
+# Password Requests is not part of the demo plan. Active demo companies
+# can use only Attendance, Apply Leave, and Projects. SDS lifetime, paid
+# tenants, and Platform Superadmin remain unrestricted.
 
 
 def safe_object_id(value):
@@ -46,7 +53,7 @@ def notify_user(db, user_id, title, body, meta=None, tenant_id=None):
 
 
 @password_requests_bp.post("/password-requests")
-@current_user_required
+@tenant_module_required("password_requests")
 def request_password_change():
     db = get_db()
     data = request.get_json(silent=True) or {}
@@ -126,7 +133,7 @@ def request_password_change():
 
 
 @password_requests_bp.get("/password-requests")
-@roles_required("super_admin")
+@platform_superadmin_required
 def list_password_requests():
     db = get_db()
 
@@ -162,7 +169,7 @@ def list_password_requests():
 
 
 @password_requests_bp.post("/password-requests/<request_id>/approve")
-@roles_required("super_admin")
+@platform_superadmin_required
 def approve_password_request(request_id):
     request_obj_id = safe_object_id(request_id)
 
@@ -237,7 +244,7 @@ def approve_password_request(request_id):
 
 
 @password_requests_bp.post("/password-requests/<request_id>/reject")
-@roles_required("super_admin")
+@platform_superadmin_required
 def reject_password_request(request_id):
     request_obj_id = safe_object_id(request_id)
 

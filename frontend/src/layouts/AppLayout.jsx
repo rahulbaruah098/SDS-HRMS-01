@@ -1,6 +1,10 @@
 import {
+  AlertTriangle,
   Bell,
+  CalendarClock,
   CheckCheck,
+  CreditCard,
+  Crown,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -331,6 +335,166 @@ function formatNotificationTime(value) {
   }
 }
 
+function formatSaasDate(value) {
+  if (!value) {
+    return '';
+  }
+
+  try {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return String(value || '').trim();
+    }
+
+    return date.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return String(value || '').trim();
+  }
+}
+
+function calculateDaysLeft(value) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const endDate = new Date(value);
+
+    if (Number.isNaN(endDate.getTime())) {
+      return null;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    return Math.ceil((endDate.getTime() - today.getTime()) / 86400000);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSaasText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+}
+
+function getSaasSummary(user = {}) {
+  const tenant = user.tenant || user.company || {};
+  const subscription = user.subscription || user.saas_subscription || {};
+
+  const tenantCode = String(
+    user.tenant_code ||
+      tenant.tenant_code ||
+      tenant.code ||
+      '',
+  ).trim();
+
+  const companyName =
+    user.company_name ||
+    tenant.company_name ||
+    tenant.name ||
+    tenant.legal_name ||
+    tenantCode ||
+    '';
+
+  const planType = normalizeSaasText(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  );
+
+  const status = normalizeSaasText(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  );
+
+  const trialEndDate =
+    subscription.trial_end_date ||
+    subscription.end_date ||
+    tenant.trial_end_date ||
+    tenant.subscription_end_date ||
+    user.trial_end_date ||
+    user.subscription_end_date ||
+    '';
+
+  const daysLeft = calculateDaysLeft(trialEndDate);
+
+  const employeeLimit =
+    subscription.employee_limit ??
+    tenant.employee_limit ??
+    user.employee_limit ??
+    null;
+
+  const employeeCount =
+    subscription.employee_count ??
+    subscription.employees_used ??
+    tenant.employee_count ??
+    tenant.employees_used ??
+    user.employee_count ??
+    user.employees_used ??
+    null;
+
+  const isSdsLifetime = Boolean(
+    user.is_sds_company ||
+      tenant.is_sds_company ||
+      subscription.is_sds_company ||
+      user.has_lifetime_access ||
+      tenant.has_lifetime_access ||
+      subscription.has_lifetime_access ||
+      planType === 'lifetime' ||
+      tenantCode.toLowerCase() === 'sds',
+  );
+
+  const isPaid = planType === 'paid' && status !== 'expired' && status !== 'suspended';
+  const isDemo = planType === 'demo' || status === 'demo';
+  const isSuspended = status === 'suspended';
+  const isExpired = Boolean(
+    status === 'expired' ||
+      status === 'trial_expired' ||
+      status === 'subscription_expired' ||
+      (!isSdsLifetime && isDemo && daysLeft !== null && daysLeft <= 0),
+  );
+
+  const allowedModules =
+    subscription.allowed_modules ||
+    tenant.allowed_modules ||
+    user.allowed_modules ||
+    [];
+
+  return {
+    tenant,
+    subscription,
+    tenantCode,
+    companyName,
+    planType,
+    status,
+    trialEndDate,
+    daysLeft,
+    employeeLimit,
+    employeeCount,
+    isSdsLifetime,
+    isPaid,
+    isDemo,
+    isExpired,
+    isSuspended,
+    allowedModules,
+    showTrialBanner: !isSdsLifetime && (isDemo || isExpired || isSuspended),
+  };
+}
+
 function normalizeNotificationMeta(notification = {}) {
   return {
     ...(notification.meta || {}),
@@ -621,6 +785,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
+  const saasSummary = useMemo(() => getSaasSummary(safeUser), [safeUser]);
 
   async function loadNotifications({ silent = false, showPopup = true } = {}) {
     if (!safeUser?._id && !safeUser?.email) {
@@ -661,6 +826,9 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         if (data?.user && typeof setUser === 'function') {
           const syncedUser = {
             ...data.user,
+            tenant: data.tenant || data.user?.tenant || {},
+            subscription: data.subscription || data.user?.subscription || {},
+            is_platform_superadmin: data.is_platform_superadmin || data.user?.is_platform_superadmin,
             employee: data.employee || {},
             employee_summary: data.employee || {},
             employee_profile: data.employee || {},
@@ -701,7 +869,13 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             email: syncedUser.email || '',
             role: syncedUser.role || '',
             roles: Array.isArray(syncedUser.roles) ? syncedUser.roles : [],
-            tenant_id: syncedUser.tenant_id || data.employee?.tenant_id || '',
+            tenant_id: syncedUser.tenant_id || data.employee?.tenant_id || data.tenant?._id || data.tenant?.id || '',
+            company_id: syncedUser.company_id || data.employee?.company_id || data.tenant?.company_id || data.tenant?._id || data.tenant?.id || '',
+            tenant_code: syncedUser.tenant_code || data.employee?.tenant_code || data.tenant?.tenant_code || data.tenant?.code || '',
+            company_name: syncedUser.company_name || data.employee?.company_name || data.tenant?.company_name || data.tenant?.name || '',
+            tenant: data.tenant || syncedUser.tenant || {},
+            subscription: data.subscription || syncedUser.subscription || {},
+            is_platform_superadmin: Boolean(data.is_platform_superadmin || syncedUser.is_platform_superadmin),
             employee_id: syncedUser.employee_id || data.employee?.id || data.employee?._id || '',
             employee_code: syncedUser.employee_code || data.employee?.employee_code || '',
             department_id: syncedUser.department_id || data.employee?.department_id || '',
@@ -731,7 +905,10 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             employee_code: data.employee?.employee_code || '',
             email: data.employee?.email || '',
             phone: data.employee?.phone || '',
-            tenant_id: data.employee?.tenant_id || '',
+            tenant_id: data.employee?.tenant_id || data.tenant?._id || data.tenant?.id || '',
+            company_id: data.employee?.company_id || data.tenant?.company_id || data.tenant?._id || data.tenant?.id || '',
+            tenant_code: data.employee?.tenant_code || data.tenant?.tenant_code || data.tenant?.code || '',
+            company_name: data.employee?.company_name || data.tenant?.company_name || data.tenant?.name || '',
             department_id: data.employee?.department_id || '',
             department_name: data.employee?.department_name || data.employee?.department || '',
             department: data.employee?.department || data.employee?.department_name || '',
@@ -782,6 +959,9 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
           const syncedUser = {
             ...data.user,
+            tenant: data.tenant || data.user?.tenant || {},
+            subscription: data.subscription || data.user?.subscription || {},
+            is_platform_superadmin: data.is_platform_superadmin || data.user?.is_platform_superadmin,
             employee: data.employee || {},
             employee_summary: data.employee || {},
             employee_profile: data.employee || {},
@@ -893,6 +1073,26 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
     setSidebarOpen(false);
     setNotificationOpen(false);
+  }
+
+  function goToBilling() {
+    goTo('billing');
+
+    try {
+      window.history.pushState({}, '', '/billing');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }
+
+  function goToSubscriptionExpired() {
+    goTo('subscription_expired');
+
+    try {
+      window.history.pushState({}, '', '/subscription-expired');
+    } catch {
+      // Ignore browser history errors.
+    }
   }
 
   function logout() {
@@ -1404,7 +1604,152 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           }
         }
 
+        .saas-sidebar-card {
+          margin: 4px 0 12px;
+          border-radius: 18px;
+          padding: 12px;
+          background: rgba(255,255,255,.08);
+          border: 1px solid rgba(255,255,255,.13);
+          color: #ffffff;
+        }
+
+        .saas-sidebar-card strong {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          margin-bottom: 6px;
+        }
+
+        .saas-sidebar-card p {
+          margin: 0;
+          color: rgba(255,255,255,.72);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .saas-sidebar-card button {
+          width: 100%;
+          border: 0;
+          border-radius: 13px;
+          margin-top: 10px;
+          padding: 9px 10px;
+          background: #ffffff;
+          color: #1d4ed8;
+          font-weight: 900;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+        }
+
+        .saas-sidebar-card.expired button {
+          color: #dc2626;
+        }
+
+        .saas-top-banner {
+          margin: 0 0 18px;
+          border-radius: 22px;
+          padding: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          background: linear-gradient(135deg, rgba(239,246,255,.96), rgba(255,255,255,.96));
+          border: 1px solid rgba(37, 99, 235, .16);
+          box-shadow: 0 12px 30px rgba(15, 23, 42, .06);
+        }
+
+        .saas-top-banner.warning {
+          background: linear-gradient(135deg, rgba(255,247,237,.98), rgba(255,255,255,.96));
+          border-color: rgba(249, 115, 22, .28);
+        }
+
+        .saas-top-banner.expired {
+          background: linear-gradient(135deg, rgba(254,242,242,.98), rgba(255,255,255,.96));
+          border-color: rgba(239, 68, 68, .28);
+        }
+
+        .saas-top-banner-left {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          min-width: 0;
+        }
+
+        .saas-top-icon {
+          width: 42px;
+          height: 42px;
+          border-radius: 15px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 auto;
+          background: #dbeafe;
+          color: #1d4ed8;
+        }
+
+        .saas-top-banner.warning .saas-top-icon {
+          background: #ffedd5;
+          color: #ea580c;
+        }
+
+        .saas-top-banner.expired .saas-top-icon {
+          background: #fee2e2;
+          color: #dc2626;
+        }
+
+        .saas-top-banner b {
+          display: block;
+          color: #0f172a;
+          font-size: 14px;
+          margin-bottom: 4px;
+        }
+
+        .saas-top-banner small {
+          display: block;
+          color: #64748b;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .saas-top-banner button {
+          border: 0;
+          border-radius: 14px;
+          padding: 11px 14px;
+          background: #2563eb;
+          color: #ffffff;
+          font-weight: 900;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          white-space: nowrap;
+          box-shadow: 0 12px 24px rgba(37, 99, 235, .22);
+        }
+
+        .saas-top-banner.warning button {
+          background: #ea580c;
+          box-shadow: 0 12px 24px rgba(234, 88, 12, .18);
+        }
+
+        .saas-top-banner.expired button {
+          background: #dc2626;
+          box-shadow: 0 12px 24px rgba(220, 38, 38, .18);
+        }
+
         @media (max-width: 720px) {
+          .saas-top-banner {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .saas-top-banner button {
+            width: 100%;
+            justify-content: center;
+          }
+
           .layout-photo-aware .user-chip span:last-child {
             max-width: 110px;
           }
@@ -1478,6 +1823,36 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         </button>
 
+        {saasSummary.isSdsLifetime ? (
+          <div className="saas-sidebar-card">
+            <strong>
+              <Crown size={15} /> SDS Lifetime Access
+            </strong>
+            <p>Full HRMS access is active without renewal or recharge.</p>
+          </div>
+        ) : null}
+
+        {saasSummary.showTrialBanner ? (
+          <div className={`saas-sidebar-card ${saasSummary.isExpired ? 'expired' : ''}`}>
+            <strong>
+              {saasSummary.isExpired ? <AlertTriangle size={15} /> : <CalendarClock size={15} />}
+              {saasSummary.isExpired ? 'Demo Expired' : 'Demo Trial'}
+            </strong>
+            <p>
+              {saasSummary.isExpired
+                ? 'Subscribe to continue using YourComate HRMS.'
+                : `${saasSummary.daysLeft ?? 'Few'} day(s) left in demo access.`}
+            </p>
+            <button
+              type="button"
+              onClick={saasSummary.isExpired ? goToSubscriptionExpired : goToBilling}
+            >
+              <CreditCard size={14} />
+              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade'}
+            </button>
+          </div>
+        ) : null}
+
         <nav>
           <button
             type="button"
@@ -1524,7 +1899,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <p>
               {displayRole}
               {capabilityText ? ` • ${capabilityText}` : ''}
-              {safeUser?.tenant_id ? ` • ${safeUser.tenant_id}` : ''}
+              {saasSummary.companyName ? ` • ${saasSummary.companyName}` : ''}
             </p>
 
             {safeUser.roles.length > 0 && (
@@ -1624,6 +1999,55 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             </button>
           </div>
         </header>
+
+        {saasSummary.showTrialBanner ? (
+          <div
+            className={`saas-top-banner ${
+              saasSummary.isExpired
+                ? 'expired'
+                : saasSummary.daysLeft !== null && saasSummary.daysLeft <= 5
+                  ? 'warning'
+                  : ''
+            }`}
+          >
+            <div className="saas-top-banner-left">
+              <span className="saas-top-icon">
+                {saasSummary.isExpired ? (
+                  <AlertTriangle size={22} />
+                ) : (
+                  <CalendarClock size={22} />
+                )}
+              </span>
+
+              <div>
+                <b>
+                  {saasSummary.isExpired
+                    ? 'Your demo subscription has expired'
+                    : `Demo subscription active${
+                        saasSummary.daysLeft !== null
+                          ? ` • ${saasSummary.daysLeft} day(s) left`
+                          : ''
+                      }`}
+                </b>
+                <small>
+                  {saasSummary.isExpired
+                    ? 'Please subscribe to the paid version to continue using the full HRMS.'
+                    : `Demo access is limited to 10 employees and Attendance, Apply Leave, and Projects. Trial ends ${
+                        formatSaasDate(saasSummary.trialEndDate) || 'soon'
+                      }.`}
+                </small>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={saasSummary.isExpired ? goToSubscriptionExpired : goToBilling}
+            >
+              <CreditCard size={16} />
+              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade Plan'}
+            </button>
+          </div>
+        ) : null}
 
         {children}
       </main>

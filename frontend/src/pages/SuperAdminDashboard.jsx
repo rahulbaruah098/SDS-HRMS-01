@@ -1176,6 +1176,22 @@ export default function SuperAdminDashboard({ setPage }) {
             >
               Send Notifications
             </button>
+
+                        <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('demo_requests')}
+            >
+              Demo Requests
+            </button>
+
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => goTo('subscriptions')}
+            >
+              Subscriptions & Payments
+            </button>
           </div>
         </div>
       </section>

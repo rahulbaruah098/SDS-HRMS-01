@@ -5,6 +5,7 @@ from datetime import datetime
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import tenant_module_required
 
 
 it_support_bp = Blueprint("it_support", __name__)
@@ -468,6 +469,7 @@ def build_ticket_query_for_current_user(db, include_all_for_it=False):
 
 
 @it_support_bp.get("/options")
+@tenant_module_required("it_support")
 @current_user_required
 def it_support_options():
     db = get_db()
@@ -501,6 +503,7 @@ def it_support_options():
 
 
 @it_support_bp.get("/profile")
+@tenant_module_required("it_support")
 @current_user_required
 def it_support_profile():
     db = get_db()
@@ -521,6 +524,7 @@ def it_support_profile():
 
 
 @it_support_bp.post("")
+@tenant_module_required("it_support")
 @current_user_required
 def create_it_support_ticket():
     db = get_db()
@@ -660,6 +664,7 @@ def create_it_support_ticket():
 
 
 @it_support_bp.get("/my")
+@tenant_module_required("it_support")
 @current_user_required
 def my_it_support_tickets():
     db = get_db()
@@ -686,6 +691,7 @@ def my_it_support_tickets():
 
 
 @it_support_bp.get("")
+@tenant_module_required("it_support")
 @current_user_required
 def list_it_support_tickets():
     db = get_db()
@@ -788,6 +794,7 @@ def list_it_support_tickets():
 
 
 @it_support_bp.get("/<ticket_id>")
+@tenant_module_required("it_support")
 @current_user_required
 def it_support_ticket_detail(ticket_id):
     db = get_db()
@@ -839,6 +846,7 @@ def it_support_ticket_detail(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/assign")
+@tenant_module_required("it_support")
 @current_user_required
 def assign_it_support_ticket(ticket_id):
     db = get_db()
@@ -963,6 +971,7 @@ def assign_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/status")
+@tenant_module_required("it_support")
 @current_user_required
 def update_it_support_status(ticket_id):
     db = get_db()
@@ -1105,6 +1114,7 @@ def update_it_support_status(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/escalate")
+@tenant_module_required("it_support")
 @current_user_required
 def escalate_it_support_ticket(ticket_id):
     db = get_db()
@@ -1211,6 +1221,7 @@ def escalate_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/review")
+@tenant_module_required("it_support")
 @current_user_required
 def review_it_support_ticket(ticket_id):
     db = get_db()
@@ -1342,6 +1353,7 @@ def review_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/reopen")
+@tenant_module_required("it_support")
 @current_user_required
 def reopen_it_support_ticket(ticket_id):
     db = get_db()

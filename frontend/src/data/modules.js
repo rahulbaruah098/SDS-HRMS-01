@@ -219,6 +219,18 @@ export const MANAGEMENT_GROUP_ROLES = ALL_COMMON_ROLES;
 
 export const ASSET_ROLES = ALL_COMMON_ROLES;
 
+export const SAAS_DEMO_MODULE_KEYS = [
+  'attendance',
+  'leave_requests',
+  'projects',
+  'notifications',
+  'profile',
+];
+
+export const SAAS_DEMO_ADMIN_SETUP_MODULE_KEYS = [
+  'employees',
+];
+
 export const LEAVE_TYPES_FOR_EMPLOYEE = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
@@ -476,6 +488,22 @@ export const superModules = [
     'Create and manage companies using this SaaS HRMS.',
     ['super_admin'],
   ],
+  [
+    'demo_requests',
+    'Demo Requests',
+    ClipboardList,
+    'Review OTP-verified company demo applications, approve or reject requests, and send generated YourComate admin login credentials.',
+    ['super_admin'],
+  ],
+
+    [
+    'subscriptions',
+    'Subscriptions & Payments',
+    ClipboardList,
+    'Monitor SaaS subscriptions, demo expiry, Razorpay orders, payment records, and refresh expired demo companies.',
+    ['super_admin'],
+  ],
+
   [
     'users',
     'User Control',
@@ -1052,6 +1080,146 @@ export function getDisplayRole(user) {
   return 'Employee';
 }
 
+export function getSaasTenant(user = {}) {
+  return user.tenant || user.company || {};
+}
+
+export function getSaasSubscription(user = {}) {
+  return user.subscription || user.saas_subscription || {};
+}
+
+export function getSaasPlanType(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+export function getSaasStatus(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+export function getSaasTenantCode(user = {}) {
+  const tenant = getSaasTenant(user);
+
+  return String(
+    user.tenant_code ||
+      tenant.tenant_code ||
+      tenant.code ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+export function isPlatformSuperAdmin(user = {}) {
+  const roles = effectiveRoleList(user);
+
+  return Boolean(user.is_platform_superadmin) || roles.includes('super_admin');
+}
+
+export function isSdsLifetimeTenant(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+  const planType = getSaasPlanType(user);
+  const tenantCode = getSaasTenantCode(user);
+
+  return (
+    tenantCode === 'sds' ||
+    planType === 'lifetime' ||
+    tenant.is_sds_company === true ||
+    tenant.has_lifetime_access === true ||
+    subscription.has_lifetime_access === true
+  );
+}
+
+export function isPaidTenant(user = {}) {
+  const planType = getSaasPlanType(user);
+  const status = getSaasStatus(user);
+
+  return planType === 'paid' && status !== 'expired' && status !== 'suspended';
+}
+
+export function isDemoTenant(user = {}) {
+  return getSaasPlanType(user) === 'demo';
+}
+
+export function isExpiredOrSuspendedTenant(user = {}) {
+  if (isPlatformSuperAdmin(user) || isSdsLifetimeTenant(user)) {
+    return false;
+  }
+
+  const status = getSaasStatus(user);
+
+  return status === 'expired' || status === 'suspended';
+}
+
+export function hasFullSaasAccess(user = {}) {
+  return (
+    isPlatformSuperAdmin(user) ||
+    isSdsLifetimeTenant(user) ||
+    isPaidTenant(user)
+  );
+}
+
+export function getDemoAllowedModuleKeys(user = {}) {
+  const allowed = new Set(SAAS_DEMO_MODULE_KEYS);
+  const roles = effectiveRoleList(user);
+
+  /*
+    Demo company admin/HR must still access Employee Management,
+    otherwise they cannot add the allowed 10 demo employees.
+    Backend still enforces the 10 employee limit.
+  */
+  if (hasAnyRole(roles, HR_ROLES)) {
+    SAAS_DEMO_ADMIN_SETUP_MODULE_KEYS.forEach((key) => allowed.add(key));
+  }
+
+  return allowed;
+}
+
+export function isModuleAllowedForSaas(user = {}, moduleKey = '') {
+  const normalizedModuleKey = String(moduleKey || '')
+    .trim()
+    .replaceAll('-', '_');
+
+  if (!normalizedModuleKey) {
+    return false;
+  }
+
+  if (hasFullSaasAccess(user)) {
+    return true;
+  }
+
+  if (isExpiredOrSuspendedTenant(user)) {
+    return normalizedModuleKey === 'profile';
+  }
+
+  if (isDemoTenant(user)) {
+    return getDemoAllowedModuleKeys(user).has(normalizedModuleKey);
+  }
+
+  return true;
+}
+
 export function getCapabilityDisplayText(user) {
   const capabilities = getEmployeeCapabilities(user);
   const labels = [];
@@ -1084,7 +1252,27 @@ export function moduleList(user) {
     return allModules;
   }
 
-  return allModules.filter((module) => hasAnyRole(roles, module[4] || []));
+  const roleAllowedModules = allModules.filter((module) =>
+    hasAnyRole(roles, module[4] || []),
+  );
+
+  if (hasFullSaasAccess(user)) {
+    return roleAllowedModules;
+  }
+
+  if (isExpiredOrSuspendedTenant(user)) {
+    return roleAllowedModules.filter((module) => module[0] === 'profile');
+  }
+
+  if (isDemoTenant(user)) {
+    const allowedDemoModules = getDemoAllowedModuleKeys(user);
+
+    return roleAllowedModules.filter((module) =>
+      allowedDemoModules.has(module[0]),
+    );
+  }
+
+  return roleAllowedModules;
 }
 
 export function canAccessModule(user, moduleKey) {
@@ -1098,9 +1286,20 @@ export function canAccessModule(user, moduleKey) {
     .trim()
     .replaceAll('-', '_');
 
+  if (
+    normalizedModuleKey === 'billing' ||
+    normalizedModuleKey === 'subscription_expired'
+  ) {
+    return true;
+  }
+
   const module = allModules.find((item) => item[0] === normalizedModuleKey);
 
   if (!module) {
+    return false;
+  }
+
+  if (!isModuleAllowedForSaas(user, normalizedModuleKey)) {
     return false;
   }
 

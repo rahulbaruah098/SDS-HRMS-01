@@ -6,6 +6,7 @@ from .config import Config
 from .extensions import init_db
 from .routes.auth import auth_bp
 from .routes.demo_requests import demo_requests_bp
+from .routes.billing import billing_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
 from .routes.workflow import workflow_bp
@@ -120,6 +121,14 @@ def create_app():
     # Superadmin approve/reject demo requests, and email demo admin credentials.
     # Keep this early because it is used from the public login/demo registration flow.
     app.register_blueprint(demo_requests_bp, url_prefix="/api/v1/demo-requests")
+
+
+    # YourComate SaaS billing/payment APIs:
+    # billing summary, Razorpay order creation, payment verification,
+    # subscription activation, Superadmin payment/subscription monitoring,
+    # and expired demo refresh.
+    # Keep this early so expired demo companies can still access upgrade/payment APIs.
+    app.register_blueprint(billing_bp, url_prefix="/api/v1/billing")
 
     # Dashboard APIs:
     # Super Admin, Admin/HR/Finance, and Employee dashboard.

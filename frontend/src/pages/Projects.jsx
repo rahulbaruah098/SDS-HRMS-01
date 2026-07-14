@@ -1226,7 +1226,142 @@ function ProjectCard({
   );
 }
 
-export default function Projects() {
+
+function getSaasTenant(user = {}) {
+  return user.tenant || user.company || {};
+}
+
+function getSaasSubscription(user = {}) {
+  return user.subscription || user.saas_subscription || {};
+}
+
+function getSaasPlanType(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasStatus(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasCompanyName(user = {}) {
+  const tenant = getSaasTenant(user);
+
+  return (
+    user.company_name ||
+    tenant.company_name ||
+    tenant.name ||
+    'Your company'
+  );
+}
+
+function getSaasEmployeeLimit(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  const rawLimit =
+    subscription.employee_limit ??
+    tenant.employee_limit ??
+    user.employee_limit ??
+    '';
+
+  if (rawLimit === null || rawLimit === undefined || rawLimit === '') {
+    return null;
+  }
+
+  const parsed = Number(rawLimit);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getTrialEndDate(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return (
+    subscription.trial_end_date ||
+    subscription.end_date ||
+    tenant.trial_end_date ||
+    tenant.subscription_end_date ||
+    user.trial_end_date ||
+    user.subscription_end_date ||
+    ''
+  );
+}
+
+function formatSaasDate(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function getSaasDaysLeft(user = {}) {
+  const trialEndDate = getTrialEndDate(user);
+
+  if (!trialEndDate) {
+    return null;
+  }
+
+  const endDate = new Date(trialEndDate);
+
+  if (Number.isNaN(endDate.getTime())) {
+    return null;
+  }
+
+  const remainingMs = endDate.getTime() - Date.now();
+
+  if (remainingMs <= 0) {
+    return 0;
+  }
+
+  return Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+}
+
+function openSaasBillingPage(setPage) {
+  if (typeof setPage === 'function') {
+    setPage('billing');
+  }
+
+  try {
+    window.history.pushState({}, '', '/billing');
+  } catch {
+    // Ignore browser history errors.
+  }
+}
+
+export default function Projects({ user: providedUser = {}, setPage } = {}) {
   const alerts = useCustomAlert();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1253,7 +1388,7 @@ const [form, setForm] = useState({
   collaborator_ids: [],
 });
 
-  const user = currentUser();
+  const user = providedUser?.email ? providedUser : currentUser();
 
   const activeProjects = useMemo(
     () => projects.filter((project) => normalizeStatus(project.status) === 'active'),
@@ -1309,6 +1444,15 @@ const createFormEmployees = useMemo(() => {
   const capabilityCanManage = isTeamLeaderOrReportingOfficer(user, dashboard);
 
   const canManageProjectSetup = backendCanManage || capabilityCanManage || adminFullAccess;
+
+  const saasPlanType = getSaasPlanType(user);
+  const saasStatus = getSaasStatus(user);
+  const isDemoTenant = saasPlanType === 'demo';
+  const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
+  const saasEmployeeLimit = getSaasEmployeeLimit(user);
+  const saasDaysLeft = getSaasDaysLeft(user);
+  const saasCompanyName = getSaasCompanyName(user);
+
 
   async function loadData() {
     setLoading(true);
@@ -1418,6 +1562,12 @@ if (key === 'department') {
 
   async function handleCreateProject(event) {
     event.preventDefault();
+
+    if (isExpiredOrSuspendedTenant) {
+      alerts.warning('Your demo subscription is expired or suspended. Please upgrade to continue using Projects.', 'Subscription Required');
+      openSaasBillingPage(setPage);
+      return;
+    }
 
     if (!canManageProjectSetup) {
       alerts.warning('Only Team Leaders and Reporting Officers can create projects.', 'Access Restricted');
@@ -2828,6 +2978,47 @@ async function handleAssign(projectId, payload) {
             : 'You can view scoped projects and update progress/status only when you are assigned or added as collaborator.'}
         </div>
 
+        {isDemoTenant || isExpiredOrSuspendedTenant ? (
+          <div
+            className={`project-alert ${isExpiredOrSuspendedTenant ? 'project-alert-error' : 'project-alert-success'}`}
+            style={{
+              marginTop: 16,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 14,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <strong>YourComate Demo Access</strong>
+              <div style={{ marginTop: 4, lineHeight: 1.6 }}>
+                Company: {saasCompanyName}. Projects is included in your demo plan.
+              </div>
+              <div style={{ lineHeight: 1.6 }}>
+                Trial end date: {formatSaasDate(getTrialEndDate(user))}
+                {saasDaysLeft !== null ? ` · ${saasDaysLeft} day(s) left` : ''}
+              </div>
+              <div style={{ lineHeight: 1.6 }}>
+                Demo limit: {saasEmployeeLimit ? `${saasEmployeeLimit} employees` : '10 employees'} · Allowed modules: Attendance, Apply Leave, Projects
+              </div>
+              {isExpiredOrSuspendedTenant ? (
+                <div style={{ marginTop: 4 }}>
+                  Your demo is expired or suspended. Please upgrade to continue using project actions.
+                </div>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              className="project-btn project-btn-primary"
+              onClick={() => openSaasBillingPage(setPage)}
+            >
+              Upgrade Plan
+            </button>
+          </div>
+        ) : null}
+
         <div className="project-summary-grid">
           <div className="project-summary-card">
             <span>Total Projects</span>
@@ -2933,7 +3124,7 @@ async function handleAssign(projectId, payload) {
           </div>
 
           <div className="project-actions" style={{ marginTop: 16 }}>
-            <button type="submit" className="project-btn project-btn-primary" disabled={saving}>
+            <button type="submit" className="project-btn project-btn-primary" disabled={saving || isExpiredOrSuspendedTenant}>
               {saving ? 'Saving...' : 'Create Active Project'}
             </button>
           </div>

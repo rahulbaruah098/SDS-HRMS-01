@@ -593,7 +593,115 @@ function AttendanceReportList({ rows = [], loading = false }) {
   );
 }
 
-export default function Attendance() {
+
+function getSaasTenant(user = {}) {
+  return user.tenant || user.company || {};
+}
+
+function getSaasSubscription(user = {}) {
+  return user.subscription || user.saas_subscription || {};
+}
+
+function getSaasPlanType(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasStatus(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasTrialEndDate(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return (
+    subscription.trial_end_date ||
+    subscription.end_date ||
+    tenant.trial_end_date ||
+    tenant.subscription_end_date ||
+    user.trial_end_date ||
+    user.subscription_end_date ||
+    ''
+  );
+}
+
+function getSaasCompanyName(user = {}) {
+  const tenant = getSaasTenant(user);
+
+  return (
+    user.company_name ||
+    tenant.company_name ||
+    tenant.name ||
+    'Your company'
+  );
+}
+
+function formatSaasDate(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  try {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    return date.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function getSaasDaysLeft(user = {}) {
+  const endDate = getSaasTrialEndDate(user);
+
+  if (!endDate) {
+    return null;
+  }
+
+  const date = new Date(endDate);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const diff = date.getTime() - Date.now();
+
+  if (diff <= 0) {
+    return 0;
+  }
+
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+export default function Attendance({ user = {}, setPage } = {}) {
   const alerts = useCustomAlert();
 
   const [myAttendance, setMyAttendance] = useState([]);
@@ -624,6 +732,25 @@ export default function Attendance() {
   const [compOffForm, setCompOffForm] = useState({ ...EMPTY_COMPOFF_FORM });
 
   const userRoles = roles();
+  const saasPlanType = getSaasPlanType(user);
+  const saasStatus = getSaasStatus(user);
+  const isDemoTenant = saasPlanType === 'demo';
+  const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
+  const saasDaysLeft = getSaasDaysLeft(user);
+  const saasTrialEndDate = getSaasTrialEndDate(user);
+  const saasCompanyName = getSaasCompanyName(user);
+
+  const openBillingPage = () => {
+    if (typeof setPage === 'function') {
+      setPage('billing');
+    }
+
+    try {
+      window.history.pushState({}, '', '/billing');
+    } catch {
+      // Ignore browser history errors.
+    }
+  };
 
   const canViewReport =
     isHRUser() ||
@@ -1132,6 +1259,57 @@ return (
           <AttendanceWidget onSuccess={refreshAttendance} />
         )}
       </section>
+
+      {(isDemoTenant || isExpiredOrSuspendedTenant) ? (
+        <section
+          className="panel"
+          style={{
+            border: isExpiredOrSuspendedTenant
+              ? '1px solid rgba(220, 38, 38, 0.25)'
+              : '1px solid rgba(37, 99, 235, 0.22)',
+            background: isExpiredOrSuspendedTenant
+              ? 'linear-gradient(135deg, rgba(254,242,242,0.96), rgba(255,255,255,0.98))'
+              : 'linear-gradient(135deg, rgba(239,246,255,0.96), rgba(255,255,255,0.98))',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 16,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <span className="kicker">
+                {isExpiredOrSuspendedTenant ? 'Demo Subscription Expired' : 'YourComate Demo Access'}
+              </span>
+              <h3 style={{ margin: '6px 0 8px' }}>
+                {isExpiredOrSuspendedTenant
+                  ? 'Attendance is locked until subscription upgrade'
+                  : 'Attendance is included in your demo plan'}
+              </h3>
+              <p style={{ margin: 0, color: '#64748b', lineHeight: 1.6 }}>
+                {saasCompanyName} is currently on the demo plan. Demo access includes
+                Attendance, Apply Leave, and Projects only. Trial end date:{' '}
+                <strong>{formatSaasDate(saasTrialEndDate)}</strong>
+                {saasDaysLeft !== null && !isExpiredOrSuspendedTenant ? (
+                  <> · <strong>{saasDaysLeft}</strong> day(s) left</>
+                ) : null}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="primary"
+              onClick={openBillingPage}
+            >
+              Upgrade Plan
+            </button>
+          </div>
+        </section>
+      ) : null}
 
 
       {showEmployeeSelfAttendancePanel && (

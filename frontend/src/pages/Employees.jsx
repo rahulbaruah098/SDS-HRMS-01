@@ -961,7 +961,96 @@ function AlumniTable({ rows, loading }) {
   );
 }
 
-export default function Employees() {
+function getSaasTenant(user = {}) {
+  return user.tenant || user.company || {};
+}
+
+function getSaasSubscription(user = {}) {
+  return user.subscription || user.saas_subscription || {};
+}
+
+function getSaasPlanType(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasStatus(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasEmployeeLimit(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  const rawLimit =
+    subscription.employee_limit ??
+    tenant.employee_limit ??
+    user.employee_limit ??
+    '';
+
+  if (rawLimit === null || rawLimit === undefined || rawLimit === '') {
+    return null;
+  }
+
+  const parsed = Number(rawLimit);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getTrialEndDate(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return (
+    subscription.trial_end_date ||
+    subscription.end_date ||
+    tenant.trial_end_date ||
+    tenant.subscription_end_date ||
+    user.trial_end_date ||
+    user.subscription_end_date ||
+    ''
+  );
+}
+
+function formatSaasDate(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+export default function Employees({ user = {}, setPage } = {}) {
   const [activeTab, setActiveTab] = useState('master');
   const [employees, setEmployees] = useState([]);
   const [alumni, setAlumni] = useState([]);
@@ -1008,10 +1097,36 @@ export default function Employees() {
     alumni: alumni.length,
   }), [employees, alumni]);
 
+  const saasPlanType = getSaasPlanType(user);
+  const saasStatus = getSaasStatus(user);
+  const saasEmployeeLimit = getSaasEmployeeLimit(user);
+  const isDemoTenant = saasPlanType === 'demo';
+  const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
+  const hasDemoEmployeeLimit = isDemoTenant && saasEmployeeLimit;
+  const demoEmployeesUsed = employees.length;
+  const demoEmployeesRemaining = hasDemoEmployeeLimit
+    ? Math.max(saasEmployeeLimit - demoEmployeesUsed, 0)
+    : null;
+  const isDemoEmployeeLimitReached = Boolean(
+    hasDemoEmployeeLimit && demoEmployeesUsed >= saasEmployeeLimit,
+  );
+
   const showMessage = (type, text) => {
     setMessage({ type, text });
     window.clearTimeout(window.__employeeMessageTimer);
     window.__employeeMessageTimer = window.setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+  };
+
+    const openBillingPage = () => {
+    if (typeof setPage === 'function') {
+      setPage('billing');
+    }
+
+    try {
+      window.history.pushState({}, '', '/billing');
+    } catch {
+      // Ignore browser history errors.
+    }
   };
 
   const loadFormOptions = async () => {
@@ -1074,6 +1189,19 @@ export default function Employees() {
 
   const handleCreateEmployee = async (event) => {
     event.preventDefault();
+
+    if (isExpiredOrSuspendedTenant) {
+      showMessage('error', 'Your demo subscription is expired or suspended. Please upgrade to continue.');
+      openBillingPage();
+      return;
+    }
+
+    if (isDemoEmployeeLimitReached) {
+      showMessage('error', `Your demo plan allows only ${saasEmployeeLimit} employees. Please upgrade to continue.`);
+      openBillingPage();
+      return;
+    }
+
     setSaving(true);
     try {
       await createEmployee(employeePayloadFromForm(employeeForm, { status: 'active', employment_status: 'active', is_alumni: false }));
@@ -1223,9 +1351,56 @@ export default function Employees() {
         <div className="hrms-stat-card"><span>Alumni</span><strong>{employeeStats.alumni}</strong></div>
       </div>
 
+      {hasDemoEmployeeLimit ? (
+        <div
+          className={`hrms-alert ${isDemoEmployeeLimitReached ? 'error' : 'success'}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 14,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <strong>YourComate Demo Employee Limit</strong>
+            <div>
+              Employees used: {demoEmployeesUsed} / {saasEmployeeLimit}.{' '}
+              {isDemoEmployeeLimitReached
+                ? 'Demo employee limit reached. Please upgrade to add more employees.'
+                : `${demoEmployeesRemaining} employee slot(s) remaining in demo.`}
+            </div>
+            <div>
+              Trial end date: {formatSaasDate(getTrialEndDate(user))}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="hrms-primary-btn"
+            onClick={openBillingPage}
+          >
+            Upgrade Plan
+          </button>
+        </div>
+      ) : null}
+
       <div className="hrms-tabs">
         <button type="button" className={`hrms-tab-btn ${activeTab === 'master' ? 'active' : ''}`} onClick={() => setActiveTab('master')}>Employee Master</button>
-        <button type="button" className={`hrms-tab-btn ${activeTab === 'create' ? 'active' : ''}`} onClick={() => setActiveTab('create')}>Create Employee</button>
+        <button
+          type="button"
+          className={`hrms-tab-btn ${activeTab === 'create' ? 'active' : ''}`}
+          onClick={() => {
+            if (isDemoEmployeeLimitReached || isExpiredOrSuspendedTenant) {
+              openBillingPage();
+              return;
+            }
+
+            setActiveTab('create');
+          }}
+        >
+          Create Employee
+        </button>
         <button type="button" className={`hrms-tab-btn ${activeTab === 'alumni' ? 'active' : ''}`} onClick={() => setActiveTab('alumni')}>Alumni</button>
       </div>
 

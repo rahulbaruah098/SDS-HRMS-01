@@ -6,6 +6,7 @@ import os
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import tenant_module_required
 
 try:
     import firebase_admin
@@ -4174,6 +4175,7 @@ def mark_all_notification_popups_seen():
 # -----------------------------------------------------------------------------
 
 @workflow_bp.get("/team_approvals")
+@tenant_module_required("apply_leave")
 @current_user_required
 def team_approvals():
     db = get_db()
@@ -4315,6 +4317,7 @@ def team_approvals():
     })
 
 @workflow_bp.patch("/team_approvals/leave_requests/<req_id>/decision")
+@tenant_module_required("apply_leave")
 @current_user_required
 def team_leave_decision(req_id):
     return leave_decision(req_id)
@@ -4325,6 +4328,7 @@ def team_leave_decision(req_id):
 # -----------------------------------------------------------------------------
 
 @workflow_bp.get("/application_status")
+@tenant_module_required("apply_leave")
 @current_user_required
 def application_status():
     db = get_db()
@@ -4526,6 +4530,7 @@ def application_status():
 # -----------------------------------------------------------------------------
 
 @workflow_bp.get("/leave_balances")
+@tenant_module_required("apply_leave")
 @current_user_required
 def list_leave_balances():
     db = get_db()
@@ -4562,6 +4567,7 @@ def list_leave_balances():
 
 
 @workflow_bp.post("/leave_balances")
+@tenant_module_required("apply_leave")
 @roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
 def create_or_update_leave_balances():
     data = request.get_json(silent=True) or {}
@@ -4574,6 +4580,7 @@ def create_or_update_leave_balances():
 
 
 @workflow_bp.patch("/leave_balances/<employee_id>")
+@tenant_module_required("apply_leave")
 @roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
 def set_leave_balance(employee_id):
     employee_obj_id = safe_object_id(employee_id)
@@ -4639,6 +4646,7 @@ def set_leave_balance(employee_id):
     })
 
 @workflow_bp.get("/leave_requests/options")
+@tenant_module_required("apply_leave")
 @current_user_required
 def leave_request_options():
     db = get_db()
@@ -4855,6 +4863,7 @@ def leave_request_options():
 
 
 @workflow_bp.get("/leave_requests")
+@tenant_module_required("apply_leave")
 @current_user_required
 def list_leave_requests():
     db = get_db()
@@ -4925,6 +4934,7 @@ def list_leave_requests():
 
 
 @workflow_bp.post("/leave_requests/apply")
+@tenant_module_required("apply_leave")
 @current_user_required
 def apply_leave_request():
     db = get_db()
@@ -5132,6 +5142,7 @@ def apply_leave_request():
 
 
 @workflow_bp.patch("/leave_requests/<req_id>/decision")
+@tenant_module_required("apply_leave")
 @current_user_required
 def leave_decision(req_id):
     leave_obj_id = safe_object_id(req_id)
@@ -5365,6 +5376,7 @@ def leave_decision(req_id):
 # -----------------------------------------------------------------------------
 
 @workflow_bp.patch("/expenses/<expense_id>/decision")
+@tenant_module_required("expenses")
 @roles_required(
     "super_admin",
     "admin",
@@ -5429,6 +5441,7 @@ def expense_decision(expense_id):
 
 
 @workflow_bp.patch("/tickets/<ticket_id>/status")
+@tenant_module_required("it_support")
 @current_user_required
 def ticket_status(ticket_id):
     ticket_obj_id = safe_object_id(ticket_id)
@@ -5494,6 +5507,7 @@ def ticket_status(ticket_id):
 
 
 @workflow_bp.post("/payroll/run")
+@tenant_module_required("payroll")
 @roles_required("super_admin", "admin", "finance", "accounts_finance")
 def payroll_run():
     db = get_db()
@@ -5844,6 +5858,7 @@ def resolve_performance_review_employee(db, raw_employee_id, roles):
 
 
 @workflow_bp.post("/performance/reviews")
+@tenant_module_required("performance_reviews")
 @current_user_required
 def create_performance_review():
     """

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, current_app
 from datetime import datetime
 from bson import ObjectId
 from werkzeug.security import generate_password_hash
@@ -7,6 +7,12 @@ import re
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import load_tenant_context
+from app.services.tenant_service import (
+    can_access_module as saas_can_access_module,
+    can_create_employee as saas_can_create_employee,
+    is_platform_superadmin as saas_is_platform_superadmin,
+)
 
 crud_bp = Blueprint("crud", __name__)
 
@@ -37,6 +43,13 @@ READ_ALLOWED_COLLECTIONS = {
     "attendance_logs",
     "attendance_mode_requests",
     "compoff_credits",
+    "team_field_attendance",
+    "payroll_runs",
+    "payslips",
+    "expenses",
+    "job_openings",
+    "candidates",
+    "trainings",
     "companies",
     "users",
     "notifications",
@@ -52,7 +65,48 @@ WRITE_ALLOWED_COLLECTIONS = {
     "projects",
     "leave_balances",
     "holiday_calendar",
+    "payroll_runs",
+    "payslips",
+    "expenses",
+    "job_openings",
+    "candidates",
+    "trainings",
     "notifications",
+}
+
+
+
+# SaaS collection access mapping.
+# Demo companies can use only Attendance, Apply Leave, Projects,
+# plus basic employee setup needed to create their first 10 employees.
+SAAS_COLLECTION_MODULES = {
+    "attendance_logs": "attendance",
+    "attendance_mode_requests": "attendance",
+    "compoff_credits": "attendance",
+    "leave_requests": "apply_leave",
+    "leave_balances": "apply_leave",
+    "projects": "projects",
+    "holiday_calendar": "holiday_calendar",
+    "performance_reviews": "performance_reviews",
+    "companies": "companies",
+    "users": "users",
+    "notifications": "notifications",
+}
+
+SAAS_EMPLOYEE_SETUP_COLLECTIONS = {
+    "employees",
+    "organisations",
+    "departments",
+    "designations",
+    "states",
+}
+
+SAAS_ERROR_STATUS_CODES = {
+    "tenant_expired": 402,
+    "tenant_suspended": 403,
+    "tenant_missing": 403,
+    "module_not_in_demo_plan": 403,
+    "employee_limit_reached": 403,
 }
 
 SOFT_DELETE_COLLECTIONS = {
@@ -66,6 +120,13 @@ SOFT_DELETE_COLLECTIONS = {
     "attendance_logs",
     "attendance_mode_requests",
     "compoff_credits",
+    "team_field_attendance",
+    "payroll_runs",
+    "payslips",
+    "expenses",
+    "job_openings",
+    "candidates",
+    "trainings",
     "notifications",
 }
 
@@ -305,6 +366,100 @@ REPORTING_OFFICER_DESIGNATION_REGEX = re.compile(
     r"(manager|managing director|director|ceo|chief executive officer)",
     re.IGNORECASE,
 )
+
+
+
+
+def saas_status_code(reason, default=403):
+    return SAAS_ERROR_STATUS_CODES.get(str(reason or ""), default)
+
+
+def saas_access_response(message, code="tenant_access_denied", status_code=403, meta=None):
+    payload = {
+        "ok": False,
+        "message": message,
+        "code": code,
+    }
+
+    if meta:
+        payload["meta"] = meta
+
+    return jsonify(payload), status_code
+
+
+def ensure_saas_collection_access(collection, action="read", db=None):
+    """
+    Simple SaaS rule for generic CRUD.
+
+    IMPORTANT:
+    - Do not block normal SDS/lifetime/paid company modules here.
+    - Demo module visibility is handled by the frontend menu.
+    - Dedicated backend route guards still protect major paid modules.
+    - This function only keeps the 10-employee demo limit on employee creation.
+
+    This avoids breaking old SDS lifetime modules such as payslips, expenses,
+    attendance logs and team field tracking.
+    """
+
+    collection = normalize_key(collection)
+
+    if collection != "employees" or action != "create":
+        return None
+
+    user = getattr(g, "current_user", {}) or {}
+
+    if saas_is_platform_superadmin(user):
+        return None
+
+    db = db or get_db()
+    context = load_tenant_context(user=user)
+    tenant = context.get("tenant")
+    subscription = context.get("subscription") or {}
+
+    # Full/lifetime/paid companies should never be blocked by demo employee limit.
+    if (
+        subscription.get("is_lifetime")
+        or subscription.get("has_lifetime_access")
+        or subscription.get("is_sds_company")
+        or subscription.get("is_paid_company")
+        or str(subscription.get("plan_type") or "").lower() in {"lifetime", "paid"}
+    ):
+        return None
+
+    limit_result = saas_can_create_employee(
+        db,
+        tenant,
+        config=current_app.config,
+    )
+
+    if limit_result.get("allowed"):
+        return None
+
+    message = (
+        limit_result.get("message")
+        or "Employee creation is not allowed for your current plan."
+    )
+
+    code = "employee_limit_reached"
+    lower_message = message.lower()
+
+    if "expired" in lower_message:
+        code = "tenant_expired"
+    elif "suspended" in lower_message:
+        code = "tenant_suspended"
+    elif "not found" in lower_message:
+        code = "tenant_missing"
+
+    return saas_access_response(
+        message,
+        code=code,
+        status_code=saas_status_code(code, 403),
+        meta={
+            "employee_count": limit_result.get("employee_count"),
+            "employee_limit": limit_result.get("employee_limit"),
+            "subscription": subscription,
+        },
+    )
 
 
 def safe_object_id(value):
@@ -3014,6 +3169,10 @@ def directory_item_matches_filter(item, key, value):
 @current_user_required
 def employee_directory():
     db = get_db()
+    saas_denied = ensure_saas_collection_access("employees", "read", db=db)
+
+    if saas_denied:
+        return saas_denied
 
     search_text = normalize_text(
         request.args.get("q")
@@ -3231,6 +3390,11 @@ def list_collection(collection):
         }), 404
 
     db = get_db()
+    saas_denied = ensure_saas_collection_access(collection, "read", db=db)
+
+    if saas_denied:
+        return saas_denied
+
     mongo_collection = get_collection(db, collection)
 
     q = scoped_query_for_collection(db, collection)
@@ -3304,12 +3468,17 @@ def get_collection_item(collection, item_id):
             "message": f"Collection '{collection}' is not available"
         }), 404
 
+    db = get_db()
+    saas_denied = ensure_saas_collection_access(collection, "read", db=db)
+
+    if saas_denied:
+        return saas_denied
+
     item_obj_id = safe_object_id(item_id)
 
     if not item_obj_id:
         return jsonify({"message": "Invalid item id"}), 400
 
-    db = get_db()
     mongo_collection = get_collection(db, collection)
 
     q = scoped_query_for_collection(db, collection)
@@ -3355,10 +3524,15 @@ def create_collection_item(collection):
         }), 403
 
     data = request.get_json(silent=True) or {}
+    db = get_db()
+    saas_denied = ensure_saas_collection_access(collection, "create", db=db)
+
+    if saas_denied:
+        return saas_denied
 
     if collection == "leave_balances":
         result, error, status_code = save_combined_leave_balances(
-            get_db(),
+            db,
             data.get("employee_id"),
             data,
         )
@@ -3393,7 +3567,6 @@ def create_collection_item(collection):
     if validation_error:
         return jsonify({"message": validation_error}), 400
 
-    db = get_db()
     mongo_collection = get_collection(db, collection)
     now = now_utc()
 
@@ -3553,6 +3726,12 @@ def update_collection_item(collection, item_id):
         collection == "employees"
         and can_update_own_employee_profile(db, item_id, data)
     )
+
+    if not self_photo_update and not self_profile_update:
+        saas_denied = ensure_saas_collection_access(collection, "update", db=db)
+
+        if saas_denied:
+            return saas_denied
 
     if collection == "projects" and not can_create_assign_or_collaborate_projects():
         return jsonify({
@@ -3977,12 +4156,17 @@ def delete_collection_item(collection, item_id):
             "message": "You do not have permission to delete this record"
         }), 403
 
+    db = get_db()
+    saas_denied = ensure_saas_collection_access(collection, "delete", db=db)
+
+    if saas_denied:
+        return saas_denied
+
     item_obj_id = safe_object_id(item_id)
 
     if not item_obj_id:
         return jsonify({"message": "Invalid item id"}), 400
 
-    db = get_db()
     mongo_collection = get_collection(db, collection)
 
     q = scoped_query_for_collection(db, collection)
@@ -4235,4 +4419,4 @@ def update_project_collaborators(project_id):
     return jsonify({
         "message": "Project collaborators updated successfully",
         "item": clean_doc(enrich_project_item(updated)),
-    })
+    }) 

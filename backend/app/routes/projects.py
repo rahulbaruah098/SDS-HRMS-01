@@ -3,7 +3,8 @@ from bson import ObjectId
 from datetime import datetime, date, timedelta
 
 from app.extensions import get_db
-from app.utils.auth import current_user_required, audit
+from app.utils.auth import audit
+from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 
@@ -1659,7 +1660,7 @@ def fetch_project_options(db):
 # -----------------------------------------------------------------------------
 
 @projects_bp.get("/options")
-@current_user_required
+@tenant_module_required("projects")
 def project_options():
     db = get_db()
 
@@ -1693,7 +1694,7 @@ def project_options():
 
 
 @projects_bp.get("")
-@current_user_required
+@tenant_module_required("projects")
 def list_projects():
     db = get_db()
 
@@ -1776,7 +1777,7 @@ def list_projects():
 
 
 @projects_bp.post("")
-@current_user_required
+@tenant_module_required("projects")
 def create_project():
     db = get_db()
 
@@ -1914,7 +1915,7 @@ def create_project():
 
 
 @projects_bp.patch("/<project_id>")
-@current_user_required
+@tenant_module_required("projects")
 def update_project(project_id):
     db = get_db()
 
@@ -1997,7 +1998,7 @@ def update_project(project_id):
 
 
 @projects_bp.patch("/<project_id>/assign")
-@current_user_required
+@tenant_module_required("projects")
 def assign_project(project_id):
     db = get_db()
 
@@ -2059,7 +2060,7 @@ def assign_project(project_id):
 
 
 @projects_bp.patch("/<project_id>/collaborators")
-@current_user_required
+@tenant_module_required("projects")
 def update_project_collaborators(project_id):
     db = get_db()
 
@@ -2114,7 +2115,7 @@ def update_project_collaborators(project_id):
 
 
 @projects_bp.patch("/<project_id>/status")
-@current_user_required
+@tenant_module_required("projects")
 def update_project_status(project_id):
     db = get_db()
 
@@ -2160,7 +2161,7 @@ def update_project_status(project_id):
 
 
 @projects_bp.delete("/<project_id>")
-@current_user_required
+@tenant_module_required("projects")
 def delete_project(project_id):
     db = get_db()
 
@@ -2198,7 +2199,7 @@ def delete_project(project_id):
 # -----------------------------------------------------------------------------
 
 @projects_bp.get("/analytics")
-@current_user_required
+@tenant_module_required("projects")
 def project_analytics():
     db = get_db()
 
@@ -2276,7 +2277,7 @@ def project_analytics():
 
 
 @projects_bp.get("/my-progress")
-@current_user_required
+@tenant_module_required("projects")
 def my_project_progress():
     db = get_db()
 
@@ -2311,7 +2312,7 @@ def my_project_progress():
 
 
 @projects_bp.get("/<project_id>/progress")
-@current_user_required
+@tenant_module_required("projects")
 def list_project_progress(project_id):
     db = get_db()
 
@@ -2343,7 +2344,7 @@ def list_project_progress(project_id):
 
 
 @projects_bp.post("/<project_id>/progress")
-@current_user_required
+@tenant_module_required("projects")
 def add_project_progress(project_id):
     db = get_db()
 
@@ -2465,7 +2466,7 @@ def add_project_progress(project_id):
 
 
 @projects_bp.get("/<project_id>")
-@current_user_required
+@tenant_module_required("projects")
 def get_project_detail(project_id):
     db = get_db()
 

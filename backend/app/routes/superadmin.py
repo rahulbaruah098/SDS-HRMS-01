@@ -1,11 +1,19 @@
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, current_app
 from bson import ObjectId
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from werkzeug.security import generate_password_hash
 
 from app.extensions import get_db
 from app.utils.auth import roles_required, audit
 from app.utils.serializers import clean_doc
+
+from app.services.tenant_service import (
+    build_subscription_summary,
+    ensure_sds_tenant,
+    get_trial_days_left,
+    is_sds_tenant,
+    serialize_tenant_for_admin,
+)
 
 
 superadmin_bp = Blueprint("superadmin", __name__)
@@ -226,6 +234,194 @@ def normalize_float(value, default=0):
         return float(value or default)
     except Exception:
         return float(default)
+
+
+def normalize_plan_type(value, default="paid"):
+    plan_type = normalize_text(value or default).lower().replace(" ", "_").replace("-", "_")
+
+    if plan_type in {"trial", "demo_trial", "free_trial"}:
+        return "demo"
+
+    if plan_type in {"lifetime", "life_time", "sds", "internal"}:
+        return "lifetime"
+
+    if plan_type not in {"demo", "paid", "lifetime"}:
+        return default
+
+    return plan_type
+
+
+def normalize_company_status(value, default="active"):
+    status = normalize_text(value or default).lower().replace(" ", "_").replace("-", "_")
+
+    if status not in {"pending", "active", "expired", "suspended", "rejected"}:
+        return default
+
+    return status
+
+
+def normalize_allowed_modules(value, plan_type="paid"):
+    if isinstance(value, str):
+        modules = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        modules = [normalize_text(item) for item in value if normalize_text(item)]
+    else:
+        modules = []
+
+    if modules:
+        return modules
+
+    if plan_type == "demo":
+        return list(current_app.config.get("DEMO_ALLOWED_MODULES", ["attendance", "apply_leave", "projects"]))
+
+    return ["all"]
+
+
+def tenant_lookup_query(tenant_id):
+    tenant_id = normalize_text(tenant_id)
+    object_id = safe_object_id(tenant_id)
+
+    query = {
+        "$or": [
+            {"tenant_id": tenant_id},
+            {"tenant_code": tenant_id},
+        ],
+        "is_deleted": {"$ne": True},
+    }
+
+    if object_id:
+        query["$or"].append({"_id": object_id})
+
+    return query
+
+
+def find_tenant_for_superadmin(db, tenant_id):
+    tenant_id = normalize_text(tenant_id)
+
+    if not tenant_id:
+        return None
+
+    return db.tenants.find_one(tenant_lookup_query(tenant_id))
+
+
+def active_employee_count(db, tenant_id):
+    return db.employees.count_documents({
+        "tenant_id": tenant_id,
+        "status": {"$nin": ["Inactive", "inactive", "disabled", "Disabled"]},
+        "is_deleted": {"$ne": True},
+    })
+
+
+def enrich_tenant_for_superadmin(db, tenant):
+    if not tenant:
+        return None
+
+    payload = serialize_tenant_for_admin(db, tenant, current_app.config) or clean_doc(tenant)
+    tenant_id = tenant.get("tenant_id")
+    today = datetime.utcnow().date().isoformat()
+
+    payload.update({
+        "name": tenant.get("name") or tenant.get("company_name"),
+        "domain": tenant.get("domain", ""),
+        "contact_email": tenant.get("contact_email") or tenant.get("company_email", ""),
+        "company_email": tenant.get("company_email") or tenant.get("contact_email", ""),
+        "contact_phone": tenant.get("contact_phone") or tenant.get("company_phone", ""),
+        "company_phone": tenant.get("company_phone") or tenant.get("contact_phone", ""),
+        "address": tenant.get("address", ""),
+        "plan": tenant.get("plan") or payload.get("plan_label"),
+        "employee_count": active_employee_count(db, tenant_id),
+        "user_count": db.users.count_documents({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        }),
+        "present_today": db.attendance_logs.count_documents({
+            "tenant_id": tenant_id,
+            "date": today,
+            "status": {"$in": ["present", "late", "early_checkout", "holiday_work"]},
+        }),
+        "late_today": db.attendance_logs.count_documents({
+            "tenant_id": tenant_id,
+            "date": today,
+            "status": "late",
+        }),
+        "pending_wfh_field": db.attendance_mode_requests.count_documents({
+            "tenant_id": tenant_id,
+            "status": "pending",
+        }),
+        "pending_leaves": db.leave_requests.count_documents({
+            "tenant_id": tenant_id,
+            "status": "pending",
+        }),
+        "pending_grievances": db.grievances.count_documents({
+            "tenant_id": tenant_id,
+            "status": {"$in": ["pending", "under_review"]},
+        }),
+        "pending_it_support": db.it_support_tickets.count_documents({
+            "tenant_id": tenant_id,
+            "status": {"$in": ["open", "assigned", "in_progress", "waiting_for_user", "reopened"]},
+        }),
+        "available_compoff": db.compoff_credits.count_documents({
+            "tenant_id": tenant_id,
+            "status": "available",
+        }),
+    })
+
+    payload["subscription"] = build_subscription_summary(db, tenant, current_app.config)
+
+    return payload
+
+
+def update_tenant_subscription_record(db, tenant):
+    tenant_id = tenant.get("tenant_id")
+    now_value = now()
+
+    if not tenant_id:
+        return
+
+    plan_type = normalize_plan_type(tenant.get("plan_type"), "paid")
+    status = normalize_company_status(tenant.get("status"), "active")
+
+    if plan_type == "demo":
+        plan_name = "30-Day Demo"
+        amount = 0
+    elif plan_type == "lifetime":
+        plan_name = "Lifetime Full HRMS"
+        amount = 0
+    else:
+        plan_name = tenant.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS")
+        amount = normalize_float(tenant.get("plan_amount"), current_app.config.get("SAAS_FULL_PLAN_AMOUNT", 4999.0))
+
+    db.subscriptions.update_one(
+        {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "tenant_id": tenant_id,
+                "company_id": tenant_id,
+                "tenant_code": tenant.get("tenant_code"),
+                "company_name": tenant.get("company_name") or tenant.get("name"),
+                "company_email": tenant.get("company_email") or tenant.get("contact_email"),
+                "plan_name": plan_name,
+                "plan_type": plan_type,
+                "status": "active" if status == "active" else status,
+                "subscription_status": tenant.get("subscription_status") or status,
+                "amount": amount,
+                "currency": current_app.config.get("RAZORPAY_CURRENCY", "INR"),
+                "start_date": tenant.get("subscription_start_date") or tenant.get("trial_start_date") or now_value,
+                "end_date": tenant.get("subscription_end_date") or tenant.get("trial_end_date"),
+                "is_sds_company": tenant.get("is_sds_company") is True,
+                "is_lifetime": plan_type == "lifetime",
+                "updated_at": now_value,
+                "is_deleted": False,
+            },
+            "$setOnInsert": {
+                "created_at": now_value,
+            },
+        },
+        upsert=True,
+    )
 
 def parse_attendance_date(value):
     value = normalize_text(value)
@@ -981,67 +1177,48 @@ def seed_company_masters(db, tenant_id):
 @roles_required("super_admin")
 def list_companies():
     db = get_db()
-    q = {}
+    ensure_sds_tenant(db, current_app.config)
 
-    search = normalize_text(request.args.get("q"))
+    q = {
+        "is_deleted": {"$ne": True},
+    }
+
+    search = normalize_text(request.args.get("q") or request.args.get("search"))
+    status = normalize_company_status(request.args.get("status"), "") if request.args.get("status") else ""
+    plan_type = normalize_plan_type(request.args.get("plan_type"), "") if request.args.get("plan_type") else ""
+
+    if status:
+        q["status"] = status
+
+    if plan_type:
+        q["plan_type"] = plan_type
 
     if search:
-        q = {
-            "$or": [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"tenant_id": {"$regex": search, "$options": "i"}},
-                {"domain": {"$regex": search, "$options": "i"}},
-            ]
-        }
+        q["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"company_name": {"$regex": search, "$options": "i"}},
+            {"tenant_id": {"$regex": search, "$options": "i"}},
+            {"tenant_code": {"$regex": search, "$options": "i"}},
+            {"domain": {"$regex": search, "$options": "i"}},
+            {"contact_email": {"$regex": search, "$options": "i"}},
+            {"company_email": {"$regex": search, "$options": "i"}},
+        ]
 
     rows = list(db.tenants.find(q).sort("created_at", -1).limit(500))
+    items = [enrich_tenant_for_superadmin(db, row) for row in rows]
 
-    today = datetime.utcnow().date().isoformat()
-
-    for row in rows:
-        tenant_id = row.get("tenant_id")
-
-        row["employee_count"] = db.employees.count_documents({
-            "tenant_id": tenant_id,
-            "status": {"$ne": "Inactive"},
-            "is_deleted": {"$ne": True},
-        })
-        row["user_count"] = db.users.count_documents({
-            "tenant_id": tenant_id,
-            "is_deleted": {"$ne": True},
-        })
-        row["present_today"] = db.attendance_logs.count_documents({
-            "tenant_id": tenant_id,
-            "date": today,
-            "status": {"$in": ["present", "late", "early_checkout", "holiday_work"]},
-        })
-        row["late_today"] = db.attendance_logs.count_documents({
-            "tenant_id": tenant_id,
-            "date": today,
-            "status": "late",
-        })
-        row["pending_wfh_field"] = db.attendance_mode_requests.count_documents({
-            "tenant_id": tenant_id,
-            "status": "pending",
-        })
-        row["pending_leaves"] = db.leave_requests.count_documents({
-            "tenant_id": tenant_id,
-            "status": "pending",
-        })
-        row["pending_grievances"] = db.grievances.count_documents({
-            "tenant_id": tenant_id,
-            "status": {"$in": ["pending", "under_review"]},
-        })
-        row["pending_it_support"] = db.it_support_tickets.count_documents({
-            "tenant_id": tenant_id,
-            "status": {"$in": ["open", "assigned", "in_progress", "waiting_for_user", "reopened"]},
-        })
-        row["available_compoff"] = db.compoff_credits.count_documents({
-            "tenant_id": tenant_id,
-            "status": "available",
-        })
-
-    return jsonify({"items": clean_doc(rows)})
+    return jsonify({
+        "items": clean_doc(items),
+        "summary": {
+            "total": len(items),
+            "active": len([item for item in items if item.get("status") == "active"]),
+            "demo": len([item for item in items if item.get("plan_type") == "demo"]),
+            "paid": len([item for item in items if item.get("plan_type") == "paid"]),
+            "expired": len([item for item in items if item.get("status") == "expired"]),
+            "suspended": len([item for item in items if item.get("status") == "suspended"]),
+            "lifetime": len([item for item in items if item.get("plan_type") == "lifetime"]),
+        },
+    })
 
 
 @superadmin_bp.post("/companies")
@@ -1060,22 +1237,62 @@ def create_company():
     if db.tenants.find_one({"tenant_id": tenant_id}):
         return jsonify({"message": "Company / tenant_id already exists"}), 409
 
+    plan_type = normalize_plan_type(data.get("plan_type") or data.get("plan"), "paid")
+    status = normalize_company_status(data.get("status"), "active")
+    employee_limit = data.get("employee_limit")
+
+    if plan_type == "demo":
+        employee_limit = int(employee_limit or current_app.config.get("DEMO_EMPLOYEE_LIMIT", 10))
+        trial_start_date = now()
+        trial_end_date = trial_start_date + timedelta(days=int(current_app.config.get("DEMO_DURATION_DAYS", 30)))
+        subscription_status = "demo"
+        trial_status = "active"
+    elif plan_type == "lifetime":
+        employee_limit = None
+        trial_start_date = None
+        trial_end_date = None
+        subscription_status = "lifetime"
+        trial_status = "not_required"
+    else:
+        employee_limit = int(employee_limit) if normalize_text(employee_limit) else None
+        trial_start_date = None
+        trial_end_date = None
+        subscription_status = "active"
+        trial_status = "not_required"
+
     doc = {
         "tenant_id": tenant_id,
+        "tenant_code": normalize_text(data.get("tenant_code") or tenant_id.upper()),
         "name": name,
+        "company_name": normalize_text(data.get("company_name") or name),
         "domain": normalize_text(data.get("domain")),
-        "contact_email": normalize_email(data.get("contact_email")),
-        "contact_phone": normalize_text(data.get("contact_phone")),
+        "contact_email": normalize_email(data.get("contact_email") or data.get("company_email")),
+        "company_email": normalize_email(data.get("company_email") or data.get("contact_email")),
+        "contact_phone": normalize_text(data.get("contact_phone") or data.get("company_phone")),
+        "company_phone": normalize_text(data.get("company_phone") or data.get("contact_phone")),
         "address": data.get("address", ""),
-        "status": "active",
-        "plan": data.get("plan", "Internal / Trial"),
+        "status": status,
+        "plan": data.get("plan") or ("30-Day Demo" if plan_type == "demo" else "Full HRMS"),
+        "plan_type": plan_type,
+        "subscription_status": subscription_status,
+        "trial_status": trial_status,
+        "trial_start_date": trial_start_date,
+        "trial_end_date": trial_end_date,
+        "employee_limit": employee_limit,
+        "allowed_modules": normalize_allowed_modules(data.get("allowed_modules"), plan_type),
+        "is_sds_company": plan_type == "lifetime" and tenant_id == current_app.config.get("SDS_TENANT_ID", "sds"),
+        "is_lifetime": plan_type == "lifetime",
+        "is_demo_company": plan_type == "demo",
+        "is_paid_company": plan_type == "paid",
         "created_at": now(),
+        "updated_at": now(),
         "created_by": str(g.current_user["_id"]),
         "is_deleted": False,
     }
 
     db.tenants.insert_one(doc)
     seed_company_masters(db, tenant_id)
+    update_tenant_subscription_record(db, doc)
 
     admin_email = normalize_email(data.get("admin_email"))
     admin_password = data.get("admin_password") or "Admin@123"
@@ -1188,21 +1405,294 @@ def update_company(tenant_id):
     data.pop("_id", None)
     data.pop("tenant_id", None)
 
-    existing = db.tenants.find_one({"tenant_id": tenant_id})
+    existing = find_tenant_for_superadmin(db, tenant_id)
 
     if not existing:
         return jsonify({"message": "Company not found"}), 404
 
+    if "plan_type" in data or "plan" in data:
+        data["plan_type"] = normalize_plan_type(data.get("plan_type") or data.get("plan"), existing.get("plan_type") or "paid")
+        data["allowed_modules"] = normalize_allowed_modules(data.get("allowed_modules"), data["plan_type"])
+        data["is_lifetime"] = data["plan_type"] == "lifetime"
+        data["is_demo_company"] = data["plan_type"] == "demo"
+        data["is_paid_company"] = data["plan_type"] == "paid"
+
+    if "status" in data:
+        data["status"] = normalize_company_status(data.get("status"), existing.get("status") or "active")
+
+    if "company_name" not in data and data.get("name"):
+        data["company_name"] = normalize_text(data.get("name"))
+
+    if "company_email" not in data and data.get("contact_email"):
+        data["company_email"] = normalize_email(data.get("contact_email"))
+
+    if "contact_email" not in data and data.get("company_email"):
+        data["contact_email"] = normalize_email(data.get("company_email"))
+
     data["updated_at"] = now()
     data["updated_by"] = str(g.current_user["_id"])
 
-    db.tenants.update_one({"tenant_id": tenant_id}, {"$set": data})
+    db.tenants.update_one({"_id": existing["_id"]}, {"$set": data})
+    updated = db.tenants.find_one({"_id": existing["_id"]})
+    update_tenant_subscription_record(db, updated)
 
     audit("update_company", "tenants", tenant_id, data)
 
     return jsonify({
         "message": "Company updated",
-        "item": clean_doc(db.tenants.find_one({"tenant_id": tenant_id})),
+        "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
+    })
+
+
+@superadmin_bp.get("/companies/<tenant_id>")
+@roles_required("super_admin")
+def get_company_detail(tenant_id):
+    db = get_db()
+    tenant = find_tenant_for_superadmin(db, tenant_id)
+
+    if not tenant:
+        return jsonify({"message": "Company not found"}), 404
+
+    tenant_id_value = tenant.get("tenant_id")
+
+    recent_payments = list(
+        db.payments.find({
+            "tenant_id": tenant_id_value,
+            "is_deleted": {"$ne": True},
+        }).sort("created_at", -1).limit(10)
+    )
+
+    recent_subscriptions = list(
+        db.subscriptions.find({
+            "tenant_id": tenant_id_value,
+            "is_deleted": {"$ne": True},
+        }).sort("created_at", -1).limit(10)
+    )
+
+    latest_demo_request = db.demo_requests.find_one(
+        {
+            "$or": [
+                {"generated_tenant_id": tenant_id_value},
+                {"tenant_id": tenant_id_value},
+                {"company_email": tenant.get("company_email") or tenant.get("contact_email")},
+            ],
+            "is_deleted": {"$ne": True},
+        },
+        sort=[("created_at", -1)],
+    )
+
+    return jsonify({
+        "item": clean_doc(enrich_tenant_for_superadmin(db, tenant)),
+        "payments": clean_doc(recent_payments),
+        "subscriptions": clean_doc(recent_subscriptions),
+        "demo_request": clean_doc(latest_demo_request),
+    })
+
+
+@superadmin_bp.post("/companies/<tenant_id>/activate")
+@roles_required("super_admin")
+def activate_company(tenant_id):
+    db = get_db()
+    tenant = find_tenant_for_superadmin(db, tenant_id)
+
+    if not tenant:
+        return jsonify({"message": "Company not found"}), 404
+
+    update = {
+        "status": "active",
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+    }
+
+    if tenant.get("plan_type") == "demo":
+        update["trial_status"] = "active"
+        update["subscription_status"] = "demo"
+    elif tenant.get("plan_type") == "lifetime":
+        update["subscription_status"] = "lifetime"
+    else:
+        update["subscription_status"] = "active"
+
+    db.tenants.update_one({"_id": tenant["_id"]}, {"$set": update})
+    updated = db.tenants.find_one({"_id": tenant["_id"]})
+    update_tenant_subscription_record(db, updated)
+
+    audit("activate_company", "tenants", tenant.get("tenant_id"), update)
+
+    return jsonify({
+        "message": "Company activated",
+        "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
+    })
+
+
+@superadmin_bp.post("/companies/<tenant_id>/suspend")
+@roles_required("super_admin")
+def suspend_company(tenant_id):
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    tenant = find_tenant_for_superadmin(db, tenant_id)
+
+    if not tenant:
+        return jsonify({"message": "Company not found"}), 404
+
+    if is_sds_tenant(tenant, current_app.config):
+        return jsonify({"message": "SDS lifetime company cannot be suspended."}), 400
+
+    update = {
+        "status": "suspended",
+        "suspension_reason": normalize_text(data.get("reason")),
+        "suspended_at": now(),
+        "suspended_by": str(g.current_user["_id"]),
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+    }
+
+    db.tenants.update_one({"_id": tenant["_id"]}, {"$set": update})
+    updated = db.tenants.find_one({"_id": tenant["_id"]})
+    update_tenant_subscription_record(db, updated)
+
+    audit("suspend_company", "tenants", tenant.get("tenant_id"), update)
+
+    return jsonify({
+        "message": "Company suspended",
+        "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
+    })
+
+
+@superadmin_bp.post("/companies/<tenant_id>/extend-demo")
+@roles_required("super_admin")
+def extend_company_demo(tenant_id):
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    tenant = find_tenant_for_superadmin(db, tenant_id)
+
+    if not tenant:
+        return jsonify({"message": "Company not found"}), 404
+
+    if tenant.get("plan_type") != "demo":
+        return jsonify({"message": "Demo can be extended only for demo companies."}), 400
+
+    days = int(data.get("days") or data.get("extend_days") or 7)
+
+    if days <= 0:
+        return jsonify({"message": "Extension days must be greater than 0."}), 400
+
+    if days > 365:
+        return jsonify({"message": "Extension days cannot exceed 365 days."}), 400
+
+    current_end = tenant.get("trial_end_date")
+
+    if isinstance(current_end, str):
+        try:
+            current_end = datetime.fromisoformat(current_end.replace("Z", "+00:00"))
+        except Exception:
+            current_end = None
+
+    base_date = current_end if isinstance(current_end, datetime) and current_end > now() else now()
+    new_end_date = base_date + timedelta(days=days)
+
+    update = {
+        "status": "active",
+        "trial_status": "active",
+        "subscription_status": "demo",
+        "trial_end_date": new_end_date,
+        "last_demo_extension_days": days,
+        "last_demo_extension_reason": normalize_text(data.get("reason")),
+        "last_demo_extended_at": now(),
+        "last_demo_extended_by": str(g.current_user["_id"]),
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+    }
+
+    db.tenants.update_one({"_id": tenant["_id"]}, {"$set": update})
+
+    db.trial_notifications.update_many(
+        {
+            "tenant_id": tenant.get("tenant_id"),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "is_deleted": True,
+                "deleted_reason": "demo_extended",
+                "updated_at": now(),
+            }
+        },
+    )
+
+    updated = db.tenants.find_one({"_id": tenant["_id"]})
+    update_tenant_subscription_record(db, updated)
+
+    audit("extend_demo", "tenants", tenant.get("tenant_id"), update)
+
+    return jsonify({
+        "message": f"Demo extended by {days} days",
+        "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
+    })
+
+
+@superadmin_bp.post("/companies/<tenant_id>/mark-paid")
+@roles_required("super_admin")
+def mark_company_paid(tenant_id):
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    tenant = find_tenant_for_superadmin(db, tenant_id)
+
+    if not tenant:
+        return jsonify({"message": "Company not found"}), 404
+
+    amount = normalize_float(data.get("amount"), current_app.config.get("SAAS_FULL_PLAN_AMOUNT", 4999.0))
+    start_date = now()
+    duration_days = int(data.get("duration_days") or 30)
+    end_date = start_date + timedelta(days=duration_days) if duration_days > 0 else None
+
+    update = {
+        "status": "active",
+        "plan": data.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS"),
+        "plan_name": data.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS"),
+        "plan_type": "paid",
+        "subscription_status": "active",
+        "trial_status": "converted_to_paid",
+        "subscription_start_date": start_date,
+        "subscription_end_date": end_date,
+        "employee_limit": None,
+        "allowed_modules": ["all"],
+        "is_demo_company": False,
+        "is_paid_company": True,
+        "is_lifetime": False,
+        "manual_paid_amount": amount,
+        "manual_paid_reason": normalize_text(data.get("reason")),
+        "manual_paid_at": now(),
+        "manual_paid_by": str(g.current_user["_id"]),
+        "updated_at": now(),
+        "updated_by": str(g.current_user["_id"]),
+    }
+
+    db.tenants.update_one({"_id": tenant["_id"]}, {"$set": update})
+    updated = db.tenants.find_one({"_id": tenant["_id"]})
+    update_tenant_subscription_record(db, updated)
+
+    db.payments.insert_one({
+        "tenant_id": updated.get("tenant_id"),
+        "company_id": updated.get("tenant_id"),
+        "tenant_code": updated.get("tenant_code"),
+        "company_name": updated.get("company_name") or updated.get("name"),
+        "company_email": updated.get("company_email") or updated.get("contact_email"),
+        "amount": amount,
+        "currency": current_app.config.get("RAZORPAY_CURRENCY", "INR"),
+        "status": "paid",
+        "payment_status": "manual_paid",
+        "payment_method": "manual_superadmin",
+        "note": normalize_text(data.get("reason")),
+        "created_at": now(),
+        "created_by": str(g.current_user["_id"]),
+        "is_deleted": False,
+    })
+
+    audit("mark_company_paid", "tenants", tenant.get("tenant_id"), update)
+
+    return jsonify({
+        "message": "Company marked as paid and full HRMS access unlocked",
+        "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
     })
 
 

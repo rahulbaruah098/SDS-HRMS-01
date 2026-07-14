@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   CalendarDays,
+  CreditCard,
   FileText,
   RefreshCcw,
   Send,
+  ShieldCheck,
   UserCheck,
 } from 'lucide-react';
 import {
@@ -158,6 +161,125 @@ function memberName(member = {}) {
   return code ? `${name} (${code})` : name;
 }
 
+
+function getSaasTenant(user = {}) {
+  return user.tenant || user.company || {};
+}
+
+function getSaasSubscription(user = {}) {
+  return user.subscription || user.saas_subscription || {};
+}
+
+function getSaasPlanType(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      user.plan_type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getSaasStatus(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.status ||
+      tenant.status ||
+      user.subscription_status ||
+      user.status ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getCompanyName(user = {}) {
+  const tenant = getSaasTenant(user);
+
+  return (
+    user.company_name ||
+    tenant.company_name ||
+    tenant.name ||
+    'Your company'
+  );
+}
+
+function getTrialEndDate(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return (
+    subscription.trial_end_date ||
+    subscription.end_date ||
+    tenant.trial_end_date ||
+    tenant.subscription_end_date ||
+    user.trial_end_date ||
+    user.subscription_end_date ||
+    ''
+  );
+}
+
+function getDemoEmployeeLimit(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  const rawLimit =
+    subscription.employee_limit ??
+    tenant.employee_limit ??
+    user.employee_limit ??
+    10;
+
+  const parsed = Number(rawLimit);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+}
+
+function formatSaasDate(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function getTrialDaysLeft(value) {
+  if (!value) {
+    return null;
+  }
+
+  const endDate = new Date(value);
+
+  if (Number.isNaN(endDate.getTime())) {
+    return null;
+  }
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const endStart = new Date(endDate);
+  endStart.setHours(0, 0, 0, 0);
+
+  const diff = Math.ceil((endStart - todayStart) / (1000 * 60 * 60 * 24));
+
+  return Math.max(diff, 0);
+}
+
 function daysBetween(fromDate, toDate, dayType) {
   if (dayType === 'half_day') return 0.5;
 
@@ -173,13 +295,23 @@ function daysBetween(fromDate, toDate, dayType) {
   return diff > 0 ? diff : 1;
 }
 
-export default function ApplyLeave({ user }) {
+export default function ApplyLeave({ user = {}, setPage } = {}) {
   const alerts = useCustomAlert();
   const userRoles = useMemo(() => normalizeRoles(user), [user]);
   const isHrAdminUser = hasAnyRole(userRoles, HR_ADMIN_ROLES);
   const isAdminUser = hasAnyRole(userRoles, ADMIN_ROLES);
   const isHrUser = hasAnyRole(userRoles, HR_ROLES) && !isAdminUser;
   const employeeProfile = useMemo(() => getEmployeeProfile(user), [user]);
+
+  const saasPlanType = getSaasPlanType(user);
+  const saasStatus = getSaasStatus(user);
+  const isDemoTenant = saasPlanType === 'demo';
+  const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
+  const trialEndDate = getTrialEndDate(user);
+  const trialDaysLeft = getTrialDaysLeft(trialEndDate);
+  const demoEmployeeLimit = getDemoEmployeeLimit(user);
+  const showDemoAccessBanner = isDemoTenant || isExpiredOrSuspendedTenant;
+
 
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [projects, setProjects] = useState([]);
@@ -254,6 +386,18 @@ export default function ApplyLeave({ user }) {
     loadOptions();
   }, []);
 
+  function openBillingPage() {
+    if (typeof setPage === 'function') {
+      setPage('billing');
+    }
+
+    try {
+      window.history.pushState({}, '', '/billing');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }
+
   function updateForm(key, value) {
     setForm((current) => {
       const next = {
@@ -281,6 +425,15 @@ export default function ApplyLeave({ user }) {
 
 async function handleSubmit(event) {
   event.preventDefault();
+
+  if (isExpiredOrSuspendedTenant) {
+    alerts.warning(
+      'Your demo subscription is expired or suspended. Please upgrade to continue.',
+      'Subscription Required',
+    );
+    openBillingPage();
+    return;
+  }
 
   if (!form.from_date || !form.to_date) {
       alerts.warning('From date and to date are required.', 'Missing Details');
@@ -417,6 +570,98 @@ async function handleSubmit(event) {
             background: #EFF6FF;
             color: #1D4ED8;
             font-weight: 750;
+          }
+
+          .apply-leave-saas-banner {
+            border-radius: 24px;
+            border: 1px solid #BFDBFE;
+            background:
+              radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 34%),
+              linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 100%);
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 18px;
+            box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08);
+          }
+
+          .apply-leave-saas-banner.expired {
+            border-color: #FED7AA;
+            background:
+              radial-gradient(circle at top left, rgba(249, 115, 22, 0.16), transparent 34%),
+              linear-gradient(135deg, #FFF7ED 0%, #FFFFFF 100%);
+          }
+
+          .apply-leave-saas-icon {
+            width: 46px;
+            height: 46px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            background: #DBEAFE;
+            color: #2563EB;
+            flex-shrink: 0;
+          }
+
+          .apply-leave-saas-banner.expired .apply-leave-saas-icon {
+            background: #FFEDD5;
+            color: #EA580C;
+          }
+
+          .apply-leave-saas-content {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            min-width: 0;
+          }
+
+          .apply-leave-saas-content h3 {
+            margin: 0;
+            color: #0F172A;
+            letter-spacing: -0.035em;
+          }
+
+          .apply-leave-saas-content p {
+            margin: 7px 0 0;
+            color: #475569;
+            line-height: 1.6;
+          }
+
+          .apply-leave-saas-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+          }
+
+          .apply-leave-saas-meta span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            color: #334155;
+            font-size: 12px;
+            font-weight: 850;
+          }
+
+          .apply-leave-upgrade-btn {
+            min-height: 44px;
+            padding: 0 15px;
+            border: 0;
+            border-radius: 15px;
+            background: linear-gradient(135deg, #2563EB, #4F46E5);
+            color: #FFFFFF;
+            font-weight: 950;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
           }
 
           .apply-leave-layout {
@@ -564,7 +809,99 @@ async function handleSubmit(event) {
           }
 
           @media (max-width: 1050px) {
-            .apply-leave-layout {
+            .apply-leave-saas-banner {
+            border-radius: 24px;
+            border: 1px solid #BFDBFE;
+            background:
+              radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 34%),
+              linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 100%);
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 18px;
+            box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08);
+          }
+
+          .apply-leave-saas-banner.expired {
+            border-color: #FED7AA;
+            background:
+              radial-gradient(circle at top left, rgba(249, 115, 22, 0.16), transparent 34%),
+              linear-gradient(135deg, #FFF7ED 0%, #FFFFFF 100%);
+          }
+
+          .apply-leave-saas-icon {
+            width: 46px;
+            height: 46px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            background: #DBEAFE;
+            color: #2563EB;
+            flex-shrink: 0;
+          }
+
+          .apply-leave-saas-banner.expired .apply-leave-saas-icon {
+            background: #FFEDD5;
+            color: #EA580C;
+          }
+
+          .apply-leave-saas-content {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            min-width: 0;
+          }
+
+          .apply-leave-saas-content h3 {
+            margin: 0;
+            color: #0F172A;
+            letter-spacing: -0.035em;
+          }
+
+          .apply-leave-saas-content p {
+            margin: 7px 0 0;
+            color: #475569;
+            line-height: 1.6;
+          }
+
+          .apply-leave-saas-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+          }
+
+          .apply-leave-saas-meta span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            color: #334155;
+            font-size: 12px;
+            font-weight: 850;
+          }
+
+          .apply-leave-upgrade-btn {
+            min-height: 44px;
+            padding: 0 15px;
+            border: 0;
+            border-radius: 15px;
+            background: linear-gradient(135deg, #2563EB, #4F46E5);
+            color: #FFFFFF;
+            font-weight: 950;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
+          }
+
+          .apply-leave-layout {
               grid-template-columns: 1fr;
             }
           }
@@ -577,6 +914,17 @@ async function handleSubmit(event) {
             }
 
             .apply-leave-refresh {
+              width: 100%;
+              justify-content: center;
+            }
+
+
+            .apply-leave-saas-banner {
+              flex-direction: column;
+              border-radius: 22px;
+            }
+
+            .apply-leave-upgrade-btn {
               width: 100%;
               justify-content: center;
             }
@@ -619,6 +967,59 @@ async function handleSubmit(event) {
           {loadingOptions ? 'Refreshing...' : 'Refresh'}
         </button>
       </section>
+
+      {showDemoAccessBanner ? (
+        <section
+          className={`apply-leave-saas-banner ${isExpiredOrSuspendedTenant ? 'expired' : ''}`}
+        >
+          <div className="apply-leave-saas-content">
+            <div className="apply-leave-saas-icon">
+              {isExpiredOrSuspendedTenant ? (
+                <AlertTriangle size={24} />
+              ) : (
+                <ShieldCheck size={24} />
+              )}
+            </div>
+
+            <div>
+              <h3>
+                {isExpiredOrSuspendedTenant
+                  ? 'Demo subscription expired'
+                  : 'YourComate Demo Access'}
+              </h3>
+              <p>
+                {isExpiredOrSuspendedTenant
+                  ? 'Your demo access is expired or suspended. Please upgrade to continue using HRMS modules.'
+                  : `${getCompanyName(user)} is currently using demo access. Apply Leave is included in the demo plan along with Attendance and Projects.`}
+              </p>
+
+              <div className="apply-leave-saas-meta">
+                <span>
+                  <CalendarDays size={14} />
+                  Trial ends: {formatSaasDate(trialEndDate)}
+                </span>
+                <span>
+                  <FileText size={14} />
+                  Days left: {trialDaysLeft === null ? 'N/A' : trialDaysLeft}
+                </span>
+                <span>
+                  <UserCheck size={14} />
+                  Employee limit: {demoEmployeeLimit}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="apply-leave-upgrade-btn"
+            onClick={openBillingPage}
+          >
+            <CreditCard size={16} />
+            Upgrade Plan
+          </button>
+        </section>
+      ) : null}
 
       <section className="apply-leave-layout">
         <aside className="apply-leave-panel">
@@ -807,7 +1208,7 @@ async function handleSubmit(event) {
             <button
               type="submit"
               className="apply-leave-submit"
-              disabled={submitting}
+              disabled={submitting || isExpiredOrSuspendedTenant}
             >
               <Send size={17} />
               {submitting ? 'Submitting...' : 'Submit Leave Request'}

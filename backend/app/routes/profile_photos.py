@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
 from app.utils.auth import current_user_required
+from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 
@@ -404,7 +405,7 @@ def save_employee_image_file(file, employee, upload_folder_type, file_prefix, ma
 
 
 @profile_photos_bp.post("/profile-photos/upload")
-@current_user_required
+@tenant_module_required("profile")
 def upload_profile_photo():
     db = get_db()
 
@@ -467,7 +468,7 @@ def upload_profile_photo():
 
 
 @profile_photos_bp.post("/profile-covers/upload")
-@current_user_required
+@tenant_module_required("profile")
 def upload_profile_cover():
     db = get_db()
 

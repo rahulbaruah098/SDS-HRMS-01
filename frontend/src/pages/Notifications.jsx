@@ -78,6 +78,48 @@ function priorityClass(priority = '') {
   return 'notif-pill-blue';
 }
 
+
+function getNotificationAction(item = {}) {
+  const meta = item.meta || {};
+  const target = String(
+    meta.target ||
+      meta.page ||
+      item.target ||
+      item.page ||
+      '',
+  )
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_');
+
+  if (target === 'billing' || target === 'upgrade' || target === 'subscribe') {
+    return {
+      page: 'billing',
+      label: 'Open Billing',
+    };
+  }
+
+  if (
+    target === 'subscription_expired' ||
+    target === 'trial_expired' ||
+    target === 'demo_expired'
+  ) {
+    return {
+      page: 'subscription_expired',
+      label: 'View Expiry Details',
+    };
+  }
+
+  if (item.notification_type === 'saas_trial_reminder') {
+    return {
+      page: 'billing',
+      label: 'Upgrade Plan',
+    };
+  }
+
+  return null;
+}
+
 function optionValue(item = {}) {
   return String(item.value || item._id || item.id || item.tenant_id || '').trim();
 }
@@ -238,8 +280,9 @@ function MultiSelectInput({
   );
 }
 
-function NotificationCard({ item, onMarkRead }) {
+function NotificationCard({ item, onMarkRead, onNavigate }) {
   const isUnread = item.read !== true && item.status !== 'read';
+  const action = getNotificationAction(item);
 
   return (
     <article className={`notif-card ${isUnread ? 'unread' : ''}`}>
@@ -253,6 +296,16 @@ function NotificationCard({ item, onMarkRead }) {
           <span className={`notif-pill ${isUnread ? 'notif-pill-green' : 'notif-pill-gray'}`}>
             {notificationStatusLabel(item)}
           </span>
+          {action ? (
+            <button
+              type="button"
+              className="notif-primary-btn"
+              onClick={() => onNavigate(action.page)}
+            >
+              {action.label}
+            </button>
+          ) : null}
+
           {isUnread ? (
             <button
               type="button"
@@ -292,7 +345,7 @@ function NotificationCard({ item, onMarkRead }) {
   );
 }
 
-export default function Notifications() {
+export default function Notifications({ setPage } = {}) {
   const alerts = useCustomAlert();
   const user = currentUser();
   const canCreate = canCreateNotifications(user);
@@ -640,6 +693,30 @@ export default function Notifications() {
       showMessage('error', error.message || 'Unable to mark all notifications as read.', 'Mark All Read Failed');
     }
   };
+
+
+  function handleNavigate(page) {
+    const normalizedPage = String(page || '').trim();
+
+    if (!normalizedPage) {
+      return;
+    }
+
+    if (typeof setPage === 'function') {
+      setPage(normalizedPage);
+    }
+
+    try {
+      const routeMap = {
+        billing: '/billing',
+        subscription_expired: '/subscription-expired',
+      };
+
+      window.history.pushState({}, '', routeMap[normalizedPage] || '/');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }
 
   const notificationTypeOptions = [
     { value: 'general', label: 'General' },
@@ -1217,6 +1294,7 @@ export default function Notifications() {
                   key={item._id || item.id || `${item.title}-${item.created_at}`}
                   item={item}
                   onMarkRead={handleMarkRead}
+                  onNavigate={handleNavigate}
                 />
               ))}
             </div>

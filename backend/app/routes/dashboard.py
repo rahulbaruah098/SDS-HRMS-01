@@ -5,6 +5,11 @@ from datetime import datetime, date, timedelta
 from app.extensions import get_db
 from app.utils.auth import current_user_required
 from app.utils.serializers import clean_doc
+from app.middleware.tenant_guard import (
+    active_tenant_required,
+    get_loaded_tenant_context,
+    platform_superadmin_required,
+)
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
@@ -100,6 +105,31 @@ def current_tenant_id():
     tenant_id = str(tenant_id or "").strip()
 
     return tenant_id or "sds"
+
+
+def current_saas_payload():
+    """
+    Adds SaaS tenant/subscription details to dashboard API responses.
+
+    The tenant guard loads this context before dashboard routes run.
+    If context is not available for any reason, dashboard still works and
+    returns an empty SaaS payload.
+    """
+
+    try:
+        context = get_loaded_tenant_context()
+    except Exception:
+        context = {}
+
+    tenant = context.get("tenant") or getattr(g, "current_tenant", {}) or {}
+    subscription = context.get("subscription") or getattr(g, "subscription", {}) or {}
+
+    return {
+        "tenant_id": context.get("tenant_id") or current_tenant_id(),
+        "tenant": clean_doc(tenant),
+        "subscription": clean_doc(subscription),
+        "is_platform_superadmin": bool(context.get("is_platform_superadmin")),
+    }
 
 
 def tenant_query(extra=None, include_legacy=True):
@@ -2597,7 +2627,7 @@ def tenant_project_analytics(db, tenant_id):
 
 
 @dashboard_bp.get("/superadmin")
-@current_user_required
+@platform_superadmin_required
 def superadmin_dashboard():
     db = get_db()
 
@@ -2777,8 +2807,14 @@ def superadmin_dashboard():
     default_tenant_id = current_tenant_id()
     project_analytics = tenant_project_analytics(db, default_tenant_id)
 
+    saas_payload = current_saas_payload()
+
     return jsonify({
         "stats": stats,
+        "saas": saas_payload,
+        "tenant": saas_payload.get("tenant"),
+        "subscription": saas_payload.get("subscription"),
+        "is_platform_superadmin": saas_payload.get("is_platform_superadmin"),
         "tenants": clean_doc(tenant_summary),
         "recent_users": clean_doc(recent_users),
         "recent_audit": clean_doc(recent_audit),
@@ -2796,7 +2832,7 @@ def superadmin_dashboard():
 
 
 @dashboard_bp.get("/admin")
-@current_user_required
+@active_tenant_required
 def admin_dashboard():
     db = get_db()
     roles = current_roles()
@@ -3134,8 +3170,14 @@ def admin_dashboard():
     if my_pending_attendance_mode_requests:
         stats["My Pending WFH/Field Approvals"] = len(my_pending_attendance_mode_requests)
 
+    saas_payload = current_saas_payload()
+
     return jsonify({
         "stats": stats,
+        "saas": saas_payload,
+        "tenant": saas_payload.get("tenant"),
+        "subscription": saas_payload.get("subscription"),
+        "is_platform_superadmin": saas_payload.get("is_platform_superadmin"),
         "today": today,
         "roles": list(roles),
         "employee_summary": clean_doc(employee_snapshot(current_emp, roles)) if current_emp else None,
@@ -3163,7 +3205,7 @@ def admin_dashboard():
 
 
 @dashboard_bp.get("/employee")
-@current_user_required
+@active_tenant_required
 def employee_dashboard():
     db = get_db()
     roles = current_roles()
@@ -3171,7 +3213,13 @@ def employee_dashboard():
     emp = current_employee(db)
 
     if not emp:
+        saas_payload = current_saas_payload()
+
         return jsonify({
+            "saas": saas_payload,
+            "tenant": saas_payload.get("tenant"),
+            "subscription": saas_payload.get("subscription"),
+            "is_platform_superadmin": saas_payload.get("is_platform_superadmin"),
             "employee": None,
             "employee_summary": None,
             "dashboard_display": {
@@ -3514,7 +3562,13 @@ def employee_dashboard():
         else "Employee"
     )
 
+    saas_payload = current_saas_payload()
+
     return jsonify({
+        "saas": saas_payload,
+        "tenant": saas_payload.get("tenant"),
+        "subscription": saas_payload.get("subscription"),
+        "is_platform_superadmin": saas_payload.get("is_platform_superadmin"),
         "employee": clean_doc(emp),
         "employee_summary": clean_doc(employee_snapshot(emp, roles)),
         "dashboard_display": {
