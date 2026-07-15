@@ -272,7 +272,7 @@ def create_app():
             },
             "modules": [
                 "Authentication",
-                "SaaS Demo Requests",
+                "SaaS Trial Requests",
                 "Dashboard",
                 "Employee Master",
                 "Attendance",

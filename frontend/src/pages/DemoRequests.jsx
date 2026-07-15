@@ -333,7 +333,7 @@ export default function DemoRequests() {
     }
 
     const ok = await alerts.confirm(
-      `Approve trial registration for ${row.company_name}? The system will create a trial company, generate admin login credentials, start the 30-day trial, and email login details to ${row.company_email}.`,
+      `Approve trial registration for ${row.company_name}? The system will create a trial company, generate admin login credentials, start the 15-day full-access trial, and email login details to ${row.company_email}.`,
       'Approve Trial Request',
     );
 
@@ -594,7 +594,7 @@ export default function DemoRequests() {
           <div>
             <h3>Trial Request List</h3>
             <p>
-              Approving a verified request creates the trial company, starts the 30-day trial,
+              Approving a verified request creates the trial company, starts the 15-day full-access trial,
               generates admin credentials, and sends the approval email automatically.
             </p>
           </div>

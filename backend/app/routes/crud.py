@@ -77,8 +77,8 @@ WRITE_ALLOWED_COLLECTIONS = {
 
 
 # SaaS collection access mapping.
-# Demo companies can use only Attendance, Apply Leave, Projects,
-# plus basic employee setup needed to create their first 10 employees.
+# Active trial companies receive full role-based access during the trial.
+# Paid companies use the selected plan employee limit, while SDS lifetime stays unrestricted.
 SAAS_COLLECTION_MODULES = {
     "attendance_logs": "attendance",
     "attendance_mode_requests": "attendance",
@@ -426,7 +426,7 @@ def ensure_saas_collection_access(collection, action="read", db=None):
     ):
         return None
 
-    # For demo and paid companies, let tenant_service decide using the latest
+    # For trial and paid companies, let tenant_service decide using the latest
     # tenant employee_limit:
     # - active trial with employee_limit=None => allowed
     # - paid Essential/Growth employee_limit => blocked at limit

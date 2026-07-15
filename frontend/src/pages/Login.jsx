@@ -1177,7 +1177,7 @@ export default function Login({ onLogin }) {
                   <b>Want to use YourComate HRMS for your company?</b>
                   <span>Apply for a trial registration. Your company email will be verified by OTP before Superadmin approval.</span>
                   <div className="sds-demo-note">
-                    <strong>Demo access:</strong> 15 days, full HRMS access, all HRMS modules modules.
+                    <strong>Trial access:</strong> 15 days, full HRMS access, all HRMS modules.
                   </div>
                 </div>
 

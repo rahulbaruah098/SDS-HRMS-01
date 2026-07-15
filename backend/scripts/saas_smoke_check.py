@@ -450,7 +450,7 @@ def build_next_steps(route_result, config_result, database_result):
             )
 
     if not steps:
-        steps.append("Smoke check passed. Continue with frontend/manual demo registration testing.")
+        steps.append("Smoke check passed. Continue with frontend/manual trial registration testing.")
 
     return steps
 
