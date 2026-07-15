@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from bson import ObjectId
 from flask import Blueprint, current_app, g, jsonify, request
 
 from app.extensions import get_db
@@ -69,6 +70,13 @@ def current_user_is_superadmin():
     }
 
     return "super_admin" in normalized
+
+
+def object_id_or_none(value):
+    try:
+        return ObjectId(str(value))
+    except Exception:
+        return None
 
 
 def requested_tenant_id(default_to_current=True):
@@ -352,6 +360,179 @@ def create_order():
         return error_response(exc)
 
 
+@billing_bp.post("/premium-request")
+@current_user_required
+def premium_plan_request():
+    """
+    Saves a Premium custom quotation request for Superadmin/Sales review.
+
+    This route does not create a Razorpay order because Premium is quote-based.
+    It does not send email. The request is shown in the Superadmin Premium
+    Requests page for follow-up, quotation and manual payment/activation.
+    Expected optional body:
+    {
+      "plan_code": "premium",
+      "contact_name": "...",
+      "contact_email": "...",
+      "contact_phone": "...",
+      "message": "...",
+      "requirements": {
+        "employee_count": 250,
+        "onboarding": "Yes",
+        "training": "Yes",
+        "support_sla": "Priority",
+        "custom_modules": "..."
+      }
+    }
+    """
+
+    db = get_db()
+    data = request_json()
+    tenant_id = requested_tenant_id(default_to_current=True)
+    user = getattr(g, "current_user", {}) or {}
+
+    try:
+        company = find_company_for_billing(db, tenant_id)
+        summary = build_billing_summary(db, company)
+
+        selected_plan = db.pricing_plans.find_one({
+            "plan_code": safe_str(data.get("plan_code") or "premium").lower() or "premium",
+            "is_deleted": {"$ne": True},
+        }) or {}
+
+        requester_name = safe_str(
+            data.get("contact_name")
+            or data.get("requester_name")
+            or user.get("name")
+            or user.get("full_name")
+            or company.get("contact_person")
+            or company.get("company_name")
+        )
+
+        requester_email = safe_str(
+            data.get("contact_email")
+            or data.get("requester_email")
+            or user.get("email")
+            or company.get("company_email")
+            or company.get("contact_email")
+            or company.get("email")
+        )
+
+        requester_phone = safe_str(
+            data.get("contact_phone")
+            or data.get("requester_phone")
+            or user.get("phone")
+            or user.get("mobile")
+            or company.get("contact_phone")
+            or company.get("phone")
+            or company.get("mobile")
+        )
+
+        requirements = data.get("requirements")
+        if not isinstance(requirements, dict):
+            requirements = {}
+
+        explicit_employee_count = (
+            requirements.get("employee_count")
+            or data.get("employee_count")
+            or summary.get("employee_count")
+        )
+
+        request_doc = {
+            "tenant_id": tenant_id,
+            "tenant_code": company.get("tenant_code"),
+            "company_name": (
+                company.get("company_name")
+                or company.get("name")
+                or summary.get("company_name")
+                or "YourComate company"
+            ),
+            "company_email": (
+                company.get("company_email")
+                or company.get("contact_email")
+                or company.get("email")
+                or requester_email
+            ),
+            "requester_name": requester_name,
+            "requester_email": requester_email,
+            "requester_phone": requester_phone,
+            "requested_plan_code": selected_plan.get("plan_code") or "premium",
+            "requested_plan_name": selected_plan.get("plan_name") or "Premium",
+            "requested_plan_label": selected_plan.get("plan_label") or "Premium",
+            "is_custom_pricing": True,
+            "allow_online_payment": False,
+            "employee_count": explicit_employee_count,
+            "current_plan_type": summary.get("plan_type"),
+            "current_status": summary.get("status"),
+            "trial_status": summary.get("trial_status"),
+            "trial_days_left": summary.get("trial_days_left"),
+            "requirements": requirements,
+            "message": safe_str(data.get("message")),
+            "status": "new",
+            "source": "billing_premium_request_form",
+            "created_by": current_user_id(),
+            "created_by_email": user.get("email"),
+            "created_at": now_utc(),
+            "updated_at": now_utc(),
+            "is_deleted": False,
+        }
+
+        result = db.premium_plan_requests.insert_one(request_doc)
+        request_id = str(result.inserted_id)
+
+        db.premium_plan_requests.update_one(
+            {"_id": result.inserted_id},
+            {
+                "$set": {
+                    "request_reference": f"PRM-{request_id[-8:].upper()}",
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+
+        request_doc["request_reference"] = f"PRM-{request_id[-8:].upper()}"
+
+        db.tenants.update_one(
+            {"tenant_id": tenant_id},
+            {
+                "$set": {
+                    "selected_plan_code": "premium",
+                    "last_premium_request_id": request_id,
+                    "last_premium_request_at": now_utc(),
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+
+        audit(
+            "billing.premium_request_created",
+            "premium_plan_requests",
+            request_id,
+            {
+                "tenant_id": tenant_id,
+                "company_name": request_doc.get("company_name"),
+                "status": "new",
+            },
+        )
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                "Premium request submitted successfully. "
+                "Superadmin/Sales can review it from the Premium Requests page."
+            ),
+            "request_id": request_id,
+            "request_reference": request_doc.get("request_reference"),
+            "request": clean_doc({
+                **request_doc,
+                "_id": request_id,
+            }),
+        }), 201
+    except Exception as exc:
+        return error_response(exc)
+
+
+
 @billing_bp.post("/verify-payment")
 @current_user_required
 def verify_payment():
@@ -622,6 +803,147 @@ def admin_delete_pricing_plan(plan_code):
         })
     except Exception as exc:
         return error_response(exc)
+
+
+@billing_bp.get("/admin/premium-requests")
+@roles_required("super_admin")
+def admin_premium_requests():
+    """
+    Superadmin monitoring list for Premium custom quotation requests.
+    """
+
+    db = get_db()
+    status = safe_str(request.args.get("status"))
+    tenant_id = safe_str(request.args.get("tenant_id"))
+    search = safe_str(request.args.get("search"))
+
+    query = {"is_deleted": {"$ne": True}}
+
+    if status and status.lower() != "all":
+        query["status"] = status
+
+    if tenant_id:
+        query["tenant_id"] = tenant_id
+
+    if search:
+        query["$or"] = [
+            {"company_name": {"$regex": search, "$options": "i"}},
+            {"company_email": {"$regex": search, "$options": "i"}},
+            {"requester_name": {"$regex": search, "$options": "i"}},
+            {"requester_email": {"$regex": search, "$options": "i"}},
+            {"requester_phone": {"$regex": search, "$options": "i"}},
+            {"requested_plan_code": {"$regex": search, "$options": "i"}},
+            {"requested_plan_name": {"$regex": search, "$options": "i"}},
+        ]
+
+    data = paginated_cursor(
+        db.premium_plan_requests,
+        query,
+        page=request.args.get("page", 1),
+        limit=request.args.get("limit", 20),
+    )
+
+    return jsonify({"ok": True, **data})
+
+
+@billing_bp.patch("/admin/premium-requests/<request_id>")
+@billing_bp.put("/admin/premium-requests/<request_id>")
+@roles_required("super_admin")
+def admin_update_premium_request(request_id):
+    """
+    Updates Premium request status after sales follow-up.
+
+    Expected body:
+    {
+      "status": "new" | "contacted" | "quoted" | "converted" | "closed",
+      "sales_note": "...",
+      "quoted_amount": 9999,
+      "quoted_employee_limit": 500
+    }
+    """
+
+    db = get_db()
+    data = request_json()
+    object_id = object_id_or_none(request_id)
+
+    if not object_id:
+        return jsonify({
+            "ok": False,
+            "message": "Invalid Premium request ID.",
+            "code": "invalid_premium_request_id",
+        }), 400
+
+    allowed_statuses = {
+        "new",
+        "contacted",
+        "requirements_collected",
+        "quoted",
+        "payment_pending",
+        "converted",
+        "closed",
+        "cancelled",
+    }
+
+    status = safe_str(data.get("status")).lower().replace(" ", "_").replace("-", "_")
+    update_doc = {
+        "updated_at": now_utc(),
+        "updated_by": current_user_id(),
+    }
+
+    if status:
+        if status not in allowed_statuses:
+            return jsonify({
+                "ok": False,
+                "message": "Invalid Premium request status.",
+                "code": "invalid_premium_request_status",
+                "allowed_statuses": sorted(allowed_statuses),
+            }), 400
+
+        update_doc["status"] = status
+
+    for field in [
+        "sales_note",
+        "quoted_amount",
+        "quoted_currency",
+        "quoted_employee_limit",
+        "quoted_billing_interval",
+        "quotation_reference",
+        "payment_link",
+        "follow_up_date",
+    ]:
+        if field in data:
+            update_doc[field] = data.get(field)
+
+    result = db.premium_plan_requests.update_one(
+        {"_id": object_id, "is_deleted": {"$ne": True}},
+        {"$set": update_doc},
+    )
+
+    if not result.matched_count:
+        return jsonify({
+            "ok": False,
+            "message": "Premium request not found.",
+            "code": "premium_request_not_found",
+        }), 404
+
+    updated = db.premium_plan_requests.find_one({"_id": object_id})
+
+    audit(
+        "billing.premium_request_updated",
+        "premium_plan_requests",
+        request_id,
+        {
+            "status": updated.get("status") if updated else status,
+            "tenant_id": updated.get("tenant_id") if updated else None,
+        },
+    )
+
+    return jsonify({
+        "ok": True,
+        "message": "Premium request updated successfully.",
+        "request": clean_doc(updated),
+    })
+
 
 
 @billing_bp.get("/admin/orders")

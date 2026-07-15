@@ -462,7 +462,7 @@ function PricingPlanCard({ plan, selected, disabled, onSelect }) {
           {isCustom ? 'Custom' : formatCurrency(amount, currency)}
         </strong>
         <span style={{ color: '#64748b', fontSize: 13 }}>
-          {isCustom ? 'Contact Superadmin' : `per ${interval}`}
+          {isCustom ? 'Contact Sales Team' : `per ${interval}`}
         </span>
       </div>
 
@@ -518,6 +518,9 @@ export default function Billing({ user = {}, setPage }) {
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
   const [selectedPlanCode, setSelectedPlanCode] = useState('');
+  const [showSalesContact, setShowSalesContact] = useState(false);
+  const [submittingPremiumRequest, setSubmittingPremiumRequest] = useState(false);
+  const [premiumRequestId, setPremiumRequestId] = useState('');
 
   const plans = useMemo(() => getPlans(summary || {}), [summary]);
   const selectedPlan = useMemo(() => {
@@ -591,6 +594,12 @@ export default function Billing({ user = {}, setPage }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function handleSelectPlan(planCode) {
+    setSelectedPlanCode(planCode);
+    setShowSalesContact(false);
+    setPremiumRequestId('');
+  }
+
   async function handlePaymentSuccess(paymentResponse, orderResponse) {
     setVerifyingPayment(true);
 
@@ -627,6 +636,7 @@ export default function Billing({ user = {}, setPage }) {
       }
 
       await loadBillingSummary();
+      setShowSalesContact(false);
 
       if (typeof setPage === 'function') {
         setPage('dashboard');
@@ -642,11 +652,82 @@ export default function Billing({ user = {}, setPage }) {
         title: 'Payment verification failed',
         message:
           error.message ||
-          'Payment was received but verification failed. Please contact Superadmin.',
+          'Payment was received but verification failed. Please contact the sales/support team.',
         type: 'error',
       });
     } finally {
       setVerifyingPayment(false);
+    }
+  }
+
+  async function submitPremiumRequest() {
+    if (!selectedPlan) {
+      showAlert({
+        title: 'Select Premium plan',
+        message: 'Please select the Premium plan before contacting the sales team.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    setSubmittingPremiumRequest(true);
+    setShowSalesContact(true);
+
+    try {
+      const planCode = selectedPlan.plan_code || selectedPlan.code || selectedPlanCode || 'premium';
+      const planName = selectedPlan.display_name || selectedPlan.plan_name || 'Premium';
+
+      const data = await api('/billing/premium-request', {
+        method: 'POST',
+        body: JSON.stringify({
+          plan_code: planCode,
+          contact_name:
+            user.name ||
+            user.full_name ||
+            user.employee_name ||
+            computed.companyName,
+          contact_email: user.email || computed.companyEmail,
+          contact_phone: user.phone || user.mobile || user.contact_no || '',
+          employee_count: computed.employeesUsed,
+          message:
+            'The company has selected the Premium custom plan from the Billing page and requested sales follow-up.',
+          requirements: {
+            requested_plan: planName,
+            employee_count: computed.employeesUsed,
+            current_employee_limit: computed.employeeLimit,
+            onboarding: 'To be discussed with sales team',
+            training: 'To be discussed with sales team',
+            support_sla: 'Premium / enterprise support discussion required',
+            custom_modules: 'To be discussed with sales team',
+          },
+        }),
+      });
+
+      const requestId =
+        data.request_id ||
+        data.request?._id ||
+        data.request?.id ||
+        '';
+
+      setPremiumRequestId(requestId);
+
+      showAlert({
+        title: 'Premium request submitted',
+        message:
+          data.message ||
+          'Your Premium request has been shared with the sales team. They will contact the company with quotation and payment details.',
+        type: 'success',
+      });
+    } catch (error) {
+      showAlert({
+        title: 'Unable to submit Premium request',
+        message:
+          error.message ||
+          'Please try again or contact the sales/support team manually.',
+        type: 'error',
+      });
+    } finally {
+      setSubmittingPremiumRequest(false);
     }
   }
 
@@ -670,11 +751,7 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (selectedPlan.is_custom_pricing || selectedPlan.allow_online_payment === false) {
-      showAlert({
-        title: 'Custom premium plan',
-        message: 'Premium/custom pricing must be activated by Superadmin after discussion.',
-        type: 'info',
-      });
+      await submitPremiumRequest();
       return;
     }
 
@@ -785,6 +862,9 @@ export default function Billing({ user = {}, setPage }) {
   const selectedPlanEmployeeText = selectedPlan?.is_unlimited_employees
     ? 'Unlimited'
     : `${selectedPlan?.employee_limit || selectedPlan?.included_employees || '—'} employees`;
+
+  const isCustomSelected =
+    Boolean(selectedPlan?.is_custom_pricing) || selectedPlan?.allow_online_payment === false;
 
   return (
     <section className="panel" style={{ maxWidth: 1180, margin: '0 auto' }}>
@@ -956,7 +1036,7 @@ export default function Billing({ user = {}, setPage }) {
                     Select a subscription plan
                   </h2>
                   <p style={{ margin: '6px 0 0', color: '#64748b' }}>
-                    Superadmin can update these plan prices and employee limits dynamically.
+                    Essential and Growth can be paid online. Premium is handled by the sales team after quotation.
                   </p>
                 </div>
               </div>
@@ -976,8 +1056,8 @@ export default function Billing({ user = {}, setPage }) {
                       key={code}
                       plan={plan}
                       selected={code === selectedPlanCode}
-                      disabled={computed.isLifetime || computed.isPaid || creatingOrder || verifyingPayment}
-                      onSelect={setSelectedPlanCode}
+                      disabled={computed.isLifetime || computed.isPaid || creatingOrder || verifyingPayment || submittingPremiumRequest}
+                      onSelect={handleSelectPlan}
                     />
                   );
                 })}
@@ -1066,7 +1146,7 @@ export default function Billing({ user = {}, setPage }) {
                     lineHeight: 1.85,
                   }}
                 >
-                  <li>Demo company becomes official paid company</li>
+                  <li>Trial company becomes official paid company</li>
                   <li>Full HRMS access continues after trial expiry</li>
                   <li>Employee limit applies according to selected plan</li>
                   <li>Payment record appears in Superadmin monitoring</li>
@@ -1090,6 +1170,7 @@ export default function Billing({ user = {}, setPage }) {
                 disabled={
                   creatingOrder ||
                   verifyingPayment ||
+                  submittingPremiumRequest ||
                   computed.isLifetime ||
                   computed.isPaid
                 }
@@ -1100,8 +1181,10 @@ export default function Billing({ user = {}, setPage }) {
                   minHeight: 46,
                 }}
               >
-                {creatingOrder || verifyingPayment ? (
+                {creatingOrder || verifyingPayment || submittingPremiumRequest ? (
                   <Loader2 size={18} className="spin" />
+                ) : isCustomSelected ? (
+                  <Users size={18} />
                 ) : (
                   <CreditCard size={18} />
                 )}
@@ -1109,12 +1192,14 @@ export default function Billing({ user = {}, setPage }) {
                   ? 'Verifying Payment...'
                   : creatingOrder
                     ? 'Opening Razorpay...'
-                    : computed.isPaid
+                    : submittingPremiumRequest
+                      ? 'Submitting Request...'
+                      : computed.isPaid
                       ? 'Already Paid'
                       : computed.isLifetime
                         ? 'Lifetime Access'
-                        : selectedPlan?.is_custom_pricing || selectedPlan?.allow_online_payment === false
-                          ? 'Contact Superadmin'
+                        : isCustomSelected
+                          ? 'Contact Sales Team'
                           : `Pay for ${selectedPlan?.display_name || selectedPlan?.plan_name || 'Selected Plan'}`}
               </button>
 
@@ -1150,6 +1235,93 @@ export default function Billing({ user = {}, setPage }) {
               </button>
             </div>
 
+            {showSalesContact && isCustomSelected ? (
+              <div
+                style={{
+                  marginTop: 22,
+                  padding: 22,
+                  borderRadius: 22,
+                  background:
+                    'linear-gradient(135deg, rgba(236,253,245,0.96), rgba(239,246,255,0.96))',
+                  border: '1px solid rgba(37,99,235,0.2)',
+                  boxShadow: '0 18px 45px rgba(15,23,42,0.07)',
+                }}
+              >
+                <h3
+                  style={{
+                    margin: '0 0 10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    color: '#0f172a',
+                  }}
+                >
+                  <Users size={22} color="#2563eb" />
+                  Premium custom plan request
+                </h3>
+
+                <p style={{ margin: 0, color: '#475569', lineHeight: 1.7 }}>
+                  Premium does not open Razorpay directly because the final amount is custom.
+                  Your request is now saved and shared with the sales team. They will review the
+                  company size, number of employees, onboarding requirement, support level and
+                  any custom HRMS needs before sharing the final quotation and payment process.
+                </p>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                    gap: 14,
+                    marginTop: 18,
+                  }}
+                >
+                  <div
+                    style={{
+                      borderRadius: 18,
+                      padding: 16,
+                      background: '#ffffff',
+                      border: '1px solid rgba(226,232,240,0.9)',
+                    }}
+                  >
+                    <strong style={{ color: '#0f172a' }}>Procedure</strong>
+                    <ul style={{ margin: '10px 0 0', paddingLeft: 18, color: '#475569', lineHeight: 1.75 }}>
+                      <li>Sales team receives the Premium interest/request.</li>
+                      <li>Company requirements and employee volume are discussed.</li>
+                      <li>Quotation or payment link is shared after discussion.</li>
+                      <li>After payment, Premium access is activated from Superadmin.</li>
+                    </ul>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 18,
+                      padding: 16,
+                      background: '#ffffff',
+                      border: '1px solid rgba(226,232,240,0.9)',
+                    }}
+                  >
+                    <strong style={{ color: '#0f172a' }}>Charges</strong>
+                    <p style={{ margin: '10px 0 0', color: '#475569', lineHeight: 1.7 }}>
+                      Premium charges are quote-based. The amount can change depending on employee
+                      count, onboarding support, custom setup, training, SLA and enterprise support
+                      requirements.
+                    </p>
+                  </div>
+                </div>
+
+                {premiumRequestId ? (
+                  <p style={{ margin: '16px 0 0', color: '#166534', fontWeight: 900 }}>
+                    Premium request submitted successfully. Request ID: {premiumRequestId}
+                  </p>
+                ) : (
+                  <p style={{ margin: '16px 0 0', color: '#1e3a8a', fontWeight: 800 }}>
+                    Click Contact Sales Team to submit this Premium request.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+
             {!computed.isLifetime && !computed.isPaid ? (
               <div
                 style={{
@@ -1165,9 +1337,9 @@ export default function Billing({ user = {}, setPage }) {
               >
                 <CheckCircle2 size={20} style={{ flexShrink: 0, marginTop: 2 }} />
                 <p style={{ margin: 0, lineHeight: 1.6 }}>
-                  Razorpay test mode can be used with test payment details.
-                  After successful verification, the selected plan employee
-                  limit will be applied automatically.
+                  {isCustomSelected
+                    ? 'Premium is custom quoted. Contact Sales Team submits a request and sends it to the sales team for quotation follow-up.'
+                    : 'Razorpay test mode can be used with test payment details. After successful verification, the selected plan employee limit will be applied automatically.'}
                 </p>
               </div>
             ) : null}
