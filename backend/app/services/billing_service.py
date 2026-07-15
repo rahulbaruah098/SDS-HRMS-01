@@ -13,6 +13,14 @@ from app.services.razorpay_service import (
     safe_float,
     verify_payment_signature,
 )
+from app.services.pricing_service import (
+    PricingServiceError,
+    build_public_pricing_payload,
+    ensure_default_pricing_plans,
+    find_pricing_plan,
+    get_default_paid_plan,
+    normalize_plan_for_subscription,
+)
 from app.services.tenant_service import (
     build_subscription_summary,
     find_tenant,
@@ -160,21 +168,67 @@ def ensure_company_can_pay(company):
     return True
 
 
-def create_subscription_order(db, tenant_id, requested_by=None, amount=None):
+def resolve_selected_pricing_plan(db, plan_code=None):
     """
-    Creates a Razorpay order and stores a local payment order record.
-    Frontend will use the returned checkout object to open Razorpay Checkout.
+    Resolve the selected paid plan.
+
+    Rules:
+    - If frontend sends plan_code, use that plan.
+    - Otherwise use configured/default recommended plan, normally Growth.
+    - Custom Premium plans cannot be paid online unless Superadmin enables online payment.
+    """
+
+    ensure_default_pricing_plans(db)
+
+    selected_code = safe_str(plan_code or get_config_value("SAAS_DEFAULT_PAID_PLAN_CODE", "growth"))
+    plan = find_pricing_plan(db, selected_code) if selected_code else None
+
+    if not plan:
+        plan = get_default_paid_plan(db)
+
+    if not plan:
+        raise BillingServiceError(
+            "No active pricing plan is available for payment.",
+            400,
+            "pricing_plan_not_available",
+        )
+
+    try:
+        normalized = normalize_plan_for_subscription(plan)
+    except PricingServiceError as exc:
+        raise BillingServiceError(exc.message, exc.status_code, exc.code, exc.details) from exc
+
+    return plan, normalized
+
+
+def create_subscription_order(db, tenant_id, requested_by=None, amount=None, plan_code=None):
+    """
+    Creates a Razorpay order for a selected dynamic pricing plan and stores
+    a local payment order record. Frontend will use the returned checkout
+    object to open Razorpay Checkout.
     """
 
     company = find_company_for_billing(db, tenant_id)
     ensure_company_can_pay(company)
 
-    plan_amount = safe_float(
-        amount if amount is not None else get_config_value("SAAS_FULL_PLAN_AMOUNT", 4999.0),
-        4999.0,
-    )
-    plan_name = safe_str(get_config_value("SAAS_FULL_PLAN_NAME", "Full HRMS")) or "Full HRMS"
-    plan_interval = safe_str(get_config_value("SAAS_FULL_PLAN_INTERVAL", "monthly")) or "monthly"
+    plan, subscription_plan = resolve_selected_pricing_plan(db, plan_code=plan_code)
+
+    # Amount override is kept only for Superadmin/internal flexibility.
+    # Normal frontend payments should use the dynamic pricing plan amount.
+    plan_amount = safe_float(amount if amount is not None else subscription_plan.get("amount"), 0.0)
+
+    if plan_amount <= 0:
+        raise BillingServiceError(
+            "Selected plan cannot be paid online. Please contact Superadmin for custom pricing.",
+            400,
+            "custom_plan_requires_superadmin",
+        )
+
+    plan_name = safe_str(subscription_plan.get("plan_name") or plan.get("display_name")) or "Full HRMS"
+    plan_code = safe_str(subscription_plan.get("plan_code") or plan.get("plan_code"))
+    plan_interval = safe_str(subscription_plan.get("billing_interval") or "monthly") or "monthly"
+    employee_limit = subscription_plan.get("employee_limit")
+    is_unlimited_employees = bool(subscription_plan.get("is_unlimited_employees"))
 
     order_data = create_razorpay_order(
         company,
@@ -182,26 +236,47 @@ def create_subscription_order(db, tenant_id, requested_by=None, amount=None):
         notes={
             "requested_by": safe_str(requested_by),
             "tenant_id": safe_str(company.get("tenant_id")),
+            "plan_code": plan_code,
+            "plan_name": plan_name,
             "plan_interval": plan_interval,
+            "employee_limit": "unlimited" if is_unlimited_employees else str(employee_limit or ""),
         },
     )
 
     razorpay_order = order_data.get("razorpay_order") or {}
     checkout = order_data.get("checkout") or {}
+    checkout.update({
+        "description": f"YourComate HRMS {plan_name} Subscription",
+        "plan_code": plan_code,
+        "plan_name": plan_name,
+        "plan_label": subscription_plan.get("plan_label") or plan_name,
+        "plan_interval": plan_interval,
+        "employee_limit": employee_limit,
+        "is_unlimited_employees": is_unlimited_employees,
+        "plan_amount": plan_amount,
+    })
+
     created_at = now_utc()
 
     order_doc = {
         "tenant_id": safe_str(company.get("tenant_id")),
         "company_name": get_company_name(company),
         "company_email": get_company_contact_email(company),
+        "plan_code": plan_code,
         "plan_name": plan_name,
+        "plan_label": subscription_plan.get("plan_label") or plan_name,
         "plan_type": "paid",
         "plan_interval": plan_interval,
+        "billing_interval": plan_interval,
+        "employee_limit": employee_limit,
+        "is_unlimited_employees": is_unlimited_employees,
+        "allowed_modules": ["all"],
         "amount": plan_amount,
         "amount_paise": int(checkout.get("amount") or 0),
-        "currency": checkout.get("currency") or get_config_value("RAZORPAY_CURRENCY", "INR"),
+        "currency": checkout.get("currency") or subscription_plan.get("currency") or get_config_value("RAZORPAY_CURRENCY", "INR"),
         "razorpay_order_id": razorpay_order.get("id"),
         "razorpay_order": razorpay_order,
+        "pricing_plan_snapshot": plan,
         "status": "created",
         "requested_by": safe_str(requested_by),
         "created_at": created_at,
@@ -215,6 +290,8 @@ def create_subscription_order(db, tenant_id, requested_by=None, amount=None):
     return {
         "order_id": str(result.inserted_id),
         "razorpay_order_id": order_doc["razorpay_order_id"],
+        "plan": plan,
+        "selected_plan": subscription_plan,
         "checkout": checkout,
         "billing": build_billing_summary(db, company),
     }
@@ -241,20 +318,30 @@ def find_payment_order(db, razorpay_order_id=None, order_id=None, tenant_id=None
 
 def build_paid_subscription_document(company, payment_record, start_date=None):
     start_date = parse_datetime(start_date) or now_utc()
-    plan_name = payment_record.get("plan_name") or safe_str(get_config_value("SAAS_FULL_PLAN_NAME", "Full HRMS"))
-    plan_interval = payment_record.get("plan_interval") or safe_str(get_config_value("SAAS_FULL_PLAN_INTERVAL", "monthly"))
+    plan_code = safe_str(payment_record.get("plan_code") or get_config_value("SAAS_DEFAULT_PAID_PLAN_CODE", "growth"))
+    plan_name = payment_record.get("plan_name") or safe_str(get_config_value("SAAS_FULL_PLAN_NAME", "Growth"))
+    plan_label = payment_record.get("plan_label") or plan_name
+    plan_interval = payment_record.get("plan_interval") or payment_record.get("billing_interval") or safe_str(get_config_value("SAAS_FULL_PLAN_INTERVAL", "monthly"))
     end_date = add_subscription_interval(start_date, plan_interval)
+    employee_limit = payment_record.get("employee_limit")
+    is_unlimited_employees = bool(payment_record.get("is_unlimited_employees")) or employee_limit in [None, "", "unlimited", "Unlimited"]
 
     return {
         "tenant_id": safe_str(company.get("tenant_id")),
         "company_name": get_company_name(company),
         "company_email": get_company_contact_email(company),
+        "plan_code": plan_code,
         "plan_name": plan_name,
+        "plan_label": plan_label,
         "plan_type": "paid",
         "plan_interval": plan_interval,
+        "billing_interval": plan_interval,
         "status": "active",
         "amount": safe_float(payment_record.get("amount"), 0.0),
         "currency": payment_record.get("currency") or safe_str(get_config_value("RAZORPAY_CURRENCY", "INR")),
+        "employee_limit": None if is_unlimited_employees else employee_limit,
+        "is_unlimited_employees": is_unlimited_employees,
+        "allowed_modules": ["all"],
         "payment_id": safe_str(payment_record.get("_id")),
         "razorpay_order_id": payment_record.get("razorpay_order_id"),
         "razorpay_payment_id": payment_record.get("razorpay_payment_id"),
@@ -268,7 +355,7 @@ def build_paid_subscription_document(company, payment_record, start_date=None):
 
 def activate_paid_subscription(db, company, payment_record):
     """
-    Converts an approved/expired demo company into a paid full-access company.
+    Converts an approved/expired trial company into a paid full-access company.
     SDS/lifetime companies are intentionally not processed here.
     """
 
@@ -293,15 +380,23 @@ def activate_paid_subscription(db, company, payment_record):
 
     update_doc = {
         "$set": {
-            "plan": "Full HRMS",
+            "plan": subscription_doc.get("plan_label") or subscription_doc.get("plan_name"),
+            "plan_code": subscription_doc.get("plan_code"),
+            "plan_name": subscription_doc.get("plan_name"),
+            "plan_label": subscription_doc.get("plan_label"),
+            "selected_plan_code": subscription_doc.get("plan_code"),
+            "selected_plan_name": subscription_doc.get("plan_name"),
             "plan_type": "paid",
             "status": "active",
             "subscription_status": "active",
             "trial_status": "converted",
             "subscription_start_date": subscription_doc["started_at"],
             "subscription_end_date": subscription_doc["ends_at"],
-            "employee_limit": None,
+            "employee_limit": subscription_doc.get("employee_limit"),
+            "is_unlimited_employees": subscription_doc.get("is_unlimited_employees"),
+            "billing_interval": subscription_doc.get("billing_interval") or subscription_doc.get("plan_interval"),
             "allowed_modules": ["all"],
+            "requires_payment": False,
             "is_demo_company": False,
             "is_paid_company": True,
             "last_payment_id": safe_str(payment_record.get("_id")),
@@ -392,7 +487,13 @@ def verify_and_activate_payment(db, tenant_id, payload):
         },
         payment_details=payment_details,
     )
+    payment_record["plan_code"] = order_doc.get("plan_code") or safe_str(get_config_value("SAAS_DEFAULT_PAID_PLAN_CODE", "growth"))
+    payment_record["plan_name"] = order_doc.get("plan_name") or payment_record.get("plan_name")
+    payment_record["plan_label"] = order_doc.get("plan_label") or payment_record.get("plan_name")
     payment_record["plan_interval"] = order_doc.get("plan_interval") or safe_str(get_config_value("SAAS_FULL_PLAN_INTERVAL", "monthly"))
+    payment_record["billing_interval"] = order_doc.get("billing_interval") or payment_record["plan_interval"]
+    payment_record["employee_limit"] = order_doc.get("employee_limit")
+    payment_record["is_unlimited_employees"] = bool(order_doc.get("is_unlimited_employees"))
 
     payment_result = db.payments.insert_one(payment_record)
     payment_record["_id"] = payment_result.inserted_id
@@ -412,13 +513,31 @@ def verify_and_activate_payment(db, tenant_id, payload):
 
     activation = activate_paid_subscription(db, company, payment_record)
 
+    company_email = get_company_contact_email(company)
+    company_name = get_company_name(company)
+    plan_name = (
+        payment_record.get("plan_name")
+        or payment_record.get("plan_label")
+        or order_doc.get("plan_name")
+        or order_doc.get("plan_label")
+        or "YourComate HRMS Subscription"
+    )
+    amount = payment_record.get("amount") or order_doc.get("amount") or 0
+    currency = payment_record.get("currency") or order_doc.get("currency") or "INR"
+    employee_limit = payment_record.get("employee_limit")
+
+    if payment_record.get("is_unlimited_employees"):
+        employee_limit = "Unlimited"
+
     try:
         send_payment_success_email(
-            get_company_contact_email(company),
-            get_company_name(company),
-            payment_record.get("plan_name") or safe_str(get_config_value("SAAS_FULL_PLAN_NAME", "Full HRMS")),
-            payment_record.get("amount"),
-            activation.get("subscription", {}).get("ends_at"),
+            current_app.config,
+            company_email,
+            company_name,
+            plan_name=plan_name,
+            amount=amount,
+            currency=currency,
+            employee_limit=employee_limit,
         )
     except Exception:
         # Payment activation must not fail because email delivery failed.
@@ -440,8 +559,11 @@ def build_billing_summary(db, company):
             "message": "Company account not found.",
         }
 
+    ensure_default_pricing_plans(db)
     summary = build_subscription_summary(db, company, config=current_app.config)
     checkout_config = get_public_checkout_config()
+    pricing_payload = build_public_pricing_payload(db)
+    default_plan = get_default_paid_plan(db)
 
     requires_payment = not (
         is_sds_tenant(company, current_app.config)
@@ -449,10 +571,24 @@ def build_billing_summary(db, company):
         or is_paid_tenant(company)
     )
 
+    if default_plan:
+        checkout_config.update({
+            "plan_code": default_plan.get("plan_code"),
+            "plan_name": default_plan.get("plan_name"),
+            "plan_amount": default_plan.get("amount"),
+            "plan_interval": default_plan.get("billing_interval"),
+            "employee_limit": default_plan.get("employee_limit"),
+            "is_unlimited_employees": default_plan.get("is_unlimited_employees"),
+        })
+
     summary.update({
         "requires_payment": requires_payment,
         "billing_page_path": safe_str(get_config_value("BILLING_PAGE_PATH", "/billing")) or "/billing",
         "checkout": checkout_config,
+        "pricing": pricing_payload,
+        "plans": pricing_payload.get("plans") or [],
+        "trial": pricing_payload.get("trial") or {},
+        "default_plan": default_plan,
     })
 
     return summary

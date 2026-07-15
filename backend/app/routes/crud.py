@@ -391,14 +391,15 @@ def ensure_saas_collection_access(collection, action="read", db=None):
     """
     Simple SaaS rule for generic CRUD.
 
-    IMPORTANT:
-    - Do not block normal SDS/lifetime/paid company modules here.
-    - Demo module visibility is handled by the frontend menu.
-    - Dedicated backend route guards still protect major paid modules.
-    - This function only keeps the 10-employee demo limit on employee creation.
+    New pricing model:
+    - SDS/lifetime company: unlimited, never blocked here.
+    - Active 15-day full-access trial: no employee cap when DEMO_EMPLOYEE_LIMIT=0.
+    - Paid company: employee creation is limited by selected paid plan.
+      Essential = 50, Growth = 100, Premium = unlimited.
+    - Expired/suspended trial: employee creation is blocked.
 
-    This avoids breaking old SDS lifetime modules such as payslips, expenses,
-    attendance logs and team field tracking.
+    Other module visibility/access is handled by frontend menu + dedicated
+    tenant route guards. Generic CRUD should not break SDS lifetime modules.
     """
 
     collection = normalize_key(collection)
@@ -416,16 +417,21 @@ def ensure_saas_collection_access(collection, action="read", db=None):
     tenant = context.get("tenant")
     subscription = context.get("subscription") or {}
 
-    # Full/lifetime/paid companies should never be blocked by demo employee limit.
+    # SDS/lifetime companies must always remain unrestricted.
     if (
         subscription.get("is_lifetime")
         or subscription.get("has_lifetime_access")
         or subscription.get("is_sds_company")
-        or subscription.get("is_paid_company")
-        or str(subscription.get("plan_type") or "").lower() in {"lifetime", "paid"}
+        or str(subscription.get("plan_type") or "").lower() == "lifetime"
     ):
         return None
 
+    # For demo and paid companies, let tenant_service decide using the latest
+    # tenant employee_limit:
+    # - active trial with employee_limit=None => allowed
+    # - paid Essential/Growth employee_limit => blocked at limit
+    # - Premium employee_limit=None => allowed
+    # - expired/suspended => blocked
     limit_result = saas_can_create_employee(
         db,
         tenant,

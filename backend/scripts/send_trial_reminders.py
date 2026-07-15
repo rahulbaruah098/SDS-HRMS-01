@@ -1,4 +1,6 @@
-"""
+"""Send YourComate HRMS 15-day full-access trial reminders.
+
+
 Send YourComate HRMS SaaS trial reminder emails and in-app notifications.
 
 Usage from backend folder:
@@ -16,10 +18,10 @@ Recommended cron example, once daily at 09:00:
     0 9 * * * cd /path/to/backend && /path/to/venv/bin/python scripts/send_trial_reminders.py >> logs/trial_reminders.log 2>&1
 
 What this script does:
-- Checks active demo companies.
+- Checks active trial companies.
 - Sends due reminder emails through SMTP.
 - Creates in-app notifications.
-- Marks demo companies as expired when trial end date is reached.
+- Marks trial companies as expired when trial end date is reached.
 - Skips SDS lifetime and paid companies.
 """
 

@@ -12,7 +12,7 @@ JSON output:
 What this script checks:
 - Flask app can start.
 - SaaS config values are loaded.
-- SMTP/Razorpay config placeholders are detected.
+- SMTP/Razorpay config placeholders are detected. Valid zero SaaS settings are accepted.
 - Important SaaS routes are registered.
 - MongoDB connection is available.
 - SDS tenant exists after seed script.
@@ -42,9 +42,11 @@ REQUIRED_ROUTES = [
     "/api/v1/demo-requests/resend-otp",
     "/api/v1/demo-requests/status",
     "/api/v1/demo-requests/admin/requests",
+    "/api/v1/billing/pricing",
     "/api/v1/billing/summary",
     "/api/v1/billing/create-order",
     "/api/v1/billing/verify-payment",
+    "/api/v1/billing/admin/pricing-plans",
     "/api/v1/billing/admin/subscriptions",
     "/api/v1/billing/admin/payments",
     "/api/v1/billing/admin/orders",
@@ -60,6 +62,7 @@ REQUIRED_CONFIG_KEYS = [
     "YOURCOMATE_DOMAIN",
     "AUTO_ADMIN_EMAIL_DOMAIN",
     "DEMO_DURATION_DAYS",
+    "DEMO_HAS_FULL_ACCESS",
     "DEMO_EMPLOYEE_LIMIT",
     "DEMO_ALLOWED_MODULES",
     "DEMO_OTP_LENGTH",
@@ -72,6 +75,16 @@ REQUIRED_CONFIG_KEYS = [
     "RAZORPAY_KEY_ID",
     "RAZORPAY_KEY_SECRET",
     "RAZORPAY_CURRENCY",
+    "SAAS_FULL_PLAN_AMOUNT",
+    "SAAS_FULL_PLAN_INTERVAL",
+    "SAAS_ESSENTIAL_PLAN_AMOUNT",
+    "SAAS_ESSENTIAL_EMPLOYEE_LIMIT",
+    "SAAS_GROWTH_PLAN_AMOUNT",
+    "SAAS_GROWTH_EMPLOYEE_LIMIT",
+    "SAAS_PREMIUM_PLAN_AMOUNT",
+    "SAAS_PREMIUM_EMPLOYEE_LIMIT",
+    "SAAS_PREMIUM_IS_CUSTOM",
+    "SAAS_DEFAULT_PAID_PLAN_CODE",
     "FRONTEND_BASE_URL",
     "BILLING_PAGE_PATH",
 ]
@@ -79,6 +92,7 @@ REQUIRED_CONFIG_KEYS = [
 SAAS_COLLECTIONS = [
     "tenants",
     "demo_requests",
+    "pricing_plans",
     "subscriptions",
     "payments",
     "payment_orders",
@@ -118,7 +132,10 @@ def serialize_for_json(value):
 
 
 def safe_str(value):
-    return str(value or "").strip()
+    if value is None:
+        return ""
+
+    return str(value).strip()
 
 
 def is_placeholder(value):
@@ -130,6 +147,27 @@ def is_placeholder(value):
         or "your_" in text
         or text in {"changeme", "change_me", "replace_me", "todo"}
     )
+
+
+def is_config_key_valid(key, value):
+    """
+    Some final SaaS config values are intentionally zero:
+    - DEMO_EMPLOYEE_LIMIT=0 means unlimited during the 15-day trial.
+    - SAAS_PREMIUM_PLAN_AMOUNT=0 means custom quote.
+    - SAAS_PREMIUM_EMPLOYEE_LIMIT=0 means unlimited/custom.
+    """
+
+    zero_allowed_keys = {
+        "DEMO_EMPLOYEE_LIMIT",
+        "SAAS_PREMIUM_PLAN_AMOUNT",
+        "SAAS_PREMIUM_EMPLOYEE_LIMIT",
+    }
+
+    if key in zero_allowed_keys and safe_str(value) == "0":
+        return True
+
+    return value is not None and not is_placeholder(value)
+
 
 
 def resolve_db(app):
@@ -219,12 +257,13 @@ def check_config(app):
     for key in REQUIRED_CONFIG_KEYS:
         value = app.config.get(key)
         placeholder = is_placeholder(value)
+        ok = is_config_key_valid(key, value)
 
         details.append({
             "key": key,
-            "ok": value is not None and not placeholder,
+            "ok": ok,
             "present": value is not None,
-            "placeholder": placeholder,
+            "placeholder": placeholder and not ok,
             "value_preview": "***" if "PASSWORD" in key or "SECRET" in key else safe_str(value),
         })
 
@@ -306,11 +345,31 @@ def check_database(app):
             }
         )
 
+        pricing_plan_codes = []
+
+        if "pricing_plans" in collection_names:
+            try:
+                pricing_plan_codes = sorted([
+                    plan.get("plan_code")
+                    for plan in db.pricing_plans.find(
+                        {"is_deleted": {"$ne": True}},
+                        {"plan_code": 1},
+                    )
+                    if plan.get("plan_code")
+                ])
+            except Exception:
+                pricing_plan_codes = []
+
+        expected_pricing_codes = {"essential", "growth", "premium"}
+        pricing_defaults_exist = expected_pricing_codes.issubset(set(pricing_plan_codes))
+
         return {
             "ok": True,
             "connected": True,
             "collections": collection_details,
             "sds_tenant_exists": bool(sds_tenant),
+            "pricing_defaults_exist": pricing_defaults_exist,
+            "pricing_plan_codes": pricing_plan_codes,
             "sds_tenant": {
                 "tenant_id": sds_tenant.get("tenant_id") if sds_tenant else "",
                 "tenant_code": sds_tenant.get("tenant_code") if sds_tenant else "",
@@ -327,6 +386,8 @@ def check_database(app):
             "error": str(exc),
             "collections": [],
             "sds_tenant_exists": False,
+            "pricing_defaults_exist": False,
+            "pricing_plan_codes": [],
         }
 
 
@@ -372,6 +433,9 @@ def build_next_steps(route_result, config_result, database_result):
 
     if database_result.get("connected") and not database_result.get("sds_tenant_exists"):
         steps.append("SDS lifetime tenant is missing. Run: python scripts/seed_sds_tenant.py")
+
+    if database_result.get("connected") and not database_result.get("pricing_defaults_exist"):
+        steps.append("Dynamic pricing defaults are missing. Run: python scripts/seed_pricing_plans.py")
 
     if database_result.get("connected"):
         missing_collections = [
@@ -444,14 +508,26 @@ def main():
     print("Database")
     print(f"- Connected             : {result['database'].get('connected')}")
     print(f"- SDS Tenant Exists     : {result['database'].get('sds_tenant_exists')}")
+    print(f"- Pricing Defaults      : {result['database'].get('pricing_defaults_exist')}")
+    print(f"- Pricing Plan Codes    : {', '.join(result['database'].get('pricing_plan_codes') or []) or 'None'}")
 
     if result["database"].get("error"):
         print(f"- Error                 : {result['database'].get('error')}")
 
     print("")
     print("Next Steps")
-    for step in result.get("next_steps") or []:
-        print(f"- {step}")
+    next_steps = result.get("next_steps") or []
+
+    if next_steps:
+        for step in next_steps:
+            print(f"- {step}")
+    else:
+        print("- No next steps. SaaS smoke check passed.")
+
+    if result["database"].get("connected") and not result["database"].get("pricing_defaults_exist"):
+        print("")
+        print("Pricing Seed Command")
+        print("- python scripts/seed_pricing_plans.py")
 
     return 0 if result.get("ok") else 1
 

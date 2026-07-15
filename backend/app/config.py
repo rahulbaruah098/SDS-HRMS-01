@@ -93,11 +93,22 @@ class Config:
     )
 
     # Demo registration / trial settings.
-    DEMO_DURATION_DAYS = _get_int("DEMO_DURATION_DAYS", 30)
-    DEMO_EMPLOYEE_LIMIT = _get_int("DEMO_EMPLOYEE_LIMIT", 10)
+    # New SaaS rule:
+    # - demo trial is 15 days
+    # - demo companies get full HRMS access during the trial
+    # - after expiry, payment/subscription is required
+    DEMO_DURATION_DAYS = _get_int("DEMO_DURATION_DAYS", 15)
+    DEMO_HAS_FULL_ACCESS = _get_bool("DEMO_HAS_FULL_ACCESS", True)
+
+    # 0 means no employee cap during the 15-day trial.
+    # Paid plan limits are controlled by pricing plans after subscription.
+    DEMO_EMPLOYEE_LIMIT = _get_int("DEMO_EMPLOYEE_LIMIT", 0)
+
+    # Keep this configurable for backward compatibility.
+    # With DEMO_HAS_FULL_ACCESS=true, this is treated as all modules.
     DEMO_ALLOWED_MODULES = _get_csv(
         "DEMO_ALLOWED_MODULES",
-        "attendance,apply_leave,projects",
+        "all",
     )
 
     # Used while generating approved demo company admin credentials.
@@ -120,12 +131,12 @@ class Config:
     )
 
     # Reminder days are counted from the demo start date.
-    # Example with 30-day demo: day 20, day 25, day 29, day 30.
+    # Example with 15-day trial: day 10, day 13, day 14, day 15.
     TRIAL_REMINDER_DAYS = [
-        _get_int("TRIAL_REMINDER_DAY_1", 20),
-        _get_int("TRIAL_REMINDER_DAY_2", 25),
-        _get_int("TRIAL_REMINDER_DAY_3", 29),
-        _get_int("TRIAL_REMINDER_DAY_4", 30),
+        _get_int("TRIAL_REMINDER_DAY_1", 10),
+        _get_int("TRIAL_REMINDER_DAY_2", 13),
+        _get_int("TRIAL_REMINDER_DAY_3", 14),
+        _get_int("TRIAL_REMINDER_DAY_4", 15),
     ]
 
     SAAS_PLAN_TYPES = {
@@ -165,11 +176,25 @@ class Config:
     RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
     RAZORPAY_CURRENCY = os.getenv("RAZORPAY_CURRENCY", "INR")
 
-    # Amount is kept configurable because the final paid HRMS package price
-    # can be changed later without editing code.
-    SAAS_FULL_PLAN_NAME = os.getenv("SAAS_FULL_PLAN_NAME", "Full HRMS")
-    SAAS_FULL_PLAN_AMOUNT = _get_float("SAAS_FULL_PLAN_AMOUNT", 4999.0)
+    # Legacy fallback paid package values.
+    # New paid plans are controlled dynamically through pricing_plans collection.
+    SAAS_FULL_PLAN_NAME = os.getenv("SAAS_FULL_PLAN_NAME", "Growth")
+    SAAS_FULL_PLAN_AMOUNT = _get_float("SAAS_FULL_PLAN_AMOUNT", 4495.0)
     SAAS_FULL_PLAN_INTERVAL = os.getenv("SAAS_FULL_PLAN_INTERVAL", "monthly")
+
+    # Default dynamic pricing plan values.
+    # Superadmin can later edit actual plan records from pricing APIs/UI.
+    SAAS_ESSENTIAL_PLAN_AMOUNT = _get_float("SAAS_ESSENTIAL_PLAN_AMOUNT", 2495.0)
+    SAAS_ESSENTIAL_EMPLOYEE_LIMIT = _get_int("SAAS_ESSENTIAL_EMPLOYEE_LIMIT", 50)
+
+    SAAS_GROWTH_PLAN_AMOUNT = _get_float("SAAS_GROWTH_PLAN_AMOUNT", 4495.0)
+    SAAS_GROWTH_EMPLOYEE_LIMIT = _get_int("SAAS_GROWTH_EMPLOYEE_LIMIT", 100)
+
+    SAAS_PREMIUM_PLAN_AMOUNT = _get_float("SAAS_PREMIUM_PLAN_AMOUNT", 0.0)
+    SAAS_PREMIUM_EMPLOYEE_LIMIT = _get_int("SAAS_PREMIUM_EMPLOYEE_LIMIT", 0)
+    SAAS_PREMIUM_IS_CUSTOM = _get_bool("SAAS_PREMIUM_IS_CUSTOM", True)
+
+    SAAS_DEFAULT_PAID_PLAN_CODE = os.getenv("SAAS_DEFAULT_PAID_PLAN_CODE", "growth")
 
     # Frontend URL used inside emails, subscription reminders, and payment links.
     FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")

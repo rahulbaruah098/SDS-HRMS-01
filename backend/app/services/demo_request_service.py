@@ -22,9 +22,7 @@ LEGAL_SUFFIX_WORDS = {
 }
 
 DEFAULT_DEMO_MODULES = [
-    "attendance",
-    "apply_leave",
-    "projects",
+    "all",
 ]
 
 
@@ -56,6 +54,10 @@ def to_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def truthy(value):
+    return safe_str(value).lower() in {"1", "true", "yes", "y", "on"}
 
 
 def get_config_value(config, key, default=None):
@@ -91,6 +93,9 @@ def normalize_module_list(value):
 
         if module and module not in modules:
             modules.append(module)
+
+    if "all" in modules:
+        return ["all"]
 
     return modules or list(DEFAULT_DEMO_MODULES)
 
@@ -326,14 +331,22 @@ def ensure_demo_request_can_be_rejected(demo_request):
 
 
 def build_tenant_document(demo_request, tenant_id, credentials, approved_by, config=None):
-    trial_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 30), 30)
-    employee_limit = to_int(get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 10), 10)
-    allowed_modules = normalize_module_list(
+    trial_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 15), 15)
+    demo_has_full_access = truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True))
+
+    configured_employee_limit = to_int(
+        get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 0),
+        0,
+    )
+    employee_limit = configured_employee_limit if configured_employee_limit > 0 else None
+
+    allowed_modules = ["all"] if demo_has_full_access else normalize_module_list(
         get_config_value(config, "DEMO_ALLOWED_MODULES", DEFAULT_DEMO_MODULES)
     )
 
     trial_start = now_utc()
     trial_end = trial_start + timedelta(days=trial_days)
+    plan_label = f"{trial_days}-Day Full Access Trial" if demo_has_full_access else f"{trial_days}-Day Demo"
 
     return {
         "tenant_id": tenant_id,
@@ -345,18 +358,24 @@ def build_tenant_document(demo_request, tenant_id, credentials, approved_by, con
         "contact_phone": demo_request.get("company_phone"),
         "address": demo_request.get("company_address", ""),
         "status": "active",
-        "plan": "Demo",
+        "plan": plan_label,
+        "plan_name": plan_label,
+        "plan_label": plan_label,
         "plan_type": "demo",
         "subscription_status": "demo",
         "trial_status": "active",
         "trial_start_date": trial_start,
         "trial_end_date": trial_end,
         "demo_duration_days": trial_days,
+        "demo_has_full_access": demo_has_full_access,
         "employee_limit": employee_limit,
+        "is_unlimited_employees": employee_limit is None,
         "allowed_modules": allowed_modules,
+        "requires_payment": False,
         "is_sds_company": False,
         "is_lifetime": False,
         "is_demo_company": True,
+        "is_paid_company": False,
         "demo_request_id": str(demo_request.get("_id")),
         "generated_admin_email": credentials["admin_email"],
         "created_at": trial_start,
@@ -436,20 +455,32 @@ def build_admin_employee_document(demo_request, tenant_id, user_id, credentials,
 
 
 def build_demo_subscription_document(demo_request, tenant_id, config=None):
-    trial_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 30), 30)
+    trial_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 15), 15)
+    demo_has_full_access = truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True))
     started_at = now_utc()
     ends_at = started_at + timedelta(days=trial_days)
+    plan_name = f"{trial_days}-Day Full Access Trial" if demo_has_full_access else f"{trial_days}-Day Demo"
 
     return {
         "tenant_id": tenant_id,
         "company_name": demo_request.get("company_name"),
-        "plan_name": "Demo",
+        "plan_name": plan_name,
+        "plan_label": plan_name,
         "plan_type": "demo",
         "status": "active",
         "amount": 0,
         "currency": get_config_value(config, "RAZORPAY_CURRENCY", "INR"),
         "started_at": started_at,
         "ends_at": ends_at,
+        "trial_start_date": started_at,
+        "trial_end_date": ends_at,
+        "demo_duration_days": trial_days,
+        "demo_has_full_access": demo_has_full_access,
+        "employee_limit": None,
+        "is_unlimited_employees": True,
+        "allowed_modules": ["all"] if demo_has_full_access else normalize_module_list(
+            get_config_value(config, "DEMO_ALLOWED_MODULES", DEFAULT_DEMO_MODULES)
+        ),
         "demo_request_id": str(demo_request.get("_id")),
         "created_at": started_at,
         "updated_at": started_at,
@@ -551,7 +582,10 @@ def approve_demo_request(db, demo_request_id, approved_by, config=None):
         "trial_start_date": tenant_doc["trial_start_date"],
         "trial_end_date": tenant_doc["trial_end_date"],
         "employee_limit": tenant_doc["employee_limit"],
+        "is_unlimited_employees": tenant_doc.get("is_unlimited_employees"),
         "allowed_modules": tenant_doc["allowed_modules"],
+        "demo_has_full_access": tenant_doc.get("demo_has_full_access"),
+        "demo_duration_days": tenant_doc.get("demo_duration_days"),
     }
 
 

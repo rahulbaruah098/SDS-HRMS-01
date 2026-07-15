@@ -158,7 +158,7 @@ def demo_request_query_from_filters(args):
 @demo_requests_bp.post("/apply")
 def apply_for_demo():
     """
-    Public API used by Login page: Apply for Demo Registration.
+    Public API used by Login page: Apply for Trial Registration.
 
     Flow:
     1. Company submits details.
@@ -176,7 +176,7 @@ def apply_for_demo():
     if duplicate:
         return jsonify({
             "ok": False,
-            "message": "A demo request already exists for this company email.",
+            "message": "A trial request already exists for this company email.",
             "status": duplicate.get("status"),
             "request_id": str(duplicate.get("_id")),
         }), 409
@@ -201,6 +201,7 @@ def apply_for_demo():
     request_id = str(insert_result.inserted_id)
 
     mail_result = send_demo_otp_email(
+        current_app.config,
         doc.get("company_email"),
         doc.get("company_name"),
         otp_code,
@@ -220,7 +221,7 @@ def apply_for_demo():
 
     return jsonify({
         "ok": True,
-        "message": "Demo registration submitted. Please verify the OTP sent to the registered company email.",
+        "message": "Trial registration submitted. Please verify the OTP sent to the registered company email.",
         "request_id": request_id,
         "email": doc.get("company_email"),
         "otp_email_sent": bool(mail_result.get("ok")),
@@ -231,7 +232,7 @@ def apply_for_demo():
 @demo_requests_bp.post("/verify-otp")
 def verify_demo_otp():
     """
-    Public API used after demo registration OTP entry.
+    Public API used after trial registration OTP entry.
     After successful OTP verification, request becomes pending for Superadmin approval.
     """
 
@@ -269,6 +270,7 @@ def verify_demo_otp():
 
     if demo_request and demo_request.get("otp_verified") is not True:
         mail_result = send_demo_request_received_email(
+            current_app.config,
             demo_request.get("company_email"),
             demo_request.get("company_name"),
         )
@@ -293,6 +295,12 @@ def verify_demo_otp():
         "ok": True,
         "message": result.get("message") or "Email verified successfully.",
         "request": sanitize_demo_request(updated_request),
+        "trial": {
+            "duration_days": current_app.config.get("DEMO_DURATION_DAYS", 15),
+            "has_full_access": current_app.config.get("DEMO_HAS_FULL_ACCESS", True),
+            "allowed_modules": current_app.config.get("DEMO_ALLOWED_MODULES", ["all"]),
+            "requires_payment_after_expiry": True,
+        },
     })
 
 
@@ -346,6 +354,7 @@ def resend_demo_otp():
     )
 
     mail_result = send_demo_otp_email(
+        current_app.config,
         demo_request.get("company_email"),
         demo_request.get("company_name"),
         otp_code,
@@ -403,7 +412,7 @@ def demo_request_status():
 @roles_required("super_admin")
 def list_demo_requests_for_admin():
     """
-    Platform Superadmin API to monitor demo applications.
+    Platform Superadmin API to monitor trial applications.
     """
 
     db = get_db()
@@ -482,7 +491,7 @@ def approve_demo_request_for_admin(request_id):
     - tenant/company is created
     - admin user is created
     - admin employee profile is created
-    - 30-day demo starts
+    - 15-day full-access trial starts
     - generated login details are emailed to registered company email
     """
 
@@ -503,12 +512,17 @@ def approve_demo_request_for_admin(request_id):
 
     demo_request = find_demo_request(db, request_id=request_id)
 
+    frontend_base_url = str(current_app.config.get("FRONTEND_BASE_URL", "") or "").strip()
+    login_url = frontend_base_url.rstrip("/") if frontend_base_url else None
+
     mail_result = send_demo_approval_email(
+        current_app.config,
         demo_request.get("company_email"),
         demo_request.get("company_name"),
         result.get("admin_email"),
         result.get("admin_password"),
-        result.get("trial_end_date"),
+        login_url=login_url,
+        trial_end_date=result.get("trial_end_date"),
     )
 
     db.demo_requests.update_one(
@@ -541,7 +555,7 @@ def approve_demo_request_for_admin(request_id):
 
     return jsonify({
         "ok": True,
-        "message": "Demo request approved successfully. Admin login details have been emailed to the registered company email.",
+        "message": "Trial request approved successfully. Admin login details have been emailed to the registered company email.",
         "result": clean_doc(safe_result),
     })
 
@@ -567,6 +581,7 @@ def reject_demo_request_for_admin(request_id):
         }), exc.status_code
 
     mail_result = send_demo_rejection_email(
+        current_app.config,
         result.get("company_email"),
         result.get("company_name"),
         result.get("reason"),
@@ -598,7 +613,7 @@ def reject_demo_request_for_admin(request_id):
 
     return jsonify({
         "ok": True,
-        "message": "Demo request rejected successfully.",
+        "message": "Trial request rejected successfully.",
         "result": clean_doc(result),
         "rejection_email_sent": bool(mail_result.get("ok")),
         "mail_message": mail_result.get("message"),

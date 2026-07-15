@@ -11,6 +11,14 @@ from app.services.billing_service import (
     find_company_for_billing,
     verify_and_activate_payment,
 )
+from app.services.pricing_service import (
+    PricingServiceError,
+    archive_pricing_plan,
+    build_public_pricing_payload,
+    ensure_default_pricing_plans,
+    list_pricing_plans,
+    upsert_pricing_plan,
+)
 from app.services.razorpay_service import (
     RazorpayServiceError,
     verify_webhook_signature,
@@ -89,6 +97,13 @@ def error_response(error):
             "details": clean_doc(error.details),
         }), error.status_code
 
+    if isinstance(error, PricingServiceError):
+        return jsonify({
+            "message": error.message,
+            "code": error.code,
+            "details": clean_doc(error.details),
+        }), error.status_code
+
     if isinstance(error, RazorpayServiceError):
         return jsonify({
             "message": error.message,
@@ -99,6 +114,7 @@ def error_response(error):
     return jsonify({
         "message": "Billing request failed.",
         "code": "billing_request_failed",
+        "details": str(error),
     }), 500
 
 
@@ -135,6 +151,30 @@ def paginated_cursor(collection, query, page=1, limit=20, sort=None):
     }
 
 
+@billing_bp.get("/pricing")
+def public_pricing():
+    """
+    Public pricing endpoint used by login/demo/billing screens.
+
+    It returns the active dynamic pricing plans:
+    - Essential
+    - Growth
+    - Premium
+    plus the 15-day full-access trial details.
+    """
+
+    db = get_db()
+
+    try:
+        payload = build_public_pricing_payload(db)
+        return jsonify({
+            "ok": True,
+            **clean_doc(payload),
+        })
+    except Exception as exc:
+        return error_response(exc)
+
+
 @billing_bp.get("/summary")
 @current_user_required
 def billing_summary():
@@ -149,6 +189,7 @@ def billing_summary():
     try:
         company = find_company_for_billing(db, tenant_id)
         summary = build_billing_summary(db, company)
+        checkout = summary.get("checkout") or {}
 
         return jsonify({
             "ok": True,
@@ -157,15 +198,19 @@ def billing_summary():
             "subscription": clean_doc(summary),
             "billing": clean_doc(summary),
 
-            # Flat fields are kept for the Billing.jsx page.
+            # Flat fields are kept for Billing.jsx compatibility.
             "tenant_id": summary.get("tenant_id"),
             "tenant_code": summary.get("tenant_code"),
             "company_name": summary.get("company_name"),
             "company_email": company.get("company_email") or company.get("contact_email") or company.get("email"),
             "status": summary.get("status"),
             "plan": summary.get("plan"),
+            "plan_code": summary.get("plan_code"),
             "plan_type": summary.get("plan_type"),
             "plan_label": summary.get("plan_label"),
+            "selected_plan_code": summary.get("selected_plan_code"),
+            "selected_plan_name": summary.get("selected_plan_name"),
+            "billing_interval": summary.get("billing_interval"),
             "subscription_status": summary.get("subscription_status"),
             "trial_status": summary.get("trial_status"),
             "trial_start_date": summary.get("trial_start_date"),
@@ -177,6 +222,7 @@ def billing_summary():
             "employee_count": summary.get("employee_count"),
             "employees_used": summary.get("employee_count"),
             "employee_limit": summary.get("employee_limit"),
+            "is_unlimited_employees": summary.get("is_unlimited_employees"),
             "allowed_modules": summary.get("allowed_modules") or [],
             "is_sds_company": summary.get("is_sds_company"),
             "has_lifetime_access": summary.get("is_lifetime"),
@@ -185,12 +231,21 @@ def billing_summary():
             "is_paid_company": summary.get("is_paid_company"),
             "is_expired": summary.get("is_expired"),
             "is_suspended": summary.get("is_suspended"),
+            "demo_has_full_access": summary.get("demo_has_full_access"),
             "requires_payment": summary.get("requires_payment"),
             "billing_page_path": summary.get("billing_page_path"),
-            "checkout": clean_doc(summary.get("checkout") or {}),
-            "plan_amount": (summary.get("checkout") or {}).get("plan_amount"),
-            "amount": (summary.get("checkout") or {}).get("plan_amount"),
-            "currency": (summary.get("checkout") or {}).get("currency"),
+
+            # Dynamic pricing fields.
+            "checkout": clean_doc(checkout),
+            "pricing": clean_doc(summary.get("pricing") or {}),
+            "plans": clean_doc(summary.get("plans") or []),
+            "trial": clean_doc(summary.get("trial") or {}),
+            "default_plan": clean_doc(summary.get("default_plan") or {}),
+
+            # Legacy flat checkout fields.
+            "plan_amount": checkout.get("plan_amount"),
+            "amount": checkout.get("plan_amount"),
+            "currency": checkout.get("currency"),
         })
     except Exception as exc:
         return error_response(exc)
@@ -200,14 +255,24 @@ def billing_summary():
 @current_user_required
 def create_order():
     """
-    Creates a Razorpay order for upgrading a demo/expired company.
-    SDS lifetime tenant will be rejected by the billing service.
+    Creates a Razorpay order for a selected dynamic paid plan.
+
+    Expected body:
+    {
+      "plan_code": "essential" | "growth" | "premium",
+      "amount": optional internal override
+    }
+
+    SDS lifetime tenants are rejected by the billing service.
+    Premium is blocked for online payment unless Superadmin enables online
+    payment and sets an amount for it.
     """
 
     db = get_db()
     data = request_json()
     tenant_id = requested_tenant_id(default_to_current=True)
     amount = data.get("amount")
+    plan_code = data.get("plan_code") or data.get("selected_plan_code")
 
     try:
         order = create_subscription_order(
@@ -215,6 +280,7 @@ def create_order():
             tenant_id=tenant_id,
             requested_by=current_user_id(),
             amount=amount,
+            plan_code=plan_code,
         )
 
         audit(
@@ -224,10 +290,13 @@ def create_order():
             {
                 "tenant_id": tenant_id,
                 "razorpay_order_id": order.get("razorpay_order_id"),
+                "plan_code": plan_code,
             },
         )
 
         checkout = order.get("checkout") or {}
+        selected_plan = order.get("selected_plan") or {}
+        plan = order.get("plan") or {}
 
         return jsonify({
             "ok": True,
@@ -236,6 +305,16 @@ def create_order():
             # Local order fields.
             "local_order_id": order.get("order_id"),
             "order_id": order.get("order_id"),
+
+            # Selected dynamic plan.
+            "plan": clean_doc(plan),
+            "selected_plan": clean_doc(selected_plan),
+            "plan_code": checkout.get("plan_code") or selected_plan.get("plan_code"),
+            "plan_name": checkout.get("plan_name") or selected_plan.get("plan_name"),
+            "plan_label": checkout.get("plan_label") or selected_plan.get("plan_label"),
+            "employee_limit": checkout.get("employee_limit"),
+            "is_unlimited_employees": checkout.get("is_unlimited_employees"),
+            "billing_interval": checkout.get("plan_interval") or selected_plan.get("billing_interval"),
 
             # Razorpay public fields expected by Billing.jsx.
             "key_id": checkout.get("key_id"),
@@ -259,6 +338,11 @@ def create_order():
                 "description": checkout.get("description"),
                 "prefill": checkout.get("prefill") or {},
                 "notes": checkout.get("notes") or {},
+                "plan_code": checkout.get("plan_code"),
+                "plan_name": checkout.get("plan_name"),
+                "plan_label": checkout.get("plan_label"),
+                "employee_limit": checkout.get("employee_limit"),
+                "is_unlimited_employees": checkout.get("is_unlimited_employees"),
             }),
 
             # Full service response remains available for debugging/admin usage.
@@ -304,6 +388,7 @@ def verify_payment():
         )
 
         billing = result.get("billing") or {}
+        subscription = result.get("subscription") or billing
 
         return jsonify({
             "ok": True,
@@ -311,13 +396,19 @@ def verify_payment():
             **clean_doc(result),
 
             # Flat fields help frontend refresh status immediately after payment.
-            "subscription": clean_doc(result.get("subscription") or billing),
+            "subscription": clean_doc(subscription),
             "billing": clean_doc(billing),
             "tenant_id": billing.get("tenant_id"),
             "company_name": billing.get("company_name"),
             "status": billing.get("status"),
+            "plan_code": billing.get("plan_code") or subscription.get("plan_code"),
             "plan_type": billing.get("plan_type"),
+            "plan_label": billing.get("plan_label") or subscription.get("plan_label"),
+            "selected_plan_code": billing.get("selected_plan_code") or subscription.get("plan_code"),
+            "selected_plan_name": billing.get("selected_plan_name") or subscription.get("plan_name"),
             "subscription_status": billing.get("subscription_status"),
+            "employee_limit": billing.get("employee_limit") or subscription.get("employee_limit"),
+            "is_unlimited_employees": billing.get("is_unlimited_employees") or subscription.get("is_unlimited_employees"),
             "is_paid_company": billing.get("is_paid_company"),
             "requires_payment": billing.get("requires_payment"),
         })
@@ -400,6 +491,139 @@ def admin_refresh_expired_demos():
         return error_response(exc)
 
 
+@billing_bp.get("/admin/pricing-plans")
+@roles_required("super_admin")
+def admin_pricing_plans():
+    """
+    Superadmin list of dynamic pricing plans.
+    """
+
+    db = get_db()
+
+    try:
+        ensure_default_pricing_plans(db, created_by=current_user_id())
+        plans = list_pricing_plans(
+            db,
+            include_inactive=True,
+            include_deleted=False,
+        )
+
+        return jsonify({
+            "ok": True,
+            "items": clean_doc(plans),
+            "plans": clean_doc(plans),
+            "total": len(plans),
+        })
+    except Exception as exc:
+        return error_response(exc)
+
+
+@billing_bp.post("/admin/pricing-plans")
+@roles_required("super_admin")
+def admin_create_or_update_pricing_plan():
+    """
+    Create or update a dynamic pricing plan.
+
+    Body can include:
+    {
+      plan_code,
+      plan_name,
+      amount,
+      employee_limit,
+      is_unlimited_employees,
+      is_custom_pricing,
+      allow_online_payment,
+      is_recommended,
+      features
+    }
+    """
+
+    db = get_db()
+    data = request_json()
+
+    try:
+        plan = upsert_pricing_plan(db, data, updated_by=current_user_id())
+
+        audit(
+            "billing.pricing_plan_upserted",
+            "pricing_plans",
+            plan.get("_id") or plan.get("plan_code"),
+            {
+                "plan_code": plan.get("plan_code"),
+                "amount": plan.get("amount"),
+                "employee_limit": plan.get("employee_limit"),
+            },
+        )
+
+        return jsonify({
+            "ok": True,
+            "message": "Pricing plan saved successfully.",
+            "plan": clean_doc(plan),
+        })
+    except Exception as exc:
+        return error_response(exc)
+
+
+@billing_bp.put("/admin/pricing-plans/<plan_code>")
+@billing_bp.patch("/admin/pricing-plans/<plan_code>")
+@roles_required("super_admin")
+def admin_update_pricing_plan(plan_code):
+    db = get_db()
+    data = request_json()
+    data["plan_code"] = plan_code
+
+    try:
+        plan = upsert_pricing_plan(db, data, updated_by=current_user_id())
+
+        audit(
+            "billing.pricing_plan_updated",
+            "pricing_plans",
+            plan.get("_id") or plan.get("plan_code"),
+            {
+                "plan_code": plan.get("plan_code"),
+                "amount": plan.get("amount"),
+                "employee_limit": plan.get("employee_limit"),
+            },
+        )
+
+        return jsonify({
+            "ok": True,
+            "message": "Pricing plan updated successfully.",
+            "plan": clean_doc(plan),
+        })
+    except Exception as exc:
+        return error_response(exc)
+
+
+@billing_bp.delete("/admin/pricing-plans/<plan_code>")
+@roles_required("super_admin")
+def admin_delete_pricing_plan(plan_code):
+    """
+    Archives custom pricing plans.
+    Default plans cannot be deleted; edit/deactivate them instead.
+    """
+
+    db = get_db()
+
+    try:
+        result = archive_pricing_plan(db, plan_code, updated_by=current_user_id())
+
+        audit(
+            "billing.pricing_plan_archived",
+            "pricing_plans",
+            plan_code,
+            result,
+        )
+
+        return jsonify({
+            "ok": True,
+            "message": "Pricing plan archived successfully.",
+            "result": clean_doc(result),
+        })
+    except Exception as exc:
+        return error_response(exc)
+
+
 @billing_bp.get("/admin/orders")
 @roles_required("super_admin")
 def admin_payment_orders():
@@ -421,6 +645,8 @@ def admin_payment_orders():
             {"company_name": {"$regex": search, "$options": "i"}},
             {"company_email": {"$regex": search, "$options": "i"}},
             {"razorpay_order_id": {"$regex": search, "$options": "i"}},
+            {"plan_code": {"$regex": search, "$options": "i"}},
+            {"plan_name": {"$regex": search, "$options": "i"}},
         ]
 
     data = paginated_cursor(
@@ -451,6 +677,8 @@ def admin_payments():
             {"company_email": {"$regex": search, "$options": "i"}},
             {"razorpay_order_id": {"$regex": search, "$options": "i"}},
             {"razorpay_payment_id": {"$regex": search, "$options": "i"}},
+            {"plan_code": {"$regex": search, "$options": "i"}},
+            {"plan_name": {"$regex": search, "$options": "i"}},
         ]
 
     data = paginated_cursor(
@@ -483,6 +711,7 @@ def admin_subscriptions():
         query["$or"] = [
             {"company_name": {"$regex": search, "$options": "i"}},
             {"company_email": {"$regex": search, "$options": "i"}},
+            {"plan_code": {"$regex": search, "$options": "i"}},
             {"plan_name": {"$regex": search, "$options": "i"}},
         ]
 

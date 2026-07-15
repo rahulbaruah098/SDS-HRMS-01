@@ -15,6 +15,13 @@ from app.services.tenant_service import (
     serialize_tenant_for_admin,
 )
 
+from app.services.pricing_service import (
+    find_pricing_plan,
+    get_default_paid_plan,
+    normalize_plan_for_subscription,
+    PricingServiceError,
+)
+
 
 superadmin_bp = Blueprint("superadmin", __name__)
 
@@ -236,6 +243,93 @@ def normalize_float(value, default=0):
         return float(default)
 
 
+def config_bool(key, default=False):
+    value = current_app.config.get(key, default)
+
+    if isinstance(value, bool):
+        return value
+
+    return normalize_text(value).lower() in {"1", "true", "yes", "y", "on"}
+
+
+def configured_trial_days():
+    try:
+        return int(current_app.config.get("DEMO_DURATION_DAYS", 15) or 15)
+    except Exception:
+        return 15
+
+
+def configured_trial_employee_limit():
+    try:
+        limit = int(current_app.config.get("DEMO_EMPLOYEE_LIMIT", 0) or 0)
+    except Exception:
+        limit = 0
+
+    # 0 means unlimited during the 15-day full-access trial.
+    return None if limit <= 0 else limit
+
+
+def configured_trial_allowed_modules():
+    raw = current_app.config.get("DEMO_ALLOWED_MODULES", ["all"])
+
+    modules = normalize_allowed_modules(raw, "demo")
+
+    return modules or ["all"]
+
+
+def configured_trial_plan_name():
+    return f"{configured_trial_days()}-Day Full Access Trial"
+
+
+def get_paid_plan_payload(db, data=None, tenant=None):
+    data = data or {}
+    tenant = tenant or {}
+
+    requested_plan_code = normalize_text(
+        data.get("plan_code")
+        or data.get("selected_plan_code")
+        or tenant.get("plan_code")
+        or tenant.get("selected_plan_code")
+    )
+
+    try:
+        plan = find_pricing_plan(db, requested_plan_code) if requested_plan_code else None
+
+        if not plan:
+            plan = get_default_paid_plan(db)
+
+        if plan:
+            return normalize_plan_for_subscription(plan)
+    except PricingServiceError:
+        raise
+    except Exception:
+        pass
+
+    amount = normalize_float(
+        data.get("amount") or tenant.get("plan_amount"),
+        current_app.config.get("SAAS_GROWTH_PLAN_AMOUNT", current_app.config.get("SAAS_FULL_PLAN_AMOUNT", 4495.0)),
+    )
+    employee_limit = int(
+        data.get("employee_limit")
+        or tenant.get("employee_limit")
+        or current_app.config.get("SAAS_GROWTH_EMPLOYEE_LIMIT", 100)
+        or 100
+    )
+
+    return {
+        "plan_code": normalize_text(requested_plan_code or current_app.config.get("SAAS_DEFAULT_PAID_PLAN_CODE", "growth")) or "growth",
+        "plan_name": normalize_text(data.get("plan_name") or tenant.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Growth")) or "Growth",
+        "plan_label": normalize_text(data.get("plan_name") or tenant.get("plan_label") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Growth")) or "Growth",
+        "plan_type": "paid",
+        "billing_interval": normalize_text(data.get("billing_interval") or tenant.get("billing_interval") or current_app.config.get("SAAS_FULL_PLAN_INTERVAL", "monthly")) or "monthly",
+        "amount": amount,
+        "currency": normalize_text(data.get("currency") or tenant.get("currency") or current_app.config.get("RAZORPAY_CURRENCY", "INR")) or "INR",
+        "employee_limit": employee_limit,
+        "is_unlimited_employees": False,
+        "allowed_modules": ["all"],
+    }
+
+
 def normalize_plan_type(value, default="paid"):
     plan_type = normalize_text(value or default).lower().replace(" ", "_").replace("-", "_")
 
@@ -272,7 +366,16 @@ def normalize_allowed_modules(value, plan_type="paid"):
         return modules
 
     if plan_type == "demo":
-        return list(current_app.config.get("DEMO_ALLOWED_MODULES", ["attendance", "apply_leave", "projects"]))
+        raw_modules = current_app.config.get("DEMO_ALLOWED_MODULES", ["all"])
+
+        if isinstance(raw_modules, str):
+            modules = [item.strip() for item in raw_modules.split(",") if item.strip()]
+        elif isinstance(raw_modules, (list, tuple, set)):
+            modules = [normalize_text(item) for item in raw_modules if normalize_text(item)]
+        else:
+            modules = []
+
+        return modules or ["all"]
 
     return ["all"]
 
@@ -382,14 +485,42 @@ def update_tenant_subscription_record(db, tenant):
     status = normalize_company_status(tenant.get("status"), "active")
 
     if plan_type == "demo":
-        plan_name = "30-Day Demo"
+        plan_code = tenant.get("plan_code") or "trial"
+        plan_name = tenant.get("plan_name") or tenant.get("plan_label") or configured_trial_plan_name()
         amount = 0
+        currency = current_app.config.get("RAZORPAY_CURRENCY", "INR")
+        employee_limit = tenant.get("employee_limit")
+        is_unlimited_employees = employee_limit in [None, "", "unlimited", "Unlimited"]
+        billing_interval = "trial"
+        demo_has_full_access = tenant.get("demo_has_full_access", config_bool("DEMO_HAS_FULL_ACCESS", True))
+        requires_payment = tenant.get("requires_payment", status == "expired")
+        allowed_modules = tenant.get("allowed_modules") or configured_trial_allowed_modules()
     elif plan_type == "lifetime":
+        plan_code = tenant.get("plan_code") or "lifetime"
         plan_name = "Lifetime Full HRMS"
         amount = 0
+        currency = current_app.config.get("RAZORPAY_CURRENCY", "INR")
+        employee_limit = None
+        is_unlimited_employees = True
+        billing_interval = "lifetime"
+        demo_has_full_access = False
+        requires_payment = False
+        allowed_modules = ["all"]
     else:
-        plan_name = tenant.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS")
-        amount = normalize_float(tenant.get("plan_amount"), current_app.config.get("SAAS_FULL_PLAN_AMOUNT", 4999.0))
+        paid_plan = get_paid_plan_payload(db, tenant=tenant)
+        plan_code = tenant.get("plan_code") or paid_plan.get("plan_code")
+        plan_name = tenant.get("plan_name") or tenant.get("plan_label") or paid_plan.get("plan_name")
+        amount = normalize_float(
+            tenant.get("plan_amount") or tenant.get("amount"),
+            paid_plan.get("amount", 4495.0),
+        )
+        currency = tenant.get("currency") or paid_plan.get("currency") or current_app.config.get("RAZORPAY_CURRENCY", "INR")
+        employee_limit = tenant.get("employee_limit", paid_plan.get("employee_limit"))
+        is_unlimited_employees = bool(tenant.get("is_unlimited_employees", paid_plan.get("is_unlimited_employees")))
+        billing_interval = tenant.get("billing_interval") or paid_plan.get("billing_interval") or "monthly"
+        demo_has_full_access = False
+        requires_payment = False
+        allowed_modules = ["all"]
 
     db.subscriptions.update_one(
         {
@@ -403,12 +534,22 @@ def update_tenant_subscription_record(db, tenant):
                 "tenant_code": tenant.get("tenant_code"),
                 "company_name": tenant.get("company_name") or tenant.get("name"),
                 "company_email": tenant.get("company_email") or tenant.get("contact_email"),
+                "plan_code": plan_code,
                 "plan_name": plan_name,
+                "plan_label": tenant.get("plan_label") or plan_name,
                 "plan_type": plan_type,
+                "billing_interval": billing_interval,
                 "status": "active" if status == "active" else status,
                 "subscription_status": tenant.get("subscription_status") or status,
+                "trial_status": tenant.get("trial_status"),
                 "amount": amount,
-                "currency": current_app.config.get("RAZORPAY_CURRENCY", "INR"),
+                "currency": currency,
+                "employee_limit": employee_limit,
+                "is_unlimited_employees": is_unlimited_employees,
+                "allowed_modules": allowed_modules,
+                "demo_duration_days": tenant.get("demo_duration_days") or configured_trial_days(),
+                "demo_has_full_access": demo_has_full_access,
+                "requires_payment": requires_payment,
                 "start_date": tenant.get("subscription_start_date") or tenant.get("trial_start_date") or now_value,
                 "end_date": tenant.get("subscription_end_date") or tenant.get("trial_end_date"),
                 "is_sds_company": tenant.get("is_sds_company") is True,
@@ -1242,9 +1383,9 @@ def create_company():
     employee_limit = data.get("employee_limit")
 
     if plan_type == "demo":
-        employee_limit = int(employee_limit or current_app.config.get("DEMO_EMPLOYEE_LIMIT", 10))
+        employee_limit = configured_trial_employee_limit()
         trial_start_date = now()
-        trial_end_date = trial_start_date + timedelta(days=int(current_app.config.get("DEMO_DURATION_DAYS", 30)))
+        trial_end_date = trial_start_date + timedelta(days=configured_trial_days())
         subscription_status = "demo"
         trial_status = "active"
     elif plan_type == "lifetime":
@@ -1254,7 +1395,8 @@ def create_company():
         subscription_status = "lifetime"
         trial_status = "not_required"
     else:
-        employee_limit = int(employee_limit) if normalize_text(employee_limit) else None
+        paid_plan = get_paid_plan_payload(db, data=data)
+        employee_limit = paid_plan.get("employee_limit")
         trial_start_date = None
         trial_end_date = None
         subscription_status = "active"
@@ -1272,14 +1414,24 @@ def create_company():
         "company_phone": normalize_text(data.get("company_phone") or data.get("contact_phone")),
         "address": data.get("address", ""),
         "status": status,
-        "plan": data.get("plan") or ("30-Day Demo" if plan_type == "demo" else "Full HRMS"),
+        "plan": data.get("plan") or (configured_trial_plan_name() if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("plan_name", "Growth")),
         "plan_type": plan_type,
         "subscription_status": subscription_status,
         "trial_status": trial_status,
         "trial_start_date": trial_start_date,
         "trial_end_date": trial_end_date,
         "employee_limit": employee_limit,
-        "allowed_modules": normalize_allowed_modules(data.get("allowed_modules"), plan_type),
+        "allowed_modules": configured_trial_allowed_modules() if plan_type == "demo" else normalize_allowed_modules(data.get("allowed_modules"), plan_type),
+        "demo_duration_days": configured_trial_days() if plan_type == "demo" else None,
+        "demo_has_full_access": config_bool("DEMO_HAS_FULL_ACCESS", True) if plan_type == "demo" else False,
+        "requires_payment": False,
+        "plan_code": "trial" if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("plan_code"),
+        "plan_name": configured_trial_plan_name() if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("plan_name"),
+        "plan_label": configured_trial_plan_name() if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("plan_label"),
+        "billing_interval": "trial" if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("billing_interval"),
+        "plan_amount": 0 if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("amount"),
+        "currency": current_app.config.get("RAZORPAY_CURRENCY", "INR") if plan_type == "demo" else get_paid_plan_payload(db, data=data).get("currency"),
+        "is_unlimited_employees": employee_limit is None,
         "is_sds_company": plan_type == "lifetime" and tenant_id == current_app.config.get("SDS_TENANT_ID", "sds"),
         "is_lifetime": plan_type == "lifetime",
         "is_demo_company": plan_type == "demo",
@@ -1412,10 +1564,47 @@ def update_company(tenant_id):
 
     if "plan_type" in data or "plan" in data:
         data["plan_type"] = normalize_plan_type(data.get("plan_type") or data.get("plan"), existing.get("plan_type") or "paid")
-        data["allowed_modules"] = normalize_allowed_modules(data.get("allowed_modules"), data["plan_type"])
+        data["allowed_modules"] = configured_trial_allowed_modules() if data["plan_type"] == "demo" else normalize_allowed_modules(data.get("allowed_modules"), data["plan_type"])
         data["is_lifetime"] = data["plan_type"] == "lifetime"
         data["is_demo_company"] = data["plan_type"] == "demo"
         data["is_paid_company"] = data["plan_type"] == "paid"
+
+        if data["plan_type"] == "demo":
+            trial_start = existing.get("trial_start_date") or now()
+            data.update({
+                "plan": configured_trial_plan_name(),
+                "plan_code": "trial",
+                "plan_name": configured_trial_plan_name(),
+                "plan_label": configured_trial_plan_name(),
+                "billing_interval": "trial",
+                "plan_amount": 0,
+                "employee_limit": configured_trial_employee_limit(),
+                "is_unlimited_employees": configured_trial_employee_limit() is None,
+                "demo_duration_days": configured_trial_days(),
+                "demo_has_full_access": config_bool("DEMO_HAS_FULL_ACCESS", True),
+                "requires_payment": False,
+                "trial_start_date": trial_start,
+                "trial_end_date": existing.get("trial_end_date") or (trial_start + timedelta(days=configured_trial_days())),
+                "subscription_status": "demo",
+                "trial_status": "active",
+            })
+        elif data["plan_type"] == "paid":
+            paid_plan = get_paid_plan_payload(db, data=data, tenant=existing)
+            data.update({
+                "plan": paid_plan.get("plan_name"),
+                "plan_code": paid_plan.get("plan_code"),
+                "plan_name": paid_plan.get("plan_name"),
+                "plan_label": paid_plan.get("plan_label"),
+                "billing_interval": paid_plan.get("billing_interval"),
+                "plan_amount": paid_plan.get("amount"),
+                "currency": paid_plan.get("currency"),
+                "employee_limit": paid_plan.get("employee_limit"),
+                "is_unlimited_employees": paid_plan.get("is_unlimited_employees"),
+                "demo_has_full_access": False,
+                "requires_payment": False,
+                "subscription_status": "active",
+                "trial_status": "converted_to_paid",
+            })
 
     if "status" in data:
         data["status"] = normalize_company_status(data.get("status"), existing.get("status") or "active")
@@ -1569,7 +1758,7 @@ def extend_company_demo(tenant_id):
         return jsonify({"message": "Company not found"}), 404
 
     if tenant.get("plan_type") != "demo":
-        return jsonify({"message": "Demo can be extended only for demo companies."}), 400
+        return jsonify({"message": "Trial can be extended only for trial companies."}), 400
 
     days = int(data.get("days") or data.get("extend_days") or 7)
 
@@ -1599,6 +1788,13 @@ def extend_company_demo(tenant_id):
         "last_demo_extension_reason": normalize_text(data.get("reason")),
         "last_demo_extended_at": now(),
         "last_demo_extended_by": str(g.current_user["_id"]),
+        "last_trial_extension_days": days,
+        "last_trial_extension_reason": normalize_text(data.get("reason")),
+        "last_trial_extended_at": now(),
+        "last_trial_extended_by": str(g.current_user["_id"]),
+        "requires_payment": False,
+        "demo_has_full_access": config_bool("DEMO_HAS_FULL_ACCESS", True),
+        "allowed_modules": configured_trial_allowed_modules(),
         "updated_at": now(),
         "updated_by": str(g.current_user["_id"]),
     }
@@ -1613,7 +1809,7 @@ def extend_company_demo(tenant_id):
         {
             "$set": {
                 "is_deleted": True,
-                "deleted_reason": "demo_extended",
+                "deleted_reason": "trial_extended",
                 "updated_at": now(),
             }
         },
@@ -1625,7 +1821,7 @@ def extend_company_demo(tenant_id):
     audit("extend_demo", "tenants", tenant.get("tenant_id"), update)
 
     return jsonify({
-        "message": f"Demo extended by {days} days",
+        "message": f"Trial extended by {days} days",
         "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
     })
 
@@ -1640,22 +1836,31 @@ def mark_company_paid(tenant_id):
     if not tenant:
         return jsonify({"message": "Company not found"}), 404
 
-    amount = normalize_float(data.get("amount"), current_app.config.get("SAAS_FULL_PLAN_AMOUNT", 4999.0))
+    paid_plan = get_paid_plan_payload(db, data=data, tenant=tenant)
+    amount = normalize_float(data.get("amount"), paid_plan.get("amount", 4495.0))
     start_date = now()
     duration_days = int(data.get("duration_days") or 30)
     end_date = start_date + timedelta(days=duration_days) if duration_days > 0 else None
 
     update = {
         "status": "active",
-        "plan": data.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS"),
-        "plan_name": data.get("plan_name") or current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS"),
+        "plan": paid_plan.get("plan_name"),
+        "plan_code": paid_plan.get("plan_code"),
+        "plan_name": paid_plan.get("plan_name"),
+        "plan_label": paid_plan.get("plan_label"),
         "plan_type": "paid",
+        "billing_interval": paid_plan.get("billing_interval"),
+        "plan_amount": amount,
+        "currency": paid_plan.get("currency"),
         "subscription_status": "active",
         "trial_status": "converted_to_paid",
         "subscription_start_date": start_date,
         "subscription_end_date": end_date,
-        "employee_limit": None,
+        "employee_limit": paid_plan.get("employee_limit"),
+        "is_unlimited_employees": paid_plan.get("is_unlimited_employees"),
         "allowed_modules": ["all"],
+        "demo_has_full_access": False,
+        "requires_payment": False,
         "is_demo_company": False,
         "is_paid_company": True,
         "is_lifetime": False,
@@ -1677,8 +1882,13 @@ def mark_company_paid(tenant_id):
         "tenant_code": updated.get("tenant_code"),
         "company_name": updated.get("company_name") or updated.get("name"),
         "company_email": updated.get("company_email") or updated.get("contact_email"),
+        "plan_code": paid_plan.get("plan_code"),
+        "plan_name": paid_plan.get("plan_name"),
+        "plan_label": paid_plan.get("plan_label"),
+        "employee_limit": paid_plan.get("employee_limit"),
+        "is_unlimited_employees": paid_plan.get("is_unlimited_employees"),
         "amount": amount,
-        "currency": current_app.config.get("RAZORPAY_CURRENCY", "INR"),
+        "currency": paid_plan.get("currency") or current_app.config.get("RAZORPAY_CURRENCY", "INR"),
         "status": "paid",
         "payment_status": "manual_paid",
         "payment_method": "manual_superadmin",
@@ -1691,7 +1901,7 @@ def mark_company_paid(tenant_id):
     audit("mark_company_paid", "tenants", tenant.get("tenant_id"), update)
 
     return jsonify({
-        "message": "Company marked as paid and full HRMS access unlocked",
+        "message": "Company marked as paid. Selected plan access and employee limit applied.",
         "item": clean_doc(enrich_tenant_for_superadmin(db, updated)),
     })
 

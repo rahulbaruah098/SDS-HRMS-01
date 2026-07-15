@@ -13,8 +13,8 @@ What this script does:
 - Creates or refreshes the SDS lifetime tenant in db.tenants.
 - Adds tenant_id / tenant_code / company_name to existing legacy records
   that do not already have a tenant.
-- Keeps existing demo/paid tenant records untouched.
-- Does not require SDS to recharge, renew, or subscribe.
+- Keeps existing trial/paid tenant records untouched.
+- Does not require SDS to pay, renew, or subscribe.
 """
 
 import argparse
@@ -36,6 +36,7 @@ EXCLUDED_COLLECTIONS = {
     "tenants",
     "companies",
     "demo_requests",
+    "pricing_plans",
     "subscriptions",
     "payments",
     "payment_orders",
@@ -217,6 +218,90 @@ def build_sds_update_payload(sds_tenant, config):
     }
 
 
+def build_sds_lifetime_tenant_fields(sds_tenant, config):
+    tenant_id = sds_tenant.get("tenant_id") or config.get("SDS_TENANT_ID", "sds")
+    tenant_code = sds_tenant.get("tenant_code") or config.get("SDS_TENANT_CODE", "SDS")
+    company_name = (
+        sds_tenant.get("company_name")
+        or sds_tenant.get("name")
+        or config.get("SDS_COMPANY_NAME", "Sayanant Development Services Pvt. Ltd.")
+    )
+
+    return {
+        "tenant_id": tenant_id,
+        "company_id": tenant_id,
+        "tenant_code": tenant_code,
+        "company_name": company_name,
+        "name": company_name,
+        "plan": "Lifetime Full HRMS",
+        "plan_code": "lifetime",
+        "plan_name": "Lifetime Full HRMS",
+        "plan_label": "Lifetime Full HRMS",
+        "plan_type": "lifetime",
+        "billing_interval": "lifetime",
+        "status": "active",
+        "subscription_status": "lifetime",
+        "trial_status": "not_required",
+        "employee_limit": None,
+        "is_unlimited_employees": True,
+        "allowed_modules": ["all"],
+        "demo_duration_days": None,
+        "demo_has_full_access": False,
+        "requires_payment": False,
+        "has_lifetime_access": True,
+        "is_sds_company": True,
+        "is_lifetime": True,
+        "is_demo_company": False,
+        "is_paid_company": False,
+        "updated_at": now_utc(),
+        "is_deleted": False,
+    }
+
+
+def ensure_sds_lifetime_tenant_fields(db, sds_tenant, config, dry_run=False):
+    fields = build_sds_lifetime_tenant_fields(sds_tenant, config)
+    query = {
+        "$or": [
+            {"tenant_id": fields["tenant_id"]},
+            {"tenant_code": fields["tenant_code"]},
+            {"is_sds_company": True},
+        ],
+        "is_deleted": {"$ne": True},
+    }
+
+    existing = db.tenants.find_one(query)
+
+    if dry_run:
+        preview = {
+            **(existing or sds_tenant or {}),
+            **fields,
+        }
+
+        return preview, {
+            "action": "would_update" if existing else "would_create",
+            "dry_run": True,
+        }
+
+    db.tenants.update_one(
+        query,
+        {
+            "$set": fields,
+            "$setOnInsert": {
+                "created_at": now_utc(),
+                "created_by": "seed_sds_tenant",
+            },
+        },
+        upsert=True,
+    )
+
+    updated = db.tenants.find_one(query) or fields
+
+    return updated, {
+        "action": "updated",
+        "dry_run": False,
+    }
+
+
 def migrate_collection(db, collection_name, update_payload, dry_run=False):
     collection = db[collection_name]
     query = missing_tenant_query()
@@ -274,12 +359,23 @@ def ensure_sds_subscription_record(db, sds_tenant, config, dry_run=False):
             or sds_tenant.get("name")
             or config.get("SDS_COMPANY_NAME", "Sayanant Development Services Pvt. Ltd.")
         ),
+        "plan_code": "lifetime",
         "plan_name": "Lifetime Full HRMS",
+        "plan_label": "Lifetime Full HRMS",
         "plan_type": "lifetime",
+        "billing_interval": "lifetime",
         "status": "active",
         "subscription_status": "lifetime",
+        "trial_status": "not_required",
         "amount": 0,
-        "currency": "INR",
+        "currency": config.get("RAZORPAY_CURRENCY", "INR"),
+        "employee_limit": None,
+        "is_unlimited_employees": True,
+        "allowed_modules": ["all"],
+        "demo_duration_days": None,
+        "demo_has_full_access": False,
+        "requires_payment": False,
+        "has_lifetime_access": True,
         "start_date": now,
         "end_date": None,
         "is_sds_company": True,
@@ -334,6 +430,13 @@ def run_seed(db, app, *, dry_run=False, include_all=False):
         sds_tenant = ensure_sds_tenant(db, config)
         tenant_action = "created_or_updated"
 
+    sds_tenant, lifetime_result = ensure_sds_lifetime_tenant_fields(
+        db,
+        sds_tenant,
+        config,
+        dry_run=dry_run,
+    )
+
     update_payload = build_sds_update_payload(sds_tenant, config)
     collections = get_target_collections(db, include_all=include_all)
 
@@ -359,6 +462,7 @@ def run_seed(db, app, *, dry_run=False, include_all=False):
         "dry_run": dry_run,
         "include_all": include_all,
         "tenant_action": tenant_action,
+        "lifetime_field_action": lifetime_result,
         "sds_tenant": {
             "tenant_id": sds_tenant.get("tenant_id"),
             "tenant_code": sds_tenant.get("tenant_code"),
@@ -367,6 +471,9 @@ def run_seed(db, app, *, dry_run=False, include_all=False):
             "status": sds_tenant.get("status"),
             "is_sds_company": sds_tenant.get("is_sds_company"),
             "is_lifetime": sds_tenant.get("is_lifetime"),
+            "has_lifetime_access": sds_tenant.get("has_lifetime_access"),
+            "allowed_modules": sds_tenant.get("allowed_modules") or ["all"],
+            "requires_payment": False,
         },
         "subscription": subscription_result,
         "collections_checked": len(collection_results),
@@ -441,6 +548,9 @@ def main():
     print(f"SDS Company        : {clean_result.get('sds_tenant', {}).get('company_name')}")
     print(f"SDS Plan Type      : {clean_result.get('sds_tenant', {}).get('plan_type')}")
     print(f"SDS Status         : {clean_result.get('sds_tenant', {}).get('status')}")
+    print(f"SDS Lifetime Access: {clean_result.get('sds_tenant', {}).get('has_lifetime_access')}")
+    print(f"SDS Requires Pay   : {clean_result.get('sds_tenant', {}).get('requires_payment')}")
+    print(f"Lifetime Field Fix : {clean_result.get('lifetime_field_action', {}).get('action')}")
     print(f"Subscription Action: {clean_result.get('subscription', {}).get('action')}")
     print(f"Collections Checked: {clean_result.get('collections_checked')}")
     print(f"Records Matched    : {clean_result.get('total_matched')}")

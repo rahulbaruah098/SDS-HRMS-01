@@ -41,6 +41,95 @@ def _json_error(message, code="tenant_access_denied", status_code=403, meta=None
     return jsonify(payload), status_code
 
 
+def _safe_lower(value):
+    return str(value or "").strip().lower()
+
+
+def _config_truthy(key, default=False):
+    value = current_app.config.get(key, default)
+
+    if isinstance(value, bool):
+        return value
+
+    return _safe_lower(value) in {"1", "true", "yes", "y", "on"}
+
+
+def _contains_all_module(value):
+    if value is None:
+        return False
+
+    if isinstance(value, str):
+        parts = [
+            item.strip().lower()
+            for item in value.replace(";", ",").split(",")
+            if item.strip()
+        ]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(item or "").strip().lower() for item in value]
+    else:
+        return False
+
+    return "all" in parts or "*" in parts
+
+
+def _is_trial_subscription(subscription=None, tenant=None):
+    subscription = subscription or {}
+    tenant = tenant or {}
+
+    return (
+        _safe_lower(subscription.get("plan_type")) == "demo"
+        or _safe_lower(subscription.get("subscription_type")) == "demo"
+        or _safe_lower(subscription.get("trial_status")) in {"active", "trial", "running"}
+        or _safe_lower(tenant.get("plan_type")) == "demo"
+        or _safe_lower(tenant.get("subscription_type")) == "demo"
+        or _safe_lower(tenant.get("trial_status")) in {"active", "trial", "running"}
+    )
+
+
+def _is_blocked_subscription(subscription=None, tenant=None):
+    subscription = subscription or {}
+    tenant = tenant or {}
+
+    status_values = {
+        _safe_lower(subscription.get("status")),
+        _safe_lower(subscription.get("subscription_status")),
+        _safe_lower(subscription.get("trial_status")),
+        _safe_lower(tenant.get("status")),
+        _safe_lower(tenant.get("subscription_status")),
+        _safe_lower(tenant.get("trial_status")),
+    }
+
+    if {"expired", "suspended", "blocked", "inactive"} & status_values:
+        return True
+
+    return bool(
+        subscription.get("is_expired")
+        or subscription.get("is_suspended")
+        or tenant.get("is_expired")
+        or tenant.get("is_suspended")
+    )
+
+
+def _trial_has_full_access(subscription=None, tenant=None):
+    subscription = subscription or {}
+    tenant = tenant or {}
+
+    if not _is_trial_subscription(subscription, tenant):
+        return False
+
+    if _is_blocked_subscription(subscription, tenant):
+        return False
+
+    return bool(
+        subscription.get("demo_has_full_access") is True
+        or tenant.get("demo_has_full_access") is True
+        or _contains_all_module(subscription.get("allowed_modules"))
+        or _contains_all_module(tenant.get("allowed_modules"))
+        or _config_truthy("DEMO_HAS_FULL_ACCESS", False)
+        or _contains_all_module(current_app.config.get("DEMO_ALLOWED_MODULES"))
+    )
+
+
 def get_request_tenant_id(user=None):
     """
     Returns the tenant/company id for the current request.
@@ -148,7 +237,7 @@ def active_tenant_required(fn):
 
         if subscription.get("is_expired"):
             return _json_error(
-                "Your demo/subscription has expired. Please upgrade to continue.",
+                "Your trial/subscription has expired. Please upgrade to continue.",
                 code="tenant_expired",
                 status_code=402,
                 meta=subscription,
@@ -168,7 +257,10 @@ def tenant_module_required(module_name):
     @tenant_module_required("apply_leave")
     @tenant_module_required("projects")
 
-    Demo tenants are allowed only for configured demo modules.
+    Active trial tenants are allowed full HRMS access when
+    DEMO_HAS_FULL_ACCESS=true or allowed_modules contains "all".
+
+    Expired/suspended trial tenants remain blocked.
     SDS lifetime tenant is always allowed.
     Platform superadmin is always allowed.
     """
@@ -180,6 +272,12 @@ def tenant_module_required(module_name):
             context = load_tenant_context()
             user = getattr(g, "current_user", {}) or {}
             tenant = context.get("tenant")
+            subscription = context.get("subscription") or {}
+
+            if _trial_has_full_access(subscription, tenant):
+                g.allowed_module = module_name
+                g.tenant_access_reason = "active_full_access_trial"
+                return fn(*args, **kwargs)
 
             result = can_access_module(
                 tenant,
@@ -196,7 +294,7 @@ def tenant_module_required(module_name):
             reason = result.get("reason") or "tenant_access_denied"
             return _json_error(
                 result.get("message")
-                or "This module is not available for your current plan.",
+                or "This module is not available for your current subscription/trial status.",
                 code=reason,
                 status_code=_status_code_for_reason(reason, 403),
                 meta={
@@ -215,8 +313,11 @@ def employee_creation_allowed_required(fn):
     """
     Decorator for employee creation APIs.
 
-    Demo companies can create only up to DEMO_EMPLOYEE_LIMIT employees.
-    SDS lifetime company has no employee limit.
+    Employee creation rule:
+    - SDS lifetime company has no employee limit.
+    - Active 15-day full-access trial has no limit when DEMO_EMPLOYEE_LIMIT=0.
+    - Paid companies are limited by selected plan employee_limit.
+    - Expired/suspended companies are blocked.
     """
 
     @wraps(fn)

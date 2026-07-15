@@ -123,15 +123,15 @@ def days_left_until_trial_end(tenant, reference_time=None):
 
 
 def configured_reminder_days():
-    raw_days = config_value("TRIAL_REMINDER_DAYS", [20, 25, 29, 30])
-    demo_duration = to_int(config_value("DEMO_DURATION_DAYS", 30), 30)
+    raw_days = config_value("TRIAL_REMINDER_DAYS", [10, 13, 14, 15])
+    demo_duration = to_int(config_value("DEMO_DURATION_DAYS", 15), 15)
 
     if isinstance(raw_days, str):
         values = raw_days.split(",")
     elif isinstance(raw_days, (list, tuple, set)):
         values = list(raw_days)
     else:
-        values = [20, 25, 29, 30]
+        values = [10, 13, 14, 15]
 
     reminder_days = []
 
@@ -145,7 +145,7 @@ def configured_reminder_days():
             reminder_days.append(day)
 
     if not reminder_days:
-        reminder_days = [20, 25, 29, 30]
+        reminder_days = [10, 13, 14, 15]
 
     return sorted(day for day in reminder_days if day <= demo_duration)
 
@@ -154,11 +154,11 @@ def reminder_type_for_tenant(tenant, reference_time=None):
     """
     Returns a stable reminder type for today.
 
-    Example for 30-day demo:
-    - Day 20 reminder -> "day_20"
-    - Day 25 reminder -> "day_25"
-    - Day 29 reminder -> "day_29"
-    - Day 30 / expired -> "expired"
+    Example for 15-day full-access trial:
+    - Day 10 reminder -> "day_10"
+    - Day 13 reminder -> "day_13"
+    - Day 14 reminder -> "day_14"
+    - Day 15 / expired -> "expired"
     """
 
     end_date = trial_end_date(tenant)
@@ -168,7 +168,7 @@ def reminder_type_for_tenant(tenant, reference_time=None):
 
     reference_time = reference_time or now_utc()
 
-    demo_duration = to_int(config_value("DEMO_DURATION_DAYS", 30), 30)
+    demo_duration = to_int(config_value("DEMO_DURATION_DAYS", 15), 15)
     days_left = days_left_until_trial_end(tenant, reference_time)
 
     if days_left is None:
@@ -218,6 +218,9 @@ def record_trial_notification(db, tenant, reminder_type, email_result=None, in_a
         "status": tenant.get("status"),
         "trial_start_date": tenant.get("trial_start_date"),
         "trial_end_date": tenant.get("trial_end_date"),
+        "demo_duration_days": tenant.get("demo_duration_days") or config_value("DEMO_DURATION_DAYS", 15),
+        "demo_has_full_access": tenant.get("demo_has_full_access", True),
+        "requires_payment": tenant.get("requires_payment", False),
         "email_result": email_result or {},
         "in_app_notification_count": in_app_count,
         "sent_at": now,
@@ -237,10 +240,10 @@ def build_trial_message(tenant, days_left):
 
     if days_left <= 0:
         return {
-            "title": "YourComate HRMS Demo Expired",
+            "title": "YourComate HRMS Trial Expired",
             "body": (
-                f"{company}'s 30-day demo has expired. "
-                "Please subscribe to the paid version to continue using YourComate HRMS."
+                f"{company}'s 15-day full-access trial has expired. "
+                "Please complete subscription payment to continue using YourComate HRMS."
             ),
             "priority": "urgent",
             "target": "subscription_expired",
@@ -248,9 +251,9 @@ def build_trial_message(tenant, days_left):
 
     if days_left == 1:
         return {
-            "title": "YourComate HRMS Demo Expires Tomorrow",
+            "title": "YourComate HRMS Trial Expires Tomorrow",
             "body": (
-                f"{company}'s demo will expire tomorrow. "
+                f"{company}'s 15-day full-access trial will expire tomorrow. "
                 "Please upgrade now to avoid service interruption."
             ),
             "priority": "high",
@@ -258,9 +261,9 @@ def build_trial_message(tenant, days_left):
         }
 
     return {
-        "title": f"YourComate HRMS Demo Expires in {days_left} Days",
+        "title": f"YourComate HRMS Trial Expires in {days_left} Days",
         "body": (
-            f"{company}'s demo will expire in {days_left} days. "
+            f"{company}'s 15-day full-access trial will expire in {days_left} days. "
             "Please subscribe before expiry to continue using the HRMS."
         ),
         "priority": "high",
@@ -354,6 +357,9 @@ def build_in_app_notification_doc(tenant, user, message, reminder_type, days_lef
             "tenant_id": tenant_id,
             "company_name": tenant_name(tenant),
             "trial_end_date": tenant.get("trial_end_date"),
+            "demo_duration_days": tenant.get("demo_duration_days") or config_value("DEMO_DURATION_DAYS", 15),
+            "demo_has_full_access": tenant.get("demo_has_full_access", True),
+            "requires_payment": tenant.get("requires_payment", False),
             "target": message["target"],
             "page": message["target"],
         },
@@ -436,6 +442,25 @@ def mark_tenant_expired_if_needed(db, tenant, days_left):
                 "status": "expired",
                 "trial_status": "expired",
                 "subscription_status": "expired",
+                "requires_payment": True,
+                "updated_at": now_utc(),
+            }
+        },
+    )
+
+    db.subscriptions.update_many(
+        {
+            "tenant_id": tenant_identifier(tenant),
+            "plan_type": "demo",
+            "status": {"$ne": "expired"},
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "status": "expired",
+                "trial_status": "expired",
+                "subscription_status": "expired",
+                "requires_payment": True,
                 "updated_at": now_utc(),
             }
         },
@@ -444,6 +469,7 @@ def mark_tenant_expired_if_needed(db, tenant, days_left):
     tenant["status"] = "expired"
     tenant["trial_status"] = "expired"
     tenant["subscription_status"] = "expired"
+    tenant["requires_payment"] = True
 
     return True
 
@@ -502,11 +528,21 @@ def process_trial_notification_for_tenant(db, tenant, *, force=False, dry_run=Fa
 
     if company_email:
         try:
+            frontend_base = safe_str(config_value("FRONTEND_BASE_URL", ""))
+            billing_path = safe_str(config_value("BILLING_PAGE_PATH", "/billing")) or "/billing"
+
+            if frontend_base:
+                billing_url = f"{frontend_base.rstrip('/')}/{billing_path.lstrip('/')}"
+            else:
+                billing_url = billing_path
+
             email_result = send_trial_reminder_email(
+                current_app.config,
                 company_email,
                 tenant_name(tenant),
                 days_left,
-                billing_path=config_value("BILLING_PAGE_PATH", "/billing"),
+                trial_end_date=tenant.get("trial_end_date"),
+                billing_url=billing_url,
             )
         except Exception as exc:
             email_result = {"ok": False, "message": str(exc)}

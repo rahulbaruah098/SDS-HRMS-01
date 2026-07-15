@@ -10,8 +10,8 @@ Preview mode:
     python scripts/create_saas_indexes.py --dry-run
 
 What this script does:
-- Creates indexes for tenants, demo requests, subscriptions, payments,
-  payment orders, and trial notifications.
+- Creates indexes for tenants, demo requests, pricing plans, subscriptions,
+  payments, payment orders, and trial notifications.
 - Helps prevent duplicate demo/company records.
 - Improves Superadmin search/filter performance.
 - Does not delete or modify existing records.
@@ -200,6 +200,30 @@ INDEX_DEFINITIONS = [
         "collection": "demo_requests",
         "name": "demo_request_company_search",
         "keys": [("company_name", 1), ("company_email", 1), ("contact_person_name", 1)],
+        "options": {},
+    },
+
+    {
+        "collection": "pricing_plans",
+        "name": "pricing_plan_code_unique_active",
+        "keys": [("plan_code", 1)],
+        "options": {
+            "unique": True,
+            "partialFilterExpression": {
+                "plan_code": {"$exists": True, "$type": "string"},
+            },
+        },
+    },
+    {
+        "collection": "pricing_plans",
+        "name": "pricing_plan_active_sort",
+        "keys": [("is_active", 1), ("sort_order", 1), ("amount", 1)],
+        "options": {},
+    },
+    {
+        "collection": "pricing_plans",
+        "name": "pricing_plan_payment_flags",
+        "keys": [("allow_online_payment", 1), ("is_custom_pricing", 1), ("is_recommended", 1)],
         "options": {},
     },
     {

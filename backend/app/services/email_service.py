@@ -1,325 +1,472 @@
+"""
+Email service for YourComate HRMS SaaS workflows.
+
+Used for:
+- demo OTP email
+- demo request confirmation
+- demo approval with generated admin credentials
+- demo rejection
+- 15-day full-access trial reminders
+- payment success confirmation
+
+Important:
+- This service never stores secrets.
+- SMTP credentials come from Flask config / .env.
+"""
+
 import smtplib
+import ssl
 from email.message import EmailMessage
 from html import escape
-from urllib.parse import urljoin
-
-from flask import current_app
 
 
-class EmailSendError(RuntimeError):
-    """Raised when SMTP email sending fails."""
+class EmailServiceError(RuntimeError):
+    def __init__(self, message, code="email_error", details=None):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.details = details or {}
 
 
-DEFAULT_TEXT_FOOTER = "\n\nRegards,\nYourComate HRMS Team"
+def safe_str(value):
+    return str(value or "").strip()
 
 
-def _config(name, default=None):
-    return current_app.config.get(name, default)
+def get_config(config, key, default=None):
+    if config is None:
+        return default
+
+    try:
+        return config.get(key, default)
+    except AttributeError:
+        return getattr(config, key, default)
 
 
-def _sender_value():
-    sender_email = _config("MAIL_DEFAULT_SENDER") or _config("MAIL_USERNAME")
-    sender_name = _config("MAIL_SENDER_NAME", "YourComate HRMS")
+def configured_sender(config):
+    sender_email = safe_str(get_config(config, "MAIL_DEFAULT_SENDER"))
+    username = safe_str(get_config(config, "MAIL_USERNAME"))
+    sender_name = safe_str(get_config(config, "MAIL_SENDER_NAME", "YourComate HRMS"))
+
+    if not sender_email:
+        sender_email = username
 
     if sender_name and sender_email:
         return f"{sender_name} <{sender_email}>"
 
-    return sender_email or "no-reply@yourcomate.com"
+    return sender_email
 
 
-def _frontend_url(path=""):
-    base_url = (_config("FRONTEND_BASE_URL", "") or "").rstrip("/") + "/"
-    clean_path = str(path or "").lstrip("/")
+def smtp_ready(config):
+    return bool(
+        safe_str(get_config(config, "MAIL_SERVER"))
+        and safe_str(get_config(config, "MAIL_PORT"))
+        and safe_str(get_config(config, "MAIL_USERNAME"))
+        and safe_str(get_config(config, "MAIL_PASSWORD"))
+        and configured_sender(config)
+    )
 
-    if not clean_path:
-        return base_url.rstrip("/")
 
-    return urljoin(base_url, clean_path)
-
-
-def is_email_configured():
+def send_email(config, to_email, subject, text_body, html_body=None, cc=None, bcc=None):
     """
-    Returns True only when SMTP username and password are configured.
-    This keeps local development from crashing when mail credentials are missing.
-    """
-
-    return bool(_config("MAIL_USERNAME") and _config("MAIL_PASSWORD"))
-
-
-def send_email(to, subject, text_body, html_body=None, reply_to=None):
-    """
-    Sends a plain text / optional HTML email using SMTP settings from Config.
+    Sends an email through configured SMTP.
 
     Returns:
-        dict: {"ok": bool, "message": str}
+    {
+      "ok": True/False,
+      "message": "...",
+      "to": "...",
+      "subject": "..."
+    }
     """
 
-    recipient = str(to or "").strip()
-    subject = str(subject or "").strip()
+    to_email = safe_str(to_email)
+    subject = safe_str(subject)
 
-    if not recipient:
-        return {"ok": False, "message": "Recipient email is required."}
-
-    if not subject:
-        return {"ok": False, "message": "Email subject is required."}
-
-    if not is_email_configured():
+    if not to_email:
         return {
             "ok": False,
-            "message": "SMTP email is not configured. Please set MAIL_USERNAME and MAIL_PASSWORD.",
+            "message": "Recipient email is missing.",
+            "code": "missing_recipient",
         }
 
+    if not smtp_ready(config):
+        return {
+            "ok": False,
+            "message": "SMTP is not configured. Check MAIL_SERVER, MAIL_USERNAME, MAIL_PASSWORD and MAIL_DEFAULT_SENDER.",
+            "code": "smtp_not_configured",
+        }
+
+    server = safe_str(get_config(config, "MAIL_SERVER"))
+    port = int(get_config(config, "MAIL_PORT", 587))
+    username = safe_str(get_config(config, "MAIL_USERNAME"))
+    password = safe_str(get_config(config, "MAIL_PASSWORD"))
+    use_tls = bool(get_config(config, "MAIL_USE_TLS", True))
+    use_ssl = bool(get_config(config, "MAIL_USE_SSL", False))
+
     message = EmailMessage()
-    message["From"] = _sender_value()
-    message["To"] = recipient
+    message["From"] = configured_sender(config)
+    message["To"] = to_email
     message["Subject"] = subject
 
-    if reply_to:
-        message["Reply-To"] = str(reply_to).strip()
+    if cc:
+        message["Cc"] = cc if isinstance(cc, str) else ", ".join(cc)
 
-    message.set_content(str(text_body or "") + DEFAULT_TEXT_FOOTER)
+    if bcc:
+        message["Bcc"] = bcc if isinstance(bcc, str) else ", ".join(bcc)
+
+    message.set_content(text_body or "")
 
     if html_body:
-        message.add_alternative(str(html_body), subtype="html")
-
-    server = _config("MAIL_SERVER", "smtp.gmail.com")
-    port = int(_config("MAIL_PORT", 587) or 587)
-    use_tls = bool(_config("MAIL_USE_TLS", True))
-    use_ssl = bool(_config("MAIL_USE_SSL", False))
-    username = _config("MAIL_USERNAME")
-    password = _config("MAIL_PASSWORD")
+        message.add_alternative(html_body, subtype="html")
 
     try:
         if use_ssl:
-            smtp = smtplib.SMTP_SSL(server, port, timeout=30)
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(server, port, context=context, timeout=30) as smtp:
+                smtp.login(username, password)
+                smtp.send_message(message)
         else:
-            smtp = smtplib.SMTP(server, port, timeout=30)
-
-        with smtp:
-            smtp.ehlo()
-
-            if use_tls and not use_ssl:
-                smtp.starttls()
+            with smtplib.SMTP(server, port, timeout=30) as smtp:
                 smtp.ehlo()
 
-            smtp.login(username, password)
-            smtp.send_message(message)
+                if use_tls:
+                    smtp.starttls(context=ssl.create_default_context())
+                    smtp.ehlo()
 
-        return {"ok": True, "message": "Email sent successfully."}
+                smtp.login(username, password)
+                smtp.send_message(message)
 
+        return {
+            "ok": True,
+            "message": "Email sent successfully.",
+            "to": to_email,
+            "subject": subject,
+        }
     except Exception as exc:
-        return {"ok": False, "message": f"Failed to send email: {exc}"}
+        return {
+            "ok": False,
+            "message": str(exc),
+            "code": "smtp_send_failed",
+            "to": to_email,
+            "subject": subject,
+        }
 
 
-def _html_shell(title, body_html):
-    safe_title = escape(str(title or "YourComate HRMS"))
-
+def html_shell(title, body_html):
     return f"""
     <!doctype html>
     <html>
-      <body style="margin:0;padding:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#172033;">
-        <div style="max-width:640px;margin:0 auto;padding:28px 16px;">
-          <div style="background:#ffffff;border:1px solid #e7ecf5;border-radius:18px;overflow:hidden;">
-            <div style="background:#0f3d91;color:#ffffff;padding:20px 24px;">
-              <h2 style="margin:0;font-size:22px;line-height:1.35;">{safe_title}</h2>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{escape(title)}</title>
+      </head>
+      <body style="margin:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+        <div style="max-width:680px;margin:0 auto;padding:28px 16px;">
+          <div style="background:#ffffff;border-radius:22px;border:1px solid #e2e8f0;box-shadow:0 18px 50px rgba(15,23,42,0.08);overflow:hidden;">
+            <div style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:26px;color:#ffffff;">
+              <p style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.12em;font-weight:700;">YourComate HRMS</p>
+              <h1 style="margin:8px 0 0;font-size:26px;line-height:1.2;">{escape(title)}</h1>
             </div>
-            <div style="padding:24px;font-size:15px;line-height:1.65;">
+            <div style="padding:28px;">
               {body_html}
             </div>
-            <div style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.5;">
-              This is an automated email from YourComate HRMS. Please do not share your login credentials with anyone.
-            </div>
           </div>
+          <p style="margin:16px 0 0;text-align:center;color:#64748b;font-size:12px;">
+            This is an automated email from YourComate HRMS.
+          </p>
         </div>
       </body>
     </html>
     """
 
 
-def send_demo_otp_email(company_email, company_name, otp_code, expiry_minutes=None):
-    expiry = expiry_minutes or _config("DEMO_OTP_EXPIRY_MINUTES", 10)
-    safe_company = escape(company_name or "there")
-    safe_otp = escape(str(otp_code or ""))
+def send_demo_otp_email(config, to_email, company_name, otp_code, expires_minutes=10):
+    company_name = safe_str(company_name) or "your company"
+    otp_code = safe_str(otp_code)
+    expires_minutes = expires_minutes or 10
 
-    subject = "YourComate HRMS Demo Registration OTP"
+    subject = "YourComate HRMS demo verification OTP"
 
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        f"Your OTP for YourComate HRMS demo registration is: {otp_code}\n\n"
-        f"This OTP is valid for {expiry} minutes.\n"
-        "If you did not request this demo registration, please ignore this email."
-    )
+    text_body = f"""Dear {company_name},
 
-    html_body = _html_shell(
-        "YourComate HRMS Demo Registration OTP",
+Your OTP for YourComate HRMS demo registration is:
+
+{otp_code}
+
+This OTP is valid for {expires_minutes} minutes.
+
+After verification, your request will be sent to Superadmin for approval.
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Verify your demo request",
         f"""
-        <p>Dear {safe_company},</p>
-        <p>Your OTP for YourComate HRMS demo registration is:</p>
-        <div style="font-size:30px;font-weight:700;letter-spacing:6px;color:#0f3d91;background:#eef4ff;border-radius:14px;padding:14px 18px;text-align:center;margin:18px 0;">
-          {safe_otp}
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 18px;line-height:1.7;">Use the OTP below to verify your company email for YourComate HRMS demo registration.</p>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:18px;padding:20px;text-align:center;margin:18px 0;">
+          <p style="margin:0;color:#475569;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Verification OTP</p>
+          <p style="margin:8px 0 0;font-size:36px;font-weight:900;color:#1d4ed8;letter-spacing:0.18em;">{escape(otp_code)}</p>
         </div>
-        <p>This OTP is valid for <strong>{escape(str(expiry))} minutes</strong>.</p>
-        <p>If you did not request this demo registration, please ignore this email.</p>
+        <p style="margin:0;line-height:1.7;color:#475569;">This OTP is valid for <strong>{expires_minutes} minutes</strong>. After OTP verification, your request will be reviewed by Superadmin.</p>
         """,
     )
 
-    return send_email(company_email, subject, text_body, html_body)
+    return send_email(config, to_email, subject, text_body, html_body)
 
 
-def send_demo_request_received_email(company_email, company_name):
-    subject = "YourComate HRMS Demo Request Received"
+def send_demo_request_received_email(config, to_email, company_name):
+    company_name = safe_str(company_name) or "your company"
+    subject = "YourComate HRMS demo request received"
 
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        "Your demo registration request has been received successfully.\n"
-        "Your request will now be reviewed by the Platform Superadmin.\n"
-        "Once approved, your admin login email and password will be sent to this registered company email."
-    )
+    text_body = f"""Dear {company_name},
 
-    html_body = _html_shell(
-        "Demo Request Received",
+Your YourComate HRMS demo request has been received and your company email has been verified.
+
+Your request is now waiting for Superadmin approval.
+
+After approval, you will receive company admin login credentials.
+
+Demo trial details:
+- 15 days free trial
+- Full HRMS access during trial
+- Payment/subscription required after trial expiry
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Demo request received",
         f"""
-        <p>Dear {escape(company_name or 'User')},</p>
-        <p>Your demo registration request has been received successfully.</p>
-        <p>Your request will now be reviewed by the <strong>Platform Superadmin</strong>.</p>
-        <p>Once approved, your admin login email and password will be sent to this registered company email.</p>
-        """,
-    )
-
-    return send_email(company_email, subject, text_body, html_body)
-
-
-def send_demo_approval_email(
-    company_email,
-    company_name,
-    admin_email,
-    admin_password,
-    trial_end_date=None,
-):
-    login_url = _frontend_url("login")
-    safe_company = escape(company_name or "User")
-    safe_admin_email = escape(admin_email or "")
-    safe_admin_password = escape(admin_password or "")
-    safe_trial_end_date = escape(str(trial_end_date or "30 days from approval date"))
-
-    subject = "YourComate HRMS Demo Approved - Admin Login Details"
-
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        "Your YourComate HRMS demo request has been approved.\n\n"
-        f"Login URL: {login_url}\n"
-        f"Admin Email: {admin_email}\n"
-        f"Password: {admin_password}\n\n"
-        f"Your demo is valid until: {trial_end_date or '30 days from approval date'}\n\n"
-        "Demo access includes Attendance, Apply Leave, and Projects modules for up to 10 employees.\n"
-        "Please change your password after first login."
-    )
-
-    html_body = _html_shell(
-        "Demo Approved - Admin Login Details",
-        f"""
-        <p>Dear {safe_company},</p>
-        <p>Your <strong>YourComate HRMS</strong> demo request has been approved.</p>
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin:18px 0;">
-          <p style="margin:0 0 8px;"><strong>Login URL:</strong> <a href="{escape(login_url)}">{escape(login_url)}</a></p>
-          <p style="margin:0 0 8px;"><strong>Admin Email:</strong> {safe_admin_email}</p>
-          <p style="margin:0;"><strong>Password:</strong> {safe_admin_password}</p>
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">Your YourComate HRMS demo request has been received and your company email has been verified.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#166534;font-weight:800;">Current Status: Pending Superadmin Approval</p>
+          <p style="margin:8px 0 0;color:#475569;line-height:1.6;">After approval, you will receive your generated company admin login credentials.</p>
         </div>
-        <p><strong>Demo validity:</strong> {safe_trial_end_date}</p>
-        <p>Your demo access includes Attendance, Apply Leave, and Projects modules for up to 10 employees.</p>
-        <p>Please change your password after first login.</p>
+        <ul style="margin:0;padding-left:20px;color:#334155;line-height:1.8;">
+          <li><strong>15 days</strong> free trial</li>
+          <li><strong>Full HRMS access</strong> during trial</li>
+          <li>Payment/subscription required after trial expiry</li>
+        </ul>
         """,
     )
 
-    return send_email(company_email, subject, text_body, html_body)
+    return send_email(config, to_email, subject, text_body, html_body)
 
 
-def send_demo_rejection_email(company_email, company_name, reason=None):
-    subject = "YourComate HRMS Demo Request Update"
-    clean_reason = str(reason or "The request could not be approved at this time.").strip()
+def send_demo_approval_email(config, to_email, company_name, admin_email, admin_password, login_url=None, trial_end_date=None):
+    company_name = safe_str(company_name) or "your company"
+    admin_email = safe_str(admin_email)
+    admin_password = safe_str(admin_password)
+    login_url = safe_str(login_url) or safe_str(get_config(config, "FRONTEND_BASE_URL", "")) or "YourComate HRMS login page"
 
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        "Thank you for applying for a YourComate HRMS demo.\n"
-        f"Status: Not approved\n"
-        f"Reason: {clean_reason}"
-    )
+    subject = "YourComate HRMS demo approved - admin login details"
 
-    html_body = _html_shell(
-        "Demo Request Update",
+    trial_line = ""
+    if trial_end_date:
+        trial_line = f"\nTrial End Date: {trial_end_date}\n"
+
+    text_body = f"""Dear {company_name},
+
+Your YourComate HRMS demo request has been approved.
+
+Your company admin login has been created.
+
+Login URL: {login_url}
+Admin Email: {admin_email}
+Temporary Password: {admin_password}
+{trial_line}
+Trial details:
+- 15 days free trial
+- Full HRMS access during the trial
+- After 15 days, payment/subscription is required to continue using HRMS
+- Once payment is completed, your demo company becomes an official registered company
+
+Please login and change your password after first access.
+
+Regards,
+YourComate HRMS
+"""
+
+    trial_html = ""
+    if trial_end_date:
+        trial_html = f"""
+        <p style="margin:8px 0 0;color:#475569;">Trial End Date: <strong>{escape(str(trial_end_date))}</strong></p>
+        """
+
+    html_body = html_shell(
+        "Demo approved",
         f"""
-        <p>Dear {escape(company_name or 'User')},</p>
-        <p>Thank you for applying for a YourComate HRMS demo.</p>
-        <p><strong>Status:</strong> Not approved</p>
-        <p><strong>Reason:</strong> {escape(clean_reason)}</p>
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">Your YourComate HRMS demo request has been approved. Your company admin login has been created.</p>
+
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0 0 10px;color:#1e3a8a;font-weight:900;">Admin Login Details</p>
+          <p style="margin:0 0 8px;color:#334155;">Login URL: <strong>{escape(login_url)}</strong></p>
+          <p style="margin:0 0 8px;color:#334155;">Admin Email: <strong>{escape(admin_email)}</strong></p>
+          <p style="margin:0;color:#334155;">Temporary Password: <strong>{escape(admin_password)}</strong></p>
+        </div>
+
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#0f172a;font-weight:900;">Trial Details</p>
+          <ul style="margin:10px 0 0;padding-left:20px;color:#334155;line-height:1.8;">
+            <li><strong>15 days</strong> free trial</li>
+            <li><strong>Full HRMS access</strong> during trial</li>
+            <li>After 15 days, payment/subscription is required to continue</li>
+            <li>After payment, the demo company becomes an official registered company</li>
+          </ul>
+          {trial_html}
+        </div>
+
+        <p style="margin:0;line-height:1.7;color:#475569;">Please login and change your password after first access.</p>
         """,
     )
 
-    return send_email(company_email, subject, text_body, html_body)
+    return send_email(config, to_email, subject, text_body, html_body)
 
 
-def send_trial_reminder_email(company_email, company_name, days_left, billing_path=None):
-    billing_url = _frontend_url(billing_path or _config("BILLING_PAGE_PATH", "/billing"))
-    days_left_int = int(days_left or 0)
+def send_demo_rejection_email(config, to_email, company_name, rejection_reason=None):
+    company_name = safe_str(company_name) or "your company"
+    rejection_reason = safe_str(rejection_reason) or "The request could not be approved at this time."
 
-    if days_left_int <= 0:
-        subject = "YourComate HRMS Demo Has Expired"
-        headline = "Your demo has expired"
-        message = "Your demo period has ended. Please subscribe to continue using YourComate HRMS."
-    elif days_left_int == 1:
-        subject = "YourComate HRMS Demo Expires Tomorrow"
-        headline = "Your demo expires tomorrow"
-        message = "Your demo will expire tomorrow. Please subscribe to avoid interruption."
+    subject = "YourComate HRMS demo request update"
+
+    text_body = f"""Dear {company_name},
+
+Your YourComate HRMS demo request was reviewed by Superadmin and could not be approved at this time.
+
+Reason:
+{rejection_reason}
+
+You may contact the YourComate HRMS team for more details.
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Demo request update",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">Your YourComate HRMS demo request was reviewed by Superadmin and could not be approved at this time.</p>
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#991b1b;font-weight:900;">Reason</p>
+          <p style="margin:8px 0 0;color:#334155;line-height:1.7;">{escape(rejection_reason)}</p>
+        </div>
+        <p style="margin:0;line-height:1.7;color:#475569;">You may contact the YourComate HRMS team for more details.</p>
+        """,
+    )
+
+    return send_email(config, to_email, subject, text_body, html_body)
+
+
+def send_trial_reminder_email(config, to_email, company_name, days_left, trial_end_date=None, billing_url=None):
+    company_name = safe_str(company_name) or "your company"
+    days_left = int(days_left or 0)
+    billing_url = safe_str(billing_url) or safe_str(get_config(config, "FRONTEND_BASE_URL", "")) or "YourComate HRMS billing page"
+
+    if days_left <= 0:
+        subject = "YourComate HRMS trial has ended"
+        headline = "Your trial has ended"
+        urgency = "Your 15-day full-access trial has ended. Please complete payment/subscription to continue using HRMS."
+    elif days_left == 1:
+        subject = "YourComate HRMS trial ends tomorrow"
+        headline = "Your trial ends tomorrow"
+        urgency = "Your 15-day full-access trial ends tomorrow. Please complete payment/subscription to avoid access interruption."
     else:
-        subject = f"YourComate HRMS Demo Expires in {days_left_int} Days"
-        headline = f"Your demo expires in {days_left_int} days"
-        message = "Please subscribe before expiry to continue using YourComate HRMS without interruption."
+        subject = f"YourComate HRMS trial ends in {days_left} days"
+        headline = f"Your trial ends in {days_left} days"
+        urgency = f"Your 15-day full-access trial ends in {days_left} days. Please complete payment/subscription to continue without interruption."
 
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        f"{message}\n\n"
-        f"Upgrade / Billing URL: {billing_url}"
-    )
+    trial_line = ""
+    if trial_end_date:
+        trial_line = f"\nTrial End Date: {trial_end_date}\n"
 
-    html_body = _html_shell(
+    text_body = f"""Dear {company_name},
+
+{urgency}
+{trial_line}
+Billing/Upgrade URL: {billing_url}
+
+After payment, your demo company will become an official registered company and your selected plan employee limit will apply.
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
         headline,
         f"""
-        <p>Dear {escape(company_name or 'User')},</p>
-        <p>{escape(message)}</p>
-        <p style="margin:22px 0;">
-          <a href="{escape(billing_url)}" style="background:#0f3d91;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;display:inline-block;">
-            Upgrade / Subscribe
-          </a>
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">{escape(urgency)}</p>
+
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#9a3412;font-weight:900;">Action Required</p>
+          <p style="margin:8px 0 0;color:#334155;line-height:1.7;">Complete payment/subscription to continue using YourComate HRMS after trial expiry.</p>
+          {"<p style='margin:8px 0 0;color:#475569;'>Trial End Date: <strong>" + escape(str(trial_end_date)) + "</strong></p>" if trial_end_date else ""}
+        </div>
+
+        <p style="margin:0 0 18px;line-height:1.7;color:#475569;">After payment, your demo company will become an official registered company and the selected plan employee limit will apply.</p>
+
+        <p style="margin:0;">
+          <a href="{escape(billing_url)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:14px;padding:12px 18px;font-weight:800;">Open Billing Page</a>
         </p>
         """,
     )
 
-    return send_email(company_email, subject, text_body, html_body)
+    return send_email(config, to_email, subject, text_body, html_body)
 
 
-def send_payment_success_email(company_email, company_name, plan_name, amount, subscription_end_date=None):
-    subject = "YourComate HRMS Subscription Activated"
+def send_payment_success_email(config, to_email, company_name, plan_name=None, amount=None, currency="INR", employee_limit=None):
+    company_name = safe_str(company_name) or "your company"
+    plan_name = safe_str(plan_name) or "YourComate HRMS Subscription"
+    currency = safe_str(currency) or "INR"
 
-    text_body = (
-        f"Dear {company_name or 'User'},\n\n"
-        "Your payment has been received successfully and your subscription is now active.\n\n"
-        f"Plan: {plan_name}\n"
-        f"Amount: {amount}\n"
-        f"Subscription End Date: {subscription_end_date or 'As per selected plan'}"
-    )
+    if employee_limit in [None, "", "unlimited", "Unlimited"]:
+        employee_text = "Unlimited employees"
+    else:
+        employee_text = f"Up to {employee_limit} employees"
 
-    html_body = _html_shell(
-        "Subscription Activated",
+    amount_text = ""
+    if amount not in [None, ""]:
+        amount_text = f"{currency} {amount}"
+
+    subject = "YourComate HRMS payment successful"
+
+    text_body = f"""Dear {company_name},
+
+Your YourComate HRMS payment has been verified successfully.
+
+Plan: {plan_name}
+Employee Limit: {employee_text}
+Amount: {amount_text}
+
+Your demo company has now been converted into an official paid registered company.
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Payment successful",
         f"""
-        <p>Dear {escape(company_name or 'User')},</p>
-        <p>Your payment has been received successfully and your subscription is now active.</p>
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin:18px 0;">
-          <p style="margin:0 0 8px;"><strong>Plan:</strong> {escape(str(plan_name or 'Full HRMS'))}</p>
-          <p style="margin:0 0 8px;"><strong>Amount:</strong> {escape(str(amount or ''))}</p>
-          <p style="margin:0;"><strong>Subscription End Date:</strong> {escape(str(subscription_end_date or 'As per selected plan'))}</p>
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(company_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">Your YourComate HRMS payment has been verified successfully.</p>
+
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:18px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#166534;font-weight:900;">Subscription Activated</p>
+          <p style="margin:8px 0 0;color:#334155;">Plan: <strong>{escape(plan_name)}</strong></p>
+          <p style="margin:8px 0 0;color:#334155;">Employee Limit: <strong>{escape(employee_text)}</strong></p>
+          <p style="margin:8px 0 0;color:#334155;">Amount: <strong>{escape(amount_text or 'Paid')}</strong></p>
         </div>
-        <p>You can now continue using YourComate HRMS.</p>
+
+        <p style="margin:0;line-height:1.7;color:#475569;">Your demo company has now been converted into an official paid registered company.</p>
         """,
     )
 
-    return send_email(company_email, subject, text_body, html_body)
+    return send_email(config, to_email, subject, text_body, html_body)

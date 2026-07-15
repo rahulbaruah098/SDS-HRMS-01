@@ -4,9 +4,7 @@ from bson import ObjectId
 
 
 DEFAULT_DEMO_MODULES = [
-    "attendance",
-    "apply_leave",
-    "projects",
+    "all",
 ]
 
 MODULE_ALIASES = {
@@ -147,6 +145,9 @@ def normalize_module_list(value):
         module = normalize_module_name(item)
         if module and module not in modules:
             modules.append(module)
+
+    if "all" in modules:
+        return ["all"]
 
     return modules or list(DEFAULT_DEMO_MODULES)
 
@@ -404,8 +405,17 @@ def get_trial_days_left(tenant):
 
 
 def get_employee_limit(tenant, config=None):
+    """
+    Employee limit rules:
+    - SDS/lifetime: unlimited
+    - Active demo trial: configured DEMO_EMPLOYEE_LIMIT; 0/blank means unlimited during trial
+    - Paid plans: tenant.employee_limit from selected pricing plan
+    - Premium/custom: None means unlimited
+    """
+
     if not tenant:
-        return to_int(get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 10), 10)
+        limit = to_int(get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 0), 0)
+        return limit if limit > 0 else None
 
     if is_lifetime_tenant(tenant, config):
         return None
@@ -414,10 +424,12 @@ def get_employee_limit(tenant, config=None):
 
     if value in [None, "", "unlimited", "Unlimited"]:
         if is_demo_tenant(tenant):
-            return to_int(get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 10), 10)
+            limit = to_int(get_config_value(config, "DEMO_EMPLOYEE_LIMIT", 0), 0)
+            return limit if limit > 0 else None
         return None
 
-    return to_int(value, 0) or None
+    limit = to_int(value, 0)
+    return limit if limit > 0 else None
 
 
 def count_active_employees(db, tenant_id):
@@ -470,9 +482,10 @@ def can_create_employee(db, tenant, config=None):
     employee_count = count_active_employees(db, tenant.get("tenant_id"))
 
     if employee_limit is not None and employee_count >= employee_limit:
+        plan_name = safe_str(tenant.get("selected_plan_name") or tenant.get("plan") or "current plan")
         return {
             "allowed": False,
-            "message": f"Your demo plan allows only {employee_limit} employees. Please upgrade to continue.",
+            "message": f"Your {plan_name} plan allows only {employee_limit} employees. Please upgrade to continue.",
             "employee_count": employee_count,
             "employee_limit": employee_limit,
         }
@@ -538,6 +551,16 @@ def can_access_module(tenant, module_name, user=None, config=None):
             "allowed": True,
             "module": module,
             "reason": "paid_access",
+        }
+
+    # New SaaS rule:
+    # demo companies get full HRMS access during the 15-day trial.
+    # After expiry, the earlier tenant_expired block stops access.
+    if is_demo_tenant(tenant) and truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True)):
+        return {
+            "allowed": True,
+            "module": module,
+            "reason": "active_demo_full_trial_access",
         }
 
     allowed_modules = normalize_module_list(tenant.get("allowed_modules"))
@@ -656,7 +679,11 @@ def build_subscription_summary(db, tenant, config=None):
     elif is_paid_tenant(tenant):
         plan_label = "Paid Full HRMS"
     elif is_demo_tenant(tenant):
-        plan_label = "30-Day Demo"
+        demo_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 15), 15)
+        if truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True)):
+            plan_label = f"{demo_days}-Day Full Access Trial"
+        else:
+            plan_label = f"{demo_days}-Day Demo"
     else:
         plan_label = safe_str(tenant.get("plan") or tenant.get("plan_type") or "Unknown")
 
@@ -675,13 +702,26 @@ def build_subscription_summary(db, tenant, config=None):
         "trial_days_left": trial_days_left,
         "employee_count": employee_count,
         "employee_limit": employee_limit,
+        "is_unlimited_employees": employee_limit is None,
         "allowed_modules": tenant.get("allowed_modules") or [],
+        "plan_code": tenant.get("plan_code"),
+        "selected_plan_code": tenant.get("selected_plan_code") or tenant.get("plan_code"),
+        "selected_plan_name": tenant.get("selected_plan_name") or tenant.get("plan_name") or tenant.get("plan"),
+        "billing_interval": tenant.get("billing_interval"),
         "is_sds_company": is_sds_tenant(tenant, config),
         "is_lifetime": is_lifetime_tenant(tenant, config),
         "is_demo_company": is_demo_tenant(tenant),
         "is_paid_company": is_paid_tenant(tenant),
         "is_expired": is_tenant_expired(tenant),
         "is_suspended": is_tenant_suspended(tenant),
+        "demo_has_full_access": truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True)),
+        "requires_payment": (
+            not is_lifetime_tenant(tenant, config)
+            and (
+                is_tenant_expired(tenant)
+                or is_demo_tenant(tenant)
+            )
+        ),
     }
 
 
@@ -744,7 +784,14 @@ def serialize_tenant_for_admin(db, tenant, config=None):
         "trial_days_left": summary.get("trial_days_left"),
         "employee_count": summary.get("employee_count"),
         "employee_limit": summary.get("employee_limit"),
+        "is_unlimited_employees": summary.get("is_unlimited_employees"),
         "allowed_modules": summary.get("allowed_modules"),
+        "plan_code": summary.get("plan_code"),
+        "selected_plan_code": summary.get("selected_plan_code"),
+        "selected_plan_name": summary.get("selected_plan_name"),
+        "billing_interval": summary.get("billing_interval"),
+        "demo_has_full_access": summary.get("demo_has_full_access"),
+        "requires_payment": summary.get("requires_payment"),
         "is_sds_company": summary.get("is_sds_company"),
         "is_lifetime": summary.get("is_lifetime"),
         "is_demo_company": summary.get("is_demo_company"),

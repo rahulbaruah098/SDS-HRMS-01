@@ -207,7 +207,7 @@ def build_auth_tenant_payload(db, user):
     """
     Builds SaaS tenant/subscription data for login and /me responses.
 
-    Login is intentionally not blocked here. If a demo has expired, the
+    Login is intentionally not blocked here. If a trial has expired, the
     frontend will receive the subscription status and redirect the company
     user to Billing/Upgrade, while SDS lifetime users continue normally.
     """
@@ -220,9 +220,25 @@ def build_auth_tenant_payload(db, user):
         config=current_app.config,
     )
 
+    tenant = clean_doc(tenant_context.get("tenant")) or {}
+    subscription = clean_doc(tenant_context.get("subscription")) or {}
+
+    # Keep old backend compatibility value plan_type=demo, but expose enough
+    # trial metadata for frontend full-access trial decisions after refresh.
+    if str(subscription.get("plan_type") or tenant.get("plan_type") or "").lower() == "demo":
+        subscription.setdefault("demo_duration_days", current_app.config.get("DEMO_DURATION_DAYS", 15))
+        subscription.setdefault("demo_has_full_access", current_app.config.get("DEMO_HAS_FULL_ACCESS", True))
+        subscription.setdefault("allowed_modules", current_app.config.get("DEMO_ALLOWED_MODULES", ["all"]))
+        subscription.setdefault("requires_payment", False)
+
+        tenant.setdefault("demo_duration_days", subscription.get("demo_duration_days"))
+        tenant.setdefault("demo_has_full_access", subscription.get("demo_has_full_access"))
+        tenant.setdefault("allowed_modules", subscription.get("allowed_modules"))
+        tenant.setdefault("requires_payment", subscription.get("requires_payment"))
+
     return {
-        "tenant": clean_doc(tenant_context.get("tenant")),
-        "subscription": clean_doc(tenant_context.get("subscription")),
+        "tenant": tenant,
+        "subscription": subscription,
         "is_platform_superadmin": bool(
             tenant_context.get("is_platform_superadmin")
         ),
@@ -559,7 +575,15 @@ def me():
     employee = employee_snapshot(raw_employee, user) if raw_employee else None
     user = sync_user_employee_capabilities(db, user, employee)
 
+    g.current_user = user
+    g.tenant_id = user.get("tenant_id") or default_tenant_id()
+
+    tenant_payload = build_auth_tenant_payload(db, user)
+
     return jsonify({
         "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
+        "tenant": tenant_payload["tenant"],
+        "subscription": tenant_payload["subscription"],
+        "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
     })
