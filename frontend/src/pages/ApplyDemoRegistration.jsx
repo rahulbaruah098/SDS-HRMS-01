@@ -169,11 +169,11 @@ export default function ApplyDemoRegistration() {
       setRequestInfo(data);
       setStep('otp');
       alerts.success(
-        data.message || 'Demo registration submitted. Please verify the OTP sent to your company email.',
+        data.message || 'Trial registration submitted. Please verify the OTP sent to your company email.',
         'OTP Sent',
       );
     } catch (err) {
-      alerts.error(err.message || 'Unable to submit demo registration.', 'Demo Registration Failed');
+      alerts.error(err.message || 'Unable to submit trial registration.', 'Trial Registration Failed');
     } finally {
       setSubmitting(false);
     }
@@ -274,7 +274,7 @@ export default function ApplyDemoRegistration() {
       const status = data?.request?.status;
       alerts.info(
         `Current status: ${getRequestStatusLabel(status)}.`,
-        'Demo Request Status',
+        'Trial Request Status',
       );
     } catch (err) {
       alerts.error(err.message || 'Unable to check request status.', 'Status Check Failed');
@@ -903,7 +903,7 @@ export default function ApplyDemoRegistration() {
                 <div className="demo-logo">YC</div>
                 <div>
                   <b>YourComate HRMS</b>
-                  <span>SaaS demo registration</span>
+                  <span>SaaS trial registration</span>
                 </div>
               </div>
 
@@ -912,13 +912,13 @@ export default function ApplyDemoRegistration() {
               </button>
             </div>
 
-            <div className="demo-title-kicker">✨ Company demo onboarding</div>
+            <div className="demo-title-kicker">✨ Company trial onboarding</div>
             <h1>
-              Apply for your <span>30-day HRMS demo.</span>
+              Apply for your <span>15-day full-access HRMS trial.</span>
             </h1>
             <p>
               Register your company details, verify your email by OTP, and wait for Superadmin approval.
-              After approval, your company admin login will be generated and sent to your registered email.
+              After approval, your company admin login will be generated and your 15-day full-access trial will start.
             </p>
 
             <div className="demo-benefit-grid">
@@ -931,32 +931,32 @@ export default function ApplyDemoRegistration() {
               <div className="demo-benefit-card">
                 <i>✅</i>
                 <b>Superadmin approval</b>
-                <span>Only approved companies receive demo login credentials.</span>
+                <span>Only approved companies receive trial login credentials.</span>
               </div>
 
               <div className="demo-benefit-card">
                 <i>👥</i>
-                <b>10 employee limit</b>
-                <span>Demo companies can add up to 10 employees during the trial.</span>
+                <b>Full trial access</b>
+                <span>All HRMS modules are available during the 15-day trial.</span>
               </div>
 
               <div className="demo-benefit-card">
                 <i>📊</i>
-                <b>Limited modules</b>
-                <span>Demo access includes Attendance, Apply Leave, and Projects only.</span>
+                <b>Upgrade after trial</b>
+                <span>After 15 days, payment is required to continue using HRMS.</span>
               </div>
             </div>
           </div>
 
           <div className="demo-flow-box">
-            <b>Demo approval flow</b>
+            <b>Trial approval flow</b>
             <div className="demo-flow-line">
               <span>Apply</span>
               <span>OTP</span>
               <span>Verify</span>
               <span>Superadmin Approval</span>
               <span>Credentials Email</span>
-              <span>30-Day Demo</span>
+              <span>15-Day Trial</span>
             </div>
           </div>
         </section>
@@ -965,7 +965,7 @@ export default function ApplyDemoRegistration() {
           <div className="demo-form-header">
             <div className="demo-form-header-top">
               <div>
-                <h2>Apply for Demo Registration</h2>
+                <h2>Apply for Trial Registration</h2>
                 <p>
                   Fill the company details carefully. The OTP and final login credentials will be sent to the registered company email.
                 </p>
@@ -1184,13 +1184,13 @@ export default function ApplyDemoRegistration() {
                     <b>{getRequestStatusLabel(requestInfo?.request?.status || 'pending')}</b>
                   </div>
                   <div className="demo-summary-item">
-                    <span>Demo Access After Approval</span>
-                    <b>30 days / 10 employees</b>
+                    <span>Trial Access After Approval</span>
+                    <b>15 days / full HRMS access</b>
                   </div>
                 </div>
 
                 <div className="demo-final-note">
-                  Demo access starts only after approval. The approved company will receive login credentials like initials@yourcomate.com and initials@1234.
+                  Trial access starts only after approval. The approved company will receive login credentials like initials@yourcomate.com and initials@1234. After 15 days, payment converts the trial company into an official registered paid company.
                 </div>
 
                 <div className="demo-action-row">

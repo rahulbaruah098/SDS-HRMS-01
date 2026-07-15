@@ -58,6 +58,10 @@ function formatDate(value) {
 function formatCurrency(value, currency = 'INR') {
   const amount = toNumber(value, 0);
 
+  if (amount <= 0) {
+    return 'Custom';
+  }
+
   try {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -203,22 +207,76 @@ function getEmployeeUsage(summary = {}, user = {}) {
   };
 }
 
-function getAmount(summary = {}) {
-  const plan = summary.plan || summary.payment_plan || summary.upgrade_plan || {};
+function getPlans(summary = {}) {
+  const plans =
+    summary.plans ||
+    summary.pricing?.plans ||
+    summary.billing?.plans ||
+    summary.subscription?.plans ||
+    [];
 
-  return (
-    summary.amount ||
-    summary.plan_amount ||
-    summary.saas_full_plan_amount ||
-    plan.amount ||
-    4999
-  );
+  if (Array.isArray(plans) && plans.length) {
+    return plans;
+  }
+
+  return [
+    {
+      plan_code: 'essential',
+      display_name: 'Essential',
+      plan_name: 'Essential',
+      description: 'Starter HRMS subscription for small teams.',
+      amount: 2495,
+      currency: 'INR',
+      billing_interval: 'monthly',
+      employee_limit: 50,
+      included_employees: 50,
+      is_unlimited_employees: false,
+      is_custom_pricing: false,
+      allow_online_payment: true,
+      features: ['Full HRMS access', 'Up to 50 employees', 'Standard support'],
+    },
+    {
+      plan_code: 'growth',
+      display_name: 'Growth',
+      plan_name: 'Growth',
+      description: 'Recommended HRMS subscription for growing companies.',
+      amount: 4495,
+      currency: 'INR',
+      billing_interval: 'monthly',
+      employee_limit: 100,
+      included_employees: 100,
+      is_unlimited_employees: false,
+      is_custom_pricing: false,
+      allow_online_payment: true,
+      is_recommended: true,
+      features: ['Full HRMS access', 'Up to 100 employees', 'Priority support'],
+    },
+    {
+      plan_code: 'premium',
+      display_name: 'Premium',
+      plan_name: 'Premium',
+      description: 'Enterprise HRMS subscription with unlimited employees.',
+      amount: 0,
+      currency: 'INR',
+      billing_interval: 'monthly',
+      employee_limit: null,
+      included_employees: null,
+      is_unlimited_employees: true,
+      is_custom_pricing: true,
+      allow_online_payment: false,
+      features: ['Full HRMS access', 'Unlimited employees', 'Custom onboarding'],
+    },
+  ];
 }
 
-function getCurrency(summary = {}) {
-  const plan = summary.plan || summary.payment_plan || summary.upgrade_plan || {};
-
-  return summary.currency || plan.currency || 'INR';
+function getDefaultPlanCode(summary = {}) {
+  return (
+    summary.selected_plan_code ||
+    summary.default_plan?.plan_code ||
+    summary.checkout?.plan_code ||
+    summary.pricing?.default_plan?.plan_code ||
+    'growth'
+  );
 }
 
 function loadRazorpayCheckout() {
@@ -329,20 +387,156 @@ function SummaryCard({ icon: Icon, label, value, tone = '#2563eb' }) {
   );
 }
 
+function PricingPlanCard({ plan, selected, disabled, onSelect }) {
+  const planCode = plan.plan_code || plan.code || '';
+  const planName = plan.display_name || plan.plan_name || planCode;
+  const amount = toNumber(plan.amount, 0);
+  const currency = plan.currency || 'INR';
+  const interval = plan.billing_interval || 'monthly';
+  const isCustom = Boolean(plan.is_custom_pricing);
+  const allowOnlinePayment = plan.allow_online_payment !== false && !isCustom;
+  const employeeText = plan.is_unlimited_employees
+    ? 'Unlimited employees'
+    : `Up to ${plan.employee_limit || plan.included_employees || 0} employees`;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(planCode)}
+      disabled={disabled}
+      style={{
+        textAlign: 'left',
+        border: selected
+          ? '2px solid rgba(37,99,235,0.8)'
+          : '1px solid rgba(226,232,240,0.95)',
+        borderRadius: 24,
+        padding: 22,
+        background: selected
+          ? 'linear-gradient(135deg, rgba(239,246,255,0.98), #ffffff)'
+          : '#ffffff',
+        boxShadow: selected
+          ? '0 22px 48px rgba(37,99,235,0.13)'
+          : '0 14px 34px rgba(15,23,42,0.06)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.65 : 1,
+        position: 'relative',
+      }}
+    >
+      {plan.is_recommended ? (
+        <span
+          style={{
+            position: 'absolute',
+            right: 18,
+            top: 16,
+            borderRadius: 999,
+            padding: '5px 10px',
+            background: 'rgba(37,99,235,0.1)',
+            color: '#1d4ed8',
+            fontSize: 11,
+            fontWeight: 900,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+          }}
+        >
+          Recommended
+        </span>
+      ) : null}
+
+      <h3 style={{ margin: '0 0 8px', color: '#0f172a', fontSize: 22 }}>
+        {planName}
+      </h3>
+
+      <p style={{ margin: 0, color: '#64748b', lineHeight: 1.55, minHeight: 48 }}>
+        {safeText(plan.description, 'Full HRMS subscription plan.')}
+      </p>
+
+      <div style={{ marginTop: 18 }}>
+        <strong
+          style={{
+            display: 'block',
+            fontSize: 30,
+            color: '#0f172a',
+            letterSpacing: '-0.04em',
+          }}
+        >
+          {isCustom ? 'Custom' : formatCurrency(amount, currency)}
+        </strong>
+        <span style={{ color: '#64748b', fontSize: 13 }}>
+          {isCustom ? 'Contact Superadmin' : `per ${interval}`}
+        </span>
+      </div>
+
+      <div
+        style={{
+          marginTop: 14,
+          borderRadius: 16,
+          padding: '11px 13px',
+          background: selected ? 'rgba(37,99,235,0.1)' : 'rgba(15,23,42,0.04)',
+          color: selected ? '#1d4ed8' : '#334155',
+          fontWeight: 900,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+        }}
+      >
+        <Users size={17} />
+        {employeeText}
+      </div>
+
+      <ul style={{ margin: '16px 0 0', paddingLeft: 20, color: '#475569', lineHeight: 1.8 }}>
+        {(plan.features || []).slice(0, 5).map((feature) => (
+          <li key={`${planCode}-${feature}`}>{feature}</li>
+        ))}
+      </ul>
+
+      <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {selected ? (
+          <>
+            <CheckCircle2 size={18} color="#2563eb" />
+            <span style={{ color: '#2563eb', fontWeight: 900 }}>Selected</span>
+          </>
+        ) : allowOnlinePayment ? (
+          <>
+            <CreditCard size={18} color="#64748b" />
+            <span style={{ color: '#64748b', fontWeight: 800 }}>Select plan</span>
+          </>
+        ) : (
+          <>
+            <AlertTriangle size={18} color="#92400e" />
+            <span style={{ color: '#92400e', fontWeight: 800 }}>Custom plan</span>
+          </>
+        )}
+      </div>
+    </button>
+  );
+}
+
 export default function Billing({ user = {}, setPage }) {
   const { showAlert } = useCustomAlert();
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
+  const [selectedPlanCode, setSelectedPlanCode] = useState('');
+
+  const plans = useMemo(() => getPlans(summary || {}), [summary]);
+  const selectedPlan = useMemo(() => {
+    return (
+      plans.find((plan) => (plan.plan_code || plan.code) === selectedPlanCode) ||
+      plans.find((plan) => (plan.plan_code || plan.code) === getDefaultPlanCode(summary || {})) ||
+      plans[0] ||
+      null
+    );
+  }, [plans, selectedPlanCode, summary]);
 
   const computed = useMemo(() => {
     const planType = getPlanType(summary || {}, user);
     const status = getStatus(summary || {}, user);
     const employeeUsage = getEmployeeUsage(summary || {}, user);
     const daysLeft = getDaysLeft(summary || {}, user);
-    const amount = getAmount(summary || {});
-    const currency = getCurrency(summary || {});
+
+    const selectedAmount = selectedPlan?.amount ?? summary?.amount ?? 4495;
+    const selectedCurrency = selectedPlan?.currency ?? summary?.currency ?? 'INR';
 
     return {
       companyName: getCompanyName(summary || {}, user),
@@ -353,14 +547,14 @@ export default function Billing({ user = {}, setPage }) {
       daysLeft,
       employeesUsed: employeeUsage.used,
       employeeLimit: employeeUsage.limit,
-      amount,
-      currency,
+      amount: selectedAmount,
+      currency: selectedCurrency,
       isLifetime: planType === 'lifetime' || summary?.is_sds_company || summary?.has_lifetime_access,
       isPaid: planType === 'paid' && status !== 'expired' && status !== 'suspended',
       isExpired: status === 'expired' || status === 'suspended' || daysLeft === 0,
       isDemo: planType === 'demo',
     };
-  }, [summary, user]);
+  }, [summary, user, selectedPlan]);
 
   async function loadBillingSummary() {
     setLoading(true);
@@ -368,6 +562,19 @@ export default function Billing({ user = {}, setPage }) {
     try {
       const data = await api('/billing/summary');
       setSummary(data);
+
+      const defaultCode = getDefaultPlanCode(data);
+      const availablePlans = getPlans(data);
+      const firstOnlinePlan =
+        availablePlans.find((plan) => plan.allow_online_payment !== false && !plan.is_custom_pricing) ||
+        availablePlans[0];
+
+      setSelectedPlanCode(
+        defaultCode ||
+          firstOnlinePlan?.plan_code ||
+          firstOnlinePlan?.code ||
+          'growth',
+      );
     } catch (error) {
       showAlert({
         title: 'Unable to load billing details',
@@ -397,6 +604,7 @@ export default function Billing({ user = {}, setPage }) {
           orderResponse.order_id ||
           orderResponse.id ||
           '',
+        plan_code: orderResponse.plan_code || selectedPlanCode,
       };
 
       const data = await api('/billing/verify-payment', {
@@ -452,6 +660,24 @@ export default function Billing({ user = {}, setPage }) {
       return;
     }
 
+    if (!selectedPlan) {
+      showAlert({
+        title: 'Select a plan',
+        message: 'Please select Essential, Growth, or Premium before payment.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    if (selectedPlan.is_custom_pricing || selectedPlan.allow_online_payment === false) {
+      showAlert({
+        title: 'Custom premium plan',
+        message: 'Premium/custom pricing must be activated by Superadmin after discussion.',
+        type: 'info',
+      });
+      return;
+    }
+
     setCreatingOrder(true);
 
     try {
@@ -460,7 +686,7 @@ export default function Billing({ user = {}, setPage }) {
       const orderResponse = await api('/billing/create-order', {
         method: 'POST',
         body: JSON.stringify({
-          plan_name: 'Full HRMS',
+          plan_code: selectedPlan.plan_code || selectedPlan.code || selectedPlanCode,
         }),
       });
 
@@ -488,9 +714,11 @@ export default function Billing({ user = {}, setPage }) {
       const options = {
         key: razorpayKey,
         amount: order.amount,
-        currency: order.currency || computed.currency || 'INR',
+        currency: order.currency || selectedPlan.currency || computed.currency || 'INR',
         name: 'YourComate HRMS',
-        description: orderResponse.description || 'Full HRMS Subscription',
+        description:
+          orderResponse.description ||
+          `${selectedPlan.display_name || selectedPlan.plan_name || 'HRMS'} Subscription`,
         order_id: order.id || order.razorpay_order_id,
         prefill: {
           name: computed.companyName,
@@ -498,7 +726,8 @@ export default function Billing({ user = {}, setPage }) {
         },
         notes: {
           company_name: computed.companyName,
-          plan_name: 'Full HRMS',
+          plan_code: selectedPlan.plan_code || selectedPlan.code || selectedPlanCode,
+          plan_name: selectedPlan.display_name || selectedPlan.plan_name || selectedPlanCode,
         },
         theme: {
           color: '#2563eb',
@@ -553,6 +782,10 @@ export default function Billing({ user = {}, setPage }) {
     }
   }
 
+  const selectedPlanEmployeeText = selectedPlan?.is_unlimited_employees
+    ? 'Unlimited'
+    : `${selectedPlan?.employee_limit || selectedPlan?.included_employees || '—'} employees`;
+
   return (
     <section className="panel" style={{ maxWidth: 1180, margin: '0 auto' }}>
       <div
@@ -597,7 +830,7 @@ export default function Billing({ user = {}, setPage }) {
                 letterSpacing: '-0.045em',
               }}
             >
-              Upgrade to full HRMS access
+              Choose your HRMS subscription
             </h1>
 
             <p
@@ -609,8 +842,8 @@ export default function Billing({ user = {}, setPage }) {
                 fontSize: 16,
               }}
             >
-              Demo companies can subscribe through Razorpay to unlock the full
-              YourComate HRMS suite. SDS lifetime access remains payment-free.
+              Start with a 15-day full-access trial. After trial expiry, select
+              Essential, Growth, or Premium to continue using YourComate HRMS.
             </p>
 
             <div style={{ marginTop: 18 }}>
@@ -623,7 +856,7 @@ export default function Billing({ user = {}, setPage }) {
 
           <div
             style={{
-              minWidth: 240,
+              minWidth: 250,
               borderRadius: 24,
               padding: 22,
               background: '#ffffff',
@@ -651,13 +884,17 @@ export default function Billing({ user = {}, setPage }) {
             </div>
 
             <p style={{ margin: 0, color: '#64748b', fontWeight: 700 }}>
-              Upgrade Plan
+              Selected Plan
             </p>
             <h2 style={{ margin: '6px 0 0', color: '#0f172a' }}>
-              {formatCurrency(computed.amount, computed.currency)}
+              {selectedPlan?.display_name || selectedPlan?.plan_name || 'Growth'}
             </h2>
             <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: 13 }}>
-              Full HRMS subscription
+              {formatCurrency(selectedPlan?.amount ?? 4495, selectedPlan?.currency || 'INR')}
+              {selectedPlan?.is_custom_pricing ? '' : ` / ${selectedPlan?.billing_interval || 'monthly'}`}
+            </p>
+            <p style={{ margin: '8px 0 0', color: '#334155', fontWeight: 800, fontSize: 13 }}>
+              {selectedPlanEmployeeText}
             </p>
           </div>
         </div>
@@ -697,10 +934,54 @@ export default function Billing({ user = {}, setPage }) {
               />
               <SummaryCard
                 icon={IndianRupee}
-                label="Upgrade Amount"
+                label="Selected Amount"
                 value={formatCurrency(computed.amount, computed.currency)}
                 tone="#16a34a"
               />
+            </div>
+
+            <div style={{ marginTop: 30 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 16,
+                  alignItems: 'flex-end',
+                  flexWrap: 'wrap',
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0, color: '#0f172a' }}>
+                    Select a subscription plan
+                  </h2>
+                  <p style={{ margin: '6px 0 0', color: '#64748b' }}>
+                    Superadmin can update these plan prices and employee limits dynamically.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                  gap: 18,
+                }}
+              >
+                {plans.map((plan) => {
+                  const code = plan.plan_code || plan.code;
+
+                  return (
+                    <PricingPlanCard
+                      key={code}
+                      plan={plan}
+                      selected={code === selectedPlanCode}
+                      disabled={computed.isLifetime || computed.isPaid || creatingOrder || verifyingPayment}
+                      onSelect={setSelectedPlanCode}
+                    />
+                  );
+                })}
+              </div>
             </div>
 
             <div
@@ -740,18 +1021,18 @@ export default function Billing({ user = {}, setPage }) {
                 ) : computed.isPaid ? (
                   <p style={{ margin: 0, color: '#166534', lineHeight: 1.7 }}>
                     This company already has active paid access. Full HRMS
-                    modules are unlocked.
+                    modules are unlocked according to its selected plan.
                   </p>
                 ) : computed.isExpired ? (
                   <p style={{ margin: 0, color: '#991b1b', lineHeight: 1.7 }}>
-                    Demo access is expired or suspended. Please subscribe to
+                    Trial access is expired or suspended. Please subscribe to
                     continue using YourComate HRMS.
                   </p>
                 ) : (
                   <p style={{ margin: 0, color: '#475569', lineHeight: 1.7 }}>
-                    Demo access is active. Days left:{' '}
+                    15-day full-access trial is active. Days left:{' '}
                     <strong>{computed.daysLeft ?? 'Not available'}</strong>.
-                    Demo users can access Attendance, Apply Leave, and Projects.
+                    All HRMS modules remain available until trial expiry.
                   </p>
                 )}
               </div>
@@ -774,7 +1055,7 @@ export default function Billing({ user = {}, setPage }) {
                   }}
                 >
                   <Sparkles size={22} color="#7c3aed" />
-                  Full HRMS Unlocks
+                  After Payment
                 </h3>
 
                 <ul
@@ -785,10 +1066,10 @@ export default function Billing({ user = {}, setPage }) {
                     lineHeight: 1.85,
                   }}
                 >
-                  <li>All HRMS modules</li>
-                  <li>Full employee operations</li>
-                  <li>Assets, policies, reports, grievance, IT support</li>
-                  <li>AI Assistant and advanced company workflows</li>
+                  <li>Demo company becomes official paid company</li>
+                  <li>Full HRMS access continues after trial expiry</li>
+                  <li>Employee limit applies according to selected plan</li>
+                  <li>Payment record appears in Superadmin monitoring</li>
                 </ul>
               </div>
             </div>
@@ -832,7 +1113,9 @@ export default function Billing({ user = {}, setPage }) {
                       ? 'Already Paid'
                       : computed.isLifetime
                         ? 'Lifetime Access'
-                        : 'Pay with Razorpay'}
+                        : selectedPlan?.is_custom_pricing || selectedPlan?.allow_online_payment === false
+                          ? 'Contact Superadmin'
+                          : `Pay for ${selectedPlan?.display_name || selectedPlan?.plan_name || 'Selected Plan'}`}
               </button>
 
               <button
@@ -882,9 +1165,9 @@ export default function Billing({ user = {}, setPage }) {
               >
                 <CheckCircle2 size={20} style={{ flexShrink: 0, marginTop: 2 }} />
                 <p style={{ margin: 0, lineHeight: 1.6 }}>
-                  Razorpay test mode can be used with test card/payment details.
-                  After successful verification, the backend will mark this
-                  company as paid and unlock full HRMS access.
+                  Razorpay test mode can be used with test payment details.
+                  After successful verification, the selected plan employee
+                  limit will be applied automatically.
                 </p>
               </div>
             ) : null}

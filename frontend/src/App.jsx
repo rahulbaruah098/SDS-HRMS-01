@@ -4,10 +4,12 @@ import {
   canAccessModule,
   hasFullSaasAccess,
   isExpiredOrSuspendedTenant,
+  isSdsLifetimeTenant,
 } from './data/modules';
 
 import AppLayout from './layouts/AppLayout';
 import Login from './pages/Login';
+// Page file name remains ApplyDemoRegistration for compatibility, but UI copy now says Trial Registration.
 import ApplyDemoRegistration from './pages/ApplyDemoRegistration.jsx';
 import Billing from './pages/Billing.jsx';
 import SubscriptionExpired from './pages/SubscriptionExpired.jsx';
@@ -92,6 +94,25 @@ const PAGE_ALIASES = {
   'expired-subscription': 'subscription_expired',
   'expired-demo': 'subscription_expired',
 
+  trial_request: 'demo_requests',
+  trial_requests: 'demo_requests',
+  trial_application: 'demo_requests',
+  trial_applications: 'demo_requests',
+  saas_trial_request: 'demo_requests',
+  saas_trial_requests: 'demo_requests',
+  company_trial_requests: 'demo_requests',
+  company_trial_applications: 'demo_requests',
+
+  'trial-request': 'demo_requests',
+  'trial-requests': 'demo_requests',
+  'trial-application': 'demo_requests',
+  'trial-applications': 'demo_requests',
+  'saas-trial-request': 'demo_requests',
+  'saas-trial-requests': 'demo_requests',
+  'company-trial-requests': 'demo_requests',
+  'company-trial-applications': 'demo_requests',
+
+  // Backward-compatible old demo aliases.
   demo_request: 'demo_requests',
   demo_requests: 'demo_requests',
   demo_application: 'demo_requests',
@@ -117,12 +138,19 @@ const PAGE_ALIASES = {
   payment_management: 'subscriptions',
   payments: 'subscriptions',
   razorpay_orders: 'subscriptions',
+  pricing: 'subscriptions',
+  pricing_plans: 'subscriptions',
+  dynamic_pricing: 'subscriptions',
+  saas_pricing: 'subscriptions',
 
   'subscription-management': 'subscriptions',
   'saas-subscriptions': 'subscriptions',
   'billing-management': 'subscriptions',
   'payment-management': 'subscriptions',
   'razorpay-orders': 'subscriptions',
+  'pricing-plans': 'subscriptions',
+  'dynamic-pricing': 'subscriptions',
+  'saas-pricing': 'subscriptions',
 
   employee: 'employees',
   employees: 'employees',
@@ -458,7 +486,20 @@ function getBrowserPathname() {
 function isApplyDemoRegistrationPath(pathname) {
   const path = String(pathname || '/').trim().toLowerCase();
 
-  return path === '/apply-demo-registration' || path === '/apply-demo-registration/';
+  return [
+    '/apply-trial-registration',
+    '/apply-trial-registration/',
+    '/trial-registration',
+    '/trial-registration/',
+    '/register-trial',
+    '/register-trial/',
+    '/apply-demo-registration',
+    '/apply-demo-registration/',
+    '/demo-registration',
+    '/demo-registration/',
+    '/register-demo',
+    '/register-demo/',
+  ].includes(path);
 }
 
 function isBillingPath(pathname) {
@@ -474,7 +515,11 @@ function isBillingPath(pathname) {
     path === '/subscribe' ||
     path === '/subscribe/' ||
     path === '/payment' ||
-    path === '/payment/'
+    path === '/payment/' ||
+    path === '/pricing' ||
+    path === '/pricing/' ||
+    path === '/plans' ||
+    path === '/plans/'
   );
 }
 
@@ -486,6 +531,10 @@ function isSubscriptionExpiredPath(pathname) {
     path === '/subscription-expired/' ||
     path === '/trial-expired' ||
     path === '/trial-expired/' ||
+    path === '/trial-ended' ||
+    path === '/trial-ended/' ||
+    path === '/upgrade-required' ||
+    path === '/upgrade-required/' ||
     path === '/demo-expired' ||
     path === '/demo-expired/'
   );
@@ -619,7 +668,9 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'billing') {
-    if (hasFullSaasAccess(safeUser)) {
+    // Active trial users must be allowed to open Billing/Upgrade.
+    // Only SDS lifetime users are redirected away because SDS never pays.
+    if (isSdsLifetimeTenant(safeUser)) {
       return <DashboardRouter user={safeUser} setPage={setPage} />;
     }
 
@@ -810,7 +861,7 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
-  const isDemoRegistrationRoute = useMemo(
+  const isTrialRegistrationRoute = useMemo(
     () => isApplyDemoRegistrationPath(currentPath),
     [currentPath],
   );
@@ -828,7 +879,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!normalizedUser || !isDemoRegistrationRoute) {
+    if (!normalizedUser || !isTrialRegistrationRoute) {
       return;
     }
 
@@ -838,14 +889,16 @@ export default function App() {
     } catch {
       // Ignore browser history errors.
     }
-  }, [isDemoRegistrationRoute, normalizedUser]);
+  }, [isTrialRegistrationRoute, normalizedUser]);
 
   useEffect(() => {
     if (!normalizedUser || !isBillingPath(currentPath)) {
       return;
     }
 
-    if (hasFullSaasAccess(normalizedUser)) {
+    // Active trial users must be allowed to open Billing/Upgrade.
+    // Only SDS lifetime users are redirected away because SDS never pays.
+    if (isSdsLifetimeTenant(normalizedUser)) {
       setPage('dashboard');
 
       try {
@@ -910,7 +963,7 @@ export default function App() {
       return;
     }
 
-    if (normalizedPage === 'billing' && hasFullSaasAccess(normalizedUser)) {
+    if (normalizedPage === 'billing' && isSdsLifetimeTenant(normalizedUser)) {
       setPage('dashboard');
 
       try {
@@ -1054,7 +1107,7 @@ export default function App() {
   }, [normalizedUser]);
 
 if (!normalizedUser) {
-  if (isDemoRegistrationRoute) {
+  if (isTrialRegistrationRoute) {
     return (
       <CustomAlertProvider>
         <ApplyDemoRegistration />

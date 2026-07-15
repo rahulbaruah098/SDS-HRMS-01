@@ -1182,7 +1182,7 @@ export default function SuperAdminDashboard({ setPage }) {
               className="secondary"
               onClick={() => goTo('demo_requests')}
             >
-              Demo Requests
+              Trial Requests
             </button>
 
             <button

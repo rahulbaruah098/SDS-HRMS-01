@@ -220,11 +220,7 @@ export const MANAGEMENT_GROUP_ROLES = ALL_COMMON_ROLES;
 export const ASSET_ROLES = ALL_COMMON_ROLES;
 
 export const SAAS_DEMO_MODULE_KEYS = [
-  'attendance',
-  'leave_requests',
-  'projects',
-  'notifications',
-  'profile',
+  'all',
 ];
 
 export const SAAS_DEMO_ADMIN_SETUP_MODULE_KEYS = [
@@ -490,9 +486,9 @@ export const superModules = [
   ],
   [
     'demo_requests',
-    'Demo Requests',
+    'Trial Requests',
     ClipboardList,
-    'Review OTP-verified company demo applications, approve or reject requests, and send generated YourComate admin login credentials.',
+    'Review OTP-verified company trial applications, approve or reject requests, and send generated YourComate admin login credentials for the 15-day full-access trial.',
     ['super_admin'],
   ],
 
@@ -500,7 +496,7 @@ export const superModules = [
     'subscriptions',
     'Subscriptions & Payments',
     ClipboardList,
-    'Monitor SaaS subscriptions, demo expiry, Razorpay orders, payment records, and refresh expired demo companies.',
+    'Monitor SaaS subscriptions, trial expiry, Razorpay orders, payment records, dynamic pricing plans, and refresh expired trial companies.',
     ['super_admin'],
   ],
 
@@ -1162,6 +1158,58 @@ export function isDemoTenant(user = {}) {
   return getSaasPlanType(user) === 'demo';
 }
 
+export function getDemoAllowedModulesFromSession(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  const candidates = [
+    subscription.allowed_modules,
+    subscription.demo_allowed_modules,
+    tenant.allowed_modules,
+    tenant.demo_allowed_modules,
+    user.allowed_modules,
+    user.demo_allowed_modules,
+    SAAS_DEMO_MODULE_KEYS,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length) {
+      return candidate
+        .map((item) => String(item || '').trim().replaceAll('-', '_'))
+        .filter(Boolean);
+    }
+
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate
+        .split(',')
+        .map((item) => item.trim().replaceAll('-', '_'))
+        .filter(Boolean);
+    }
+  }
+
+  return SAAS_DEMO_MODULE_KEYS;
+}
+
+export function demoHasFullAccess(user = {}) {
+  if (!isDemoTenant(user) || isExpiredOrSuspendedTenant(user)) {
+    return false;
+  }
+
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+  const allowedModules = getDemoAllowedModulesFromSession(user).map((item) =>
+    String(item || '').trim().toLowerCase(),
+  );
+
+  return Boolean(
+    tenant.demo_has_full_access === true ||
+      subscription.demo_has_full_access === true ||
+      user.demo_has_full_access === true ||
+      allowedModules.includes('all') ||
+      allowedModules.includes('*'),
+  );
+}
+
 export function isExpiredOrSuspendedTenant(user = {}) {
   if (isPlatformSuperAdmin(user) || isSdsLifetimeTenant(user)) {
     return false;
@@ -1176,18 +1224,31 @@ export function hasFullSaasAccess(user = {}) {
   return (
     isPlatformSuperAdmin(user) ||
     isSdsLifetimeTenant(user) ||
-    isPaidTenant(user)
+    isPaidTenant(user) ||
+    demoHasFullAccess(user)
   );
 }
 
 export function getDemoAllowedModuleKeys(user = {}) {
-  const allowed = new Set(SAAS_DEMO_MODULE_KEYS);
+  const allowedModules = getDemoAllowedModulesFromSession(user);
+  const allowed = new Set(
+    allowedModules.map((item) =>
+      String(item || '')
+        .trim()
+        .replaceAll('-', '_'),
+    ),
+  );
   const roles = effectiveRoleList(user);
 
+  if (allowed.has('all') || allowed.has('*') || demoHasFullAccess(user)) {
+    return new Set(['all']);
+  }
+
   /*
-    Demo company admin/HR must still access Employee Management,
-    otherwise they cannot add the allowed 10 demo employees.
-    Backend still enforces the 10 employee limit.
+    Legacy fallback only:
+    If any older trial tenant has restricted module data, HR/Admin can still
+    access Employee Management for setup. New active trial companies use
+    full-access trial and do not depend on this fallback.
   */
   if (hasAnyRole(roles, HR_ROLES)) {
     SAAS_DEMO_ADMIN_SETUP_MODULE_KEYS.forEach((key) => allowed.add(key));
@@ -1214,7 +1275,13 @@ export function isModuleAllowedForSaas(user = {}, moduleKey = '') {
   }
 
   if (isDemoTenant(user)) {
-    return getDemoAllowedModuleKeys(user).has(normalizedModuleKey);
+    const allowedDemoModules = getDemoAllowedModuleKeys(user);
+
+    return (
+      allowedDemoModules.has('all') ||
+      allowedDemoModules.has('*') ||
+      allowedDemoModules.has(normalizedModuleKey)
+    );
   }
 
   return true;
@@ -1266,6 +1333,10 @@ export function moduleList(user) {
 
   if (isDemoTenant(user)) {
     const allowedDemoModules = getDemoAllowedModuleKeys(user);
+
+    if (allowedDemoModules.has('all') || allowedDemoModules.has('*')) {
+      return roleAllowedModules;
+    }
 
     return roleAllowedModules.filter((module) =>
       allowedDemoModules.has(module[0]),

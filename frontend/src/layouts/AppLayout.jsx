@@ -1836,19 +1836,19 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           <div className={`saas-sidebar-card ${saasSummary.isExpired ? 'expired' : ''}`}>
             <strong>
               {saasSummary.isExpired ? <AlertTriangle size={15} /> : <CalendarClock size={15} />}
-              {saasSummary.isExpired ? 'Demo Expired' : 'Demo Trial'}
+              {saasSummary.isExpired ? 'Trial Expired' : '15-Day Full Access Trial'}
             </strong>
             <p>
               {saasSummary.isExpired
                 ? 'Subscribe to continue using YourComate HRMS.'
-                : `${saasSummary.daysLeft ?? 'Few'} day(s) left in demo access.`}
+                : `${saasSummary.daysLeft ?? 'Few'} day(s) left in the 15-day full-access trial.`}
             </p>
             <button
               type="button"
               onClick={saasSummary.isExpired ? goToSubscriptionExpired : goToBilling}
             >
               <CreditCard size={14} />
-              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade'}
+              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade Plan'}
             </button>
           </div>
         ) : null}
@@ -2022,8 +2022,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
               <div>
                 <b>
                   {saasSummary.isExpired
-                    ? 'Your demo subscription has expired'
-                    : `Demo subscription active${
+                    ? 'Your trial/subscription has expired'
+                    : `15-day full-access trial active${
                         saasSummary.daysLeft !== null
                           ? ` • ${saasSummary.daysLeft} day(s) left`
                           : ''
@@ -2031,8 +2031,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
                 </b>
                 <small>
                   {saasSummary.isExpired
-                    ? 'Please subscribe to the paid version to continue using the full HRMS.'
-                    : `Demo access is limited to 10 employees and Attendance, Apply Leave, and Projects. Trial ends ${
+                    ? 'Please subscribe to a paid plan to continue using YourComate HRMS.'
+                    : `All HRMS modules are available during the 15-day trial. Payment is required after trial expiry. Trial ends ${
                         formatSaasDate(saasSummary.trialEndDate) || 'soon'
                       }.`}
                 </small>

@@ -2991,7 +2991,7 @@ async function handleAssign(projectId, payload) {
             }}
           >
             <div>
-              <strong>YourComate Demo Access</strong>
+              <strong>YourComate 15-Day Full Access Trial</strong>
               <div style={{ marginTop: 4, lineHeight: 1.6 }}>
                 Company: {saasCompanyName}. Projects is included in your demo plan.
               </div>
@@ -3000,7 +3000,7 @@ async function handleAssign(projectId, payload) {
                 {saasDaysLeft !== null ? ` · ${saasDaysLeft} day(s) left` : ''}
               </div>
               <div style={{ lineHeight: 1.6 }}>
-                Demo limit: {saasEmployeeLimit ? `${saasEmployeeLimit} employees` : '10 employees'} · Allowed modules: Attendance, Apply Leave, Projects
+                Demo limit: {saasEmployeeLimit ? `${saasEmployeeLimit} employees` : 'full HRMS access'} · Allowed modules: Attendance, Apply Leave, Projects
               </div>
               {isExpiredOrSuspendedTenant ? (
                 <div style={{ marginTop: 4 }}>

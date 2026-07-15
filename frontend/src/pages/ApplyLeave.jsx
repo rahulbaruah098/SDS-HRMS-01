@@ -985,12 +985,12 @@ async function handleSubmit(event) {
               <h3>
                 {isExpiredOrSuspendedTenant
                   ? 'Demo subscription expired'
-                  : 'YourComate Demo Access'}
+                  : 'YourComate 15-Day Full Access Trial'}
               </h3>
               <p>
                 {isExpiredOrSuspendedTenant
-                  ? 'Your demo access is expired or suspended. Please upgrade to continue using HRMS modules.'
-                  : `${getCompanyName(user)} is currently using demo access. Apply Leave is included in the demo plan along with Attendance and Projects.`}
+                  ? 'Your trial access is expired or suspended. Please upgrade to continue using HRMS modules.'
+                  : `${getCompanyName(user)} is currently using trial access. Apply Leave is included in the demo plan along with Attendance and Projects.`}
               </p>
 
               <div className="apply-leave-saas-meta">

@@ -345,6 +345,7 @@ function NotificationCard({ item, onMarkRead, onNavigate }) {
   );
 }
 
+// SaaS trial notifications use 15-day full-access trial wording.
 export default function Notifications({ setPage } = {}) {
   const alerts = useCustomAlert();
   const user = currentUser();

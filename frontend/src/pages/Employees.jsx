@@ -1002,6 +1002,14 @@ function getSaasEmployeeLimit(user = {}) {
   const tenant = getSaasTenant(user);
   const subscription = getSaasSubscription(user);
 
+  if (
+    subscription.is_unlimited_employees === true ||
+    tenant.is_unlimited_employees === true ||
+    user.is_unlimited_employees === true
+  ) {
+    return null;
+  }
+
   const rawLimit =
     subscription.employee_limit ??
     tenant.employee_limit ??
@@ -1015,6 +1023,40 @@ function getSaasEmployeeLimit(user = {}) {
   const parsed = Number(rawLimit);
 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getSaasPlanName(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return String(
+    subscription.selected_plan_name ||
+      subscription.plan_label ||
+      subscription.plan_name ||
+      subscription.plan ||
+      tenant.selected_plan_name ||
+      tenant.plan_label ||
+      tenant.plan_name ||
+      tenant.plan ||
+      user.selected_plan_name ||
+      user.plan_label ||
+      user.plan_name ||
+      'Current'
+  ).trim();
+}
+
+function demoHasFullTrialAccess(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+  const allowedModules = subscription.allowed_modules || tenant.allowed_modules || user.allowed_modules || [];
+
+  return (
+    subscription.demo_has_full_access === true ||
+    tenant.demo_has_full_access === true ||
+    user.demo_has_full_access === true ||
+    (Array.isArray(allowedModules) && (allowedModules.includes('all') || allowedModules.includes('*'))) ||
+    (typeof allowedModules === 'string' && allowedModules.toLowerCase().split(',').map((item) => item.trim()).includes('all'))
+  );
 }
 
 function getTrialEndDate(user = {}) {
@@ -1100,15 +1142,18 @@ export default function Employees({ user = {}, setPage } = {}) {
   const saasPlanType = getSaasPlanType(user);
   const saasStatus = getSaasStatus(user);
   const saasEmployeeLimit = getSaasEmployeeLimit(user);
+  const saasPlanName = getSaasPlanName(user);
   const isDemoTenant = saasPlanType === 'demo';
+  const isPaidTenant = saasPlanType === 'paid';
   const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
-  const hasDemoEmployeeLimit = isDemoTenant && saasEmployeeLimit;
-  const demoEmployeesUsed = employees.length;
-  const demoEmployeesRemaining = hasDemoEmployeeLimit
-    ? Math.max(saasEmployeeLimit - demoEmployeesUsed, 0)
+  const hasFullTrialAccess = isDemoTenant && !isExpiredOrSuspendedTenant && demoHasFullTrialAccess(user);
+  const hasPaidEmployeeLimit = isPaidTenant && saasEmployeeLimit;
+  const employeesUsedForLimit = employees.length;
+  const paidEmployeesRemaining = hasPaidEmployeeLimit
+    ? Math.max(saasEmployeeLimit - employeesUsedForLimit, 0)
     : null;
-  const isDemoEmployeeLimitReached = Boolean(
-    hasDemoEmployeeLimit && demoEmployeesUsed >= saasEmployeeLimit,
+  const isPaidEmployeeLimitReached = Boolean(
+    hasPaidEmployeeLimit && employeesUsedForLimit >= saasEmployeeLimit,
   );
 
   const showMessage = (type, text) => {
@@ -1191,13 +1236,13 @@ export default function Employees({ user = {}, setPage } = {}) {
     event.preventDefault();
 
     if (isExpiredOrSuspendedTenant) {
-      showMessage('error', 'Your demo subscription is expired or suspended. Please upgrade to continue.');
+      showMessage('error', 'Your trial/subscription is expired or suspended. Please upgrade to continue.');
       openBillingPage();
       return;
     }
 
-    if (isDemoEmployeeLimitReached) {
-      showMessage('error', `Your demo plan allows only ${saasEmployeeLimit} employees. Please upgrade to continue.`);
+    if (isPaidEmployeeLimitReached) {
+      showMessage('error', `Your ${saasPlanName} plan allows only ${saasEmployeeLimit} employees. Please upgrade to continue.`);
       openBillingPage();
       return;
     }
@@ -1351,9 +1396,9 @@ export default function Employees({ user = {}, setPage } = {}) {
         <div className="hrms-stat-card"><span>Alumni</span><strong>{employeeStats.alumni}</strong></div>
       </div>
 
-      {hasDemoEmployeeLimit ? (
+      {hasFullTrialAccess ? (
         <div
-          className={`hrms-alert ${isDemoEmployeeLimitReached ? 'error' : 'success'}`}
+          className="hrms-alert success"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1363,15 +1408,43 @@ export default function Employees({ user = {}, setPage } = {}) {
           }}
         >
           <div>
-            <strong>YourComate Demo Employee Limit</strong>
+            <strong>YourComate 15-Day Full Access Trial</strong>
             <div>
-              Employees used: {demoEmployeesUsed} / {saasEmployeeLimit}.{' '}
-              {isDemoEmployeeLimitReached
-                ? 'Demo employee limit reached. Please upgrade to add more employees.'
-                : `${demoEmployeesRemaining} employee slot(s) remaining in demo.`}
+              All HRMS modules and employee management are available during the active trial.
             </div>
             <div>
-              Trial end date: {formatSaasDate(getTrialEndDate(user))}
+              Trial end date: {formatSaasDate(getTrialEndDate(user))}. After expiry, subscription payment is required.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="hrms-primary-btn"
+            onClick={openBillingPage}
+          >
+            View Plans
+          </button>
+        </div>
+      ) : null}
+
+      {hasPaidEmployeeLimit ? (
+        <div
+          className={`hrms-alert ${isPaidEmployeeLimitReached ? 'error' : 'success'}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 14,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <strong>YourComate {saasPlanName} Employee Limit</strong>
+            <div>
+              Employees used: {employeesUsedForLimit} / {saasEmployeeLimit}.{' '}
+              {isPaidEmployeeLimitReached
+                ? `${saasPlanName} employee limit reached. Please upgrade to add more employees.`
+                : `${paidEmployeesRemaining} employee slot(s) remaining in this plan.`}
             </div>
           </div>
 
@@ -1391,7 +1464,7 @@ export default function Employees({ user = {}, setPage } = {}) {
           type="button"
           className={`hrms-tab-btn ${activeTab === 'create' ? 'active' : ''}`}
           onClick={() => {
-            if (isDemoEmployeeLimitReached || isExpiredOrSuspendedTenant) {
+            if (isPaidEmployeeLimitReached || isExpiredOrSuspendedTenant) {
               openBillingPage();
               return;
             }

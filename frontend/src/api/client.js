@@ -50,31 +50,124 @@ export function firstNonEmpty(...values) {
 }
 
 
-export function safeSessionPhotoValue(value = '') {
-  const raw = String(value || '').trim();
+function normalizeAllowedModules(value, fallback = ['all']) {
+  if (Array.isArray(value)) {
+    const modules = value
+      .map((item) => String(item || '').trim().replaceAll('-', '_'))
+      .filter(Boolean);
 
-  if (!raw) {
-    return '';
+    return modules.length ? modules : fallback;
   }
 
-  /*
-    Never keep large base64 images in localStorage/session/dashboard state.
-    This prevents Team Leader dashboard crash after profile photo upload.
-  */
-  if (raw.startsWith('data:image') && raw.length > 5000) {
-    return '';
+  if (typeof value === 'string' && value.trim()) {
+    const modules = value
+      .split(',')
+      .map((item) => item.trim().replaceAll('-', '_'))
+      .filter(Boolean);
+
+    return modules.length ? modules : fallback;
   }
 
-  /*
-    Any very long non-http value is also unsafe.
-    Real uploaded image paths should be short, for example:
-    /uploads/profile_photos/employee.jpg
-  */
-  if (raw.length > 1000 && !raw.startsWith('http')) {
-    return '';
+  return fallback;
+}
+
+function normalizeStatusValue(value = '') {
+  return String(value || '').trim().toLowerCase().replaceAll('-', '_');
+}
+
+function isTrialDemoContext(tenant = {}, subscription = {}) {
+  const planType = normalizeStatusValue(
+    subscription.plan_type ||
+      tenant.plan_type ||
+      subscription.subscription_type ||
+      tenant.subscription_type,
+  );
+
+  const trialStatus = normalizeStatusValue(
+    subscription.trial_status ||
+      tenant.trial_status ||
+      subscription.subscription_status ||
+      tenant.subscription_status ||
+      subscription.status ||
+      tenant.status,
+  );
+
+  return (
+    planType === 'demo' ||
+    planType === 'trial' ||
+    trialStatus === 'demo' ||
+    trialStatus === 'trial' ||
+    trialStatus === 'active_trial'
+  );
+}
+
+function isBlockedTrialContext(tenant = {}, subscription = {}) {
+  const statuses = [
+    subscription.status,
+    subscription.subscription_status,
+    subscription.trial_status,
+    tenant.status,
+    tenant.subscription_status,
+    tenant.trial_status,
+  ].map(normalizeStatusValue);
+
+  return statuses.some((status) =>
+    ['expired', 'suspended', 'blocked', 'inactive'].includes(status),
+  );
+}
+
+function enrichTrialSaasContext(rawTenant = {}, rawSubscription = {}) {
+  const tenant = { ...(rawTenant || {}) };
+  const subscription = { ...(rawSubscription || {}) };
+
+  if (!isTrialDemoContext(tenant, subscription)) {
+    return { tenant, subscription };
   }
 
-  return raw;
+  const blocked = isBlockedTrialContext(tenant, subscription);
+  const durationDays =
+    subscription.demo_duration_days ||
+    tenant.demo_duration_days ||
+    subscription.trial_days ||
+    tenant.trial_days ||
+    15;
+
+  const allowedModules = normalizeAllowedModules(
+    subscription.allowed_modules ||
+      subscription.demo_allowed_modules ||
+      tenant.allowed_modules ||
+      tenant.demo_allowed_modules ||
+      ['all'],
+    ['all'],
+  );
+
+  const hasFullAccess =
+    subscription.demo_has_full_access === true ||
+    tenant.demo_has_full_access === true ||
+    allowedModules.includes('all') ||
+    allowedModules.includes('*');
+
+  const requiresPayment =
+    subscription.requires_payment === true ||
+    tenant.requires_payment === true ||
+    blocked;
+
+  subscription.plan_type = subscription.plan_type || tenant.plan_type || 'demo';
+  subscription.demo_duration_days = durationDays;
+  subscription.demo_has_full_access = hasFullAccess;
+  subscription.allowed_modules = allowedModules;
+  subscription.requires_payment = requiresPayment;
+
+  tenant.plan_type = tenant.plan_type || subscription.plan_type || 'demo';
+  tenant.demo_duration_days = tenant.demo_duration_days || durationDays;
+  tenant.demo_has_full_access = tenant.demo_has_full_access === true || hasFullAccess;
+  tenant.allowed_modules = normalizeAllowedModules(
+    tenant.allowed_modules || allowedModules,
+    allowedModules,
+  );
+  tenant.requires_payment = tenant.requires_payment === true || requiresPayment;
+
+  return { tenant, subscription };
 }
 
 export function getProfilePhotoValue(record = {}) {
@@ -995,6 +1088,33 @@ export function buildProfileCoverPayload(coverValue, extra = {}) {
   };
 }
 
+export function safeSessionPhotoValue(value = '') {
+  const raw = String(value || '').trim();
+
+  if (!raw) {
+    return '';
+  }
+
+  /*
+    Never keep large base64 images in localStorage/session/dashboard state.
+    This prevents dashboard crash after profile photo upload.
+  */
+  if (raw.startsWith('data:image') && raw.length > 5000) {
+    return '';
+  }
+
+  /*
+    Any very long non-http value is also unsafe.
+    Real uploaded image paths should be short, for example:
+    /uploads/profile_photos/employee.jpg
+  */
+  if (raw.length > 1000 && !raw.startsWith('http')) {
+    return '';
+  }
+
+  return raw;
+}
+
 function compactSessionUser(user = {}, employee = {}, saas = {}) {
   const photo = safeSessionPhotoValue(
     getProfilePhotoValue(user) ||
@@ -1019,8 +1139,12 @@ function compactSessionUser(user = {}, employee = {}, saas = {}) {
       employee.banner_url ||
       '',
   );
-    const tenant = saas.tenant || user.tenant || {};
-  const subscription = saas.subscription || user.subscription || {};
+  const saasContext = enrichTrialSaasContext(
+    saas.tenant || user.tenant || {},
+    saas.subscription || user.subscription || {},
+  );
+  const tenant = saasContext.tenant;
+  const subscription = saasContext.subscription;
 
   const tenantId =
     user.tenant_id ||
@@ -1308,6 +1432,8 @@ const SAAS_EXPIRED_ERROR_CODES = new Set([
   'subscription_expired',
   'trial_expired',
   'demo_expired',
+  'payment_required',
+  'requires_payment',
 ]);
 
 const SAAS_BILLING_ERROR_CODES = new Set([
@@ -1331,7 +1457,8 @@ function isBillingApiPath(path = '') {
     value.includes('/billing') ||
     value.includes('/auth/login') ||
     value.includes('/auth/me') ||
-    value.includes('/demo-requests')
+    value.includes('/demo-requests') ||
+    value.includes('/trial-requests')
   );
 }
 
@@ -1559,7 +1686,7 @@ export async function api(path, options = {}) {
     throw buildApiError(
       data,
       response.status,
-      'Your demo/subscription has expired. Please upgrade to continue.',
+      'Your trial/subscription has expired. Please upgrade to continue.',
     );
   }
 
@@ -1601,17 +1728,22 @@ export function checkBackendHealth() {
 
 export async function refreshCurrentSession() {
   const data = await api('/auth/me');
+  const saasContext = enrichTrialSaasContext(data.tenant || {}, data.subscription || {});
 
   setSession({
     token: getToken(),
     user: data.user || {},
     employee: data.employee || {},
-    tenant: data.tenant || {},
-    subscription: data.subscription || {},
+    tenant: saasContext.tenant,
+    subscription: saasContext.subscription,
     is_platform_superadmin: data.is_platform_superadmin,
   });
 
-  return data;
+  return {
+    ...data,
+    tenant: saasContext.tenant,
+    subscription: saasContext.subscription,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

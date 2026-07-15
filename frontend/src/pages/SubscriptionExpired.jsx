@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarClock,
   CreditCard,
+  IndianRupee,
   Lock,
   ShieldCheck,
   Users,
@@ -20,10 +21,11 @@ function formatDate(value) {
   }
 
   try {
-    const date = new Date(value);
+    const rawValue = typeof value === 'object' && value.$date ? value.$date : value;
+    const date = new Date(rawValue);
 
     if (Number.isNaN(date.getTime())) {
-      return normalizeValue(value) || 'Not available';
+      return normalizeValue(rawValue) || 'Not available';
     }
 
     return date.toLocaleDateString('en-IN', {
@@ -56,25 +58,15 @@ function getCompanyName(user = {}) {
   );
 }
 
-function getPlanType(user = {}) {
-  const subscription = getSubscription(user);
-  const tenant = getTenant(user);
-
-  return normalizeValue(
-    subscription.plan_type ||
-      tenant.plan_type ||
-      user.plan_type ||
-      'demo',
-  ).toLowerCase();
-}
-
 function getStatus(user = {}) {
   const subscription = getSubscription(user);
   const tenant = getTenant(user);
 
   return normalizeValue(
     subscription.status ||
+      subscription.subscription_status ||
       tenant.status ||
+      tenant.subscription_status ||
       user.subscription_status ||
       user.status ||
       'expired',
@@ -88,11 +80,28 @@ function getTrialEndDate(user = {}) {
   return (
     subscription.trial_end_date ||
     subscription.end_date ||
+    subscription.subscription_end_date ||
     tenant.trial_end_date ||
     tenant.subscription_end_date ||
+    tenant.end_date ||
     user.trial_end_date ||
     user.subscription_end_date ||
-    ''
+    user.end_date
+  );
+}
+
+function getPlanName(user = {}) {
+  const subscription = getSubscription(user);
+  const tenant = getTenant(user);
+
+  return (
+    subscription.plan_name ||
+    subscription.plan_label ||
+    subscription.display_name ||
+    tenant.plan_name ||
+    tenant.plan_label ||
+    user.plan_name ||
+    '15-Day Full Access Trial'
   );
 }
 
@@ -113,12 +122,121 @@ function getEmployeeUsage(user = {}) {
     subscription.employee_limit ??
     tenant.employee_limit ??
     user.employee_limit ??
-    10;
+    null;
+
+  const isUnlimited =
+    subscription.is_unlimited_employees ||
+    tenant.is_unlimited_employees ||
+    limit === null ||
+    limit === undefined ||
+    normalizeValue(limit).toLowerCase() === 'unlimited';
 
   return {
     used,
     limit,
+    isUnlimited,
   };
+}
+
+function goToPath(path, fallbackPage) {
+  try {
+    window.history.pushState({}, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  } catch {
+    if (path) {
+      window.location.href = path;
+    } else if (fallbackPage) {
+      window.location.href = `/${fallbackPage}`;
+    }
+  }
+}
+
+function InfoCard({ icon: Icon, label, value, tone = '#2563eb' }) {
+  return (
+    <div className="stat-card" style={{ padding: 18 }}>
+      <div
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 16,
+          display: 'grid',
+          placeItems: 'center',
+          background: `${tone}18`,
+          color: tone,
+          marginBottom: 10,
+        }}
+      >
+        <Icon size={22} />
+      </div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function PlanPreview({ title, price, employeeLimit, recommended }) {
+  return (
+    <div
+      style={{
+        borderRadius: 20,
+        padding: 18,
+        background: recommended
+          ? 'linear-gradient(135deg, rgba(239,246,255,0.98), #ffffff)'
+          : '#ffffff',
+        border: recommended
+          ? '1px solid rgba(37,99,235,0.38)'
+          : '1px solid rgba(226,232,240,0.9)',
+        boxShadow: '0 14px 32px rgba(15,23,42,0.05)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          alignItems: 'flex-start',
+          marginBottom: 10,
+        }}
+      >
+        <h3 style={{ margin: 0, color: '#0f172a' }}>{title}</h3>
+        {recommended ? (
+          <span
+            style={{
+              borderRadius: 999,
+              background: 'rgba(37,99,235,0.12)',
+              color: '#1d4ed8',
+              padding: '4px 9px',
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+            }}
+          >
+            Recommended
+          </span>
+        ) : null}
+      </div>
+
+      <p
+        style={{
+          margin: 0,
+          color: '#0f172a',
+          fontSize: 24,
+          fontWeight: 900,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+      >
+        {price === 'Custom' ? null : <IndianRupee size={21} />}
+        {price}
+      </p>
+
+      <p style={{ margin: '8px 0 0', color: '#64748b', lineHeight: 1.6 }}>
+        {employeeLimit}
+      </p>
+    </div>
+  );
 }
 
 export default function SubscriptionExpired({ user = {}, setPage }) {
@@ -127,11 +245,12 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
 
     return {
       companyName: getCompanyName(user),
-      planType: getPlanType(user),
       status: getStatus(user),
       trialEndDate: getTrialEndDate(user),
+      planName: getPlanName(user),
       employeesUsed: employeeUsage.used,
       employeeLimit: employeeUsage.limit,
+      isUnlimitedEmployees: employeeUsage.isUnlimited,
     };
   }, [user]);
 
@@ -140,21 +259,24 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
       setPage('billing');
     }
 
-    try {
-      window.history.pushState({}, '', '/billing');
-    } catch {
-      // Ignore browser history errors.
-    }
+    goToPath('/billing', 'billing');
   }
 
   function goBack() {
     if (typeof setPage === 'function') {
       setPage('dashboard');
+      return;
     }
+
+    goToPath('/dashboard', 'dashboard');
   }
 
+  const employeeText = summary.isUnlimitedEmployees
+    ? `${summary.employeesUsed || 0} / Unlimited`
+    : `${summary.employeesUsed || 0} / ${summary.employeeLimit || 'Plan limit'}`;
+
   return (
-    <section className="panel" style={{ maxWidth: 1100, margin: '0 auto' }}>
+    <section className="panel" style={{ maxWidth: 1120, margin: '0 auto' }}>
       <div
         style={{
           borderRadius: 28,
@@ -194,12 +316,12 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
                 margin: '0 0 8px',
                 color: '#ea580c',
                 fontSize: 13,
-                fontWeight: 800,
+                fontWeight: 900,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
               }}
             >
-              Demo Subscription Exhausted
+              Subscription Required
             </p>
 
             <h1
@@ -211,20 +333,21 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
                 letterSpacing: '-0.04em',
               }}
             >
-              Your 30-day demo has ended
+              Your 15-day full-access trial has ended
             </h1>
 
             <p
               style={{
                 margin: '14px 0 0',
-                maxWidth: 760,
+                maxWidth: 790,
                 color: '#475569',
                 fontSize: 16,
                 lineHeight: 1.7,
               }}
             >
-              Please subscribe to the paid version of YourComate HRMS to continue
-              using the system and unlock the full HRMS feature set.
+              Please choose a paid subscription plan to continue using YourComate
+              HRMS. After successful payment, this trial company will become an
+              official registered paid company.
             </p>
           </div>
         </div>
@@ -237,114 +360,96 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
             marginTop: 28,
           }}
         >
-          <div className="stat-card" style={{ padding: 18 }}>
-            <Building2 size={24} />
-            <span>Company</span>
-            <strong>{summary.companyName}</strong>
-          </div>
+          <InfoCard
+            icon={Building2}
+            label="Company"
+            value={summary.companyName}
+            tone="#2563eb"
+          />
 
-          <div className="stat-card" style={{ padding: 18 }}>
-            <Lock size={24} />
-            <span>Current Status</span>
-            <strong style={{ textTransform: 'capitalize' }}>
-              {summary.status || 'Expired'}
-            </strong>
-          </div>
+          <InfoCard
+            icon={Lock}
+            label="Current Status"
+            value={summary.status || 'Expired'}
+            tone="#ea580c"
+          />
 
-          <div className="stat-card" style={{ padding: 18 }}>
-            <CalendarClock size={24} />
-            <span>Demo End Date</span>
-            <strong>{formatDate(summary.trialEndDate)}</strong>
-          </div>
+          <InfoCard
+            icon={CalendarClock}
+            label="Trial End Date"
+            value={formatDate(summary.trialEndDate)}
+            tone="#dc2626"
+          />
 
-          <div className="stat-card" style={{ padding: 18 }}>
-            <Users size={24} />
-            <span>Demo Employee Limit</span>
-            <strong>
-              {summary.employeesUsed || 0} / {summary.employeeLimit || 10}
-            </strong>
-          </div>
+          <InfoCard
+            icon={Users}
+            label="Current Usage"
+            value={employeeText}
+            tone="#7c3aed"
+          />
+        </div>
+
+        <div
+          style={{
+            borderRadius: 24,
+            padding: 22,
+            background: '#ffffff',
+            border: '1px solid rgba(226,232,240,0.9)',
+            marginTop: 24,
+          }}
+        >
+          <h3
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              margin: '0 0 12px',
+              color: '#0f172a',
+            }}
+          >
+            <ShieldCheck size={22} color="#2563eb" />
+            What changes after upgrade?
+          </h3>
+
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 20,
+              color: '#475569',
+              lineHeight: 1.9,
+            }}
+          >
+            <li>Your company access is restored immediately after payment verification.</li>
+            <li>All HRMS modules remain available according to the selected paid plan.</li>
+            <li>Employee limit is applied based on Essential, Growth, or Premium.</li>
+            <li>Billing, subscription, and payment records are visible to Superadmin.</li>
+          </ul>
         </div>
 
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: 18,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+            gap: 16,
             marginTop: 24,
           }}
         >
-          <div
-            style={{
-              borderRadius: 22,
-              padding: 22,
-              background: '#ffffff',
-              border: '1px solid rgba(226,232,240,0.9)',
-            }}
-          >
-            <h3
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                margin: '0 0 12px',
-                color: '#0f172a',
-              }}
-            >
-              <ShieldCheck size={22} color="#2563eb" />
-              Demo access was limited to
-            </h3>
-
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: 20,
-                color: '#475569',
-                lineHeight: 1.9,
-              }}
-            >
-              <li>Attendance module</li>
-              <li>Apply Leave module</li>
-              <li>Projects module</li>
-              <li>Maximum 10 employees</li>
-            </ul>
-          </div>
-
-          <div
-            style={{
-              borderRadius: 22,
-              padding: 22,
-              background: '#ffffff',
-              border: '1px solid rgba(226,232,240,0.9)',
-            }}
-          >
-            <h3
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                margin: '0 0 12px',
-                color: '#0f172a',
-              }}
-            >
-              <CreditCard size={22} color="#7c3aed" />
-              Paid version will unlock
-            </h3>
-
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: 20,
-                color: '#475569',
-                lineHeight: 1.9,
-              }}
-            >
-              <li>All HRMS modules</li>
-              <li>Continued company access</li>
-              <li>Subscription-based usage</li>
-              <li>Superadmin monitoring and billing records</li>
-            </ul>
-          </div>
+          <PlanPreview
+            title="Essential"
+            price="2,495 / month"
+            employeeLimit="Up to 50 employees"
+          />
+          <PlanPreview
+            title="Growth"
+            price="4,495 / month"
+            employeeLimit="Up to 100 employees"
+            recommended
+          />
+          <PlanPreview
+            title="Premium"
+            price="Custom"
+            employeeLimit="Unlimited employees"
+          />
         </div>
 
         <div
@@ -368,7 +473,7 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
             }}
           >
             <CreditCard size={18} />
-            Upgrade / Subscribe Now
+            Open Billing & Upgrade
           </button>
 
           <button

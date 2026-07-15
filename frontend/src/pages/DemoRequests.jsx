@@ -219,6 +219,7 @@ function RequestDetails({ request }) {
   );
 }
 
+// SaaS trial: approval starts a 15-day full-access trial.
 export default function DemoRequests() {
   const alerts = useCustomAlert();
 
@@ -258,7 +259,7 @@ export default function DemoRequests() {
       setCounts(data.counts || {});
       setPagination(data.pagination || { page: nextPage, limit: 20, total: 0, pages: 1 });
     } catch (error) {
-      alerts.error(error.message || 'Unable to load demo requests.', 'Demo Requests Load Failed');
+      alerts.error(error.message || 'Unable to load trial requests.', 'Trial Requests Load Failed');
     } finally {
       setLoading(false);
     }
@@ -332,8 +333,8 @@ export default function DemoRequests() {
     }
 
     const ok = await alerts.confirm(
-      `Approve demo registration for ${row.company_name}? The system will create a demo company, generate admin login credentials, start the 30-day trial, and email login details to ${row.company_email}.`,
-      'Approve Demo Request',
+      `Approve trial registration for ${row.company_name}? The system will create a trial company, generate admin login credentials, start the 30-day trial, and email login details to ${row.company_email}.`,
+      'Approve Trial Request',
     );
 
     if (!ok) {
@@ -350,14 +351,14 @@ export default function DemoRequests() {
 
       alerts.success(
         data.message || 'Demo request approved and login details sent by email.',
-        'Demo Approved',
+        'Trial Approved',
       );
 
       setRejectTarget(null);
       setSelectedRequest(null);
       await load(filters, pagination.page || 1);
     } catch (error) {
-      alerts.error(error.message || 'Unable to approve demo request.', 'Approval Failed');
+      alerts.error(error.message || 'Unable to approve trial request.', 'Approval Failed');
     } finally {
       setLoadingId('');
     }
@@ -384,8 +385,8 @@ export default function DemoRequests() {
     }
 
     const ok = await alerts.confirm(
-      `Reject demo registration for ${rejectTarget.company_name}? The company will be informed by email.`,
-      'Reject Demo Request',
+      `Reject trial registration for ${rejectTarget.company_name}? The company will be informed by email.`,
+      'Reject Trial Request',
     );
 
     if (!ok) {
@@ -402,13 +403,13 @@ export default function DemoRequests() {
         }),
       });
 
-      alerts.success(data.message || 'Demo request rejected.', 'Demo Rejected');
+      alerts.success(data.message || 'Demo request rejected.', 'Trial Rejected');
       setRejectTarget(null);
       setRejectReason('');
       setSelectedRequest(null);
       await load(filters, pagination.page || 1);
     } catch (error) {
-      alerts.error(error.message || 'Unable to reject demo request.', 'Rejection Failed');
+      alerts.error(error.message || 'Unable to reject trial request.', 'Rejection Failed');
     } finally {
       setLoadingId('');
     }
@@ -424,9 +425,9 @@ export default function DemoRequests() {
       <section className="hero compact">
         <div>
           <span className="kicker">YourComate SaaS</span>
-          <h1>Demo Registration Requests</h1>
+          <h1>Trial Registration Requests</h1>
           <p>
-            Review company demo applications, verify OTP status, approve eligible requests,
+            Review company trial applications, verify OTP status, approve eligible requests,
             and trigger automatic admin login email delivery.
           </p>
         </div>
@@ -527,7 +528,7 @@ export default function DemoRequests() {
         <section className="panel" id="demo-reject-section">
           <div className="toolbar">
             <div>
-              <h3>Reject Demo Request</h3>
+              <h3>Reject Trial Request</h3>
               <p>
                 Reject request for <b>{rejectTarget.company_name}</b> — {rejectTarget.company_email}
               </p>
@@ -591,9 +592,9 @@ export default function DemoRequests() {
       <section className="panel">
         <div className="toolbar">
           <div>
-            <h3>Demo Request List</h3>
+            <h3>Trial Request List</h3>
             <p>
-              Approving a verified request creates the demo company, starts the 30-day trial,
+              Approving a verified request creates the trial company, starts the 30-day trial,
               generates admin credentials, and sends the approval email automatically.
             </p>
           </div>
@@ -701,7 +702,7 @@ export default function DemoRequests() {
 
           {!rows.length && (
             <div className="empty">
-              {loading ? 'Loading demo requests...' : 'No demo requests found'}
+              {loading ? 'Loading trial requests...' : 'No trial requests found'}
             </div>
           )}
         </div>

@@ -1283,7 +1283,7 @@ return (
           >
             <div>
               <span className="kicker">
-                {isExpiredOrSuspendedTenant ? 'Demo Subscription Expired' : 'YourComate Demo Access'}
+                {isExpiredOrSuspendedTenant ? 'Demo Subscription Expired' : 'YourComate 15-Day Full Access Trial'}
               </span>
               <h3 style={{ margin: '6px 0 8px' }}>
                 {isExpiredOrSuspendedTenant
@@ -1291,8 +1291,8 @@ return (
                   : 'Attendance is included in your demo plan'}
               </h3>
               <p style={{ margin: 0, color: '#64748b', lineHeight: 1.6 }}>
-                {saasCompanyName} is currently on the demo plan. Demo access includes
-                Attendance, Apply Leave, and Projects only. Trial end date:{' '}
+                {saasCompanyName} is currently on the demo plan. Trial access includes
+                all HRMS modules only. Trial end date:{' '}
                 <strong>{formatSaasDate(saasTrialEndDate)}</strong>
                 {saasDaysLeft !== null && !isExpiredOrSuspendedTenant ? (
                   <> · <strong>{saasDaysLeft}</strong> day(s) left</>

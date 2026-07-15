@@ -41,7 +41,7 @@ const STATUS_OPTIONS = [
 
 const PLAN_OPTIONS = [
   { value: '', label: 'All Plans' },
-  { value: 'demo', label: 'Demo' },
+  { value: 'demo', label: 'Trial' },
   { value: 'paid', label: 'Paid' },
   { value: 'lifetime', label: 'Lifetime' },
 ];
@@ -370,7 +370,7 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
               >
                 <CalendarClock size={16} />
-                Extend Demo
+                Extend Trial
               </button>
 
               <button
@@ -435,7 +435,7 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
                   background: '#f8fafc',
                 }}
               >
-                <h3 style={{ margin: '0 0 12px' }}>Demo Request</h3>
+                <h3 style={{ margin: '0 0 12px' }}>Trial Request</h3>
                 {demoRequest ? (
                   <>
                     <p><strong>Status:</strong> {safeText(demoRequest.status)}</p>
@@ -444,7 +444,7 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
                     <p><strong>Approved:</strong> {formatDate(demoRequest.approved_at)}</p>
                   </>
                 ) : (
-                  <p style={{ color: '#64748b' }}>No linked demo request found.</p>
+                  <p style={{ color: '#64748b' }}>No linked trial request found.</p>
                 )}
               </div>
             </div>
@@ -520,6 +520,7 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
   );
 }
 
+// SaaS companies page uses 15-day full-access trial display wording.
 export default function Companies() {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
@@ -664,7 +665,7 @@ export default function Companies() {
   }
 
   function handleExtendDemo(tenantId) {
-    const daysText = window.prompt('Extend demo by how many days?', '7');
+    const daysText = window.prompt('Extend trial by how many days?', '7');
 
     if (daysText === null) {
       return;
@@ -677,7 +678,7 @@ export default function Companies() {
       return;
     }
 
-    const reason = window.prompt('Reason for demo extension:', 'Superadmin approved extension');
+    const reason = window.prompt('Reason for trial extension:', 'Superadmin approved trial extension');
 
     if (reason === null) {
       return;
@@ -743,7 +744,7 @@ export default function Companies() {
           <span className="kicker">SaaS Tenant Control</span>
           <h1>Companies / Tenants</h1>
           <p>
-            Monitor all companies using YourComate HRMS, manage demo and paid
+            Monitor all companies using YourComate HRMS, manage trial and paid
             tenants, extend trial access, suspend accounts, and protect SDS
             lifetime access.
           </p>
@@ -761,7 +762,7 @@ export default function Companies() {
         >
           <SummaryCard icon={Building2} label="Total Companies" value={summary.total || rows.length || 0} />
           <SummaryCard icon={ShieldCheck} label="Lifetime" value={summary.lifetime || 0} tone="#16a34a" />
-          <SummaryCard icon={CalendarClock} label="Demo" value={summary.demo || 0} tone="#2563eb" />
+          <SummaryCard icon={CalendarClock} label="Trial" value={summary.demo || 0} tone="#2563eb" />
           <SummaryCard icon={IndianRupee} label="Paid" value={summary.paid || 0} tone="#7c3aed" />
           <SummaryCard icon={AlertTriangle} label="Expired" value={summary.expired || 0} tone="#dc2626" />
         </div>
@@ -902,7 +903,7 @@ export default function Companies() {
               onChange={(e) => handleChange('plan_type', e.target.value)}
             >
               <option value="paid">Paid</option>
-              <option value="demo">Demo</option>
+              <option value="demo">Trial</option>
               <option value="lifetime">Lifetime</option>
             </select>
           </label>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api, setSession, refreshCurrentSession, currentUser } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
+// SaaS trial: 15-day full-access trial after Superadmin approval.
 export default function Login({ onLogin }) {
   const alerts = useCustomAlert();
   const [form, setForm] = useState({
@@ -1174,9 +1175,9 @@ export default function Login({ onLogin }) {
               <div className="sds-demo-entry">
                 <div>
                   <b>Want to use YourComate HRMS for your company?</b>
-                  <span>Apply for a demo registration. Your company email will be verified by OTP before Superadmin approval.</span>
+                  <span>Apply for a trial registration. Your company email will be verified by OTP before Superadmin approval.</span>
                   <div className="sds-demo-note">
-                    <strong>Demo access:</strong> 30 days, 10 employees, Attendance, Apply Leave and Projects modules.
+                    <strong>Demo access:</strong> 15 days, full HRMS access, all HRMS modules modules.
                   </div>
                 </div>
 
@@ -1185,7 +1186,7 @@ export default function Login({ onLogin }) {
                   className="sds-demo-btn"
                   onClick={openDemoRegistration}
                 >
-                  Apply for Demo Registration
+                  Apply for Trial Registration
                 </button>
               </div>
             </form>
