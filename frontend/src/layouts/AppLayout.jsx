@@ -192,6 +192,7 @@ function moduleGroup(key) {
       'companies',
       'users',
       'password_requests',
+      'billing',
       'system_settings',
       'audit_logs',
     ].includes(key)
@@ -413,24 +414,45 @@ function getSaasSummary(user = {}) {
       '',
   );
 
+  const planCode = normalizeSaasText(
+    subscription.plan_code ||
+      tenant.plan_code ||
+      user.plan_code ||
+      '',
+  );
+
   const status = normalizeSaasText(
     subscription.status ||
+      tenant.subscription_status ||
+      tenant.plan_status ||
       tenant.status ||
       user.subscription_status ||
+      user.plan_status ||
       user.status ||
       '',
   );
 
   const trialEndDate =
     subscription.trial_end_date ||
-    subscription.end_date ||
     tenant.trial_end_date ||
-    tenant.subscription_end_date ||
     user.trial_end_date ||
-    user.subscription_end_date ||
     '';
 
-  const daysLeft = calculateDaysLeft(trialEndDate);
+  const renewalDueDate =
+    subscription.next_payment_due_date ||
+    subscription.subscription_end_date ||
+    subscription.current_period_end ||
+    subscription.paid_until ||
+    subscription.end_date ||
+    tenant.next_payment_due_date ||
+    tenant.subscription_end_date ||
+    tenant.current_period_end ||
+    tenant.paid_until ||
+    user.next_payment_due_date ||
+    user.subscription_end_date ||
+    user.current_period_end ||
+    user.paid_until ||
+    '';
 
   const employeeLimit =
     subscription.employee_limit ??
@@ -455,17 +477,48 @@ function getSaasSummary(user = {}) {
       tenant.has_lifetime_access ||
       subscription.has_lifetime_access ||
       planType === 'lifetime' ||
+      planCode === 'lifetime' ||
       tenantCode.toLowerCase() === 'sds',
   );
 
-  const isPaid = planType === 'paid' && status !== 'expired' && status !== 'suspended';
-  const isDemo = planType === 'demo' || status === 'demo';
-  const isSuspended = status === 'suspended';
-  const isExpired = Boolean(
-    status === 'expired' ||
-      status === 'trial_expired' ||
-      status === 'subscription_expired' ||
+  const paidPlanCodes = ['essential', 'growth', 'premium'];
+  const isPaidPlan = Boolean(
+    planType === 'paid' ||
+      paidPlanCodes.includes(planCode) ||
+      truthyValue(subscription.is_paid_company) ||
+      truthyValue(tenant.is_paid_company) ||
+      truthyValue(user.is_paid_company),
+  );
+
+  const isDemo = Boolean(
+    !isPaidPlan &&
+      (planType === 'demo' ||
+        planType === 'trial' ||
+        status === 'demo' ||
+        status === 'trial' ||
+        status === 'trial_active'),
+  );
+
+  const accessEndDate = isPaidPlan ? renewalDueDate : trialEndDate;
+  const daysLeft = calculateDaysLeft(accessEndDate);
+  const isSuspended = status === 'suspended' || status === 'blocked';
+
+  const isTrialExpired = Boolean(
+    status === 'trial_expired' ||
+      status === 'demo_expired' ||
       (!isSdsLifetime && isDemo && daysLeft !== null && daysLeft <= 0),
+  );
+
+  const isSubscriptionExpired = Boolean(
+    status === 'subscription_expired' ||
+      (status === 'expired' && isPaidPlan) ||
+      (!isSdsLifetime && isPaidPlan && daysLeft !== null && daysLeft <= 0),
+  );
+
+  const isExpired = isTrialExpired || isSubscriptionExpired;
+  const isPaid = isPaidPlan && !isExpired && !isSuspended;
+  const isPaidRenewalSoon = Boolean(
+    isPaid && daysLeft !== null && daysLeft >= 0 && daysLeft <= 7,
   );
 
   const allowedModules =
@@ -474,27 +527,44 @@ function getSaasSummary(user = {}) {
     user.allowed_modules ||
     [];
 
+  const planLabel =
+    subscription.plan_name ||
+    tenant.plan_name ||
+    user.plan_name ||
+    (planCode
+      ? planCode.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+      : 'Paid');
+
   return {
     tenant,
     subscription,
     tenantCode,
     companyName,
     planType,
+    planCode,
+    planLabel,
     status,
     trialEndDate,
+    renewalDueDate,
+    accessEndDate,
     daysLeft,
     employeeLimit,
     employeeCount,
     isSdsLifetime,
+    isPaidPlan,
     isPaid,
     isDemo,
     isExpired,
+    isTrialExpired,
+    isSubscriptionExpired,
     isSuspended,
+    isPaidRenewalSoon,
     allowedModules,
-    showTrialBanner: !isSdsLifetime && (isDemo || isExpired || isSuspended),
+    showSaasBanner:
+      !isSdsLifetime &&
+      (isDemo || isExpired || isSuspended || isPaidRenewalSoon),
   };
 }
-
 function normalizeNotificationMeta(notification = {}) {
   return {
     ...(notification.meta || {}),
@@ -786,6 +856,74 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
   const saasSummary = useMemo(() => getSaasSummary(safeUser), [safeUser]);
+
+  const saasBanner = useMemo(() => {
+    if (saasSummary.isSubscriptionExpired) {
+      return {
+        title: `${saasSummary.planLabel} subscription expired`,
+        message: `Renew your subscription to restore full HRMS access${
+          saasSummary.renewalDueDate
+            ? ` from ${formatSaasDate(saasSummary.renewalDueDate)}`
+            : ''
+        }.`,
+        sidebarMessage: 'Renew the subscription to restore full HRMS access.',
+        actionLabel: 'Renew Plan',
+        expired: true,
+      };
+    }
+
+    if (saasSummary.isTrialExpired) {
+      return {
+        title: '15-Day Trial Expired',
+        message: 'Choose a paid plan to continue using YourComate HRMS.',
+        sidebarMessage: 'Subscribe to continue using YourComate HRMS.',
+        actionLabel: 'Subscribe Now',
+        expired: true,
+      };
+    }
+
+    if (saasSummary.isSuspended) {
+      return {
+        title: 'Subscription Access Suspended',
+        message: 'Open Billing to review the subscription status or complete the required payment.',
+        sidebarMessage: 'Review Billing to restore account access.',
+        actionLabel: 'View Billing',
+        expired: true,
+      };
+    }
+
+    if (saasSummary.isPaidRenewalSoon) {
+      return {
+        title: `${saasSummary.planLabel} renewal due soon`,
+        message: `Renewal is due ${
+          saasSummary.renewalDueDate
+            ? `on ${formatSaasDate(saasSummary.renewalDueDate)}`
+            : 'soon'
+        }${
+          saasSummary.daysLeft !== null
+            ? ` • ${saasSummary.daysLeft} day(s) left`
+            : ''
+        }.`,
+        sidebarMessage: `${saasSummary.daysLeft ?? 'Few'} day(s) left before renewal.`,
+        actionLabel: 'Renew Plan',
+        expired: false,
+      };
+    }
+
+    return {
+      title: `15-day full-access trial active${
+        saasSummary.daysLeft !== null
+          ? ` • ${saasSummary.daysLeft} day(s) left`
+          : ''
+      }`,
+      message: `All HRMS modules are available during the trial. Trial ends ${
+        formatSaasDate(saasSummary.trialEndDate) || 'soon'
+      }.`,
+      sidebarMessage: `${saasSummary.daysLeft ?? 'Few'} day(s) left in the 15-day full-access trial.`,
+      actionLabel: 'Upgrade Plan',
+      expired: false,
+    };
+  }, [saasSummary]);
 
   async function loadNotifications({ silent = false, showPopup = true } = {}) {
     if (!safeUser?._id && !safeUser?.email) {
@@ -1832,23 +1970,19 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         ) : null}
 
-        {saasSummary.showTrialBanner ? (
-          <div className={`saas-sidebar-card ${saasSummary.isExpired ? 'expired' : ''}`}>
+        {saasSummary.showSaasBanner ? (
+          <div className={`saas-sidebar-card ${saasBanner.expired ? 'expired' : ''}`}>
             <strong>
-              {saasSummary.isExpired ? <AlertTriangle size={15} /> : <CalendarClock size={15} />}
-              {saasSummary.isExpired ? 'Trial Expired' : '15-Day Full Access Trial'}
+              {saasBanner.expired ? <AlertTriangle size={15} /> : <CalendarClock size={15} />}
+              {saasBanner.title}
             </strong>
-            <p>
-              {saasSummary.isExpired
-                ? 'Subscribe to continue using YourComate HRMS.'
-                : `${saasSummary.daysLeft ?? 'Few'} day(s) left in the 15-day full-access trial.`}
-            </p>
+            <p>{saasBanner.sidebarMessage}</p>
             <button
               type="button"
               onClick={saasSummary.isExpired ? goToSubscriptionExpired : goToBilling}
             >
               <CreditCard size={14} />
-              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade Plan'}
+              {saasBanner.actionLabel}
             </button>
           </div>
         ) : null}
@@ -2000,19 +2134,20 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         </header>
 
-        {saasSummary.showTrialBanner ? (
+        {saasSummary.showSaasBanner ? (
           <div
             className={`saas-top-banner ${
-              saasSummary.isExpired
+              saasBanner.expired
                 ? 'expired'
-                : saasSummary.daysLeft !== null && saasSummary.daysLeft <= 5
+                : saasSummary.isPaidRenewalSoon ||
+                    (saasSummary.daysLeft !== null && saasSummary.daysLeft <= 5)
                   ? 'warning'
                   : ''
             }`}
           >
             <div className="saas-top-banner-left">
               <span className="saas-top-icon">
-                {saasSummary.isExpired ? (
+                {saasBanner.expired ? (
                   <AlertTriangle size={22} />
                 ) : (
                   <CalendarClock size={22} />
@@ -2020,22 +2155,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
               </span>
 
               <div>
-                <b>
-                  {saasSummary.isExpired
-                    ? 'Your trial/subscription has expired'
-                    : `15-day full-access trial active${
-                        saasSummary.daysLeft !== null
-                          ? ` • ${saasSummary.daysLeft} day(s) left`
-                          : ''
-                      }`}
-                </b>
-                <small>
-                  {saasSummary.isExpired
-                    ? 'Please subscribe to a paid plan to continue using YourComate HRMS.'
-                    : `All HRMS modules are available during the 15-day trial. Payment is required after trial expiry. Trial ends ${
-                        formatSaasDate(saasSummary.trialEndDate) || 'soon'
-                      }.`}
-                </small>
+                <b>{saasBanner.title}</b>
+                <small>{saasBanner.message}</small>
               </div>
             </div>
 
@@ -2044,7 +2165,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
               onClick={saasSummary.isExpired ? goToSubscriptionExpired : goToBilling}
             >
               <CreditCard size={16} />
-              {saasSummary.isExpired ? 'Subscribe Now' : 'Upgrade Plan'}
+              {saasBanner.actionLabel}
             </button>
           </div>
         ) : null}

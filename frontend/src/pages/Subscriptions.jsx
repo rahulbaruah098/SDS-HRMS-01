@@ -1,20 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  BellRing,
   CalendarClock,
   CheckCircle2,
-  CreditCard,
+  Download,
   IndianRupee,
   Loader2,
+  ReceiptText,
   RefreshCw,
   Save,
   Search,
-  Settings,
   ShieldCheck,
+  TimerReset,
   WalletCards,
 } from 'lucide-react';
 
-import { api } from '../api/client';
+import { api, getToken } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const STATUS_OPTIONS = [
@@ -23,6 +25,8 @@ const STATUS_OPTIONS = [
   { value: 'expired', label: 'Expired' },
   { value: 'suspended', label: 'Suspended' },
   { value: 'paid', label: 'Paid' },
+  { value: 'trial', label: 'Trial' },
+  { value: 'lifetime', label: 'Lifetime' },
 ];
 
 function safeText(value, fallback = '—') {
@@ -33,6 +37,58 @@ function safeText(value, fallback = '—') {
 function toNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeStatus(value) {
+  return safeText(value, '').toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+}
+
+function getDaysLeft(row = {}) {
+  const explicit = row.days_left ?? row.subscription_days_left ?? row.trial_days_left;
+
+  if (explicit !== undefined && explicit !== null && explicit !== '') {
+    return Math.max(0, Math.ceil(toNumber(explicit, 0)));
+  }
+
+  const endDate =
+    row.valid_until ||
+    row.end_date ||
+    row.subscription_end_date ||
+    row.trial_end_date ||
+    row.next_due_date;
+
+  if (!endDate) {
+    return null;
+  }
+
+  const parsed = new Date(typeof endDate === 'object' && endDate.$date ? endDate.$date : endDate);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  const difference = parsed.getTime() - Date.now();
+  return difference <= 0 ? 0 : Math.ceil(difference / (1000 * 60 * 60 * 24));
+}
+
+function getValidityLabel(row = {}) {
+  const normalized = normalizeStatus(row.status);
+
+  if (['lifetime', 'lifetime_active'].includes(normalized) || row.plan_type === 'lifetime') {
+    return 'Lifetime access';
+  }
+
+  const daysLeft = getDaysLeft(row);
+
+  if (daysLeft === null) {
+    return 'Validity unavailable';
+  }
+
+  if (daysLeft <= 0) {
+    return 'Expired';
+  }
+
+  return `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining`;
 }
 
 function formatCurrency(value, currency = 'INR') {
@@ -99,6 +155,109 @@ function buildQuery(params = {}) {
   return queryString ? `?${queryString}` : '';
 }
 
+function buildBillingApiUrl(path = '') {
+  const value = String(path || '').trim();
+
+  if (!value) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  const envBase = String(import.meta.env.VITE_API_BASE || '').trim().replace(/\/+$/, '');
+  let apiBase = envBase;
+
+  if (!apiBase && typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location;
+    apiBase =
+      !hostname || hostname === 'localhost' || hostname === '127.0.0.1'
+        ? 'http://127.0.0.1:5000/api/v1'
+        : `${protocol}//${hostname}:5000/api/v1`;
+  }
+
+  const normalizedPath = value.startsWith('/') ? value : `/${value}`;
+
+  if (normalizedPath.startsWith('/api/v1/')) {
+    const origin = apiBase.replace(/\/api\/v1$/i, '');
+    return `${origin}${normalizedPath}`;
+  }
+
+  return `${apiBase}${normalizedPath}`;
+}
+
+function getDownloadFilename(response, payment = {}) {
+  const disposition = response.headers.get('content-disposition') || '';
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  const rawFilename = utf8Match?.[1] || plainMatch?.[1] || '';
+
+  if (rawFilename) {
+    try {
+      return decodeURIComponent(rawFilename);
+    } catch {
+      return rawFilename;
+    }
+  }
+
+  const reference = safeText(
+    payment.invoice_number || payment.receipt_number || payment.razorpay_payment_id,
+    'yourcomate-invoice',
+  ).replace(/[^a-z0-9_-]+/gi, '-');
+
+  return `${reference}.pdf`;
+}
+
+function paymentIdentity(payment = {}, index = 0) {
+  return safeText(
+    payment.id ||
+      payment._id ||
+      payment.razorpay_payment_id ||
+      payment.invoice_number ||
+      payment.receipt_number,
+    `payment-${index}`,
+  );
+}
+
+function alertStyle(level = 'info') {
+  const normalized = normalizeStatus(level);
+
+  if (['critical', 'error', 'danger'].includes(normalized)) {
+    return {
+      background: 'rgba(254,226,226,0.86)',
+      border: '1px solid rgba(220,38,38,0.22)',
+      color: '#991b1b',
+      icon: '#dc2626',
+    };
+  }
+
+  if (['warning', 'attention'].includes(normalized)) {
+    return {
+      background: 'rgba(255,247,237,0.92)',
+      border: '1px solid rgba(234,88,12,0.22)',
+      color: '#9a3412',
+      icon: '#ea580c',
+    };
+  }
+
+  if (['success', 'healthy'].includes(normalized)) {
+    return {
+      background: 'rgba(240,253,244,0.9)',
+      border: '1px solid rgba(22,163,74,0.22)',
+      color: '#166534',
+      icon: '#16a34a',
+    };
+  }
+
+  return {
+    background: 'rgba(239,246,255,0.92)',
+    border: '1px solid rgba(37,99,235,0.22)',
+    color: '#1e40af',
+    icon: '#2563eb',
+  };
+}
+
 function getStatusStyle(status) {
   const normalized = String(status || '').trim().toLowerCase();
 
@@ -149,6 +308,142 @@ function StatusBadge({ status }) {
     >
       {statusLabel(status)}
     </span>
+  );
+}
+
+function AlertMessage({ level = 'info', message, compact = false }) {
+  if (!message) {
+    return <span style={{ color: '#94a3b8' }}>No alert</span>;
+  }
+
+  const tone = alertStyle(level);
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        borderRadius: compact ? 12 : 16,
+        padding: compact ? '8px 10px' : '11px 12px',
+        background: tone.background,
+        border: tone.border,
+        color: tone.color,
+        fontSize: compact ? 12 : 13,
+        lineHeight: 1.45,
+        maxWidth: compact ? 330 : 'none',
+      }}
+    >
+      <AlertTriangle size={compact ? 14 : 16} color={tone.icon} style={{ flexShrink: 0, marginTop: 1 }} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function BillingAlertCenter({ alerts = [], hiddenCount = 0 }) {
+  if (!alerts.length) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+          padding: 16,
+          marginBottom: 22,
+          borderRadius: 20,
+          background: 'rgba(240,253,244,0.9)',
+          border: '1px solid rgba(22,163,74,0.22)',
+          color: '#166534',
+        }}
+      >
+        <CheckCircle2 size={21} style={{ flexShrink: 0, marginTop: 1 }} />
+        <div>
+          <strong style={{ display: 'block', marginBottom: 3 }}>No urgent billing alerts</strong>
+          <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+            No subscription expiry, overdue payment, or failed-payment issue currently requires Superadmin attention.
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        marginBottom: 22,
+        borderRadius: 22,
+        background: '#ffffff',
+        border: '1px solid rgba(226,232,240,0.95)',
+        boxShadow: '0 14px 34px rgba(15,23,42,0.06)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '15px 18px',
+          background: 'linear-gradient(135deg, rgba(255,247,237,0.95), rgba(255,255,255,0.98))',
+          borderBottom: '1px solid rgba(226,232,240,0.9)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <BellRing size={19} color="#ea580c" />
+          <strong style={{ color: '#0f172a' }}>Billing alerts requiring attention</strong>
+        </div>
+        <span
+          style={{
+            borderRadius: 999,
+            background: 'rgba(234,88,12,0.12)',
+            color: '#9a3412',
+            fontWeight: 900,
+            fontSize: 12,
+            padding: '5px 9px',
+          }}
+        >
+          {alerts.length + hiddenCount} alert{alerts.length + hiddenCount === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gap: 10, padding: 14 }}>
+        {alerts.map((alert, index) => {
+          const tone = alertStyle(alert.level);
+          return (
+            <div
+              key={`${alert.type || 'alert'}-${alert.id || index}`}
+              style={{
+                display: 'flex',
+                gap: 11,
+                alignItems: 'flex-start',
+                padding: 13,
+                borderRadius: 17,
+                background: tone.background,
+                border: tone.border,
+                color: tone.color,
+              }}
+            >
+              <AlertTriangle size={18} color={tone.icon} style={{ flexShrink: 0, marginTop: 1 }} />
+              <div style={{ minWidth: 0 }}>
+                <strong style={{ display: 'block', color: 'inherit', marginBottom: 3 }}>
+                  {safeText(alert.title, 'Billing attention required')}
+                </strong>
+                <span style={{ display: 'block', fontSize: 13, lineHeight: 1.5 }}>
+                  {safeText(alert.message)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+
+        {hiddenCount > 0 ? (
+          <p style={{ margin: '2px 4px 0', color: '#64748b', fontSize: 12 }}>
+            {hiddenCount} additional alert{hiddenCount === 1 ? '' : 's'} are shown in the relevant table below.
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -320,6 +615,7 @@ function toPlanDraft(plan = {}) {
 }
 
 function buildPlanPayload(draft = {}) {
+  const isPremium = normalizeStatus(draft.plan_code) === 'premium';
   const isUnlimited = Boolean(draft.is_unlimited_employees);
   const employeeLimit = isUnlimited ? null : Number(draft.employee_limit || 0);
   const includedEmployees = isUnlimited ? null : Number(draft.included_employees || draft.employee_limit || 0);
@@ -329,14 +625,14 @@ function buildPlanPayload(draft = {}) {
     plan_name: draft.plan_name,
     display_name: draft.display_name,
     description: draft.description,
-    amount: Number(draft.amount || 0),
+    amount: isPremium ? 0 : Number(draft.amount || 0),
     currency: draft.currency || 'INR',
-    billing_interval: draft.billing_interval || 'monthly',
+    billing_interval: isPremium ? 'custom' : draft.billing_interval || 'monthly',
     employee_limit: employeeLimit,
     included_employees: includedEmployees,
     is_unlimited_employees: isUnlimited,
-    is_custom_pricing: Boolean(draft.is_custom_pricing),
-    allow_online_payment: Boolean(draft.allow_online_payment),
+    is_custom_pricing: isPremium ? true : Boolean(draft.is_custom_pricing),
+    allow_online_payment: isPremium ? false : Boolean(draft.allow_online_payment),
     is_recommended: Boolean(draft.is_recommended),
     is_active: Boolean(draft.is_active),
     sort_order: Number(draft.sort_order || 100),
@@ -346,6 +642,7 @@ function buildPlanPayload(draft = {}) {
       .filter(Boolean),
   };
 }
+
 
 function FieldLabel({ children }) {
   return (
@@ -416,7 +713,7 @@ function PricingPlansPanel({
       >
         <h3 style={{ margin: 0, color: '#0f172a' }}>Dynamic Pricing Plans</h3>
         <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: 14 }}>
-          Superadmin can edit plan pricing and employee limits. These values are used on the Billing page and Razorpay orders.
+          Essential and Growth use Superadmin-controlled dynamic pricing. Premium remains quotation-based and cannot use direct checkout pricing.
         </p>
       </div>
 
@@ -438,6 +735,7 @@ function PricingPlansPanel({
             const code = plan.plan_code;
             const draft = planDrafts[code] || toPlanDraft(plan);
             const isSaving = savingPlan === code;
+            const isPremium = normalizeStatus(code) === 'premium';
 
             function updateDraft(field, value) {
               setPlanDrafts((prev) => ({
@@ -522,7 +820,8 @@ function PricingPlansPanel({
                         style={inputStyle()}
                         type="number"
                         min="0"
-                        value={draft.amount}
+                        disabled={isPremium}
+                        value={isPremium ? '0' : draft.amount}
                         onChange={(event) => updateDraft('amount', event.target.value)}
                       />
                     </div>
@@ -553,7 +852,8 @@ function PricingPlansPanel({
                       <FieldLabel>Billing Interval</FieldLabel>
                       <select
                         style={inputStyle()}
-                        value={draft.billing_interval}
+                        disabled={isPremium}
+                        value={isPremium ? 'custom' : draft.billing_interval}
                         onChange={(event) => updateDraft('billing_interval', event.target.value)}
                       >
                         <option value="monthly">Monthly</option>
@@ -601,7 +901,8 @@ function PricingPlansPanel({
                     <label style={checkboxRowStyle()}>
                       <input
                         type="checkbox"
-                        checked={draft.is_custom_pricing}
+                        checked={isPremium || draft.is_custom_pricing}
+                        disabled={isPremium}
                         onChange={(event) => updateDraft('is_custom_pricing', event.target.checked)}
                       />
                       Custom pricing
@@ -610,7 +911,8 @@ function PricingPlansPanel({
                     <label style={checkboxRowStyle()}>
                       <input
                         type="checkbox"
-                        checked={draft.allow_online_payment}
+                        checked={!isPremium && draft.allow_online_payment}
+                        disabled={isPremium}
                         onChange={(event) => updateDraft('allow_online_payment', event.target.checked)}
                       />
                       Online payment
@@ -634,6 +936,26 @@ function PricingPlansPanel({
                       Active
                     </label>
                   </div>
+
+                  {isPremium ? (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 8,
+                        padding: 11,
+                        borderRadius: 14,
+                        background: 'rgba(124,58,237,0.08)',
+                        border: '1px solid rgba(124,58,237,0.18)',
+                        color: '#5b21b6',
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <ShieldCheck size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                      Premium amount and billing interval are finalized per company quotation. Direct default-price Razorpay checkout remains disabled.
+                    </div>
+                  ) : null}
 
                   <button
                     type="button"
@@ -681,6 +1003,7 @@ export default function Subscriptions({ setPage }) {
   const [pricingLoading, setPricingLoading] = useState(false);
   const [refreshingExpired, setRefreshingExpired] = useState(false);
   const [savingPlan, setSavingPlan] = useState('');
+  const [downloadingPaymentId, setDownloadingPaymentId] = useState('');
   const [subscriptions, setSubscriptions] = useState([]);
   const [payments, setPayments] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -689,18 +1012,35 @@ export default function Subscriptions({ setPage }) {
 
   const summary = useMemo(() => {
     const activeSubscriptions = subscriptions.filter((item) =>
-      ['active', 'paid'].includes(String(item.status || '').toLowerCase()),
+      ['active', 'paid', 'lifetime'].includes(normalizeStatus(item.status)),
     ).length;
 
+    const expiringSubscriptions = subscriptions.filter((item) => {
+      const daysLeft = getDaysLeft(item);
+      return Boolean(
+        item.renewal_due_soon ||
+          (['active', 'paid'].includes(normalizeStatus(item.status)) &&
+            daysLeft !== null &&
+            daysLeft > 0 &&
+            daysLeft <= 7),
+      );
+    }).length;
+
     const expiredSubscriptions = subscriptions.filter((item) =>
-      String(item.status || '').toLowerCase() === 'expired',
+      normalizeStatus(item.status) === 'expired' || getDaysLeft(item) === 0,
     ).length;
 
     const capturedPayments = payments.filter((item) =>
       ['captured', 'paid', 'success', 'completed'].includes(
-        String(item.status || item.payment_status || '').toLowerCase(),
+        normalizeStatus(item.status || item.payment_status),
       ),
     );
+
+    const failedPayments = payments.filter((item) =>
+      ['failed', 'cancelled', 'rejected'].includes(
+        normalizeStatus(item.status || item.payment_status),
+      ),
+    ).length;
 
     const totalRevenue = capturedPayments.reduce(
       (sum, item) => sum + toNumber(item.amount || item.amount_paid || 0),
@@ -708,17 +1048,111 @@ export default function Subscriptions({ setPage }) {
     );
 
     const pendingOrders = orders.filter((item) =>
-      ['created', 'pending'].includes(String(item.status || '').toLowerCase()),
+      ['created', 'pending'].includes(normalizeStatus(item.status)),
     ).length;
 
     return {
       activeSubscriptions,
+      expiringSubscriptions,
       expiredSubscriptions,
+      failedPayments,
       totalRevenue,
       pendingOrders,
       pricingPlans: pricingPlans.length,
     };
   }, [subscriptions, payments, orders, pricingPlans]);
+
+  const allBillingAlerts = useMemo(() => {
+    const alerts = [];
+
+    subscriptions.forEach((item, index) => {
+      const daysLeft = getDaysLeft(item);
+      const status = normalizeStatus(item.status);
+      const company = safeText(item.company_name || item.tenant_name, 'Company');
+      const id = safeText(item._id || item.id || item.tenant_id, `subscription-${index}`);
+      const backendMessage = safeText(item.alert_message, '');
+
+      if (backendMessage && !['healthy', 'success'].includes(normalizeStatus(item.alert_level))) {
+        alerts.push({
+          id,
+          type: 'subscription',
+          level: item.alert_level || (status === 'expired' ? 'critical' : 'warning'),
+          title: `${company} subscription`,
+          message: backendMessage,
+        });
+        return;
+      }
+
+      if (status === 'expired' || daysLeft === 0) {
+        alerts.push({
+          id,
+          type: 'subscription',
+          level: 'critical',
+          title: `${company} subscription expired`,
+          message: 'Company access requires renewal or Superadmin review.',
+        });
+      } else if (
+        item.renewal_due_soon ||
+        (['active', 'paid'].includes(status) && daysLeft !== null && daysLeft > 0 && daysLeft <= 7)
+      ) {
+        alerts.push({
+          id,
+          type: 'subscription',
+          level: 'warning',
+          title: `${company} renewal is due soon`,
+          message: `${daysLeft} day${daysLeft === 1 ? '' : 's'} remain before the current subscription ends.`,
+        });
+      }
+    });
+
+    payments.forEach((item, index) => {
+      const status = normalizeStatus(item.status || item.payment_status);
+
+      if (!['failed', 'cancelled', 'rejected'].includes(status)) {
+        return;
+      }
+
+      const company = safeText(item.company_name || item.tenant_name, 'Company');
+      alerts.push({
+        id: safeText(item._id || item.id || item.razorpay_payment_id, `payment-${index}`),
+        type: 'payment',
+        level: 'critical',
+        title: `${company} payment ${statusLabel(status)}`,
+        message: `Payment ${safeText(item.razorpay_payment_id || item.razorpay_order_id, 'record')} requires review.`,
+      });
+    });
+
+    const staleOrderCutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+    orders.forEach((item, index) => {
+      const status = normalizeStatus(item.status);
+
+      if (!['created', 'pending'].includes(status)) {
+        return;
+      }
+
+      const createdAt = new Date(item.created_at || item.updated_at || '');
+
+      if (Number.isNaN(createdAt.getTime()) || createdAt.getTime() > staleOrderCutoff) {
+        return;
+      }
+
+      const company = safeText(item.company_name || item.tenant_name, 'Company');
+      alerts.push({
+        id: safeText(item._id || item.id || item.razorpay_order_id, `order-${index}`),
+        type: 'order',
+        level: 'warning',
+        title: `${company} has an incomplete order`,
+        message: `Razorpay order ${safeText(item.razorpay_order_id)} has remained ${status} for more than 24 hours.`,
+      });
+    });
+
+    return alerts;
+  }, [subscriptions, payments, orders]);
+
+  const visibleBillingAlerts = allBillingAlerts.slice(0, 6);
+  const hiddenBillingAlertCount = Math.max(allBillingAlerts.length - visibleBillingAlerts.length, 0);
+
 
   async function loadPricingPlans() {
     setPricingLoading(true);
@@ -795,7 +1229,9 @@ export default function Subscriptions({ setPage }) {
       return;
     }
 
-    if (draft.allow_online_payment && !draft.is_custom_pricing && Number(draft.amount || 0) <= 0) {
+    const isPremium = normalizeStatus(planCode) === 'premium';
+
+    if (!isPremium && draft.allow_online_payment && !draft.is_custom_pricing && Number(draft.amount || 0) <= 0) {
       showAlert({
         title: 'Amount required',
         message: 'Online payment plans must have an amount greater than 0.',
@@ -859,6 +1295,62 @@ export default function Subscriptions({ setPage }) {
     }
   }
 
+
+  async function downloadInvoice(payment, index = 0) {
+    const paymentId = paymentIdentity(payment, index);
+    const downloadUrl = safeText(payment.download_url, '');
+
+    if (!downloadUrl) {
+      showAlert({
+        title: 'Invoice unavailable',
+        message: 'This payment does not have a downloadable invoice yet.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    setDownloadingPaymentId(paymentId);
+
+    try {
+      const token = getToken();
+      const response = await fetch(buildBillingApiUrl(downloadUrl), {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!response.ok) {
+        let message = 'Unable to download the invoice.';
+
+        try {
+          const payload = await response.json();
+          message = payload.message || payload.error || message;
+        } catch {
+          // Keep the fallback message for a non-JSON error response.
+        }
+
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = getDownloadFilename(response, payment);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      showAlert({
+        title: 'Invoice download failed',
+        message: error.message || 'Please refresh the page and try again.',
+        type: 'error',
+      });
+    } finally {
+      setDownloadingPaymentId('');
+    }
+  }
+
   useEffect(() => {
     loadData();
     loadPricingPlans();
@@ -888,6 +1380,7 @@ export default function Subscriptions({ setPage }) {
           <strong>{safeText(row.plan_name || row.plan_label || row.plan_type)}</strong>
           <div style={{ color: '#64748b', fontSize: 12 }}>
             {safeText(row.plan_code || row.selected_plan_code, '')}
+            {row.renewal_price_source ? ` · ${statusLabel(row.renewal_price_source)}` : ''}
           </div>
         </div>
       ),
@@ -898,9 +1391,44 @@ export default function Subscriptions({ setPage }) {
       render: (row) => <StatusBadge status={row.status} />,
     },
     {
+      key: 'valid_until',
+      label: 'Subscription Validity',
+      render: (row) => {
+        const daysLeft = getDaysLeft(row);
+        const validityDate =
+          row.valid_until ||
+          row.end_date ||
+          row.subscription_end_date ||
+          row.trial_end_date ||
+          row.next_due_date;
+        const expiring = Boolean(row.renewal_due_soon || (daysLeft !== null && daysLeft > 0 && daysLeft <= 7));
+        const expired = daysLeft === 0 || normalizeStatus(row.status) === 'expired';
+
+        return (
+          <div>
+            <strong style={{ color: expired ? '#991b1b' : expiring ? '#9a3412' : '#0f172a' }}>
+              {getValidityLabel(row)}
+            </strong>
+            <div style={{ color: '#64748b', fontSize: 12, marginTop: 3 }}>
+              {normalizeStatus(row.status) === 'lifetime' || row.plan_type === 'lifetime'
+                ? 'No renewal required'
+                : formatDate(validityDate)}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
       key: 'amount',
-      label: 'Amount',
-      render: (row) => formatCurrency(row.amount || row.plan_amount || 0, row.currency || 'INR'),
+      label: 'Recurring Amount',
+      render: (row) => (
+        <div>
+          <strong>{formatCurrency(row.amount || row.plan_amount || row.renewal_amount || 0, row.currency || 'INR')}</strong>
+          <div style={{ color: '#64748b', fontSize: 12 }}>
+            {statusLabel(row.billing_interval || row.plan_interval || 'monthly')}
+          </div>
+        </div>
+      ),
     },
     {
       key: 'employee_limit',
@@ -911,16 +1439,30 @@ export default function Subscriptions({ setPage }) {
           : safeText(row.employee_limit),
     },
     {
-      key: 'start_date',
-      label: 'Start',
-      render: (row) => formatDate(row.start_date || row.subscription_start_date || row.created_at),
-    },
-    {
-      key: 'end_date',
-      label: 'End / Expiry',
-      render: (row) => formatDate(row.end_date || row.subscription_end_date || row.trial_end_date),
+      key: 'alert_message',
+      label: 'Alert',
+      render: (row) => {
+        const daysLeft = getDaysLeft(row);
+        let message = safeText(row.alert_message, '');
+        let level = row.alert_level || 'info';
+
+        if (!message && (normalizeStatus(row.status) === 'expired' || daysLeft === 0)) {
+          message = 'Subscription expired. Renewal or access review is required.';
+          level = 'critical';
+        } else if (!message && (row.renewal_due_soon || (daysLeft !== null && daysLeft > 0 && daysLeft <= 7))) {
+          message = `Renewal is due in ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`;
+          level = 'warning';
+        }
+
+        return message ? (
+          <AlertMessage level={level} message={message} compact />
+        ) : (
+          <span style={{ color: '#166534', fontWeight: 700, fontSize: 12 }}>Healthy</span>
+        );
+      },
     },
   ];
+
 
   const paymentColumns = [
     {
@@ -933,6 +1475,20 @@ export default function Subscriptions({ setPage }) {
           </strong>
           <div style={{ color: '#64748b', fontSize: 12 }}>
             {safeText(row.company_email || row.tenant_email)}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'invoice_number',
+      label: 'Invoice / Receipt',
+      render: (row) => (
+        <div>
+          <strong style={{ color: '#0f172a' }}>
+            {safeText(row.invoice_number, 'Invoice pending')}
+          </strong>
+          <div style={{ color: '#64748b', fontSize: 12 }}>
+            {safeText(row.receipt_number, 'No receipt number')}
           </div>
         </div>
       ),
@@ -951,13 +1507,13 @@ export default function Subscriptions({ setPage }) {
     },
     {
       key: 'razorpay_payment_id',
-      label: 'Payment ID',
-      render: (row) => safeText(row.razorpay_payment_id),
-    },
-    {
-      key: 'razorpay_order_id',
-      label: 'Order ID',
-      render: (row) => safeText(row.razorpay_order_id),
+      label: 'Payment Reference',
+      render: (row) => (
+        <div>
+          <strong style={{ fontSize: 12 }}>{safeText(row.razorpay_payment_id)}</strong>
+          <div style={{ color: '#64748b', fontSize: 11 }}>{safeText(row.razorpay_order_id)}</div>
+        </div>
+      ),
     },
     {
       key: 'amount',
@@ -966,15 +1522,45 @@ export default function Subscriptions({ setPage }) {
     },
     {
       key: 'status',
-      label: 'Status',
-      render: (row) => <StatusBadge status={row.status || row.payment_status} />,
+      label: 'Invoice Status',
+      render: (row) => <StatusBadge status={row.invoice_status || row.status || row.payment_status} />,
     },
     {
       key: 'paid_at',
-      label: 'Paid At',
-      render: (row) => formatDate(row.paid_at || row.created_at),
+      label: 'Payment Date',
+      render: (row) => formatDate(row.paid_at || row.invoice_date || row.created_at),
+    },
+    {
+      key: 'download_url',
+      label: 'Invoice',
+      render: (row) => {
+        const id = paymentIdentity(row);
+        const downloading = downloadingPaymentId === id;
+
+        return (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => downloadInvoice(row)}
+            disabled={!row.download_url || downloading}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 7,
+              minHeight: 38,
+              whiteSpace: 'nowrap',
+              opacity: row.download_url ? 1 : 0.55,
+            }}
+          >
+            {downloading ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+            {downloading ? 'Downloading...' : 'Download PDF'}
+          </button>
+        );
+      },
     },
   ];
+
 
   const orderColumns = [
     {
@@ -1052,8 +1638,7 @@ export default function Subscriptions({ setPage }) {
           </p>
           <h2 style={{ margin: 0 }}>Subscriptions, Payments & Pricing</h2>
           <p style={{ color: '#64748b', margin: '8px 0 0', maxWidth: 760 }}>
-            Monitor demo expiries, paid subscriptions, Razorpay orders, payment
-            records, and dynamic plan pricing for YourComate HRMS companies.
+            Monitor subscription validity, renewal alerts, invoices, Razorpay orders, payment status, and dynamic plan pricing for every YourComate company.
           </p>
         </div>
 
@@ -1088,7 +1673,7 @@ export default function Subscriptions({ setPage }) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: 14,
           marginBottom: 22,
         }}
@@ -1100,8 +1685,14 @@ export default function Subscriptions({ setPage }) {
           tone="#16a34a"
         />
         <SummaryCard
+          icon={TimerReset}
+          label="Expiring Within 7 Days"
+          value={summary.expiringSubscriptions}
+          tone="#ea580c"
+        />
+        <SummaryCard
           icon={CalendarClock}
-          label="Expired Trials"
+          label="Expired Subscriptions"
           value={summary.expiredSubscriptions}
           tone="#dc2626"
         />
@@ -1115,15 +1706,20 @@ export default function Subscriptions({ setPage }) {
           icon={WalletCards}
           label="Pending Orders"
           value={summary.pendingOrders}
-          tone="#ea580c"
+          tone="#d97706"
         />
         <SummaryCard
-          icon={Settings}
-          label="Pricing Plans"
-          value={summary.pricingPlans}
-          tone="#2563eb"
+          icon={ReceiptText}
+          label="Payment Failures"
+          value={summary.failedPayments}
+          tone="#be123c"
         />
       </div>
+
+      <BillingAlertCenter
+        alerts={visibleBillingAlerts}
+        hiddenCount={hiddenBillingAlertCount}
+      />
 
       <div
         style={{
@@ -1214,7 +1810,7 @@ export default function Subscriptions({ setPage }) {
       >
         {[
           ['subscriptions', 'Subscriptions'],
-          ['payments', 'Payments'],
+          ['payments', 'Payments & Invoices'],
           ['orders', 'Razorpay Orders'],
           ['pricing', 'Pricing Plans'],
         ].map(([key, label]) => (
@@ -1232,7 +1828,7 @@ export default function Subscriptions({ setPage }) {
       {activeTab === 'subscriptions' ? (
         <DataTable
           title="Company Subscriptions"
-          description="Shows demo, expired, lifetime, and paid subscription records."
+          description="Shows each company's plan, remaining validity, renewal source, employee limit, and subscription alerts."
           columns={subscriptionColumns}
           rows={subscriptions}
           loading={loading}
@@ -1243,7 +1839,7 @@ export default function Subscriptions({ setPage }) {
       {activeTab === 'payments' ? (
         <DataTable
           title="Payment Records"
-          description="Shows verified Razorpay payments after successful company upgrades."
+          description="Shows invoice status, payment references, payment dates, and downloadable PDF invoices."
           columns={paymentColumns}
           rows={payments}
           loading={loading}
@@ -1254,7 +1850,7 @@ export default function Subscriptions({ setPage }) {
       {activeTab === 'orders' ? (
         <DataTable
           title="Razorpay Orders"
-          description="Shows generated Razorpay checkout orders for subscription upgrades."
+          description="Shows generated Razorpay orders, including pending or incomplete checkout attempts that may require review."
           columns={orderColumns}
           rows={orders}
           loading={loading}

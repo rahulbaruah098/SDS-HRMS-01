@@ -1450,6 +1450,58 @@ function normalizeErrorCode(value = '') {
     .replaceAll(' ', '_');
 }
 
+
+function currentSaasUserRoles() {
+  const user = currentUser();
+  const values = [
+    user.role,
+    ...(Array.isArray(user.roles) ? user.roles : []),
+  ];
+
+  return new Set(values.map(normalizeErrorCode).filter(Boolean));
+}
+
+function isCurrentUserLifetimeTenant() {
+  const user = currentUser();
+  const tenant = user.tenant || {};
+  const subscription = user.subscription || {};
+
+  const tenantCode = normalizeErrorCode(
+    user.tenant_code || tenant.tenant_code || tenant.code,
+  );
+
+  const planType = normalizeErrorCode(
+    subscription.plan_type || tenant.plan_type,
+  );
+
+  const subscriptionStatus = normalizeErrorCode(
+    subscription.subscription_status ||
+      subscription.status ||
+      tenant.subscription_status ||
+      tenant.status,
+  );
+
+  return Boolean(
+    tenantCode === 'sds' ||
+      planType === 'lifetime' ||
+      subscriptionStatus === 'lifetime' ||
+      tenant.has_lifetime_access === true ||
+      subscription.has_lifetime_access === true
+  );
+}
+
+function canCurrentUserOpenClientBilling() {
+  const roles = currentSaasUserRoles();
+  const user = currentUser();
+
+  return Boolean(
+    roles.has('admin') &&
+      !roles.has('super_admin') &&
+      user.is_platform_superadmin !== true &&
+      !isCurrentUserLifetimeTenant()
+  );
+}
+
 function isBillingApiPath(path = '') {
   const value = String(path || '').toLowerCase();
 
@@ -1486,11 +1538,22 @@ function redirectForSaasRestriction(path = '', data = {}, status = 0) {
     return;
   }
 
-  if (SAAS_BILLING_ERROR_CODES.has(code)) {
+if (SAAS_BILLING_ERROR_CODES.has(code)) {
+  if (canCurrentUserOpenClientBilling()) {
     if (currentPath !== '/billing') {
       window.location.assign('/billing');
     }
+
+    return;
   }
+
+  if (
+    code === 'tenant_suspended' &&
+    currentPath !== '/subscription-expired'
+  ) {
+    window.location.assign('/subscription-expired');
+  }
+}
 }
 
 function buildApiError(data = {}, status = 0, fallbackMessage = 'Request failed.') {

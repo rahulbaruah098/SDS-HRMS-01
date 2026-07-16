@@ -485,6 +485,13 @@ export const superModules = [
     ['super_admin'],
   ],
   [
+    'premium_requests',
+    'Premium Requests',
+    ClipboardList,
+    'Review custom Premium plan requests, quotation follow-ups, payment links and conversion status.',
+    ['super_admin'],
+  ],
+  [
     'demo_requests',
     'Trial Requests',
     ClipboardList,
@@ -754,6 +761,13 @@ export const coreModules = [
     'Operating state master used in Employee form and holiday calendar.',
     HR_ROLES,
   ],
+  [
+  'billing',
+  'Billing & Subscription',
+  Receipt,
+  'View subscription status, remaining validity, renewal alerts, Premium quotation details, payment history and downloadable invoices.',
+  ['admin'],
+],
   [
     'system_settings',
     'System Settings',
@@ -1316,34 +1330,40 @@ export function moduleList(user) {
   const roles = effectiveRoleList(user);
 
   if (roles.includes('super_admin')) {
-    return allModules;
+    return allModules.filter((module) => module[0] !== 'billing');
   }
 
   const roleAllowedModules = allModules.filter((module) =>
     hasAnyRole(roles, module[4] || []),
   );
 
+  const clientModules = isSdsLifetimeTenant(user)
+    ? roleAllowedModules.filter((module) => module[0] !== 'billing')
+    : roleAllowedModules;
+
   if (hasFullSaasAccess(user)) {
-    return roleAllowedModules;
+    return clientModules;
   }
 
   if (isExpiredOrSuspendedTenant(user)) {
-    return roleAllowedModules.filter((module) => module[0] === 'profile');
+    return clientModules.filter((module) =>
+      ['billing', 'profile'].includes(module[0]),
+    );
   }
 
   if (isDemoTenant(user)) {
     const allowedDemoModules = getDemoAllowedModuleKeys(user);
 
     if (allowedDemoModules.has('all') || allowedDemoModules.has('*')) {
-      return roleAllowedModules;
+      return clientModules;
     }
 
-    return roleAllowedModules.filter((module) =>
-      allowedDemoModules.has(module[0]),
+    return clientModules.filter((module) =>
+      module[0] === 'billing' || allowedDemoModules.has(module[0]),
     );
   }
 
-  return roleAllowedModules;
+  return clientModules;
 }
 
 export function canAccessModule(user, moduleKey) {
@@ -1357,12 +1377,17 @@ export function canAccessModule(user, moduleKey) {
     .trim()
     .replaceAll('-', '_');
 
-  if (
-    normalizedModuleKey === 'billing' ||
-    normalizedModuleKey === 'subscription_expired'
-  ) {
-    return true;
-  }
+if (normalizedModuleKey === 'billing') {
+  return (
+    !isSdsLifetimeTenant(user) &&
+    !roles.includes('super_admin') &&
+    roles.includes('admin')
+  );
+}
+
+if (normalizedModuleKey === 'subscription_expired') {
+  return true;
+}
 
   const module = allModules.find((item) => item[0] === normalizedModuleKey);
 

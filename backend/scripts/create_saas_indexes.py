@@ -11,7 +11,7 @@ Preview mode:
 
 What this script does:
 - Creates indexes for tenants, demo requests, pricing plans, subscriptions,
-  payments, payment orders, and trial notifications.
+  payments, payment orders, Premium requests, and trial notifications.
 - Helps prevent duplicate demo/company records.
 - Improves Superadmin search/filter performance.
 - Does not delete or modify existing records.
@@ -282,6 +282,41 @@ INDEX_DEFINITIONS = [
         "collection": "payment_orders",
         "name": "payment_order_status",
         "keys": [("status", 1), ("created_at", -1)],
+        "options": {},
+    },
+    {
+        "collection": "premium_plan_requests",
+        "name": "premium_requests_tenant_created",
+        "keys": [("tenant_id", 1), ("created_at", -1)],
+        "options": {},
+    },
+    {
+        "collection": "premium_plan_requests",
+        "name": "premium_requests_status_created",
+        "keys": [("status", 1), ("created_at", -1)],
+        "options": {},
+    },
+    {
+        "collection": "premium_plan_requests",
+        "name": "premium_requests_reference_unique",
+        "keys": [("request_reference", 1)],
+        "options": {
+            "unique": True,
+            "partialFilterExpression": {
+                "request_reference": {"$exists": True, "$type": "string"},
+            },
+        },
+    },
+    {
+        "collection": "premium_plan_requests",
+        "name": "premium_requests_requester_email",
+        "keys": [("requester_email", 1), ("created_at", -1)],
+        "options": {},
+    },
+    {
+        "collection": "premium_plan_requests",
+        "name": "premium_requests_company_search",
+        "keys": [("company_name", 1), ("company_email", 1), ("requester_email", 1)],
         "options": {},
     },
     {

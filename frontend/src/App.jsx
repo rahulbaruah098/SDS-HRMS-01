@@ -15,6 +15,7 @@ import Billing from './pages/Billing.jsx';
 import SubscriptionExpired from './pages/SubscriptionExpired.jsx';
 import DemoRequests from './pages/DemoRequests.jsx';
 import Subscriptions from './pages/Subscriptions.jsx';
+import PremiumRequests from './pages/PremiumRequests.jsx';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import EmployeeDashboard from './pages/EmployeeDashboard';
@@ -151,6 +152,24 @@ const PAGE_ALIASES = {
   'pricing-plans': 'subscriptions',
   'dynamic-pricing': 'subscriptions',
   'saas-pricing': 'subscriptions',
+
+  premium_requests: 'premium_requests',
+  premium_request: 'premium_requests',
+  premium_plan_requests: 'premium_requests',
+  premium_plan_request: 'premium_requests',
+  custom_plan_requests: 'premium_requests',
+  custom_premium_requests: 'premium_requests',
+  sales_requests: 'premium_requests',
+  sales_request: 'premium_requests',
+
+  'premium-requests': 'premium_requests',
+  'premium-request': 'premium_requests',
+  'premium-plan-requests': 'premium_requests',
+  'premium-plan-request': 'premium_requests',
+  'custom-plan-requests': 'premium_requests',
+  'custom-premium-requests': 'premium_requests',
+  'sales-requests': 'premium_requests',
+  'sales-request': 'premium_requests',
 
   employee: 'employees',
   employees: 'employees',
@@ -523,6 +542,23 @@ function isBillingPath(pathname) {
   );
 }
 
+function isPremiumRequestsPath(pathname) {
+  const path = String(pathname || '/').trim().toLowerCase();
+
+  return (
+    path === '/premium-requests' ||
+    path === '/premium-requests/' ||
+    path === '/premium-request' ||
+    path === '/premium-request/' ||
+    path === '/premium-plan-requests' ||
+    path === '/premium-plan-requests/' ||
+    path === '/custom-premium-requests' ||
+    path === '/custom-premium-requests/' ||
+    path === '/sales-requests' ||
+    path === '/sales-requests/'
+  );
+}
+
 function isSubscriptionExpiredPath(pathname) {
   const path = String(pathname || '/').trim().toLowerCase();
 
@@ -668,10 +704,15 @@ function PageRouter({ page, user, setPage }) {
   }
 
   if (normalizedPage === 'billing') {
-    // Active trial users must be allowed to open Billing/Upgrade.
-    // Only SDS lifetime users are redirected away because SDS never pays.
+    // SDS has lifetime access and must never see subscription/payment screens.
     if (isSdsLifetimeTenant(safeUser)) {
       return <DashboardRouter user={safeUser} setPage={setPage} />;
+    }
+
+    // Client Billing contains company-level subscription, quotation, payment,
+    // and invoice information. Only the client company admin may access it.
+    if (!canAccessModule(safeUser, 'billing')) {
+      return <UnauthorizedPage setPage={setPage} />;
     }
 
     return <Billing setPage={setPage} user={safeUser} />;
@@ -703,6 +744,16 @@ function PageRouter({ page, user, setPage }) {
     }
 
     return <Subscriptions setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'premium_requests') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!userRoles.includes('super_admin')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <PremiumRequests setPage={setPage} user={safeUser} />;
   }
 
   if (!canAccessModule(safeUser, normalizedPage)) {
@@ -832,6 +883,10 @@ export default function App() {
       return 'billing';
     }
 
+    if (isPremiumRequestsPath(pathname)) {
+      return 'premium_requests';
+    }
+
     if (isSubscriptionExpiredPath(pathname)) {
       return 'subscription_expired';
     }
@@ -896,9 +951,11 @@ export default function App() {
       return;
     }
 
-    // Active trial users must be allowed to open Billing/Upgrade.
-    // Only SDS lifetime users are redirected away because SDS never pays.
-    if (isSdsLifetimeTenant(normalizedUser)) {
+    const billingAllowed = canAccessModule(normalizedUser, 'billing');
+
+    // SDS lifetime users, Superadmin, and non-admin client users must not open
+    // the client company Billing screen through a direct browser URL.
+    if (isSdsLifetimeTenant(normalizedUser) || !billingAllowed) {
       setPage('dashboard');
 
       try {
@@ -912,6 +969,29 @@ export default function App() {
     }
 
     setPage('billing');
+  }, [currentPath, normalizedUser]);
+
+  useEffect(() => {
+    if (!normalizedUser || !isPremiumRequestsPath(currentPath)) {
+      return;
+    }
+
+    const userRoles = normalizeRoles(normalizedUser);
+
+    if (!userRoles.includes('super_admin')) {
+      setPage('dashboard');
+
+      try {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } catch {
+        // Ignore browser history errors.
+      }
+
+      return;
+    }
+
+    setPage('premium_requests');
   }, [currentPath, normalizedUser]);
 
   useEffect(() => {
@@ -1063,6 +1143,16 @@ export default function App() {
     }
 
     if (normalizedPage === 'subscriptions') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!userRoles.includes('super_admin')) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'premium_requests') {
       const userRoles = normalizeRoles(normalizedUser);
 
       if (!userRoles.includes('super_admin')) {

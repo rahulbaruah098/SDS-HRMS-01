@@ -313,10 +313,18 @@ def is_paid_tenant(tenant):
     if not tenant:
         return False
 
+    subscription_status = safe_lower(tenant.get("subscription_status"))
+    plan_code = safe_lower(tenant.get("plan_code"))
+
     return (
         safe_lower(tenant.get("plan_type")) == "paid"
-        or safe_lower(tenant.get("subscription_status")) == "paid"
-        or safe_lower(tenant.get("subscription_status")) == "active_paid"
+        or truthy(tenant.get("is_paid_company"))
+        or subscription_status in {"paid", "active_paid"}
+        or (
+            plan_code in {"essential", "growth", "premium"}
+            and not is_demo_tenant(tenant)
+            and not is_lifetime_tenant(tenant)
+        )
     )
 
 
@@ -340,9 +348,15 @@ def get_trial_end_date(tenant):
 
 
 def get_subscription_end_date(tenant):
+    tenant = tenant or {}
+
     return parse_datetime(
-        (tenant or {}).get("subscription_end_date")
-        or (tenant or {}).get("ends_at")
+        tenant.get("subscription_end_date")
+        or tenant.get("next_payment_due_date")
+        or tenant.get("premium_next_due_date")
+        or tenant.get("payment_due_date")
+        or tenant.get("ends_at")
+        or tenant.get("next_due_date")
     )
 
 
@@ -362,12 +376,19 @@ def is_paid_subscription_expired(tenant):
     if not tenant or not is_paid_tenant(tenant):
         return False
 
+    if (
+        safe_lower(tenant.get("status")) == "expired"
+        or safe_lower(tenant.get("subscription_status")) == "expired"
+        or truthy(tenant.get("requires_payment"))
+    ):
+        return True
+
     subscription_end = get_subscription_end_date(tenant)
 
     if not subscription_end:
         return False
 
-    return now_utc() > subscription_end
+    return now_utc() >= subscription_end
 
 
 def is_tenant_expired(tenant):
@@ -396,6 +417,21 @@ def get_trial_days_left(tenant):
         return None
 
     remaining = trial_end - now_utc()
+    days_left = remaining.days
+
+    if remaining.total_seconds() > 0 and days_left < 1:
+        return 1
+
+    return max(days_left, 0)
+
+
+def get_subscription_days_left(tenant):
+    subscription_end = get_subscription_end_date(tenant)
+
+    if not subscription_end:
+        return None
+
+    remaining = subscription_end - now_utc()
     days_left = remaining.days
 
     if remaining.total_seconds() > 0 and days_left < 1:
@@ -604,42 +640,110 @@ def refresh_tenant_status_if_needed(db, tenant, config=None):
     if not tenant:
         return tenant
 
+    current_time = now_utc()
+
     if is_lifetime_tenant(tenant, config):
+        update_doc = {}
+
         if safe_lower(tenant.get("status")) != "active":
+            update_doc["status"] = "active"
+
+        if truthy(tenant.get("requires_payment")):
+            update_doc["requires_payment"] = False
+
+        if update_doc:
+            update_doc["updated_at"] = current_time
             db.tenants.update_one(
                 {"_id": tenant["_id"]},
-                {"$set": {"status": "active", "updated_at": now_utc()}},
+                {"$set": update_doc},
             )
-            tenant["status"] = "active"
+            tenant.update(update_doc)
+
         return tenant
 
     if is_tenant_suspended(tenant):
         return tenant
 
-    if is_tenant_expired(tenant):
-        if safe_lower(tenant.get("status")) != "expired":
+    paid_tenant = is_paid_tenant(tenant)
+    demo_tenant = is_demo_tenant(tenant)
+    expired = is_tenant_expired(tenant)
+
+    if expired:
+        update_doc = {
+            "status": "expired",
+            "requires_payment": True,
+            "updated_at": current_time,
+        }
+
+        if paid_tenant:
+            update_doc.update({
+                "subscription_status": "expired",
+                "subscription_expired_at": (
+                    tenant.get("subscription_expired_at") or current_time
+                ),
+            })
+
+        if demo_tenant:
+            update_doc.update({
+                "trial_status": "expired",
+                "trial_expired_at": tenant.get("trial_expired_at") or current_time,
+            })
+
+        needs_update = any(
+            tenant.get(key) != value
+            for key, value in update_doc.items()
+            if key != "updated_at"
+        )
+
+        if needs_update:
             db.tenants.update_one(
                 {"_id": tenant["_id"]},
-                {
-                    "$set": {
-                        "status": "expired",
-                        "trial_status": "expired" if is_demo_tenant(tenant) else tenant.get("trial_status"),
-                        "subscription_status": "expired" if is_paid_tenant(tenant) else tenant.get("subscription_status"),
-                        "updated_at": now_utc(),
-                    }
-                },
+                {"$set": update_doc},
             )
-            tenant["status"] = "expired"
-            if is_demo_tenant(tenant):
-                tenant["trial_status"] = "expired"
+
+            if paid_tenant:
+                db.subscriptions.update_many(
+                    {
+                        "tenant_id": tenant.get("tenant_id"),
+                        "status": {"$in": ["active", "paid", "active_paid"]},
+                        "is_deleted": {"$ne": True},
+                    },
+                    {
+                        "$set": {
+                            "status": "expired",
+                            "subscription_status": "expired",
+                            "requires_payment": True,
+                            "expired_at": current_time,
+                            "updated_at": current_time,
+                        }
+                    },
+                )
+
+            tenant.update(update_doc)
+
         return tenant
 
+    update_doc = {}
+
     if safe_lower(tenant.get("status")) == "expired":
+        update_doc["status"] = "active"
+
+    if truthy(tenant.get("requires_payment")):
+        update_doc["requires_payment"] = False
+
+    if paid_tenant and safe_lower(tenant.get("subscription_status")) == "expired":
+        update_doc["subscription_status"] = "active"
+
+    if demo_tenant and safe_lower(tenant.get("trial_status")) == "expired":
+        update_doc["trial_status"] = "active"
+
+    if update_doc:
+        update_doc["updated_at"] = current_time
         db.tenants.update_one(
             {"_id": tenant["_id"]},
-            {"$set": {"status": "active", "updated_at": now_utc()}},
+            {"$set": update_doc},
         )
-        tenant["status"] = "active"
+        tenant.update(update_doc)
 
     return tenant
 
@@ -673,12 +777,27 @@ def build_subscription_summary(db, tenant, config=None):
     employee_limit = get_employee_limit(tenant, config)
     employee_count = count_active_employees(db, tenant_id)
     trial_days_left = get_trial_days_left(tenant)
+    subscription_days_left = get_subscription_days_left(tenant)
+    expired = is_tenant_expired(tenant)
+    lifetime = is_lifetime_tenant(tenant, config)
+    paid = is_paid_tenant(tenant)
+    demo = is_demo_tenant(tenant)
 
-    if is_lifetime_tenant(tenant, config):
+    selected_plan_name = (
+        tenant.get("selected_plan_name")
+        or tenant.get("plan_name")
+        or tenant.get("plan")
+    )
+
+    if lifetime:
         plan_label = "Lifetime Full Access"
-    elif is_paid_tenant(tenant):
-        plan_label = "Paid Full HRMS"
-    elif is_demo_tenant(tenant):
+    elif paid:
+        plan_label = safe_str(
+            tenant.get("plan_label")
+            or selected_plan_name
+            or "Paid Full HRMS"
+        )
+    elif demo:
         demo_days = to_int(get_config_value(config, "DEMO_DURATION_DAYS", 15), 15)
         if truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True)):
             plan_label = f"{demo_days}-Day Full Access Trial"
@@ -686,6 +805,8 @@ def build_subscription_summary(db, tenant, config=None):
             plan_label = f"{demo_days}-Day Demo"
     else:
         plan_label = safe_str(tenant.get("plan") or tenant.get("plan_type") or "Unknown")
+
+    subscription_end_date = get_subscription_end_date(tenant)
 
     return {
         "tenant_id": tenant_id,
@@ -700,27 +821,57 @@ def build_subscription_summary(db, tenant, config=None):
         "trial_start_date": tenant.get("trial_start_date"),
         "trial_end_date": tenant.get("trial_end_date"),
         "trial_days_left": trial_days_left,
+        "subscription_start_date": (
+            tenant.get("subscription_start_date")
+            or tenant.get("started_at")
+        ),
+        "subscription_end_date": subscription_end_date,
+        "next_payment_due_date": (
+            tenant.get("next_payment_due_date")
+            or tenant.get("premium_next_due_date")
+            or tenant.get("payment_due_date")
+            or subscription_end_date
+        ),
+        "subscription_days_left": subscription_days_left,
         "employee_count": employee_count,
         "employee_limit": employee_limit,
         "is_unlimited_employees": employee_limit is None,
         "allowed_modules": tenant.get("allowed_modules") or [],
         "plan_code": tenant.get("plan_code"),
         "selected_plan_code": tenant.get("selected_plan_code") or tenant.get("plan_code"),
-        "selected_plan_name": tenant.get("selected_plan_name") or tenant.get("plan_name") or tenant.get("plan"),
-        "billing_interval": tenant.get("billing_interval"),
+        "selected_plan_name": selected_plan_name,
+        "billing_interval": (
+            tenant.get("billing_interval")
+            or tenant.get("premium_billing_interval")
+        ),
+        "renewal_amount": (
+            tenant.get("premium_renewal_amount")
+            if safe_lower(tenant.get("plan_code")) == "premium"
+            else tenant.get("renewal_amount")
+        ) or tenant.get("renewal_amount"),
+        "renewal_currency": (
+            tenant.get("premium_quoted_currency")
+            or tenant.get("currency")
+            or "INR"
+        ),
+        "renewal_price_source": tenant.get("renewal_price_source"),
+        "payment_source": tenant.get("payment_source"),
+        "premium_request_id": tenant.get("premium_request_id"),
+        "pending_premium_request_id": tenant.get("pending_premium_request_id"),
+        "premium_quote_status": tenant.get("premium_quote_status"),
+        "premium_payment_status": tenant.get("premium_payment_status"),
+        "last_payment_id": tenant.get("last_payment_id"),
+        "last_subscription_id": tenant.get("last_subscription_id"),
         "is_sds_company": is_sds_tenant(tenant, config),
-        "is_lifetime": is_lifetime_tenant(tenant, config),
-        "is_demo_company": is_demo_tenant(tenant),
-        "is_paid_company": is_paid_tenant(tenant),
-        "is_expired": is_tenant_expired(tenant),
+        "is_lifetime": lifetime,
+        "is_demo_company": demo,
+        "is_paid_company": paid,
+        "is_expired": expired,
         "is_suspended": is_tenant_suspended(tenant),
         "demo_has_full_access": truthy(get_config_value(config, "DEMO_HAS_FULL_ACCESS", True)),
         "requires_payment": (
-            not is_lifetime_tenant(tenant, config)
-            and (
-                is_tenant_expired(tenant)
-                or is_demo_tenant(tenant)
-            )
+            not lifetime
+            and expired
         ),
     }
 

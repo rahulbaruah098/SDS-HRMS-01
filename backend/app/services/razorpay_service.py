@@ -81,6 +81,69 @@ def build_order_receipt(company_id, prefix="yc_hrms"):
     return f"{prefix}_{company_part}_{unique_part}"[:40]
 
 
+def compact_reference_part(value, fallback="item", max_length=12):
+    """Returns a compact uppercase token safe for invoice/receipt references."""
+
+    cleaned = "".join(
+        character
+        for character in safe_str(value).upper()
+        if character.isalnum()
+    )
+
+    if not cleaned:
+        cleaned = safe_str(fallback).upper() or "ITEM"
+
+    return cleaned[-max_length:]
+
+
+def payment_datetime(payment_details=None):
+    """Resolves Razorpay's Unix timestamp to an aware UTC datetime."""
+
+    payment_details = payment_details or {}
+    created_at = payment_details.get("created_at")
+
+    try:
+        if created_at not in [None, ""]:
+            return datetime.fromtimestamp(float(created_at), tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        pass
+
+    return now_utc()
+
+
+def build_invoice_number(company, payment_id, paid_at=None):
+    """Builds a stable invoice number from tenant, date and Razorpay payment ID."""
+
+    paid_at = paid_at or now_utc()
+    tenant_part = compact_reference_part(
+        (company or {}).get("tenant_code")
+        or (company or {}).get("tenant_id")
+        or (company or {}).get("_id"),
+        fallback="CLIENT",
+        max_length=8,
+    )
+    payment_part = compact_reference_part(
+        payment_id,
+        fallback=uuid.uuid4().hex,
+        max_length=10,
+    )
+
+    return f"YC-INV-{paid_at:%Y%m%d}-{tenant_part}-{payment_part}"
+
+
+def build_receipt_number(payment_id, paid_at=None):
+    """Builds a client-facing payment receipt reference."""
+
+    paid_at = paid_at or now_utc()
+    payment_part = compact_reference_part(
+        payment_id,
+        fallback=uuid.uuid4().hex,
+        max_length=12,
+    )
+
+    return f"YC-RCT-{paid_at:%Y%m%d}-{payment_part}"
+
+
 def create_razorpay_order(company, amount=None, notes=None):
     """
     Creates a Razorpay order for a company subscription upgrade.
@@ -265,32 +328,121 @@ def fetch_payment(payment_id):
 
 def build_payment_record(company, order_doc, verification_payload, payment_details=None):
     """
-    Builds the MongoDB payment record after successful signature verification.
+    Builds the MongoDB payment/invoice record after successful signature
+    verification. Plan and quotation values come from the server-created order
+    snapshot rather than browser input.
     """
 
     payment_details = payment_details or {}
-    company_id = safe_str(company.get("_id") or company.get("company_id") or company.get("tenant_id"))
+    order_doc = order_doc or {}
+    verification_payload = verification_payload or {}
+
+    company_id = safe_str(
+        (company or {}).get("_id")
+        or (company or {}).get("company_id")
+        or (company or {}).get("tenant_id")
+    )
+    tenant_id = safe_str((company or {}).get("tenant_id") or company_id)
+
+    razorpay_order_id = safe_str(verification_payload.get("razorpay_order_id"))
+    razorpay_payment_id = safe_str(verification_payload.get("razorpay_payment_id"))
+    razorpay_signature = safe_str(verification_payload.get("razorpay_signature"))
 
     amount_paise = payment_details.get("amount") or order_doc.get("amount_paise") or 0
-    amount_rupees = safe_float(amount_paise, 0.0) / 100 if amount_paise else safe_float(order_doc.get("amount"), 0.0)
+    amount_rupees = (
+        safe_float(amount_paise, 0.0) / 100
+        if amount_paise
+        else safe_float(order_doc.get("amount"), 0.0)
+    )
+
+    paid_at = payment_datetime(payment_details)
+    invoice_number = build_invoice_number(
+        company,
+        razorpay_payment_id,
+        paid_at=paid_at,
+    )
+    receipt_number = build_receipt_number(
+        razorpay_payment_id,
+        paid_at=paid_at,
+    )
+
+    razorpay_order = order_doc.get("razorpay_order") or {}
+    plan_code = safe_str(order_doc.get("plan_code")) or safe_str(
+        current_app.config.get("SAAS_DEFAULT_PAID_PLAN_CODE", "growth")
+    )
+    plan_name = (
+        safe_str(order_doc.get("plan_name"))
+        or safe_str(current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS"))
+        or "Full HRMS"
+    )
+    plan_label = safe_str(order_doc.get("plan_label")) or plan_name
+    plan_interval = (
+        safe_str(order_doc.get("plan_interval"))
+        or safe_str(order_doc.get("billing_interval"))
+        or safe_str(current_app.config.get("SAAS_FULL_PLAN_INTERVAL", "monthly"))
+        or "monthly"
+    )
+
+    payment_status = safe_str(payment_details.get("status")) or "paid"
+    currency = (
+        safe_str(payment_details.get("currency"))
+        or safe_str(order_doc.get("currency"))
+        or safe_str(current_app.config.get("RAZORPAY_CURRENCY", "INR"))
+        or "INR"
+    )
 
     return {
         "company_id": company_id,
-        "tenant_id": safe_str(company.get("tenant_id") or company_id),
-        "company_name": safe_str(company.get("company_name") or company.get("name")),
-        "company_email": safe_str(company.get("company_email") or company.get("email")),
-        "plan_name": safe_str(current_app.config.get("SAAS_FULL_PLAN_NAME", "Full HRMS")),
-        "plan_interval": safe_str(current_app.config.get("SAAS_FULL_PLAN_INTERVAL", "monthly")),
+        "tenant_id": tenant_id,
+        "company_name": safe_str(
+            (company or {}).get("company_name")
+            or (company or {}).get("name")
+        ),
+        "company_email": safe_str(
+            (company or {}).get("company_email")
+            or (company or {}).get("contact_email")
+            or (company or {}).get("email")
+        ),
+        "plan_code": plan_code,
+        "plan_name": plan_name,
+        "plan_label": plan_label,
+        "plan_interval": plan_interval,
+        "billing_interval": (
+            safe_str(order_doc.get("billing_interval"))
+            or plan_interval
+        ),
+        "employee_limit": order_doc.get("employee_limit"),
+        "is_unlimited_employees": bool(order_doc.get("is_unlimited_employees")),
+        "premium_request_id": order_doc.get("premium_request_id"),
+        "request_reference": order_doc.get("request_reference"),
+        "quotation_reference": order_doc.get("quotation_reference"),
+        "payment_source": order_doc.get("payment_source") or "dynamic_plan_price",
+        "renewal_price_source": order_doc.get("renewal_price_source") or (
+            "custom_quote" if plan_code == "premium" else "dynamic_plan_price"
+        ),
+        "renewal_amount": safe_float(
+            order_doc.get("amount") or amount_rupees,
+            amount_rupees,
+        ),
         "amount": amount_rupees,
         "amount_paise": int(amount_paise or 0),
-        "currency": payment_details.get("currency") or order_doc.get("currency") or current_app.config.get("RAZORPAY_CURRENCY", "INR"),
-        "razorpay_order_id": safe_str(verification_payload.get("razorpay_order_id")),
-        "razorpay_payment_id": safe_str(verification_payload.get("razorpay_payment_id")),
-        "razorpay_signature": safe_str(verification_payload.get("razorpay_signature")),
-        "payment_status": payment_details.get("status") or "paid",
+        "currency": currency,
+        "razorpay_order_id": razorpay_order_id,
+        "razorpay_payment_id": razorpay_payment_id,
+        "razorpay_signature": razorpay_signature,
+        "razorpay_order_receipt": (
+            razorpay_order.get("receipt")
+            or order_doc.get("receipt")
+        ),
+        "payment_status": payment_status,
         "payment_method": payment_details.get("method"),
         "payment_details": payment_details,
         "order_doc_id": order_doc.get("_id"),
-        "created_at": now_utc(),
+        "invoice_number": invoice_number,
+        "invoice_status": "paid",
+        "invoice_date": paid_at,
+        "receipt_number": receipt_number,
+        "paid_at": paid_at,
+        "created_at": paid_at,
         "updated_at": now_utc(),
     }

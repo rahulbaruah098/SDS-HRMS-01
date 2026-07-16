@@ -1074,6 +1074,46 @@ function getTrialEndDate(user = {}) {
   );
 }
 
+function getPaidSubscriptionEndDate(user = {}) {
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
+
+  return (
+    subscription.next_payment_due_date ||
+    subscription.subscription_end_date ||
+    subscription.current_period_end ||
+    subscription.paid_until ||
+    subscription.end_date ||
+    tenant.next_payment_due_date ||
+    tenant.subscription_end_date ||
+    tenant.current_period_end ||
+    tenant.paid_until ||
+    user.next_payment_due_date ||
+    user.subscription_end_date ||
+    user.current_period_end ||
+    user.paid_until ||
+    ''
+  );
+}
+
+function calculateSaasDaysLeft(value) {
+  if (!value) {
+    return null;
+  }
+
+  const endDate = new Date(value);
+
+  if (Number.isNaN(endDate.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  endDate.setHours(23, 59, 59, 999);
+
+  return Math.ceil((endDate.getTime() - today.getTime()) / 86400000);
+}
+
 function formatSaasDate(value) {
   if (!value) {
     return 'Not available';
@@ -1145,7 +1185,23 @@ export default function Employees({ user = {}, setPage } = {}) {
   const saasPlanName = getSaasPlanName(user);
   const isDemoTenant = saasPlanType === 'demo';
   const isPaidTenant = saasPlanType === 'paid';
-  const isExpiredOrSuspendedTenant = saasStatus === 'expired' || saasStatus === 'suspended';
+  const isExpiredOrSuspendedTenant = [
+    'expired',
+    'subscription_expired',
+    'trial_expired',
+    'demo_expired',
+    'suspended',
+    'blocked',
+  ].includes(saasStatus);
+  const paidSubscriptionEndDate = getPaidSubscriptionEndDate(user);
+  const paidSubscriptionDaysLeft = calculateSaasDaysLeft(paidSubscriptionEndDate);
+  const isPaidRenewalDueSoon = Boolean(
+    isPaidTenant &&
+      !isExpiredOrSuspendedTenant &&
+      paidSubscriptionDaysLeft !== null &&
+      paidSubscriptionDaysLeft >= 0 &&
+      paidSubscriptionDaysLeft <= 7,
+  );
   const hasFullTrialAccess = isDemoTenant && !isExpiredOrSuspendedTenant && demoHasFullTrialAccess(user);
   const hasPaidEmployeeLimit = isPaidTenant && saasEmployeeLimit;
   const employeesUsedForLimit = employees.length;
@@ -1242,8 +1298,18 @@ export default function Employees({ user = {}, setPage } = {}) {
     }
 
     if (isPaidEmployeeLimitReached) {
-      showMessage('error', `Your ${saasPlanName} plan allows only ${saasEmployeeLimit} employees. Please upgrade to continue.`);
-      openBillingPage();
+      if (isPaidRenewalDueSoon) {
+        showMessage(
+          'error',
+          `Your ${saasPlanName} plan allows only ${saasEmployeeLimit} employees. Renew or change the plan from Billing to continue.`,
+        );
+        openBillingPage();
+      } else {
+        showMessage(
+          'error',
+          `Your ${saasPlanName} employee limit has been reached. Upgrade controls stay hidden while the subscription is active. Contact Superadmin for an immediate plan revision.`,
+        );
+      }
       return;
     }
 
@@ -1443,18 +1509,27 @@ export default function Employees({ user = {}, setPage } = {}) {
             <div>
               Employees used: {employeesUsedForLimit} / {saasEmployeeLimit}.{' '}
               {isPaidEmployeeLimitReached
-                ? `${saasPlanName} employee limit reached. Please upgrade to add more employees.`
+                ? isPaidRenewalDueSoon
+                  ? `${saasPlanName} employee limit reached. Renewal or plan-change controls are now available.`
+                  : `${saasPlanName} employee limit reached. Contact Superadmin for an immediate plan revision.`
                 : `${paidEmployeesRemaining} employee slot(s) remaining in this plan.`}
             </div>
+            {!isPaidRenewalDueSoon ? (
+              <div style={{ marginTop: 5 }}>
+                Subscription active until {formatSaasDate(paidSubscriptionEndDate)}. Upgrade and renewal controls remain hidden until the final 7 days.
+              </div>
+            ) : null}
           </div>
 
-          <button
-            type="button"
-            className="hrms-primary-btn"
-            onClick={openBillingPage}
-          >
-            Upgrade Plan
-          </button>
+          {isPaidRenewalDueSoon ? (
+            <button
+              type="button"
+              className="hrms-primary-btn"
+              onClick={openBillingPage}
+            >
+              Renew or Change Plan
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -1464,8 +1539,20 @@ export default function Employees({ user = {}, setPage } = {}) {
           type="button"
           className={`hrms-tab-btn ${activeTab === 'create' ? 'active' : ''}`}
           onClick={() => {
-            if (isPaidEmployeeLimitReached || isExpiredOrSuspendedTenant) {
+            if (isExpiredOrSuspendedTenant) {
               openBillingPage();
+              return;
+            }
+
+            if (isPaidEmployeeLimitReached) {
+              if (isPaidRenewalDueSoon) {
+                openBillingPage();
+              } else {
+                showMessage(
+                  'error',
+                  `Your ${saasPlanName} employee limit has been reached. Contact Superadmin for an immediate plan revision.`,
+                );
+              }
               return;
             }
 

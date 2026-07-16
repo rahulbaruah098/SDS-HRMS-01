@@ -17,6 +17,9 @@ from app.utils.auth import current_user_required
 
 SUBSCRIPTION_ERROR_STATUS_CODES = {
     "tenant_expired": 402,
+    "trial_expired": 402,
+    "subscription_expired": 402,
+    "payment_required": 402,
     "tenant_suspended": 403,
     "tenant_missing": 403,
     "module_not_in_demo_plan": 403,
@@ -130,6 +133,73 @@ def _trial_has_full_access(subscription=None, tenant=None):
     )
 
 
+def _subscription_restriction_code(subscription=None):
+    subscription = subscription or {}
+
+    if subscription.get("is_paid_company"):
+        return "subscription_expired"
+
+    if subscription.get("is_demo_company"):
+        return "trial_expired"
+
+    return "tenant_expired"
+
+
+def _subscription_restriction_message(subscription=None):
+    subscription = subscription or {}
+
+    if subscription.get("is_paid_company"):
+        plan_label = str(
+            subscription.get("plan_label")
+            or subscription.get("selected_plan_name")
+            or subscription.get("plan_code")
+            or "subscription"
+        ).strip()
+
+        return (
+            f"Your {plan_label} subscription has expired. "
+            "Please renew it from Billing to continue using YourComate HRMS."
+        )
+
+    if subscription.get("is_demo_company"):
+        return (
+            "Your 15-day trial has expired. "
+            "Please select a plan from Billing to continue using YourComate HRMS."
+        )
+
+    return (
+        "Your company subscription has expired. "
+        "Please open Billing to restore access."
+    )
+
+
+def _restriction_meta(subscription=None, **extra):
+    subscription = subscription or {}
+
+    meta = {
+        "redirect_to": "/billing",
+        "requires_payment": bool(subscription.get("requires_payment")),
+        "plan_code": (
+            subscription.get("selected_plan_code")
+            or subscription.get("plan_code")
+        ),
+        "plan_label": subscription.get("plan_label"),
+        "billing_interval": subscription.get("billing_interval"),
+        "renewal_amount": subscription.get("renewal_amount"),
+        "renewal_currency": subscription.get("renewal_currency") or "INR",
+        "subscription_end_date": subscription.get("subscription_end_date"),
+        "next_payment_due_date": subscription.get("next_payment_due_date"),
+        "premium_request_id": (
+            subscription.get("premium_request_id")
+            or subscription.get("pending_premium_request_id")
+        ),
+        "subscription": subscription,
+    }
+
+    meta.update({key: value for key, value in extra.items() if value is not None})
+    return meta
+
+
 def get_request_tenant_id(user=None):
     """
     Returns the tenant/company id for the current request.
@@ -203,11 +273,12 @@ def tenant_context_required(fn):
 
 def active_tenant_required(fn):
     """
-    Allows SDS lifetime and active paid/demo tenants.
-    Blocks suspended, expired, or missing companies.
+    Allows platform Superadmin, SDS lifetime, active trial, and active paid
+    tenants. Suspended, missing, expired-trial, and expired-paid tenants are
+    blocked.
 
-    Billing and auth routes should not use this decorator because expired demo
-    users still need to login and pay.
+    Billing and authentication routes must not use this decorator because a
+    blocked tenant must still be able to sign in, view its quotation, and pay.
     """
 
     @wraps(fn)
@@ -224,7 +295,10 @@ def active_tenant_required(fn):
                 "Company account not found.",
                 code="tenant_missing",
                 status_code=403,
-                meta=subscription,
+                meta={
+                    "redirect_to": "/login",
+                    "subscription": subscription,
+                },
             )
 
         if subscription.get("is_suspended"):
@@ -232,21 +306,24 @@ def active_tenant_required(fn):
                 "This company account is suspended. Please contact support.",
                 code="tenant_suspended",
                 status_code=403,
-                meta=subscription,
+                meta={
+                    "redirect_to": "/billing",
+                    "subscription": subscription,
+                },
             )
 
-        if subscription.get("is_expired"):
+        if subscription.get("is_expired") or subscription.get("requires_payment"):
+            code = _subscription_restriction_code(subscription)
             return _json_error(
-                "Your trial/subscription has expired. Please upgrade to continue.",
-                code="tenant_expired",
+                _subscription_restriction_message(subscription),
+                code=code,
                 status_code=402,
-                meta=subscription,
+                meta=_restriction_meta(subscription),
             )
 
         return fn(*args, **kwargs)
 
     return wrapper
-
 
 def tenant_module_required(module_name):
     """
@@ -292,16 +369,25 @@ def tenant_module_required(module_name):
                 return fn(*args, **kwargs)
 
             reason = result.get("reason") or "tenant_access_denied"
-            return _json_error(
+            response_code = reason
+            response_message = (
                 result.get("message")
-                or "This module is not available for your current subscription/trial status.",
-                code=reason,
-                status_code=_status_code_for_reason(reason, 403),
-                meta={
-                    "module": result.get("module"),
-                    "allowed_modules": result.get("allowed_modules", []),
-                    "subscription": context.get("subscription") or {},
-                },
+                or "This module is not available for your current subscription/trial status."
+            )
+
+            if reason == "tenant_expired":
+                response_code = _subscription_restriction_code(subscription)
+                response_message = _subscription_restriction_message(subscription)
+
+            return _json_error(
+                response_message,
+                code=response_code,
+                status_code=_status_code_for_reason(response_code, 403),
+                meta=_restriction_meta(
+                    subscription,
+                    module=result.get("module"),
+                    allowed_modules=result.get("allowed_modules", []),
+                ),
             )
 
         return wrapper
@@ -344,9 +430,12 @@ def employee_creation_allowed_required(fn):
 
         message = result.get("message") or "Employee creation is not allowed for your current plan."
 
+        subscription = context.get("subscription") or {}
         code = "employee_limit_reached"
-        if "expired" in message.lower():
-            code = "tenant_expired"
+
+        if "expired" in message.lower() or subscription.get("requires_payment"):
+            code = _subscription_restriction_code(subscription)
+            message = _subscription_restriction_message(subscription)
         elif "suspended" in message.lower():
             code = "tenant_suspended"
         elif "not found" in message.lower():
@@ -356,11 +445,11 @@ def employee_creation_allowed_required(fn):
             message,
             code=code,
             status_code=_status_code_for_reason(code, 403),
-            meta={
-                "employee_count": result.get("employee_count"),
-                "employee_limit": result.get("employee_limit"),
-                "subscription": context.get("subscription") or {},
-            },
+            meta=_restriction_meta(
+                subscription,
+                employee_count=result.get("employee_count"),
+                employee_limit=result.get("employee_limit"),
+            ),
         )
 
     return wrapper

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from flask import current_app
 
-from app.services.email_service import send_payment_success_email
+from app.services.email_service import send_payment_success_email, send_premium_activation_email
 from app.services.razorpay_service import (
     RazorpayServiceError,
     build_payment_record,
@@ -115,6 +115,246 @@ def add_subscription_interval(start_date, interval="monthly"):
     return start_date + timedelta(days=30)
 
 
+def normalize_billing_interval(value):
+    interval = safe_str(value or "monthly").lower().replace(" ", "_").replace("-", "_")
+
+    if interval in {"annual", "annually"}:
+        return "yearly"
+
+    if interval in {"monthly", "quarterly", "yearly", "one_time", "custom"}:
+        return interval
+
+    return "monthly"
+
+
+def is_unlimited_employee_limit(value):
+    return value in [None, "", 0, "0", "unlimited", "Unlimited"]
+
+
+def get_latest_visible_premium_request(db, tenant_id, premium_request_id=None):
+    """
+    Returns only a Premium quotation that has actually been released to the
+    client panel.
+
+    A request status such as ``quoted`` or ``payment_pending`` is not enough
+    on its own. Razorpay must remain unavailable until Superadmin explicitly
+    publishes the quotation by setting client_visible=True and
+    quotation_status to sent/converted.
+    """
+
+    tenant_id = safe_str(tenant_id)
+
+    if not tenant_id:
+        return None
+
+    query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "client_visible": True,
+        "quotation_status": {"$in": ["sent", "converted"]},
+    }
+
+    if premium_request_id:
+        object_id = as_object_id(premium_request_id)
+
+        if not object_id:
+            raise BillingServiceError(
+                "Invalid Premium quotation request ID.",
+                400,
+                "invalid_premium_request_id",
+            )
+
+        query["_id"] = object_id
+        return db.premium_plan_requests.find_one(query)
+
+    return db.premium_plan_requests.find_one(
+        query,
+        sort=[("quotation_sent_at", -1), ("updated_at", -1), ("created_at", -1)],
+    )
+
+
+def resolve_premium_quotation_for_payment(
+    db,
+    company,
+    premium_request_id=None,
+):
+    """
+    Resolves the server-authoritative Premium quotation used for checkout.
+
+    Security/business rules:
+    - the quotation must belong to the current tenant;
+    - an explicitly supplied request ID must match that released quotation;
+    - client_visible must be True;
+    - quotation_status must be sent or converted;
+    - the amount always comes from the stored custom quotation;
+    - a paid quotation cannot be charged again while the subscription is
+      still active, but it remains the recurring price source after expiry.
+    """
+
+    tenant_id = safe_str(company.get("tenant_id"))
+
+    selected_request_id = (
+        safe_str(premium_request_id)
+        or safe_str(company.get("pending_premium_request_id"))
+        or safe_str(company.get("premium_request_id"))
+    )
+
+    premium_request = get_latest_visible_premium_request(
+        db,
+        tenant_id,
+        premium_request_id=selected_request_id or None,
+    )
+
+    if not premium_request:
+        if selected_request_id:
+            raise BillingServiceError(
+                "The selected Premium quotation is not available or has not been released to the client panel.",
+                404,
+                "premium_quotation_not_available",
+            )
+
+        raise BillingServiceError(
+            "Premium quotation is not available yet. Please submit a Premium request and wait for Superadmin/Sales quotation.",
+            400,
+            "premium_quotation_required",
+        )
+
+    client_visible = premium_request.get("client_visible") is True
+    quotation_status = safe_str(
+        premium_request.get("quotation_status")
+    ).lower()
+    request_status = safe_str(
+        premium_request.get("status")
+    ).lower()
+    payment_status = safe_str(
+        premium_request.get("payment_status")
+    ).lower()
+
+    if not client_visible or quotation_status not in {"sent", "converted"}:
+        raise BillingServiceError(
+            "Premium quotation has not been released to the client yet.",
+            400,
+            "premium_quotation_not_released",
+        )
+
+    # Future route revisions may keep an unpublished draft separately while
+    # preserving the last published quotation in this snapshot. Existing
+    # records continue to use the current top-level fields.
+    published_quotation = premium_request.get("published_quotation")
+    if not isinstance(published_quotation, dict):
+        published_quotation = {}
+
+    def quotation_value(field, default=None):
+        if field in published_quotation:
+            return published_quotation.get(field)
+        return premium_request.get(field, default)
+
+    is_previous_payment_complete = (
+        payment_status == "paid"
+        or quotation_status == "converted"
+        or request_status == "converted"
+    )
+    company_is_due_for_renewal = (
+        safe_str(company.get("status")).lower() == "expired"
+        or safe_str(company.get("subscription_status")).lower() == "expired"
+        or company.get("requires_payment") is True
+    )
+
+    if is_previous_payment_complete and not company_is_due_for_renewal:
+        raise BillingServiceError(
+            "This Premium quotation has already been paid. Renewal payment becomes available when the current Premium term expires.",
+            409,
+            "premium_quotation_already_paid",
+        )
+
+    # Quotation validity applies to the first activation. A converted Premium
+    # quotation remains the recurring custom-quote source for future renewals.
+    quotation_valid_until = parse_datetime(
+        quotation_value("quotation_valid_until")
+    )
+
+    if (
+        not is_previous_payment_complete
+        and quotation_valid_until
+        and quotation_valid_until < now_utc()
+    ):
+        raise BillingServiceError(
+            "This Premium quotation has expired. Please request a revised quotation from Superadmin/Sales.",
+            409,
+            "premium_quotation_expired",
+        )
+
+    amount = safe_float(
+        quotation_value("renewal_amount")
+        or quotation_value("payment_amount")
+        or quotation_value("quoted_amount"),
+        0.0,
+    )
+
+    if amount <= 0:
+        raise BillingServiceError(
+            "Premium quotation amount is not set yet. Please wait for Superadmin/Sales to send the quotation.",
+            400,
+            "premium_quote_amount_required",
+        )
+
+    interval = normalize_billing_interval(
+        quotation_value("quoted_billing_interval")
+        or quotation_value("billing_interval")
+        or company.get("premium_billing_interval")
+        or "monthly"
+    )
+
+    employee_limit = quotation_value(
+        "quoted_employee_limit"
+    )
+    is_unlimited = is_unlimited_employee_limit(
+        employee_limit
+    )
+
+    return premium_request, {
+        "plan_code": "premium",
+        "plan_name": "Premium",
+        "plan_label": "Premium Custom",
+        "billing_interval": interval,
+        "plan_interval": interval,
+        "amount": amount,
+        "currency": (
+            quotation_value("quoted_currency")
+            or get_config_value(
+                "RAZORPAY_CURRENCY",
+                "INR",
+            )
+        ),
+        "employee_limit": (
+            None if is_unlimited else employee_limit
+        ),
+        "is_unlimited_employees": is_unlimited,
+        "allowed_modules": ["all"],
+        "premium_request_id": str(
+            premium_request.get("_id")
+        ),
+        "request_reference": premium_request.get(
+            "request_reference"
+        ),
+        "quotation_reference": (
+            quotation_value("quotation_reference")
+            or premium_request.get("request_reference")
+        ),
+        "payment_link": quotation_value(
+            "payment_link"
+        ),
+        "payment_due_date": quotation_value(
+            "payment_due_date"
+        ),
+        "quotation_valid_until": quotation_value(
+            "quotation_valid_until"
+        ),
+        "payment_source": "premium_custom_quote",
+        "renewal_price_source": "custom_quote",
+    }
+
+
 def find_company_for_billing(db, tenant_id):
     tenant_id = safe_str(tenant_id)
 
@@ -201,101 +441,325 @@ def resolve_selected_pricing_plan(db, plan_code=None):
     return plan, normalized
 
 
-def create_subscription_order(db, tenant_id, requested_by=None, amount=None, plan_code=None):
+def create_subscription_order(
+    db,
+    tenant_id,
+    requested_by=None,
+    amount=None,
+    plan_code=None,
+    premium_request_id=None,
+):
     """
-    Creates a Razorpay order for a selected dynamic pricing plan and stores
-    a local payment order record. Frontend will use the returned checkout
-    object to open Razorpay Checkout.
+    Creates a Razorpay order for a selected dynamic pricing plan
+    and stores a local payment-order record.
+
+    Essential and Growth always use the latest price configured by
+    Superadmin. Premium always uses its custom quotation amount.
+    Browser-supplied amounts are intentionally ignored.
     """
 
-    company = find_company_for_billing(db, tenant_id)
+    company = find_company_for_billing(
+        db,
+        tenant_id,
+    )
     ensure_company_can_pay(company)
 
-    plan, subscription_plan = resolve_selected_pricing_plan(db, plan_code=plan_code)
+    requested_plan_code = safe_str(
+        plan_code
+    ).lower()
 
-    # Amount override is kept only for Superadmin/internal flexibility.
-    # Normal frontend payments should use the dynamic pricing plan amount.
-    plan_amount = safe_float(amount if amount is not None else subscription_plan.get("amount"), 0.0)
+    premium_request = None
+
+    if requested_plan_code == "premium":
+        plan = {
+            "plan_code": "premium",
+            "display_name": "Premium",
+            "is_custom_pricing": True,
+        }
+
+        premium_request, subscription_plan = (
+            resolve_premium_quotation_for_payment(
+                db,
+                company,
+                premium_request_id=premium_request_id,
+            )
+        )
+
+        plan_amount = safe_float(
+            subscription_plan.get("amount"),
+            0.0,
+        )
+    else:
+        plan, subscription_plan = (
+            resolve_selected_pricing_plan(
+                db,
+                plan_code=plan_code,
+            )
+        )
+
+        # Always use the latest Superadmin-managed plan price.
+        # Never trust an amount submitted by the frontend.
+        plan_amount = safe_float(
+            subscription_plan.get("amount"),
+            0.0,
+        )
 
     if plan_amount <= 0:
         raise BillingServiceError(
-            "Selected plan cannot be paid online. Please contact Superadmin for custom pricing.",
+            "Selected plan cannot be paid online. Please contact Superadmin/Sales for pricing.",
             400,
             "custom_plan_requires_superadmin",
         )
 
-    plan_name = safe_str(subscription_plan.get("plan_name") or plan.get("display_name")) or "Full HRMS"
-    plan_code = safe_str(subscription_plan.get("plan_code") or plan.get("plan_code"))
-    plan_interval = safe_str(subscription_plan.get("billing_interval") or "monthly") or "monthly"
-    employee_limit = subscription_plan.get("employee_limit")
-    is_unlimited_employees = bool(subscription_plan.get("is_unlimited_employees"))
+    plan_name = safe_str(
+        subscription_plan.get("plan_name")
+        or plan.get("display_name")
+    ) or "Full HRMS"
+
+    selected_plan_code = safe_str(
+        subscription_plan.get("plan_code")
+        or plan.get("plan_code")
+    )
+
+    plan_interval = normalize_billing_interval(
+        subscription_plan.get("billing_interval")
+        or "monthly"
+    )
+
+    employee_limit = subscription_plan.get(
+        "employee_limit"
+    )
+
+    is_unlimited_employees = (
+        bool(
+            subscription_plan.get(
+                "is_unlimited_employees"
+            )
+        )
+        or is_unlimited_employee_limit(
+            employee_limit
+        )
+    )
 
     order_data = create_razorpay_order(
         company,
         amount=plan_amount,
         notes={
             "requested_by": safe_str(requested_by),
-            "tenant_id": safe_str(company.get("tenant_id")),
-            "plan_code": plan_code,
+            "tenant_id": safe_str(
+                company.get("tenant_id")
+            ),
+            "plan_code": selected_plan_code,
             "plan_name": plan_name,
             "plan_interval": plan_interval,
-            "employee_limit": "unlimited" if is_unlimited_employees else str(employee_limit or ""),
+            "employee_limit": (
+                "unlimited"
+                if is_unlimited_employees
+                else str(employee_limit or "")
+            ),
+            "premium_request_id": (
+                subscription_plan.get(
+                    "premium_request_id",
+                    "",
+                )
+            ),
+            "quotation_reference": (
+                subscription_plan.get(
+                    "quotation_reference",
+                    "",
+                )
+            ),
+            "payment_source": (
+                subscription_plan.get(
+                    "payment_source",
+                    "dynamic_plan_price",
+                )
+            ),
+            "renewal_price_source": (
+                subscription_plan.get(
+                    "renewal_price_source",
+                    "dynamic_plan_price",
+                )
+            ),
         },
     )
 
-    razorpay_order = order_data.get("razorpay_order") or {}
+    razorpay_order = (
+        order_data.get("razorpay_order")
+        or {}
+    )
     checkout = order_data.get("checkout") or {}
+
     checkout.update({
-        "description": f"YourComate HRMS {plan_name} Subscription",
-        "plan_code": plan_code,
+        "description": (
+            f"YourComate HRMS {plan_name} Subscription"
+        ),
+        "plan_code": selected_plan_code,
         "plan_name": plan_name,
-        "plan_label": subscription_plan.get("plan_label") or plan_name,
+        "plan_label": (
+            subscription_plan.get("plan_label")
+            or plan_name
+        ),
         "plan_interval": plan_interval,
         "employee_limit": employee_limit,
-        "is_unlimited_employees": is_unlimited_employees,
+        "is_unlimited_employees": (
+            is_unlimited_employees
+        ),
         "plan_amount": plan_amount,
+        "premium_request_id": (
+            subscription_plan.get(
+                "premium_request_id"
+            )
+        ),
+        "quotation_reference": (
+            subscription_plan.get(
+                "quotation_reference"
+            )
+        ),
+        "payment_source": (
+            subscription_plan.get(
+                "payment_source",
+                "dynamic_plan_price",
+            )
+        ),
+        "renewal_price_source": (
+            subscription_plan.get(
+                "renewal_price_source",
+                "dynamic_plan_price",
+            )
+        ),
     })
 
     created_at = now_utc()
 
     order_doc = {
-        "tenant_id": safe_str(company.get("tenant_id")),
-        "company_name": get_company_name(company),
-        "company_email": get_company_contact_email(company),
-        "plan_code": plan_code,
+        "tenant_id": safe_str(
+            company.get("tenant_id")
+        ),
+        "company_name": get_company_name(
+            company
+        ),
+        "company_email": get_company_contact_email(
+            company
+        ),
+        "plan_code": selected_plan_code,
         "plan_name": plan_name,
-        "plan_label": subscription_plan.get("plan_label") or plan_name,
+        "plan_label": (
+            subscription_plan.get("plan_label")
+            or plan_name
+        ),
         "plan_type": "paid",
         "plan_interval": plan_interval,
         "billing_interval": plan_interval,
         "employee_limit": employee_limit,
-        "is_unlimited_employees": is_unlimited_employees,
+        "is_unlimited_employees": (
+            is_unlimited_employees
+        ),
         "allowed_modules": ["all"],
+        "premium_request_id": (
+            subscription_plan.get(
+                "premium_request_id"
+            )
+        ),
+        "request_reference": (
+            subscription_plan.get(
+                "request_reference"
+            )
+        ),
+        "quotation_reference": (
+            subscription_plan.get(
+                "quotation_reference"
+            )
+        ),
+        "payment_source": (
+            subscription_plan.get(
+                "payment_source",
+                "dynamic_plan_price",
+            )
+        ),
+        "renewal_price_source": (
+            subscription_plan.get(
+                "renewal_price_source",
+                "dynamic_plan_price",
+            )
+        ),
+        "payment_due_date": (
+            subscription_plan.get(
+                "payment_due_date"
+            )
+        ),
+        "quotation_valid_until": (
+            subscription_plan.get(
+                "quotation_valid_until"
+            )
+        ),
         "amount": plan_amount,
-        "amount_paise": int(checkout.get("amount") or 0),
-        "currency": checkout.get("currency") or subscription_plan.get("currency") or get_config_value("RAZORPAY_CURRENCY", "INR"),
-        "razorpay_order_id": razorpay_order.get("id"),
+        "amount_paise": int(
+            checkout.get("amount") or 0
+        ),
+        "currency": (
+            checkout.get("currency")
+            or subscription_plan.get("currency")
+            or get_config_value(
+                "RAZORPAY_CURRENCY",
+                "INR",
+            )
+        ),
+        "razorpay_order_id": (
+            razorpay_order.get("id")
+        ),
         "razorpay_order": razorpay_order,
         "pricing_plan_snapshot": plan,
         "status": "created",
-        "requested_by": safe_str(requested_by),
+        "requested_by": safe_str(
+            requested_by
+        ),
         "created_at": created_at,
         "updated_at": created_at,
         "is_deleted": False,
     }
 
-    result = db.payment_orders.insert_one(order_doc)
+    result = db.payment_orders.insert_one(
+        order_doc
+    )
     order_doc["_id"] = result.inserted_id
 
+    if premium_request:
+        db.premium_plan_requests.update_one(
+            {
+                "_id": premium_request["_id"],
+            },
+            {
+                "$set": {
+                    "payment_status": "order_created",
+                    "payment_order_id": str(
+                        result.inserted_id
+                    ),
+                    "razorpay_order_id": (
+                        order_doc.get(
+                            "razorpay_order_id"
+                        )
+                    ),
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+
     return {
-        "order_id": str(result.inserted_id),
-        "razorpay_order_id": order_doc["razorpay_order_id"],
+        "order_id": str(
+            result.inserted_id
+        ),
+        "razorpay_order_id": (
+            order_doc["razorpay_order_id"]
+        ),
         "plan": plan,
         "selected_plan": subscription_plan,
         "checkout": checkout,
-        "billing": build_billing_summary(db, company),
+        "billing": build_billing_summary(
+            db,
+            company,
+        ),
     }
-
 
 def find_payment_order(db, razorpay_order_id=None, order_id=None, tenant_id=None):
     query = {"is_deleted": {"$ne": True}}
@@ -324,7 +788,11 @@ def build_paid_subscription_document(company, payment_record, start_date=None):
     plan_interval = payment_record.get("plan_interval") or payment_record.get("billing_interval") or safe_str(get_config_value("SAAS_FULL_PLAN_INTERVAL", "monthly"))
     end_date = add_subscription_interval(start_date, plan_interval)
     employee_limit = payment_record.get("employee_limit")
-    is_unlimited_employees = bool(payment_record.get("is_unlimited_employees")) or employee_limit in [None, "", "unlimited", "Unlimited"]
+    is_unlimited_employees = bool(payment_record.get("is_unlimited_employees")) or is_unlimited_employee_limit(employee_limit)
+    renewal_amount = safe_float(payment_record.get("renewal_amount") or payment_record.get("amount"), 0.0)
+    renewal_price_source = payment_record.get("renewal_price_source") or (
+        "custom_quote" if plan_code == "premium" else "dynamic_plan_price"
+    )
 
     return {
         "tenant_id": safe_str(company.get("tenant_id")),
@@ -339,6 +807,14 @@ def build_paid_subscription_document(company, payment_record, start_date=None):
         "status": "active",
         "amount": safe_float(payment_record.get("amount"), 0.0),
         "currency": payment_record.get("currency") or safe_str(get_config_value("RAZORPAY_CURRENCY", "INR")),
+        "renewal_amount": renewal_amount,
+        "renewal_price_source": renewal_price_source,
+        "next_due_date": end_date,
+        "payment_due_date": end_date,
+        "premium_request_id": payment_record.get("premium_request_id"),
+        "request_reference": payment_record.get("request_reference"),
+        "quotation_reference": payment_record.get("quotation_reference"),
+        "payment_source": payment_record.get("payment_source") or renewal_price_source,
         "employee_limit": None if is_unlimited_employees else employee_limit,
         "is_unlimited_employees": is_unlimited_employees,
         "allowed_modules": ["all"],
@@ -392,6 +868,11 @@ def activate_paid_subscription(db, company, payment_record):
             "trial_status": "converted",
             "subscription_start_date": subscription_doc["started_at"],
             "subscription_end_date": subscription_doc["ends_at"],
+            "next_payment_due_date": subscription_doc.get("next_due_date"),
+            "payment_due_date": subscription_doc.get("payment_due_date"),
+            "renewal_amount": subscription_doc.get("renewal_amount"),
+            "renewal_price_source": subscription_doc.get("renewal_price_source"),
+            "payment_source": subscription_doc.get("payment_source"),
             "employee_limit": subscription_doc.get("employee_limit"),
             "is_unlimited_employees": subscription_doc.get("is_unlimited_employees"),
             "billing_interval": subscription_doc.get("billing_interval") or subscription_doc.get("plan_interval"),
@@ -401,6 +882,12 @@ def activate_paid_subscription(db, company, payment_record):
             "is_paid_company": True,
             "last_payment_id": safe_str(payment_record.get("_id")),
             "last_subscription_id": str(subscription_result.inserted_id),
+            "premium_request_id": payment_record.get("premium_request_id") if subscription_doc.get("plan_code") == "premium" else company.get("premium_request_id"),
+            "premium_quote_status": "paid" if subscription_doc.get("plan_code") == "premium" else company.get("premium_quote_status"),
+            "premium_payment_status": "paid" if subscription_doc.get("plan_code") == "premium" else company.get("premium_payment_status"),
+            "premium_billing_interval": subscription_doc.get("billing_interval") if subscription_doc.get("plan_code") == "premium" else company.get("premium_billing_interval"),
+            "premium_renewal_amount": subscription_doc.get("renewal_amount") if subscription_doc.get("plan_code") == "premium" else company.get("premium_renewal_amount"),
+            "premium_next_due_date": subscription_doc.get("next_due_date") if subscription_doc.get("plan_code") == "premium" else company.get("premium_next_due_date"),
             "updated_at": now_utc(),
         }
     }
@@ -494,6 +981,15 @@ def verify_and_activate_payment(db, tenant_id, payload):
     payment_record["billing_interval"] = order_doc.get("billing_interval") or payment_record["plan_interval"]
     payment_record["employee_limit"] = order_doc.get("employee_limit")
     payment_record["is_unlimited_employees"] = bool(order_doc.get("is_unlimited_employees"))
+    payment_record["premium_request_id"] = order_doc.get("premium_request_id")
+    payment_record["request_reference"] = order_doc.get("request_reference")
+    payment_record["quotation_reference"] = order_doc.get("quotation_reference")
+    payment_record["payment_source"] = order_doc.get("payment_source") or "dynamic_plan_price"
+    payment_record["renewal_price_source"] = order_doc.get("renewal_price_source") or (
+        "custom_quote" if payment_record["plan_code"] == "premium" else "dynamic_plan_price"
+    )
+    payment_record["renewal_amount"] = order_doc.get("amount") or payment_record.get("amount")
+    payment_record["payment_due_date"] = order_doc.get("payment_due_date")
 
     payment_result = db.payments.insert_one(payment_record)
     payment_record["_id"] = payment_result.inserted_id
@@ -513,6 +1009,39 @@ def verify_and_activate_payment(db, tenant_id, payload):
 
     activation = activate_paid_subscription(db, company, payment_record)
 
+    if payment_record.get("plan_code") == "premium" and payment_record.get("premium_request_id"):
+        premium_object_id = as_object_id(payment_record.get("premium_request_id"))
+        premium_query = {"_id": premium_object_id} if premium_object_id else {"_id": payment_record.get("premium_request_id")}
+        premium_update = {
+            "$set": {
+                "status": "converted",
+                "payment_status": "paid",
+                "quotation_status": "converted",
+                "paid_at": now_utc(),
+                "payment_id": str(payment_result.inserted_id),
+                "razorpay_payment_id": razorpay_payment_id,
+                "razorpay_order_id": razorpay_order_id,
+                "subscription_id": activation.get("subscription_id"),
+                "next_due_date": activation.get("subscription", {}).get("next_due_date"),
+                "renewal_amount": payment_record.get("renewal_amount") or payment_record.get("amount"),
+                "updated_at": now_utc(),
+            },
+            "$push": {
+                "payment_history": {
+                    "payment_id": str(payment_result.inserted_id),
+                    "razorpay_payment_id": razorpay_payment_id,
+                    "razorpay_order_id": razorpay_order_id,
+                    "amount": payment_record.get("amount"),
+                    "currency": payment_record.get("currency"),
+                    "billing_interval": payment_record.get("billing_interval"),
+                    "paid_at": now_utc(),
+                    "next_due_date": activation.get("subscription", {}).get("next_due_date"),
+                    "status": "paid",
+                }
+            },
+        }
+        db.premium_plan_requests.update_one(premium_query, premium_update)
+
     company_email = get_company_contact_email(company)
     company_name = get_company_name(company)
     plan_name = (
@@ -530,15 +1059,28 @@ def verify_and_activate_payment(db, tenant_id, payload):
         employee_limit = "Unlimited"
 
     try:
-        send_payment_success_email(
-            current_app.config,
-            company_email,
-            company_name,
-            plan_name=plan_name,
-            amount=amount,
-            currency=currency,
-            employee_limit=employee_limit,
-        )
+        if payment_record.get("plan_code") == "premium":
+            send_premium_activation_email(
+                current_app.config,
+                company_email,
+                company_name,
+                amount=amount,
+                currency=currency,
+                billing_interval=payment_record.get("billing_interval") or payment_record.get("plan_interval") or "monthly",
+                employee_limit=employee_limit,
+                next_due_date=activation.get("subscription", {}).get("next_due_date"),
+                billing_url=safe_str(get_config_value("FRONTEND_BASE_URL", "")) or safe_str(get_config_value("BILLING_PAGE_PATH", "/billing")),
+            )
+        else:
+            send_payment_success_email(
+                current_app.config,
+                company_email,
+                company_name,
+                plan_name=plan_name,
+                amount=amount,
+                currency=currency,
+                employee_limit=employee_limit,
+            )
     except Exception:
         # Payment activation must not fail because email delivery failed.
         pass
@@ -566,9 +1108,17 @@ def build_billing_summary(db, company):
     default_plan = get_default_paid_plan(db)
 
     requires_payment = not (
-        is_sds_tenant(company, current_app.config)
-        or is_lifetime_tenant(company, current_app.config)
-        or is_paid_tenant(company)
+        is_sds_tenant(
+            company,
+            current_app.config,
+        )
+        or is_lifetime_tenant(
+            company,
+            current_app.config,
+        )
+    ) and (
+        not is_paid_tenant(company)
+        or bool(summary.get("is_expired"))
     )
 
     if default_plan:
