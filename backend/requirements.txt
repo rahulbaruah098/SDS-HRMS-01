@@ -90,6 +90,8 @@ urllib3==2.7.0
 
 websockets==16.0
 
+WeasyPrint==69.0
+
 Werkzeug==3.0.3
 
 google-genai

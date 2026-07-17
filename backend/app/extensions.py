@@ -353,6 +353,285 @@ def ensure_indexes(database):
         ],
     )
     
+        # Payroll configuration and processing indexes
+
+    # Employee salary structures:
+    # - one revision number per employee
+    # - efficient effective-date and revision-history lookups
+    create_index_safe(
+        database.salary_structures,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("version", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "employee_id": {"$exists": True},
+            "version": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.salary_structures,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("status", ASCENDING),
+            ("effective_from", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.salary_structures,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("is_deleted", ASCENDING),
+            ("version", ASCENDING),
+        ],
+    )
+
+    # State-wise statutory configuration:
+    # - one revision number per state and tenant
+    # - efficient active-rule resolution by effective date
+    create_index_safe(
+        database.statutory_configs,
+        [
+            ("tenant_id", ASCENDING),
+            ("state_code", ASCENDING),
+            ("version", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "state_code": {"$exists": True},
+            "version": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.statutory_configs,
+        [
+            ("tenant_id", ASCENDING),
+            ("state_code", ASCENDING),
+            ("status", ASCENDING),
+            ("effective_from", ASCENDING),
+        ],
+    )
+
+    # Payroll attendance summaries:
+    # one summary per employee for each payroll period
+    create_index_safe(
+        database.attendance_summaries,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "employee_id": {"$exists": True},
+            "period_key": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.attendance_summaries,
+        [
+            ("tenant_id", ASCENDING),
+            ("period_key", ASCENDING),
+            ("sync_status", ASCENDING),
+        ],
+    )
+
+    # Monthly payroll runs:
+    # one authoritative payroll run per tenant and payroll period
+    create_index_safe(
+        database.payroll_runs,
+        [
+            ("tenant_id", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "period_key": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.payroll_runs,
+        [
+            ("tenant_id", ASCENDING),
+            ("status", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+    )
+
+    # Employee payslips:
+    # one payslip per employee inside a payroll run
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("run_id", ASCENDING),
+            ("employee_id", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "run_id": {"$exists": True},
+            "employee_id": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("period_key", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("run_id", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    # Loans and salary advances
+    create_index_safe(
+        database.loans_advances,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    # Payroll loan and advance recovery lookups:
+    # - employee-wise active recovery resolution
+    # - payroll-period eligibility resolution
+    # - employee-code fallback resolution
+    # - immutable payslip reference lookup for locked/disbursed payroll
+    create_index_safe(
+        database.loans_advances,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("status", ASCENDING),
+            ("recovery_start_period", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.loans_advances,
+        [
+            ("tenant_id", ASCENDING),
+            ("status", ASCENDING),
+            ("recovery_start_period", ASCENDING),
+            ("recovery_end_period", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.loans_advances,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_code", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("advance_details.reference_id", ASCENDING),
+            ("status", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+    )
+
+    # Payroll reimbursement workflow and payroll-inclusion lookups:
+    # - employee claim history and status filtering
+    # - HR/Finance workflow queues
+    # - employee/payroll-period eligibility resolution
+    # - payroll-run reservation and payment completion
+    # - immutable payslip reimbursement reference lookup
+    create_index_safe(
+        database.payroll_reimbursements,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_reimbursements,
+        [
+            ("tenant_id", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_reimbursements,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("payment_mode", ASCENDING),
+            ("payroll_period", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_reimbursements,
+        [
+            ("tenant_id", ASCENDING),
+            ("scheduled_run_id", ASCENDING),
+            ("scheduled_period", ASCENDING),
+            ("status", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("reimbursement_details.reference_id", ASCENDING),
+            ("status", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+    )
+
+    # Employee bank details:
+    # one active bank-detail record per employee
+    create_index_safe(
+        database.bank_details,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "employee_id": {"$exists": True},
+        },
+    )
     
     # Master data duplicate safety
     create_index_safe(

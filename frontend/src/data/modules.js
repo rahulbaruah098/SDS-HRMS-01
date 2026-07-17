@@ -196,6 +196,12 @@ export const FINANCE_ROLES = [
   'accounts_finance',
 ];
 
+export const PAYROLL_CONFIG_ROLES = ADMIN_HR_FINANCE_ROLES;
+
+export const PAYROLL_LOAN_ROLES = ALL_COMMON_ROLES;
+
+export const PAYROLL_REIMBURSEMENT_ROLES = ALL_COMMON_ROLES;
+
 export const ATTENDANCE_ROLES = EMPLOYEE_PORTAL_ROLES;
 
 export const ATTENDANCE_MANAGER_ROLES = [
@@ -663,6 +669,31 @@ export const coreModules = [
   'Attendance, field attendance, holiday work approvals, comp-off credits, comp-off claims, expired comp-off, leave, project and audit reports.',
   REPORT_ROLES,
 ],
+
+[
+  'payroll_configuration',
+  'Payroll Configuration',
+  Settings,
+  'Configure salary structures, statutory rules, PF, PT, ESI, TDS, LWP calculation and revision history.',
+  PAYROLL_CONFIG_ROLES,
+],
+
+  [
+    'loans_advances',
+    'Loans & Advances',
+    Wallet,
+    'Manage employee loan and advance requests, approvals, disbursements, EMI schedules and payroll recovery balances.',
+    PAYROLL_LOAN_ROLES,
+  ],
+
+  [
+    'reimbursements',
+    'Reimbursements',
+    Receipt,
+    'Manage employee expense claims, receipts, HR review, Finance approval, tax treatment, payroll scheduling and payment status.',
+    PAYROLL_REIMBURSEMENT_ROLES,
+  ],
+
   [
     'payroll_runs',
     'Payroll Runs',

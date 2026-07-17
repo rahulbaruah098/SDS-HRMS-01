@@ -33,6 +33,10 @@ import States from './pages/States';
 import Profile from './pages/Profile';
 import PasswordRequests from './pages/PasswordRequests';
 import Reports from './pages/Reports';
+import Payroll from './pages/Payroll.jsx';
+import PayrollConfiguration from './pages/PayrollConfiguration.jsx';
+import LoansAdvances from './pages/LoansAdvances.jsx';
+import Reimbursements from './pages/Reimbursements.jsx';
 import Leave from './pages/Leave';
 import ApplyLeave from './pages/ApplyLeave';
 import Projects from './pages/Projects';
@@ -67,6 +71,46 @@ const EMPLOYEE_CAPABILITY_ROLES = [
   'ro',
   'team_leader',
   'reporting_officer',
+];
+
+const PAYROLL_CONFIG_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+];
+
+const PAYROLL_LOAN_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
+];
+
+const PAYROLL_REIMBURSEMENT_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
 ];
 
 const PAGE_ALIASES = {
@@ -397,6 +441,45 @@ const PAGE_ALIASES = {
 
   report: 'reports',
   reports: 'reports',
+
+  payroll_configuration: 'payroll_configuration',
+  payroll_config: 'payroll_configuration',
+  payroll_settings: 'payroll_configuration',
+  salary_structure_management: 'payroll_configuration',
+  salary_structures: 'payroll_configuration',
+  statutory_configuration: 'payroll_configuration',
+  statutory_config: 'payroll_configuration',
+
+  'payroll-configuration': 'payroll_configuration',
+  'payroll-config': 'payroll_configuration',
+  'payroll-settings': 'payroll_configuration',
+  'salary-structure-management': 'payroll_configuration',
+  'salary-structures': 'payroll_configuration',
+  'statutory-configuration': 'payroll_configuration',
+  'statutory-config': 'payroll_configuration',
+
+  loans_advances: 'loans_advances',
+  loan_advances: 'loans_advances',
+  loans: 'loans_advances',
+  advances: 'loans_advances',
+  payroll_loans: 'loans_advances',
+  payroll_advances: 'loans_advances',
+
+  'loans-advances': 'loans_advances',
+  'loan-advances': 'loans_advances',
+  'payroll-loans': 'loans_advances',
+  'payroll-advances': 'loans_advances',
+
+  reimbursements: 'reimbursements',
+  reimbursement: 'reimbursements',
+  claims: 'reimbursements',
+  employee_claims: 'reimbursements',
+  expense_claims: 'reimbursements',
+  payroll_reimbursements: 'reimbursements',
+
+  'employee-claims': 'reimbursements',
+  'expense-claims': 'reimbursements',
+  'payroll-reimbursements': 'reimbursements',
 
   profile: 'profile',
   my_profile: 'profile',
@@ -756,6 +839,36 @@ function PageRouter({ page, user, setPage }) {
     return <PremiumRequests setPage={setPage} user={safeUser} />;
   }
 
+  if (normalizedPage === 'payroll_configuration') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_CONFIG_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <PayrollConfiguration setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'loans_advances') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_LOAN_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <LoansAdvances setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'reimbursements') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_REIMBURSEMENT_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <Reimbursements setPage={setPage} user={safeUser} />;
+  }
+
   if (!canAccessModule(safeUser, normalizedPage)) {
     return <UnauthorizedPage setPage={setPage} />;
   }
@@ -842,6 +955,10 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'reports') {
     return <Reports setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'payroll_runs') {
+    return <Payroll setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'notifications') {
@@ -1156,6 +1273,36 @@ export default function App() {
       const userRoles = normalizeRoles(normalizedUser);
 
       if (!userRoles.includes('super_admin')) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'payroll_configuration') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_CONFIG_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'loans_advances') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_LOAN_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'reimbursements') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_REIMBURSEMENT_ROLES)) {
         setPage('dashboard');
       }
 

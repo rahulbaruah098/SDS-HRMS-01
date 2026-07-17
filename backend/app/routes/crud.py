@@ -65,13 +65,19 @@ WRITE_ALLOWED_COLLECTIONS = {
     "projects",
     "leave_balances",
     "holiday_calendar",
-    "payroll_runs",
-    "payslips",
     "expenses",
     "job_openings",
     "candidates",
     "trainings",
     "notifications",
+}
+
+# Payroll financial records are readable through the generic collection routes,
+# but every write must go through the dedicated payroll service. This prevents
+# bypassing calculation validation, staged approvals, locking, and audit history.
+PAYROLL_WORKFLOW_MANAGED_COLLECTIONS = {
+    "payroll_runs",
+    "payslips",
 }
 
 
@@ -1504,6 +1510,33 @@ def can_write_collection(collection):
         return True
 
     return False
+
+
+def payroll_workflow_write_denied(collection, operation):
+    """Reject generic writes that would bypass the payroll workflow."""
+    if collection not in PAYROLL_WORKFLOW_MANAGED_COLLECTIONS:
+        return None
+
+    operation_label = {
+        "create": "create",
+        "update": "update",
+        "delete": "delete",
+    }.get(operation, "modify")
+
+    return jsonify({
+        "message": (
+            f"Direct {operation_label} access to '{collection}' is disabled. "
+            "Payroll runs and payslips must be changed only through the dedicated "
+            "payroll calculation and approval workflow."
+        ),
+        "code": "payroll_workflow_managed_collection",
+        "collection": collection,
+        "operation": operation,
+        "allowed_endpoints": [
+            "POST /api/v1/payroll/calculate",
+            "POST /api/v1/payroll/run/approve",
+        ],
+    }), 405
 
 
 def payload_keys_without_ids(data):
@@ -3519,6 +3552,11 @@ def create_collection_item(collection):
             "message": f"Collection '{collection}' is not available"
         }), 404
 
+    payroll_write_denied = payroll_workflow_write_denied(collection, "create")
+
+    if payroll_write_denied:
+        return payroll_write_denied
+
     if collection == "projects" and not can_create_assign_or_collaborate_projects():
         return jsonify({
             "message": "Only Team Leaders and Reporting Officers can create projects"
@@ -3720,6 +3758,11 @@ def update_collection_item(collection, item_id):
         return jsonify({
             "message": f"Collection '{collection}' is not available"
         }), 404
+
+    payroll_write_denied = payroll_workflow_write_denied(collection, "update")
+
+    if payroll_write_denied:
+        return payroll_write_denied
 
     data = request.get_json(silent=True) or {}
     db = get_db()
@@ -4146,6 +4189,11 @@ def delete_collection_item(collection, item_id):
         return jsonify({
             "message": f"Collection '{collection}' is not available"
         }), 404
+
+    payroll_write_denied = payroll_workflow_write_denied(collection, "delete")
+
+    if payroll_write_denied:
+        return payroll_write_denied
 
     if collection == "leave_balances":
         return jsonify({

@@ -7,6 +7,7 @@ from .extensions import init_db
 from .routes.auth import auth_bp
 from .routes.demo_requests import demo_requests_bp
 from .routes.billing import billing_bp
+from .routes.payroll import payroll_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
 from .routes.workflow import workflow_bp
@@ -129,6 +130,13 @@ def create_app():
     # and expired demo refresh.
     # Keep this early so expired demo companies can still access upgrade/payment APIs.
     app.register_blueprint(billing_bp, url_prefix="/api/v1/billing")
+
+    # Payroll configuration APIs:
+    # employee salary structures, salary revision history, activation,
+    # and tenant/state-wise statutory configuration.
+    # Keep this before workflow and generic CRUD because workflow.py still
+    # contains the existing legacy payroll-run endpoint.
+    app.register_blueprint(payroll_bp, url_prefix="/api/v1/payroll")
 
     # Dashboard APIs:
     # Super Admin, Admin/HR/Finance, and Employee dashboard.
@@ -283,6 +291,7 @@ def create_app():
                 "Comp-Off Credits",
                 "Leave Management",
                 "Leave Balances",
+                "Payroll",
                 "Projects",
                 "Project Progress",
                 "Management Group",
@@ -316,6 +325,7 @@ def create_app():
             "comp_off_claim_window": "Next working day through 7 working days after approved holiday work attendance",
             "leave_module": True,
             "leave_balance_module": True,
+            "payroll_module": True,
             "notification_module": True,
             "project_module": True,
             "project_progress_module": True,
@@ -346,6 +356,8 @@ def create_app():
             "route_order": [
                 "auth",
                 "demo_requests",
+                "billing",
+                "payroll",
                 "dashboard",
                 "attendance",
                 "projects",
