@@ -291,17 +291,6 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("ticket_no", ASCENDING)],
     )
 
-    # Password requests
-    create_index_safe(
-        database.password_requests,
-        [("user_id", ASCENDING), ("status", ASCENDING)],
-    )
-
-    create_index_safe(
-        database.password_requests,
-        [("created_at", ASCENDING)],
-    )
-
         # Policies
     create_index_safe(
         database.policies,
@@ -871,7 +860,6 @@ def ensure_indexes(database):
         "documents",
         "system_settings",
         "audit_logs",
-        "password_requests",
     ]
 
     for collection_name in indexed_collections:

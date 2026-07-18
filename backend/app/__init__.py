@@ -19,7 +19,6 @@ from .routes.celebrations import celebrations_bp
 from .routes.crud import crud_bp
 from .routes.reports import reports_bp
 from .routes.superadmin import superadmin_bp
-from .routes.password_requests import password_requests_bp
 from .routes.profile_photos import profile_photos_bp
 from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
@@ -249,10 +248,6 @@ def create_app():
     # employee capability mapping and password reset.
     app.register_blueprint(superadmin_bp, url_prefix="/api/v1/superadmin")
 
-    # Password request APIs:
-    # employee password change request and Super Admin approval flow.
-    app.register_blueprint(password_requests_bp, url_prefix="/api/v1")
-
     @app.get("/")
     def root():
         return jsonify({
@@ -373,7 +368,6 @@ def create_app():
                 "crud",
                 "reports",
                 "superadmin",
-                "password_requests",
             ],
         })
 

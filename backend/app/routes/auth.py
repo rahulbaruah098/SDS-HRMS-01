@@ -1,5 +1,7 @@
+from datetime import datetime
+
 from flask import Blueprint, request, jsonify, g, current_app
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import get_db
 from app.utils.auth import issue_token, current_user_required, audit
@@ -557,6 +559,88 @@ def login():
         "tenant": tenant_payload["tenant"],
         "subscription": tenant_payload["subscription"],
         "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
+    })
+
+
+@auth_bp.post("/change-password")
+@current_user_required
+def change_password():
+    """Allow any authenticated user to securely change their own password."""
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    current_password = str(data.get("current_password") or "")
+    new_password = str(data.get("new_password") or "")
+    confirm_password = str(data.get("confirm_password") or "")
+
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({
+            "message": (
+                "Current password, new password and confirm password are required"
+            )
+        }), 400
+
+    if new_password != confirm_password:
+        return jsonify({"message": "New password and confirm password do not match"}), 400
+
+    if len(new_password) < 6:
+        return jsonify({
+            "message": "New password must be at least 6 characters"
+        }), 400
+
+    user_id = g.current_user.get("_id")
+
+    user = db.users.find_one({
+        "_id": user_id,
+        "is_active": True,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    stored_password_hash = str(user.get("password_hash") or "")
+
+    if not stored_password_hash or not check_password_hash(
+        stored_password_hash,
+        current_password,
+    ):
+        return jsonify({"message": "Current password is incorrect"}), 400
+
+    if check_password_hash(stored_password_hash, new_password):
+        return jsonify({
+            "message": "New password cannot be the same as current password"
+        }), 400
+
+    now = datetime.utcnow()
+
+    db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": generate_password_hash(new_password),
+                "password_changed_at": now,
+                "password_changed_by": str(user["_id"]),
+                "updated_at": now,
+                "updated_by": str(user["_id"]),
+            }
+        },
+    )
+
+    audit(
+        "change_own_password",
+        "users",
+        user["_id"],
+        {
+            "email": user.get("email", ""),
+            "tenant_id": user.get("tenant_id") or default_tenant_id(),
+        },
+    )
+
+    return jsonify({
+        "message": "Password changed successfully",
+        "password_changed_at": now.isoformat(),
     })
 
 

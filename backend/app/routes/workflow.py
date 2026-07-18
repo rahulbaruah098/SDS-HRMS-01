@@ -4347,7 +4347,6 @@ def application_status():
             },
             "leave_requests": [],
             "attendance_mode_requests": [],
-            "password_requests": [],
             "tickets": [],
             "compoff_claims": [],
             "notifications": [],
@@ -4379,21 +4378,6 @@ def application_status():
         })
         .sort("created_at", -1)
         .limit(100)
-    )
-
-    password_requests = list(
-        db.password_requests
-        .find({
-            "tenant_id": tenant_id,
-            "$or": [
-                {"user_id": user_id},
-                {"employee_id": {"$in": identifier_values}},
-                {"requested_by": user_id},
-            ],
-            "is_deleted": {"$ne": True},
-        })
-        .sort("created_at", -1)
-        .limit(50)
     )
 
     tickets = list(
@@ -4466,16 +4450,6 @@ def application_status():
             "live_status": row.get("live_status"),
         })
 
-    for row in password_requests:
-        status = normalize_status(row.get("status"))
-        all_status_rows.append({
-            "type": "Password Change Request",
-            "title": "Password Change",
-            "date": row.get("created_at"),
-            "status": status,
-            "live_status": "Approved" if status == "approved" else "Rejected / Cancelled" if status == "rejected" else "Pending with Super Admin",
-        })
-
     for row in tickets:
         status = normalize_status(row.get("status"))
         all_status_rows.append({
@@ -4519,7 +4493,6 @@ def application_status():
         "items": clean_doc(all_status_rows),
         "leave_requests": clean_doc(enriched_leaves),
         "attendance_mode_requests": clean_doc(enriched_modes),
-        "password_requests": clean_doc(password_requests),
         "tickets": clean_doc(tickets),
         "compoff_claims": clean_doc(compoff_claims),
         "notifications": clean_doc(notifications),

@@ -31,7 +31,7 @@ import Departments from './pages/Departments';
 import Designations from './pages/Designations';
 import States from './pages/States';
 import Profile from './pages/Profile';
-import PasswordRequests from './pages/PasswordRequests';
+import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports';
 import Payroll from './pages/Payroll.jsx';
 import PayrollConfiguration from './pages/PayrollConfiguration.jsx';
@@ -452,8 +452,10 @@ const PAGE_ALIASES = {
   notification: 'notifications',
   notifications: 'notifications',
 
-  password_request: 'password_requests',
-  password_requests: 'password_requests',
+  // The legacy Superadmin password-request screen has been retired.
+  // Old links now open My Profile, where users can change their own password.
+  password_request: 'profile',
+  password_requests: 'profile',
 
   policy: 'policies',
   policies: 'policies',
@@ -1120,8 +1122,8 @@ function PageRouter({ page, user, setPage }) {
     return <Profile setPage={setPage} user={safeUser} />;
   }
 
-  if (normalizedPage === 'password_requests') {
-    return <PasswordRequests setPage={setPage} user={safeUser} />;
+  if (normalizedPage === 'system_settings') {
+    return <Settings setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'leave') {

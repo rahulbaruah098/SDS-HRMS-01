@@ -9,6 +9,7 @@ import {
   getTeamApprovals,
   getInitials,
   getProfilePhotoUrl,
+  normalizeProfilePhotoUrl,
   normalizePeopleList,
   normalizeTeamHierarchyTree,
   normalizeProjectTeamTree,
@@ -17,6 +18,42 @@ import {
 import AttendanceWidget from '../components/AttendanceWidget';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
+
+function safeBrandingText(value, fallback = '') {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+}
+
+function normalizeTenantBranding(data = {}) {
+  const branding = data.branding || {};
+  const tenant = data.tenant || {};
+  const nestedBranding = tenant.branding || {};
+
+  return {
+    companyName: safeBrandingText(
+      branding.company_name ||
+        branding.name ||
+        tenant.company_name ||
+        tenant.name ||
+        tenant.tenant_name ||
+        nestedBranding.company_name,
+    ),
+    logo: safeBrandingText(
+      branding.company_logo ||
+        branding.company_logo_url ||
+        branding.logo ||
+        branding.logo_url ||
+        tenant.company_logo ||
+        tenant.company_logo_url ||
+        tenant.logo ||
+        tenant.logo_url ||
+        nestedBranding.company_logo ||
+        nestedBranding.company_logo_url ||
+        nestedBranding.logo ||
+        nestedBranding.logo_url,
+    ),
+  };
+}
 
 function formatDate(value) {
   if (!value) return '—';
@@ -1248,6 +1285,11 @@ export default function EmployeeDashboard({ setPage }) {
   const [leaveBalances, setLeaveBalances] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
   const [teamApprovalRequests, setTeamApprovalRequests] = useState([]);
+  const [tenantBranding, setTenantBranding] = useState({
+    companyName: '',
+    logo: '',
+  });
+  const [companyLogoFailed, setCompanyLogoFailed] = useState(false);
 
   const [claimForm, setClaimForm] = useState({
     compoff_id: '',
@@ -1268,6 +1310,7 @@ export default function EmployeeDashboard({ setPage }) {
       const [
         dashboardData,
         authData,
+        brandingData,
         attendanceData,
         requestData,
         compOffData,
@@ -1277,6 +1320,7 @@ export default function EmployeeDashboard({ setPage }) {
       ] = await Promise.all([
         api('/dashboard/employee').catch(() => ({})),
         api('/auth/me').catch(() => ({})),
+        api('/tenant-branding').catch(() => ({})),
         getAttendanceStatus().catch(() => null),
         getMyAttendanceModeRequests().catch(() => ({ items: [] })),
         getMyCompOffs().catch(() => ({ items: [] })),
@@ -1285,6 +1329,8 @@ export default function EmployeeDashboard({ setPage }) {
         getTeamApprovals({ status: 'pending' }).catch(() => ({ items: [] })),
       ]);
       setData(dashboardDataWithAuth(dashboardData, authData));
+      setTenantBranding(normalizeTenantBranding(brandingData));
+      setCompanyLogoFailed(false);
       setAttendanceStatus(attendanceData);
       setModeRequests(requestData?.items || []);
       setCompOffs(compOffData?.items || []);
@@ -1968,11 +2014,140 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
   };
   const profilePhotoUrl = getProfilePhotoUrl(profilePhotoPerson);
 
+  const tenantCompanyName = safeBrandingText(
+    tenantBranding.companyName ||
+      data?.tenant_branding?.company_name ||
+      data?.tenant?.company_name ||
+      data?.tenant?.name ||
+      data?.tenant_name ||
+      data?.company_name ||
+      employeeSummary?.company_name ||
+      employee?.company_name,
+    'Your Company',
+  );
+
+  const tenantCompanyLogo = normalizeProfilePhotoUrl(
+    tenantBranding.logo ||
+      data?.tenant_branding?.company_logo ||
+      data?.tenant_branding?.logo ||
+      data?.tenant?.company_logo ||
+      data?.tenant?.company_logo_url ||
+      data?.tenant?.logo ||
+      data?.tenant?.logo_url ||
+      data?.company_logo ||
+      data?.logo,
+  );
+
+  const tenantCompanyInitials =
+    tenantCompanyName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0))
+      .join('')
+      .toUpperCase() || 'YC';
+
   const todayStatus = statusLabel(todayAttendance?.status || 'Not checked-in');
 
   return (
     <div className="page-grid employee-dashboard-page">
       <style>{`
+        .employee-company-identity {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          width: 100%;
+          margin-bottom: 22px;
+          padding: 15px 17px;
+          border: 1px solid rgba(79, 70, 229, .16);
+          border-radius: 24px;
+          background:
+            radial-gradient(circle at 8% 0%, rgba(255,255,255,.92), transparent 34%),
+            linear-gradient(135deg, rgba(238,242,255,.96), rgba(255,255,255,.98));
+          box-shadow: 0 16px 36px rgba(79, 70, 229, .10);
+        }
+
+        .employee-company-logo-shell {
+          flex: 0 0 auto;
+          width: 78px;
+          height: 78px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          border: 1px solid rgba(79, 70, 229, .18);
+          border-radius: 22px;
+          background: #ffffff;
+          box-shadow: 0 13px 28px rgba(79, 70, 229, .14);
+        }
+
+        .employee-company-logo-shell img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          padding: 8px;
+          background: #ffffff;
+        }
+
+        .employee-company-logo-fallback {
+          color: #4f46e5;
+          font-size: 25px;
+          font-weight: 950;
+          letter-spacing: -.04em;
+        }
+
+        .employee-company-copy {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .employee-company-eyebrow {
+          display: block;
+          margin-bottom: 3px;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .16em;
+          text-transform: uppercase;
+        }
+
+        .employee-company-script {
+          margin: 0;
+          color: #0f172a;
+          font-family: "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive;
+          font-size: clamp(29px, 4vw, 48px);
+          font-weight: 500;
+          line-height: 1.08;
+          letter-spacing: .01em;
+          overflow-wrap: anywhere;
+          text-shadow: 0 9px 24px rgba(79, 70, 229, .11);
+        }
+
+        .employee-company-copy p {
+          margin: 5px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        @media (max-width: 640px) {
+          .employee-company-identity {
+            align-items: flex-start;
+            gap: 12px;
+            padding: 13px;
+            border-radius: 20px;
+          }
+
+          .employee-company-logo-shell {
+            width: 62px;
+            height: 62px;
+            border-radius: 18px;
+          }
+
+          .employee-company-script {
+            font-size: clamp(27px, 9vw, 38px);
+          }
+        }
+
         .emp-project-dashboard,
         .emp-performance-dashboard {
           display: grid;
@@ -2963,6 +3138,28 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
       `}</style>
 
       <section className="hero employee-hero">
+        <div className="employee-company-identity">
+          <div className="employee-company-logo-shell">
+            {tenantCompanyLogo && !companyLogoFailed ? (
+              <img
+                src={tenantCompanyLogo}
+                alt={`${tenantCompanyName} logo`}
+                onError={() => setCompanyLogoFailed(true)}
+              />
+            ) : (
+              <span className="employee-company-logo-fallback">
+                {tenantCompanyInitials}
+              </span>
+            )}
+          </div>
+
+          <div className="employee-company-copy">
+            <span className="employee-company-eyebrow">Company workspace</span>
+            <h2 className="employee-company-script">{tenantCompanyName}</h2>
+            <p>Your organisation identity and employee workspace</p>
+          </div>
+        </div>
+
         <div className="employee-identity">
           <div className="employee-identity-head">
             <div className="employee-profile-avatar">

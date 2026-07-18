@@ -4,12 +4,49 @@ import {
   getInitials,
   getProfilePhotoUrl,
   normalizePeopleList,
+  normalizeProfilePhotoUrl,
   normalizeProjectTeamTree,
 } from '../api/client';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 import AttendanceWidget from '../components/AttendanceWidget';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
+
+function safeBrandingText(value, fallback = '') {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+}
+
+function normalizeTenantBranding(data = {}) {
+  const branding = data.branding || {};
+  const tenant = data.tenant || {};
+  const nestedBranding = tenant.branding || {};
+
+  return {
+    companyName: safeBrandingText(
+      branding.company_name ||
+        branding.name ||
+        tenant.company_name ||
+        tenant.name ||
+        tenant.tenant_name ||
+        nestedBranding.company_name,
+    ),
+    logo: safeBrandingText(
+      branding.company_logo ||
+        branding.company_logo_url ||
+        branding.logo ||
+        branding.logo_url ||
+        tenant.company_logo ||
+        tenant.company_logo_url ||
+        tenant.logo ||
+        tenant.logo_url ||
+        nestedBranding.company_logo ||
+        nestedBranding.company_logo_url ||
+        nestedBranding.logo ||
+        nestedBranding.logo_url,
+    ),
+  };
+}
 
 function formatDate(value) {
   if (!value) return '—';
@@ -585,6 +622,12 @@ export default function AdminDashboard({ setPage }) {
   const [recentNotifications, setRecentNotifications] = useState([]);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationLoading, setNotificationLoading] = useState(false);
+  const [tenantBranding, setTenantBranding] = useState({
+    companyName: '',
+    logo: '',
+  });
+  const [brandingLoading, setBrandingLoading] = useState(false);
+  const [companyLogoFailed, setCompanyLogoFailed] = useState(false);
 
   async function loadDashboard() {
     try {
@@ -617,9 +660,25 @@ export default function AdminDashboard({ setPage }) {
     }
   }
 
+  async function loadTenantBranding({ silent = false } = {}) {
+    try {
+      if (!silent) {
+        setBrandingLoading(true);
+      }
+
+      const brandingData = await api('/tenant-branding');
+      setTenantBranding(normalizeTenantBranding(brandingData));
+    } catch (error) {
+      console.error('Unable to load tenant branding:', error);
+    } finally {
+      setBrandingLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadDashboard();
     loadDashboardNotifications();
+    loadTenantBranding();
   }, []);
 
   function goTo(page) {
@@ -709,8 +768,45 @@ export default function AdminDashboard({ setPage }) {
       employeeSummary?.department ||
       'Administration';
 
+    const tenantCompanyName = safeBrandingText(
+      tenantBranding.companyName ||
+        data?.tenant_branding?.company_name ||
+        data?.tenant?.company_name ||
+        data?.tenant?.name ||
+        data?.tenant_name ||
+        data?.company_name ||
+        employeeSummary?.company_name,
+      'Your Company',
+    );
+
+    const tenantCompanyLogo = normalizeProfilePhotoUrl(
+      tenantBranding.logo ||
+        data?.tenant_branding?.company_logo ||
+        data?.tenant_branding?.logo ||
+        data?.tenant?.company_logo ||
+        data?.tenant?.company_logo_url ||
+        data?.tenant?.logo ||
+        data?.tenant?.logo_url ||
+        data?.company_logo ||
+        data?.logo,
+    );
+
+    const tenantCompanyInitials =
+      tenantCompanyName
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part.charAt(0))
+        .join('')
+        .toUpperCase() || 'YC';
+
     const myPendingLeaves = data?.my_pending_leave_approvals || [];
   const myPendingModeRequests = data?.my_pending_attendance_mode_requests || [];
+
+  useEffect(() => {
+    setCompanyLogoFailed(false);
+  }, [tenantCompanyLogo]);
+
   const teamScopeCount = data?.team_scope_employee_ids?.length || 0;
   const pendingLeaveRequests = data?.pending?.leave_requests || [];
 
@@ -1065,6 +1161,108 @@ export default function AdminDashboard({ setPage }) {
   return (
     <div className="page-grid admin-dashboard-page">
       <style>{`
+        .admin-company-identity {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          width: min(100%, 760px);
+          margin-bottom: 22px;
+          padding: 16px 18px;
+          border: 1px solid rgba(255,255,255,.62);
+          border-radius: 24px;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.92), rgba(248,250,252,.78));
+          box-shadow:
+            0 18px 44px rgba(15,23,42,.10),
+            inset 0 1px 0 rgba(255,255,255,.85);
+          backdrop-filter: blur(16px);
+        }
+
+        .admin-company-logo-shell {
+          flex: 0 0 auto;
+          width: 86px;
+          height: 86px;
+          border-radius: 24px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          border: 1px solid rgba(79,70,229,.18);
+          background:
+            radial-gradient(circle at 24% 18%, rgba(255,255,255,.96), transparent 36%),
+            linear-gradient(145deg, var(--primarySoft), #fff);
+          box-shadow: 0 16px 34px rgba(79,70,229,.16);
+        }
+
+        .admin-company-logo-shell img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          padding: 9px;
+          background: #fff;
+        }
+
+        .admin-company-logo-fallback {
+          color: var(--primary);
+          font-size: 27px;
+          font-weight: 950;
+          letter-spacing: -.04em;
+        }
+
+        .admin-company-copy {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .admin-company-eyebrow {
+          display: block;
+          margin-bottom: 3px;
+          color: var(--muted);
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .16em;
+          text-transform: uppercase;
+        }
+
+        .admin-company-script {
+          margin: 0;
+          max-width: 100%;
+          color: var(--ink);
+          font-family: "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive;
+          font-size: clamp(30px, 4.2vw, 51px);
+          font-weight: 500;
+          line-height: 1.08;
+          letter-spacing: .01em;
+          overflow-wrap: anywhere;
+          text-shadow: 0 10px 26px rgba(79,70,229,.12);
+        }
+
+        .admin-company-copy p {
+          margin: 5px 0 0;
+          color: var(--muted);
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .admin-company-manage {
+          flex: 0 0 auto;
+          border: 1px solid var(--primaryRing);
+          border-radius: 999px;
+          padding: 10px 14px;
+          background: var(--primarySoft);
+          color: var(--primary);
+          font-weight: 900;
+          white-space: nowrap;
+          cursor: pointer;
+          transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+        }
+
+        .admin-company-manage:hover {
+          transform: translateY(-2px);
+          background: #fff;
+          box-shadow: 0 12px 24px rgba(79,70,229,.14);
+        }
+
         .admin-project-hero {
           position: relative;
           overflow: hidden;
@@ -1918,6 +2116,32 @@ export default function AdminDashboard({ setPage }) {
         }
 
         @media (max-width: 760px) {
+          .admin-company-identity {
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 14px;
+            padding: 14px;
+            border-radius: 20px;
+          }
+
+          .admin-company-logo-shell {
+            width: 70px;
+            height: 70px;
+            border-radius: 19px;
+          }
+
+          .admin-company-copy {
+            width: calc(100% - 88px);
+          }
+
+          .admin-company-script {
+            font-size: clamp(27px, 9vw, 39px);
+          }
+
+          .admin-company-manage {
+            width: 100%;
+          }
+
           .admin-project-hero {
             grid-template-columns: 1fr;
             border-radius: 22px;
@@ -1958,6 +2182,36 @@ export default function AdminDashboard({ setPage }) {
 
         <section className="hero compact">
           <div>
+            <div className="admin-company-identity">
+              <div className="admin-company-logo-shell" aria-hidden="true">
+                {tenantCompanyLogo && !companyLogoFailed ? (
+                  <img
+                    src={tenantCompanyLogo}
+                    alt=""
+                    onError={() => setCompanyLogoFailed(true)}
+                  />
+                ) : (
+                  <span className="admin-company-logo-fallback">
+                    {tenantCompanyInitials}
+                  </span>
+                )}
+              </div>
+
+              <div className="admin-company-copy">
+                <span className="admin-company-eyebrow">Company workspace</span>
+                <h2 className="admin-company-script">{tenantCompanyName}</h2>
+                <p>Tenant-specific identity shown across company dashboards</p>
+              </div>
+
+              <button
+                type="button"
+                className="admin-company-manage"
+                onClick={() => goTo('system_settings')}
+              >
+                Manage Logo
+              </button>
+            </div>
+
             <span className="kicker">Admin Dashboard</span>
 
             <h1>Welcome, {adminDisplayName}</h1>
@@ -2002,8 +2256,17 @@ export default function AdminDashboard({ setPage }) {
               Notifications
             </button>
 
-            <button type="button" className="secondary" onClick={() => { loadDashboard(); loadDashboardNotifications(); }} disabled={loading}>
-              {loading ? 'Refreshing...' : 'Refresh'}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                loadDashboard();
+                loadDashboardNotifications();
+                loadTenantBranding({ silent: true });
+              }}
+              disabled={loading || brandingLoading}
+            >
+              {loading || brandingLoading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>

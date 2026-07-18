@@ -394,6 +394,213 @@ Organisation / Entity mapping workflow:
 """
     },
     {
+        "module": "Payroll",
+        "title": "Complete monthly payroll workflow",
+        "content": """
+Complete monthly payroll workflow in SDS HRMS:
+1. The Payroll module must be enabled for the tenant before any payroll endpoint can be used.
+2. An authorized user creates and activates an effective-dated salary structure for every employee included in payroll.
+3. An authorized user creates and activates the statutory configuration for each employee work-state, including PF, ESI, PT, LWP and TDS-related settings.
+4. Employee bank details are entered and must be verified before the payroll run can be locked.
+5. Attendance is synchronized for the payroll month, or explicit manual attendance is supplied. LWP days are mandatory and are never silently assumed to be zero.
+6. Payroll is calculated for all active employees or a selected employee scope. The calculation uses the active salary revision, active statutory revision, attendance summary, approved reimbursements, eligible loan recoveries and the active payroll tax context.
+7. If any selected employee fails validation, the entire calculation batch fails and nothing is saved.
+8. A successful calculation creates or replaces a Draft payroll run and Draft employee payslips.
+9. The fixed main workflow is Draft -> HR Reviewed -> Finance Approved -> Locked -> Disbursed.
+10. HR Review reserves approved payroll reimbursements and passes the run to Finance.
+11. Finance Approval confirms the run before locking.
+12. Locking rebuilds and validates verified employee bank snapshots. A run cannot be locked when required bank details are missing, inactive, rejected or unverified.
+13. Once locked, employees are notified and their payslips become available.
+14. Finance records disbursement using transfer date, transfer mode and optional transaction or bank-file references.
+15. After disbursement, scheduled loan recoveries and payroll reimbursements are applied. Any recovery/payment failure is retained for an explicit retry without falsely reversing the salary disbursement.
+16. Locked or disbursed payroll is treated as official and cannot be recalculated like a Draft run.
+"""
+    },
+    {
+        "module": "Payroll Roles",
+        "title": "Payroll access and restrictions for every login role",
+        "content": """
+Payroll permissions and restrictions by login role:
+1. Super Admin: Can operate payroll for the selected tenant, access tenant-wide payroll data, configure salary/statutory rules, calculate payroll, perform every main workflow action, manage loans, reimbursements, bank verification, tax, TDS and reports. Cross-tenant access is allowed only through the explicitly selected tenant context.
+2. Tenant Admin: Can work only inside their own tenant. Admin can configure salary/statutory rules, synchronize attendance, calculate payroll and manage tenant-wide payroll submodules. A plain Admin role does not satisfy the action-specific main run approval checks: HR Review requires an HR role and Finance Approval, Lock and Disbursement require a Finance role. An Admin with additional HR or Finance roles receives those corresponding actions.
+3. HR, HR Admin and HR Manager: Can configure salary/statutory rules, synchronize attendance, calculate Draft payroll, perform HR Review, manage employee payroll records, complete reimbursement HR review, review tax declarations and access company-wide payroll reports. They cannot perform Finance Approval, Lock or Disbursement unless they also have a Finance role.
+4. Finance and Accounts Finance: Can configure and calculate payroll, perform Finance Approval, Lock and Disbursement, verify or reject bank details, generate salary bank files, approve/disburse loans, approve or schedule reimbursements, approve/lock tax declarations, manage TDS instructions and access company-wide payroll reports. They cannot perform HR Review unless they also have an HR role.
+5. Employee: Can access only their own employee-linked payroll self-service records, including loan/advance requests, reimbursements, bank details, tax declarations, employee statements and released payslips. Employees cannot configure payroll, calculate payroll, approve runs or view another employee's payroll records.
+6. Team Leader, Reporting Officer, RO and Manager capability roles: Payroll access remains self-service and employee-scoped. A reporting role does not automatically permit viewing or changing a subordinate's salary, bank details, tax declaration, loan, reimbursement, statement or payslip.
+7. Payslip download roles are Super Admin, Admin, HR, HR Admin, HR Manager, Finance, Accounts Finance, Employee, Team Leader and Reporting Officer. Non-privileged users can download only their own payslip and only after it is Locked or Disbursed.
+8. Menu visibility can be narrower than backend role eligibility and also depends on tenant module configuration. No role may bypass tenant isolation or the Payroll-module-enabled check.
+"""
+    },
+    {
+        "module": "Payroll Configuration",
+        "title": "Salary structure and statutory configuration workflow",
+        "content": """
+Payroll Configuration workflow:
+1. Super Admin, Admin, HR Admin, HR Manager, HR, Finance and Accounts Finance can access payroll configuration.
+2. Select the tenant when operating as Super Admin; all other users remain restricted to their own tenant.
+3. Select an employee and create a Draft salary structure containing the required earning and deduction components.
+4. Set an effective-from date and save the Draft. Draft revisions remain editable until activation.
+5. Activate the salary revision. The previous active revision is superseded and the new revision becomes effective from its configured date.
+6. Create a Draft statutory configuration for the employee's state, including PF, ESI, PT, LWP and supported tax settings.
+7. Activate the statutory revision after validation. Previous effective revisions remain in history for auditability.
+8. A new revision must start after the current active revision. Mid-month salary or statutory changes are rejected for a payroll month because one payroll period cannot use two revisions.
+9. Payroll calculation requires an active salary structure and active statutory configuration effective for the selected month.
+10. Historical revisions are retained and should not be edited as if they were the active Draft.
+"""
+    },
+    {
+        "module": "Payroll Attendance",
+        "title": "Attendance synchronization and payroll calculation rules",
+        "content": """
+Payroll attendance and calculation workflow:
+1. Super Admin, Admin, HR Admin, HR Manager, HR, Finance or Accounts Finance selects a payroll month and employee scope.
+2. Attendance can be synchronized from HRMS attendance into monthly attendance summaries, or supplied manually during calculation.
+3. Manual attendance must include explicit LWP days for every selected employee; zero must be entered explicitly when applicable.
+4. The system validates working days, paid leave, LWP and employee mappings before calculation.
+5. Payroll calculation loads the active salary structure, state statutory configuration, attendance summary, effective tax instruction, eligible loan recovery and approved reimbursement data for each employee.
+6. Request-body TDS cannot override the active Finance-controlled TDS instruction.
+7. Approved but not disbursed loans are not deducted. Only eligible disbursed/recovering advances are considered for payroll recovery.
+8. Only approved or scheduled payroll reimbursements for the selected period are included.
+9. Payroll calculation is atomic for the selected batch: if one employee fails, no payroll run or payslip in that batch is saved.
+10. Recalculation is allowed only while the existing run remains Draft and unlocked.
+"""
+    },
+    {
+        "module": "Payroll Runs",
+        "title": "Payroll approval, lock and disbursement restrictions",
+        "content": """
+Main payroll run workflow and action restrictions:
+1. Calculate creates status Draft.
+2. HR Review changes Draft to HR Reviewed. Allowed roles are HR, HR Admin and HR Manager; Super Admin is also allowed. Admin alone is not an HR reviewer.
+3. Finance Approval changes HR Reviewed to Finance Approved. Allowed roles are Finance and Accounts Finance; Super Admin is also allowed.
+4. Lock changes Finance Approved to Locked. This is a Finance action and requires verified bank details for every included employee.
+5. Disburse changes Locked to Disbursed. This is a Finance action and requires a valid transfer date and transfer mode.
+6. Every action must occur in order; skipping or repeating a stage is rejected.
+7. The payroll run and every active payslip must have the same status and expected employee count before a transition can proceed.
+8. Concurrent or partial updates are rejected, and the workflow attempts rollback when run and payslip states would diverge.
+9. A legacy payroll run cannot use this workflow until it is recalculated through the dedicated payroll calculation process.
+10. Locked and Disbursed states preserve immutable payroll, tax, bank, salary and statutory snapshots for audit and payslip generation.
+"""
+    },
+    {
+        "module": "Payroll Banking",
+        "title": "Employee bank details and salary disbursement workflow",
+        "content": """
+Payroll Banking workflow:
+1. Employees and employee-capability roles can add or update only their own bank details.
+2. Super Admin, Admin, HR Admin, HR Manager, HR, Finance and Accounts Finance can view/manage tenant employee bank records according to their management access.
+3. Saving changed bank details clears prior verification so the revised account must be checked again.
+4. Only Super Admin, Admin, Finance and Accounts Finance can verify, reject or deactivate bank details.
+5. A rejected verification must include a reason. Inactive, rejected or unverified bank details cannot be used for final payroll locking.
+6. Immediately before Lock, the system rebuilds bank snapshots from the latest verified revision for every payslip.
+7. If any employee lacks valid verified bank details, the entire Lock action is blocked.
+8. Salary bank-disbursement CSV generation is allowed only after payroll is Locked or Disbursed and only for Super Admin, Admin, Finance or Accounts Finance.
+9. Bank export status and bank references are tracked for audit.
+10. Employees cannot verify their own bank records, generate company bank files or inspect another employee's account details.
+"""
+    },
+    {
+        "module": "Loans & Advances",
+        "title": "Complete payroll loan and advance workflow",
+        "content": """
+Payroll loan and advance workflow:
+1. An employee, Team Leader, Reporting Officer, RO or Manager can create and edit only their own Draft loan/advance request.
+2. Payroll management roles can create or inspect requests for employees in their tenant.
+3. The employee submits the Draft, changing it to Pending Approval.
+4. Only Super Admin, Admin, Finance or Accounts Finance can approve or reject a Pending Approval request.
+5. Approval records approved amount, recovery start period, installment/recovery terms and related controls.
+6. Only Super Admin, Admin, Finance or Accounts Finance can disburse an Approved request.
+7. After disbursement, the advance becomes eligible for payroll recovery and can progress through Disbursed, Recovering and Closed states.
+8. Draft, Pending Approval or Approved requests may be cancelled with a reason, subject to record ownership and role access.
+9. Finance can revise future recovery terms, but cannot rewrite deductions for payroll periods already Locked or Disbursed.
+10. Payroll deduction uses only eligible disbursed/recovering advances; approved-but-not-disbursed requests are never deducted.
+11. Employees cannot view, update or cancel another employee's loan record.
+"""
+    },
+    {
+        "module": "Reimbursements",
+        "title": "Complete payroll reimbursement workflow",
+        "content": """
+Payroll reimbursement workflow:
+1. An employee or employee-capability role creates and edits only their own Draft claim, including category, amount, date, description and receipts where required.
+2. The employee submits the claim, changing it from Draft to Pending HR Review.
+3. Super Admin, Admin, HR Admin, HR Manager or HR completes HR Review and sends an accepted amount to Pending Finance Approval.
+4. Super Admin, Admin, Finance or Accounts Finance gives Finance approval, sets taxable/non-taxable treatment and chooses Payroll or Manual payment mode.
+5. Rejected claims can be rejected by authorized HR or Finance management roles with a reason.
+6. An approved Payroll reimbursement is scheduled for a payroll period and is reserved when that Draft payroll enters HR Review.
+7. If the approved amount changed after payroll calculation, HR Review is blocked until the Draft payroll is recalculated.
+8. Manual reimbursements can be marked paid only by Super Admin, Admin, Finance or Accounts Finance.
+9. Payroll reimbursements are marked paid after the corresponding salary run is Disbursed; failures remain available for explicit retry.
+10. Employees can cancel only eligible non-final claims and cannot access another employee's reimbursement.
+"""
+    },
+    {
+        "module": "Tax Declarations & TDS",
+        "title": "Complete tax declaration and TDS workflow",
+        "content": """
+Payroll tax declaration and TDS workflow:
+1. Employees and employee-capability roles can create, update, submit, cancel and view only their own tax declaration for a financial year.
+2. Editable declaration states are Draft and Rejected. Supporting proof status is tracked component-wise.
+3. Submission starts the review flow and sends the declaration for HR review.
+4. Super Admin, Admin, HR Admin, HR Manager or HR reviews components and sends the declaration to Pending Finance Approval.
+5. Super Admin, Admin, Finance or Accounts Finance approves the declaration and may later Lock it.
+6. Authorized HR or Finance management roles may reject a submitted or pending-review declaration with a reason.
+7. Approved, Locked or already Cancelled declarations cannot be cancelled by the employee.
+8. Only an Approved declaration can be Locked; a Locked declaration is final for payroll use.
+9. TDS instructions are controlled only by Super Admin, Admin, Finance and Accounts Finance.
+10. Supported TDS modes are Disabled, Manual and External. The active instruction for the payroll period is authoritative.
+11. Payroll calculation never estimates or accepts an arbitrary request-body TDS override; it uses the effective Finance instruction and tax-declaration context.
+12. No user may view or modify another employee's declaration unless they have payroll tax management access within the same tenant.
+"""
+    },
+    {
+        "module": "Payroll Reports",
+        "title": "Payroll reports and data-access restrictions",
+        "content": """
+Payroll reporting workflow and restrictions:
+1. Super Admin, Admin, HR Admin, HR Manager, HR, Finance and Accounts Finance can generate company-wide payroll registers, payroll summaries, statutory summaries, department summaries, period variance and payroll trend reports.
+2. Management users can filter by payroll period, status, employee, department, designation, location and state according to the selected report.
+3. Employees, Team Leaders, Reporting Officers, RO and Managers may generate only their own employee payroll statement through self-service access.
+4. Non-management employee statements are restricted to official Locked or Disbursed payroll and cannot expose Draft or approval-stage amounts.
+5. Non-management users cannot select another employee, generate company-wide reports or use company-level filters.
+6. CSV exports are audited and include export identifiers, file hash, row count and total amount metadata.
+7. Payroll report-export history and export status management are limited to payroll management roles.
+8. Super Admin must select the target tenant; every other role is restricted to its own tenant.
+"""
+    },
+    {
+        "module": "Payslips",
+        "title": "Payslip release, download and privacy rules",
+        "content": """
+Payslip workflow and restrictions:
+1. Payslip records are created as immutable calculation snapshots when Draft payroll is calculated.
+2. Payroll management users can preview employee payslips during authorized payroll processing.
+3. Employees and permitted employee-capability roles can download only the payslip linked to their own employee profile.
+4. A non-privileged employee cannot access a payslip until the payroll status is Locked or Disbursed.
+5. The PDF is generated from stored employee, attendance, earning, deduction, salary, statutory, tax, bank and transfer snapshots rather than mutable live values.
+6. Legacy payslips without the required immutable snapshots cannot be generated; the Draft payroll must be recalculated first.
+7. Every PDF generation is audited, and private no-store response controls are used.
+8. A role or employee reference from another tenant cannot be used to retrieve the payslip.
+"""
+    },
+    {
+        "module": "Payroll Security",
+        "title": "Payroll tenant isolation, validation and immutability",
+        "content": """
+Payroll security and integrity rules:
+1. Every payroll route requires the Payroll module to be enabled for the tenant.
+2. All payroll records are tenant-scoped. Non-Super-Admin users cannot request another tenant's payroll data.
+3. Super Admin cross-tenant work must use the explicitly selected tenant and does not merge records between companies.
+4. Employee self-service access is resolved through the logged-in user's linked employee profile and is restricted to that employee.
+5. Role checks are enforced by the backend even if a page or button is visible in the frontend.
+6. Payroll workflow transitions require the correct current status, action role, run employee count and payslip status consistency.
+7. The calculation batch is all-or-nothing when employee validation fails.
+8. Locked and Disbursed payroll cannot be recalculated or silently changed.
+9. Salary structures, statutory rules, tax context, bank details and calculation inputs are snapshotted for auditability.
+10. Important payroll actions create audit records and workflow-history entries with actor identity, role and timestamp.
+"""
+    },
+    {
         "module": "Profile",
         "title": "How profile works",
         "content": """
@@ -402,19 +609,23 @@ Profile workflow:
 2. User can view personal and employment details.
 3. Profile photo can be uploaded if enabled.
 4. Updated photo appears across profile, dashboard, and relevant employee UI.
-5. Some profile fields may be editable only by HR/Admin.
+5. Every authenticated user can change their own password by entering the current password, new password and confirmation.
+6. The password changes directly after verification and does not require a Super Admin request or approval.
+7. Some employment profile fields may remain editable only by HR/Admin.
 """
     },
     {
-        "module": "Password Requests",
-        "title": "How password request works",
+        "module": "Password Change",
+        "title": "How users change their own password",
         "content": """
-Password request workflow:
-1. Employee submits a password change/reset request.
-2. Super Admin or authorized admin opens Password Requests.
-3. Admin reviews request.
-4. Admin approves or rejects the request.
-5. If approved, password is reset or updated according to system process.
+Direct password change workflow:
+1. The logged-in user opens My Profile.
+2. The user enters their current password, new password and new-password confirmation.
+3. The backend verifies the current password and confirms that the new values match.
+4. The new password must meet the configured minimum-length requirement and cannot be the same as the current password.
+5. On success, the logged-in user's password is changed immediately without a Super Admin approval request.
+6. A user can change only their own password through this workflow.
+7. Super Admin password reset capability in User Control remains a separate administrative recovery function.
 """
     },
     {

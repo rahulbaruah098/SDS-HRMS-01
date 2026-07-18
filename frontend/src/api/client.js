@@ -4854,52 +4854,6 @@ export function reopenItSupportTicket(ticketId, payload = {}) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Password Request APIs                                                      */
-/* -------------------------------------------------------------------------- */
-
-export function createPasswordRequest(payload = {}) {
-  return api('/password-requests', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export function getPasswordRequests(params = {}) {
-  return api(`/password-requests${buildQuery(params)}`);
-}
-
-export function approvePasswordRequest(requestId) {
-  return api(`/password-requests/${requestId}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });
-}
-
-export function rejectPasswordRequest(requestId, reason = '') {
-  return api(`/password-requests/${requestId}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
-  });
-}
-
-export function decidePasswordRequest(requestId, payload = {}) {
-  const status = String(payload.status || payload.decision || '').toLowerCase();
-
-  if (status === 'approved' || status === 'approve') {
-    return approvePasswordRequest(requestId);
-  }
-
-  if (status === 'rejected' || status === 'reject') {
-    return rejectPasswordRequest(
-      requestId,
-      payload.reason || payload.note || payload.decision_reason || '',
-    );
-  }
-
-  throw new Error('Password request status must be approved or rejected');
-}
-
-/* -------------------------------------------------------------------------- */
 /* Location Helpers                                                           */
 /* -------------------------------------------------------------------------- */
 

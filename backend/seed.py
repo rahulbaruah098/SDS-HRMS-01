@@ -185,7 +185,6 @@ with app.app_context():
         "documents",
         "system_settings",
         "audit_logs",
-        "password_requests",
     ]
 
     for collection in collections_to_clear:

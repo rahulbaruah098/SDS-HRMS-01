@@ -191,7 +191,6 @@ function moduleGroup(key) {
     [
       'companies',
       'users',
-      'password_requests',
       'billing',
       'system_settings',
       'audit_logs',
@@ -759,10 +758,6 @@ function notificationTarget(meta = {}) {
   }
 
   if (meta.attendance_mode_request_id) {
-    return 'application_status';
-  }
-
-  if (meta.password_request_id) {
     return 'application_status';
   }
 

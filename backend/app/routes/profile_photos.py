@@ -18,6 +18,7 @@ profile_photos_bp = Blueprint("profile_photos", __name__)
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
 MAX_PROFILE_COVER_BYTES = 5 * 1024 * 1024
+MAX_COMPANY_LOGO_BYTES = 3 * 1024 * 1024
 
 
 ADMIN_ROLES = {
@@ -26,6 +27,13 @@ ADMIN_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
+}
+
+
+TENANT_BRANDING_ADMIN_ROLES = {
+    "super_admin",
+    "admin",
+    "tenant_admin",
 }
 
 
@@ -68,6 +76,10 @@ def current_roles():
 
 def is_admin_user():
     return bool(current_roles().intersection(ADMIN_ROLES))
+
+
+def can_manage_tenant_branding():
+    return bool(current_roles().intersection(TENANT_BRANDING_ADMIN_ROLES))
 
 
 def current_tenant_id():
@@ -131,10 +143,93 @@ def cover_alias_payload(cover_path):
     }
 
 
+def company_logo_alias_payload(logo_path):
+    return {
+        "company_logo": logo_path,
+        "company_logo_url": logo_path,
+        "logo": logo_path,
+        "logo_url": logo_path,
+        "branding.company_logo": logo_path,
+        "branding.company_logo_url": logo_path,
+        "branding.logo": logo_path,
+        "branding.logo_url": logo_path,
+    }
+
+
+def company_name_value(tenant):
+    tenant = tenant or {}
+
+    return normalize_text(
+        tenant.get("company_name")
+        or tenant.get("name")
+        or tenant.get("tenant_name")
+        or tenant.get("legal_name")
+        or tenant.get("tenant_code")
+        or current_tenant_id()
+    )
+
+
+def company_logo_value(tenant):
+    tenant = tenant or {}
+    branding = tenant.get("branding") if isinstance(tenant.get("branding"), dict) else {}
+
+    return normalize_text(
+        tenant.get("company_logo")
+        or tenant.get("company_logo_url")
+        or tenant.get("logo")
+        or tenant.get("logo_url")
+        or branding.get("company_logo")
+        or branding.get("company_logo_url")
+        or branding.get("logo")
+        or branding.get("logo_url")
+    )
+
+
+def tenant_branding_payload(tenant):
+    tenant = tenant or {}
+    logo_path = company_logo_value(tenant)
+    company_name = company_name_value(tenant)
+
+    return {
+        "tenant_id": normalize_text(tenant.get("tenant_id")) or current_tenant_id(),
+        "tenant_code": normalize_text(tenant.get("tenant_code") or tenant.get("code")),
+        "company_name": company_name,
+        "name": company_name,
+        "company_logo": logo_path,
+        "company_logo_url": logo_path,
+        "logo": logo_path,
+        "logo_url": logo_path,
+        "branding": {
+            "company_name": company_name,
+            "company_logo": logo_path,
+            "company_logo_url": logo_path,
+            "logo": logo_path,
+            "logo_url": logo_path,
+        },
+    }
+
+
+def find_current_tenant(db):
+    tenant_id = current_tenant_id()
+    tenant_values = list(dict.fromkeys([
+        tenant_id,
+        tenant_id.lower(),
+        tenant_id.upper(),
+    ]))
+
+    return db.tenants.find_one({
+        "tenant_id": {"$in": tenant_values},
+        "is_deleted": {"$ne": True},
+    })
+
+
 def get_upload_root(folder_type="profile_photos"):
     if folder_type == "profile_covers":
         configured = current_app.config.get("PROFILE_COVER_UPLOAD_FOLDER")
         default_folder = "profile_covers"
+    elif folder_type == "company_logos":
+        configured = current_app.config.get("COMPANY_LOGO_UPLOAD_FOLDER")
+        default_folder = "company_logos"
     else:
         configured = current_app.config.get("PROFILE_PHOTO_UPLOAD_FOLDER")
         default_folder = "profile_photos"
@@ -404,6 +499,210 @@ def save_employee_image_file(file, employee, upload_folder_type, file_prefix, ma
     return f"/api/v1/uploads/{upload_folder_type}/{tenant_folder}/{final_name}", ""
 
 
+def save_company_logo_file(file, tenant):
+    if not file:
+        return "", "Company logo file is required"
+
+    original_filename = secure_filename(file.filename or "")
+
+    if not original_filename or not allowed_file(original_filename):
+        return "", "Only JPG, JPEG, PNG, and WEBP images are allowed"
+
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    if file_size > MAX_COMPANY_LOGO_BYTES:
+        return "", "Company logo must be below 3MB"
+
+    tenant_id = normalize_text(tenant.get("tenant_id")) or current_tenant_id()
+    tenant_folder = secure_filename(tenant_id.lower()) or "sds"
+
+    upload_root = get_upload_root("company_logos")
+    tenant_upload_dir = os.path.join(upload_root, tenant_folder)
+    os.makedirs(tenant_upload_dir, exist_ok=True)
+
+    fallback_ext = original_filename.rsplit(".", 1)[-1].lower()
+    temp_name = f"tmp_{uuid4().hex}.{fallback_ext}"
+    temp_path = os.path.join(tenant_upload_dir, temp_name)
+
+    file.save(temp_path)
+
+    detected_ext = detect_extension(temp_path, fallback_ext)
+
+    if detected_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+        return "", "Invalid image file"
+
+    final_name = secure_filename(
+        f"company_logo_{uuid4().hex}.{detected_ext}"
+    )
+    final_path = os.path.join(tenant_upload_dir, final_name)
+
+    os.replace(temp_path, final_path)
+
+    return f"/api/v1/uploads/company_logos/{tenant_folder}/{final_name}", ""
+
+
+def remove_managed_company_logo(logo_path):
+    logo_path = normalize_text(logo_path)
+    route_prefix = "/api/v1/uploads/company_logos/"
+
+    if not logo_path.startswith(route_prefix):
+        return
+
+    relative_path = logo_path[len(route_prefix):]
+    path_parts = relative_path.split("/", 1)
+
+    if len(path_parts) != 2:
+        return
+
+    tenant_folder = secure_filename(path_parts[0])
+    safe_filename = secure_filename(path_parts[1])
+
+    if not tenant_folder or not safe_filename:
+        return
+
+    upload_root = get_upload_root("company_logos")
+    file_path = os.path.abspath(
+        os.path.join(upload_root, tenant_folder, safe_filename)
+    )
+
+    try:
+        if os.path.commonpath([upload_root, file_path]) != upload_root:
+            return
+    except ValueError:
+        return
+
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
+
+@profile_photos_bp.get("/tenant-branding")
+@current_user_required
+def get_tenant_branding():
+    db = get_db()
+    tenant = find_current_tenant(db)
+
+    if not tenant:
+        return jsonify({"message": "Company account not found"}), 404
+
+    return jsonify({
+        "branding": tenant_branding_payload(tenant),
+        "tenant": clean_doc(tenant),
+        "can_manage_branding": can_manage_tenant_branding(),
+    })
+
+
+@profile_photos_bp.post("/tenant-branding/logo")
+@current_user_required
+def upload_company_logo():
+    if not can_manage_tenant_branding():
+        return jsonify({
+            "message": "Only the company administrator can update the company logo"
+        }), 403
+
+    db = get_db()
+    tenant = find_current_tenant(db)
+
+    if not tenant:
+        return jsonify({"message": "Company account not found"}), 404
+
+    file = (
+        request.files.get("logo")
+        or request.files.get("company_logo")
+        or request.files.get("file")
+        or request.files.get("image")
+    )
+
+    logo_path, error = save_company_logo_file(file, tenant)
+
+    if error:
+        return jsonify({"message": error}), 400
+
+    previous_logo = company_logo_value(tenant)
+    changed_at = datetime.utcnow()
+    changed_by = current_user_id()
+
+    update_payload = {
+        **company_logo_alias_payload(logo_path),
+        "branding.company_name": company_name_value(tenant),
+        "branding.updated_at": changed_at,
+        "branding.updated_by": changed_by,
+        "updated_at": changed_at,
+        "updated_by": changed_by,
+    }
+
+    db.tenants.update_one(
+        {"_id": tenant["_id"]},
+        {"$set": update_payload},
+    )
+
+    updated_tenant = db.tenants.find_one({"_id": tenant["_id"]})
+
+    if previous_logo and previous_logo != logo_path:
+        remove_managed_company_logo(previous_logo)
+
+    return jsonify({
+        "message": "Company logo uploaded successfully",
+        "company_logo": logo_path,
+        "logo": logo_path,
+        "branding": tenant_branding_payload(updated_tenant),
+        "tenant": clean_doc(updated_tenant),
+    })
+
+
+@profile_photos_bp.delete("/tenant-branding/logo")
+@current_user_required
+def delete_company_logo():
+    if not can_manage_tenant_branding():
+        return jsonify({
+            "message": "Only the company administrator can remove the company logo"
+        }), 403
+
+    db = get_db()
+    tenant = find_current_tenant(db)
+
+    if not tenant:
+        return jsonify({"message": "Company account not found"}), 404
+
+    previous_logo = company_logo_value(tenant)
+    changed_at = datetime.utcnow()
+    changed_by = current_user_id()
+
+    db.tenants.update_one(
+        {"_id": tenant["_id"]},
+        {
+            "$set": {
+                **company_logo_alias_payload(""),
+                "branding.company_name": company_name_value(tenant),
+                "branding.updated_at": changed_at,
+                "branding.updated_by": changed_by,
+                "updated_at": changed_at,
+                "updated_by": changed_by,
+            }
+        },
+    )
+
+    updated_tenant = db.tenants.find_one({"_id": tenant["_id"]})
+    remove_managed_company_logo(previous_logo)
+
+    return jsonify({
+        "message": "Company logo removed successfully",
+        "company_logo": "",
+        "logo": "",
+        "branding": tenant_branding_payload(updated_tenant),
+        "tenant": clean_doc(updated_tenant),
+    })
+
+
 @profile_photos_bp.post("/profile-photos/upload")
 @tenant_module_required("profile")
 def upload_profile_photo():
@@ -547,6 +846,16 @@ def serve_profile_photo(tenant, filename):
 @profile_photos_bp.get("/uploads/profile_covers/<tenant>/<filename>")
 def serve_profile_cover(tenant, filename):
     upload_root = get_upload_root("profile_covers")
+    tenant_folder = secure_filename(tenant)
+    safe_filename = secure_filename(filename)
+
+    directory = os.path.join(upload_root, tenant_folder)
+
+    return send_from_directory(directory, safe_filename)
+
+@profile_photos_bp.get("/uploads/company_logos/<tenant>/<filename>")
+def serve_company_logo(tenant, filename):
+    upload_root = get_upload_root("company_logos")
     tenant_folder = secure_filename(tenant)
     safe_filename = secure_filename(filename)
 

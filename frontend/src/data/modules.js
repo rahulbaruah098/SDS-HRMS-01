@@ -16,7 +16,6 @@ import {
   Building2,
   KeyRound,
   UserCircle,
-  LockKeyhole,
   ClipboardList,
   ContactRound,
   Network,
@@ -526,13 +525,6 @@ export const superModules = [
     'Super Admin tenant-wise user control. Select tenant, create employee/login user, filter users, reset password, enable/disable and delete users.',
     ['super_admin'],
   ],
-  [
-    'password_requests',
-    'Password Requests',
-    LockKeyhole,
-    'Approve or reject user password change requests.',
-    ['super_admin'],
-  ],
 ];
 
 export const coreModules = [
@@ -842,13 +834,13 @@ export const coreModules = [
     'Trace all actions.',
     ['super_admin', 'admin'],
   ],
-  [
-    'profile',
-    'My Profile',
-    UserCircle,
-    'View profile, profile photo and request password change.',
-    ALL_COMMON_ROLES,
-  ],
+[
+  'profile',
+  'My Profile',
+  UserCircle,
+  'View your profile, manage your profile photo and securely change your password.',
+  ALL_COMMON_ROLES,
+],
 ];
 
 export const allModules = [...superModules, ...coreModules];

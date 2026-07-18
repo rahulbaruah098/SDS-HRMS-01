@@ -68,7 +68,6 @@ DEFAULT_LEGACY_COLLECTIONS = [
     "grievances",
     "it_tickets",
     "management_groups",
-    "password_requests",
     "performance_reviews",
     "reports",
     "celebrations",

@@ -1001,15 +1001,16 @@ export default function Profile() {
     try {
       setSubmitting(true);
 
-      const data = await api('/password-requests', {
+      const data = await api('/auth/change-password', {
         method: 'POST',
         body: JSON.stringify({
           current_password: form.current_password,
           new_password: form.new_password,
+          confirm_password: form.confirm_password,
         }),
       });
 
-      alerts.success(data.message || 'Password change request submitted.', 'Request Submitted');
+      alerts.success(data.message || 'Password changed successfully.', 'Password Changed');
 
       setForm({
         current_password: '',
@@ -1018,8 +1019,8 @@ export default function Profile() {
       });
     } catch (error) {
       alerts.error(
-        error.message || 'Unable to submit password change request.',
-        'Password Request Failed',
+        error.message || 'Unable to change password.',
+        'Password Change Failed',
       );
     } finally {
       setSubmitting(false);
@@ -1913,8 +1914,8 @@ export default function Profile() {
       ) : null}
 
       <section className="profile-password-card">
-        <h3>Request Password Change</h3>
-        <p>Your request will be sent to Super Admin for approval.</p>
+        <h3>Change Password</h3>
+        <p>Update your own login password securely. Super Admin approval is not required.</p>
 
         <form className="dynamic-form" onSubmit={submit} noValidate>
           <label>
@@ -1922,6 +1923,8 @@ export default function Profile() {
             <input
               type="password"
               value={form.current_password}
+              autoComplete="current-password"
+              required
               onChange={(e) =>
                 setForm({ ...form, current_password: e.target.value })
               }
@@ -1933,6 +1936,9 @@ export default function Profile() {
             <input
               type="password"
               value={form.new_password}
+              autoComplete="new-password"
+              minLength={6}
+              required
               onChange={(e) =>
                 setForm({ ...form, new_password: e.target.value })
               }
@@ -1944,6 +1950,9 @@ export default function Profile() {
             <input
               type="password"
               value={form.confirm_password}
+              autoComplete="new-password"
+              minLength={6}
+              required
               onChange={(e) =>
                 setForm({ ...form, confirm_password: e.target.value })
               }
@@ -1951,7 +1960,7 @@ export default function Profile() {
           </label>
 
           <button type="submit" className="primary" disabled={submitting}>
-            {submitting ? 'Submitting...' : 'Send Approval Request'}
+            {submitting ? 'Changing Password...' : 'Change Password'}
           </button>
         </form>
       </section>

@@ -2690,10 +2690,6 @@ def superadmin_dashboard():
             "status": "approved",
             "is_deleted": {"$ne": True},
         }),
-        "Pending Password Requests": db.password_requests.count_documents({
-            "status": "pending",
-            "is_deleted": {"$ne": True},
-        }),
         "Payroll Runs": db.payroll_runs.count_documents({
             "is_deleted": {"$ne": True},
         }),

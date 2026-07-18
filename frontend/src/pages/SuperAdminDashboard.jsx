@@ -638,14 +638,6 @@ export default function SuperAdminDashboard({ setPage }) {
           <button
             type="button"
             className="secondary"
-            onClick={() => goTo('password_requests')}
-          >
-            Password Requests
-          </button>
-
-          <button
-            type="button"
-            className="secondary"
             onClick={() => goTo('notifications')}
           >
             Notifications
@@ -1159,14 +1151,6 @@ export default function SuperAdminDashboard({ setPage }) {
               onClick={() => goTo('designations')}
             >
               Manage Designations
-            </button>
-
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => goTo('password_requests')}
-            >
-              Review Password Requests
             </button>
 
             <button

@@ -289,16 +289,6 @@ function normalizeHolidayWorkRows(rows = []) {
   }));
 }
 
-function normalizePasswordRows(rows = []) {
-  return rows.map((row) => ({
-    request_type: 'Password Change',
-    reason: row.reason || row.message || '—',
-    status: statusLabel(row.status),
-    created_at: formatDateTime(row.created_at),
-    updated_at: formatDateTime(row.updated_at),
-  }));
-}
-
 function normalizeTicketRows(rows = []) {
   return rows.map((row) => ({
     title: row.title || row.subject || 'Ticket',
@@ -630,11 +620,6 @@ export default function ApplicationStatus() {
   const holidayWorkRows = useMemo(
     () => normalizeHolidayWorkRows(holidayWorkRequests),
     [holidayWorkRequests],
-  );
-
-  const passwordRows = useMemo(
-    () => normalizePasswordRows(data?.password_requests || []),
-    [data],
   );
 
   const ticketRows = useMemo(
@@ -981,7 +966,7 @@ export default function ApplicationStatus() {
 
             <p>
               Track all your submitted requests in one place, including leave,
-              holiday work approvals, password change, tickets, and comp-off status.
+              holiday work approvals, tickets, grievances, and comp-off status.
             </p>
         </div>
 
@@ -1086,28 +1071,15 @@ export default function ApplicationStatus() {
   <Table rows={holidayWorkRows} maxColumns={10} />
 </section>
 
-      <section className="two-col">
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>Password Change Requests</h3>
-              <p>Shows password change approval status.</p>
-            </div>
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>Tickets / Grievances</h3>
+            <p>Shows the current status of your raised tickets and grievances.</p>
           </div>
-
-          <Table rows={passwordRows} maxColumns={8} />
         </div>
 
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>Tickets / Grievances</h3>
-              <p>Shows your raised ticket status.</p>
-            </div>
-          </div>
-
-          <Table rows={ticketRows} maxColumns={8} />
-        </div>
+        <Table rows={ticketRows} maxColumns={8} />
       </section>
 
       <section className="two-col">
