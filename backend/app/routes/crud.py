@@ -30,6 +30,16 @@ PROJECT_CREATOR_ROLES = {
     "reporting_officer",
 }
 
+PAYROLL_PRIVILEGED_READ_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+}
+
 READ_ALLOWED_COLLECTIONS = {
     "employees",
     "organisations",
@@ -260,6 +270,31 @@ SEARCH_FIELDS = {
         "department",
         "status",
         "holiday_title",
+    ],
+    "payroll_runs": [
+        "period_key",
+        "month",
+        "year",
+        "status",
+        "workflow_stage",
+        "created_by_name",
+        "hr_reviewed_by_name",
+        "finance_approved_by_name",
+        "locked_by_name",
+        "disbursed_by_name",
+    ],
+    "payslips": [
+        "period_key",
+        "employee_name",
+        "employee_code",
+        "official_email",
+        "department",
+        "designation",
+        "state",
+        "status",
+        "workflow_stage",
+        "payment_status",
+        "transfer_reference",
     ],
     "notifications": [
         "title",
@@ -1832,6 +1867,16 @@ def apply_common_filters(collection, q):
     week_key = normalize_text(request.args.get("week_key"))
     month_key = normalize_text(request.args.get("month_key"))
     year_key = normalize_text(request.args.get("year_key") or request.args.get("year"))
+    period_key = normalize_text(
+        request.args.get("period_key")
+        or request.args.get("payroll_period")
+    )
+    payroll_run_id = normalize_text(
+        request.args.get("run_id")
+        or request.args.get("payroll_run_id")
+    )
+    payroll_month = normalize_text(request.args.get("payroll_month"))
+    payroll_year = normalize_text(request.args.get("payroll_year"))
     date_from = normalize_text(request.args.get("date_from"))
     date_to = normalize_text(request.args.get("date_to"))
     q_text = normalize_text(request.args.get("q") or request.args.get("search"))
@@ -1850,6 +1895,25 @@ def apply_common_filters(collection, q):
 
     if employee_id:
         q["employee_id"] = employee_id
+
+    if collection in {"payroll_runs", "payslips"}:
+        if period_key:
+            q["period_key"] = period_key
+
+        if payroll_run_id:
+            q["run_id"] = payroll_run_id
+
+        if payroll_month:
+            try:
+                q["month"] = int(payroll_month)
+            except (TypeError, ValueError):
+                q["month"] = payroll_month
+
+        if payroll_year:
+            try:
+                q["year"] = int(payroll_year)
+            except (TypeError, ValueError):
+                q["year"] = payroll_year
 
     if collection == "employees":
         if designation:
@@ -2024,6 +2088,48 @@ def employee_owned_collection_scope(db, q, employee_field="employee_id"):
     return q
 
 
+def payroll_run_scope_query(db, q):
+    roles = current_user_roles()
+
+    if roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES):
+        return q
+
+    # Payroll runs contain company-wide financial totals and workflow data.
+    # Employees must access only their released payslips, never the run ledger.
+    q["_id"] = {"$exists": False}
+    return q
+
+
+def payslip_scope_query(db, q):
+    roles = current_user_roles()
+
+    if roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES):
+        return q
+
+    employee = get_current_employee(db)
+
+    if not employee:
+        q["_id"] = {"$exists": False}
+        return q
+
+    identifiers = employee_identifier_values(employee)
+    canonical_id = normalize_text(employee.get("_id"))
+
+    if canonical_id and canonical_id not in identifiers:
+        identifiers.append(canonical_id)
+
+    if not identifiers:
+        q["_id"] = {"$exists": False}
+        return q
+
+    # Employee users may view only their own released payroll snapshots.
+    # Any employee_id or status supplied in the query string is intentionally
+    # overridden to prevent reading another employee's Draft/internal record.
+    q["employee_id"] = {"$in": identifiers}
+    q["status"] = {"$in": ["locked", "disbursed"]}
+    return q
+
+
 def performance_rating_value(review):
     raw_value = (
         review.get("rating")
@@ -2193,10 +2299,25 @@ def scoped_query_for_collection(db, collection):
     if collection == "performance_reviews":
         q = performance_review_scope_query(db, q)
 
+    if collection == "payroll_runs":
+        q = payroll_run_scope_query(db, q)
+
+    if collection == "payslips":
+        q = payslip_scope_query(db, q)
+
     if collection == "employees":
         roles = current_user_roles()
 
-        if not roles.intersection(ADMIN_ROLES):
+        # Finance requires the tenant employee picker for Payroll, Banking,
+        # TDS instructions and reporting. This exemption applies only to the
+        # Employee Master read query; it does not grant Finance company-wide
+        # attendance, leave or comp-off access.
+        employee_master_read_roles = (
+            ADMIN_ROLES
+            | {"finance", "accounts_finance"}
+        )
+
+        if not roles.intersection(employee_master_read_roles):
             scoped_ids = employee_scoped_ids_for_current_user(db)
 
             if scoped_ids is not None:
@@ -3464,6 +3585,12 @@ def list_collection(collection):
 
     if collection == "performance_reviews" and sort_by == "created_at":
         sort_by = "review_date"
+
+    if collection == "payroll_runs" and sort_by == "created_at":
+        sort_by = "period_key"
+
+    if collection == "payslips" and sort_by == "created_at":
+        sort_by = "period_key"
 
     total = mongo_collection.count_documents(q)
 

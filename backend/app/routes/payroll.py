@@ -68,6 +68,50 @@ from app.services.payroll_reimbursement_service import (
     summarize_payroll_reimbursements,
     update_reimbursement_draft,
 )
+from app.services.payroll_bank_service import (
+    PayrollBankError,
+    deactivate_bank_details,
+    generate_bank_disbursement_csv,
+    get_bank_details,
+    list_bank_details,
+    list_bank_exports,
+    mark_bank_export_status,
+    prepare_payroll_bank_snapshots,
+    serialize_bank_details,
+    upsert_bank_details,
+    verify_bank_details,
+)
+from app.services.payroll_reporting_service import (
+    PayrollReportingError,
+    department_summary,
+    employee_statement,
+    generate_payroll_report_csv,
+    list_payroll_report_exports,
+    normalize_report_type,
+    payroll_register,
+    payroll_summary,
+    payroll_trend,
+    period_variance,
+    statutory_summary,
+    update_payroll_report_export_status,
+)
+from app.services.payroll_tax_service import (
+    PayrollTaxError,
+    activate_tds_instruction,
+    approve_tax_declaration,
+    cancel_tax_declaration,
+    complete_tax_hr_review,
+    create_tds_instruction,
+    deactivate_tds_instruction,
+    get_tax_declaration,
+    list_tax_declarations,
+    list_tds_instructions,
+    lock_tax_declaration,
+    reject_tax_declaration,
+    resolve_payroll_tax_context,
+    submit_tax_declaration,
+    upsert_tax_declaration,
+)
 from app.utils.auth import audit, roles_required
 from app.utils.serializers import clean_doc
 
@@ -330,6 +374,36 @@ def handle_payroll_loan_error(error: PayrollLoanError):
 
 @payroll_bp.errorhandler(PayrollReimbursementError)
 def handle_payroll_reimbursement_error(error: PayrollReimbursementError):
+    return jsonify({
+        "ok": False,
+        "message": error.message,
+        "code": error.code,
+        "details": clean_doc(error.details),
+    }), error.status_code
+
+
+@payroll_bp.errorhandler(PayrollBankError)
+def handle_payroll_bank_error(error: PayrollBankError):
+    return jsonify({
+        "ok": False,
+        "message": error.message,
+        "code": error.code,
+        "details": clean_doc(error.details),
+    }), error.status_code
+
+
+@payroll_bp.errorhandler(PayrollReportingError)
+def handle_payroll_reporting_error(error: PayrollReportingError):
+    return jsonify({
+        "ok": False,
+        "message": error.message,
+        "code": error.code,
+        "details": clean_doc(error.details),
+    }), error.status_code
+
+
+@payroll_bp.errorhandler(PayrollTaxError)
+def handle_payroll_tax_error(error: PayrollTaxError):
     return jsonify({
         "ok": False,
         "message": error.message,
@@ -728,6 +802,124 @@ PAYROLL_REIMBURSEMENT_REVIEW_ACTION_ROLES = (
     "hr",
     "finance",
     "accounts_finance",
+)
+
+
+PAYROLL_BANK_ACCESS_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+    "employee",
+    "team_leader",
+    "reporting_officer",
+    "manager",
+    "ro",
+)
+
+PAYROLL_BANK_MANAGEMENT_ROLES = {
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+}
+
+PAYROLL_BANK_FINANCE_ACTION_ROLES = (
+    "super_admin",
+    "admin",
+    "finance",
+    "accounts_finance",
+)
+
+
+PAYROLL_REPORT_ACCESS_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+    "employee",
+    "team_leader",
+    "reporting_officer",
+    "manager",
+    "ro",
+)
+
+PAYROLL_REPORT_MANAGEMENT_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+)
+
+PAYROLL_REPORT_MANAGEMENT_ROLE_SET = set(
+    PAYROLL_REPORT_MANAGEMENT_ROLES
+)
+
+
+PAYROLL_TAX_ACCESS_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+    "employee",
+    "team_leader",
+    "reporting_officer",
+    "manager",
+    "ro",
+)
+
+PAYROLL_TAX_MANAGEMENT_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+)
+
+PAYROLL_TAX_HR_REVIEW_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+)
+
+PAYROLL_TAX_FINANCE_ROLES = (
+    "super_admin",
+    "admin",
+    "finance",
+    "accounts_finance",
+)
+
+PAYROLL_TAX_REJECTION_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
+    "finance",
+    "accounts_finance",
+)
+
+PAYROLL_TAX_MANAGEMENT_ROLE_SET = set(
+    PAYROLL_TAX_MANAGEMENT_ROLES
 )
 
 
@@ -2846,6 +3038,2070 @@ def retry_payroll_reimbursement_payments(run_id: str):
     )
 
 
+# ------------------------ Bank details & disbursement ----------------------
+
+
+def _has_bank_management_access() -> bool:
+    return bool(_current_roles().intersection(PAYROLL_BANK_MANAGEMENT_ROLES))
+
+
+def _has_bank_finance_access() -> bool:
+    return bool(
+        _current_roles().intersection(set(PAYROLL_BANK_FINANCE_ACTION_ROLES))
+    )
+
+
+def _current_employee_for_bank_or_error(
+    db: Any,
+    tenant_id: str,
+) -> dict[str, Any]:
+    employee = _current_employee_for_user(db, tenant_id)
+
+    if not employee:
+        raise PayrollBankError(
+            "No employee profile is linked to the current user.",
+            status_code=404,
+            code="current_employee_not_found",
+        )
+
+    return employee
+
+
+def _bank_employee_reference(
+    db: Any,
+    tenant_id: str,
+    requested_reference: Any = "",
+) -> str:
+    requested = safe_str(requested_reference)
+
+    if _has_bank_management_access():
+        if requested:
+            return requested
+
+        current_employee = _current_employee_for_user(db, tenant_id)
+        if current_employee:
+            return _canonical_employee_id(current_employee)
+
+        raise PayrollBankError(
+            "employee_id is required when managing another employee's bank details.",
+            code="payroll_bank_employee_required",
+        )
+
+    current_employee = _current_employee_for_bank_or_error(db, tenant_id)
+    current_employee_id = _canonical_employee_id(current_employee)
+
+    if requested:
+        requested_employee = _find_employee(db, tenant_id, requested)
+        if (
+            not requested_employee
+            or _canonical_employee_id(requested_employee) != current_employee_id
+        ):
+            raise PayrollBankError(
+                "You can access bank details only for your own employee profile.",
+                status_code=403,
+                code="payroll_bank_employee_scope_forbidden",
+            )
+
+    return current_employee_id
+
+
+def _bank_export_response(result: Mapping[str, Any]) -> Response:
+    export = result.get("export") or {}
+    filename = safe_str(export.get("filename")) or "salary-disbursement.csv"
+    response = Response(
+        export.get("csv_bytes") or b"",
+        status=200,
+        mimetype="text/csv",
+    )
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Payroll-Bank-Export-Id"] = safe_str(export.get("id"))
+    response.headers["X-Payroll-Bank-File-SHA256"] = safe_str(
+        export.get("sha256")
+    )
+    response.headers["X-Payroll-Transaction-Count"] = safe_str(
+        (result.get("totals") or {}).get("transactions")
+    )
+    response.headers["X-Payroll-Transaction-Amount"] = safe_str(
+        (result.get("totals") or {}).get("amount")
+    )
+    return response
+
+
+@payroll_bp.get("/bank-details")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_ACCESS_ROLES)
+def get_payroll_bank_details_list():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    requested_employee = safe_str(
+        request.args.get("employee_id")
+        or request.args.get("employeeId")
+        or request.args.get("employee_code")
+        or request.args.get("employeeCode")
+    )
+
+    if _has_bank_management_access():
+        employee_reference = requested_employee
+    else:
+        employee_reference = _bank_employee_reference(
+            db,
+            tenant_id,
+            requested_employee,
+        )
+
+    records = list_bank_details(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=employee_reference,
+        verification_statuses=_query_values(
+            "verification_status",
+            "verificationStatus",
+            "status",
+        ),
+        include_inactive=(
+            _has_bank_management_access()
+            and _truthy(request.args.get("include_inactive"))
+        ),
+        limit=int(request.args.get("limit") or 500),
+    )
+    include_history = (
+        _has_bank_finance_access()
+        and _truthy(request.args.get("include_history"))
+    )
+
+    return _success(
+        "Employee bank details fetched successfully.",
+        items=[
+            serialize_bank_details(
+                record,
+                include_sensitive=False,
+                include_history=include_history,
+            )
+            for record in records
+        ],
+        count=len(records),
+    )
+
+
+@payroll_bp.get("/bank-details/<employee_reference>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_ACCESS_ROLES)
+def get_payroll_bank_details(employee_reference: str):
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    scoped_reference = _bank_employee_reference(
+        db,
+        tenant_id,
+        employee_reference,
+    )
+    record = get_bank_details(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=scoped_reference,
+        include_inactive=(
+            _has_bank_management_access()
+            and _truthy(request.args.get("include_inactive"))
+        ),
+    )
+    include_sensitive = (
+        _has_bank_finance_access()
+        and _truthy(request.args.get("include_sensitive"))
+    )
+    include_history = (
+        _has_bank_finance_access()
+        and _truthy(request.args.get("include_history"))
+    )
+
+    return _success(
+        "Employee bank details fetched successfully.",
+        bank_details=serialize_bank_details(
+            record,
+            include_sensitive=include_sensitive,
+            include_history=include_history,
+        ),
+    )
+
+
+@payroll_bp.post("/bank-details")
+@payroll_bp.put("/bank-details/<employee_reference>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_ACCESS_ROLES)
+def save_payroll_bank_details(employee_reference: str = ""):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    requested_reference = safe_str(
+        employee_reference
+        or payload.get("employee_id")
+        or payload.get("employeeId")
+        or payload.get("employee_code")
+        or payload.get("employeeCode")
+    )
+    scoped_reference = _bank_employee_reference(
+        db,
+        tenant_id,
+        requested_reference,
+    )
+    record = upsert_bank_details(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=scoped_reference,
+        payload=payload,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_bank_details_saved",
+        "bank_details",
+        record.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": record.get("employee_id"),
+            "employee_code": record.get("employee_code"),
+            "revision_number": record.get("revision_number"),
+            "verification_status": record.get("verification_status"),
+        },
+    )
+
+    return _success(
+        "Employee bank details saved and sent for verification.",
+        bank_details=serialize_bank_details(
+            record,
+            include_sensitive=False,
+            include_history=_has_bank_finance_access(),
+        ),
+    )
+
+
+@payroll_bp.post("/bank-details/<employee_reference>/verify")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def verify_payroll_bank_details(employee_reference: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    record = verify_bank_details(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=employee_reference,
+        decision=(
+            payload.get("decision")
+            or payload.get("verification_status")
+            or payload.get("verificationStatus")
+        ),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note") or payload.get("reason"))[:1000],
+        enforce_segregation_of_duties=True,
+    )
+
+    audit(
+        "payroll_bank_details_verified",
+        "bank_details",
+        record.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": record.get("employee_id"),
+            "revision_number": record.get("revision_number"),
+            "verification_status": record.get("verification_status"),
+        },
+    )
+
+    return _success(
+        "Bank verification decision saved successfully.",
+        bank_details=serialize_bank_details(
+            record,
+            include_sensitive=False,
+            include_history=True,
+        ),
+    )
+
+
+@payroll_bp.post("/bank-details/<employee_reference>/deactivate")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def deactivate_payroll_bank_details(employee_reference: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    record = deactivate_bank_details(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=employee_reference,
+        reason=safe_str(payload.get("reason")),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_bank_details_deactivated",
+        "bank_details",
+        record.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": record.get("employee_id"),
+            "reason": record.get("deactivation_reason"),
+        },
+    )
+
+    return _success(
+        "Employee bank details deactivated successfully.",
+        bank_details=serialize_bank_details(
+            record,
+            include_sensitive=False,
+            include_history=True,
+        ),
+    )
+
+
+@payroll_bp.post("/run/<run_id>/prepare-bank-snapshots")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def prepare_payroll_run_bank_snapshots(run_id: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    result = prepare_payroll_bank_snapshots(
+        db,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        strict=not _truthy(payload.get("allow_partial")),
+    )
+
+    audit(
+        "payroll_bank_snapshots_prepared",
+        "payroll_runs",
+        run_id,
+        {
+            "tenant_id": tenant_id,
+            "period_key": result.get("period_key"),
+            "prepared": (result.get("totals") or {}).get("prepared"),
+            "skipped": (result.get("totals") or {}).get("skipped"),
+            "failed": (result.get("totals") or {}).get("failed"),
+        },
+    )
+
+    return _success(
+        "Payroll bank snapshots processed successfully.",
+        bank_snapshot_validation=result,
+    )
+
+
+@payroll_bp.get("/run/<run_id>/bank-file")
+@payroll_bp.post("/run/<run_id>/bank-file")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def download_payroll_bank_file(run_id: str):
+    db = get_db()
+    payload = _request_payload() if request.method == "POST" else {}
+    tenant_id = _requested_tenant_id(payload)
+    columns = payload.get("columns") if isinstance(payload, dict) else None
+    delimiter = safe_str(
+        payload.get("delimiter")
+        if isinstance(payload, dict)
+        else request.args.get("delimiter")
+    ) or ","
+    result = generate_bank_disbursement_csv(
+        db,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        columns=columns,
+        delimiter=delimiter,
+        include_utf8_bom=not (
+            _normalize_key(
+                payload.get("include_utf8_bom")
+                if isinstance(payload, dict)
+                else request.args.get("include_utf8_bom")
+            ) in {"0", "false", "no", "off"}
+        ),
+        narration_prefix=safe_str(
+            payload.get("narration_prefix")
+            if isinstance(payload, dict)
+            else request.args.get("narration_prefix")
+        ) or "Salary",
+        export_format=safe_str(
+            payload.get("export_format")
+            if isinstance(payload, dict)
+            else request.args.get("export_format")
+        ) or "generic_neft_csv",
+        export_version=safe_str(
+            payload.get("export_version")
+            if isinstance(payload, dict)
+            else request.args.get("export_version")
+        ) or "1",
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        persist_export_metadata=True,
+        fail_on_validation_error=True,
+    )
+
+    audit(
+        "payroll_bank_file_generated",
+        "payroll_bank_exports",
+        (result.get("export") or {}).get("id"),
+        {
+            "tenant_id": tenant_id,
+            "run_id": run_id,
+            "period_key": result.get("period_key"),
+            "transaction_count": (result.get("totals") or {}).get(
+                "transactions"
+            ),
+            "total_amount": (result.get("totals") or {}).get("amount"),
+            "sha256": (result.get("export") or {}).get("sha256"),
+        },
+    )
+
+    return _bank_export_response(result)
+
+
+@payroll_bp.get("/bank-exports")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def get_payroll_bank_exports():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    records = list_bank_exports(
+        db,
+        tenant_id=tenant_id,
+        run_id=request.args.get("run_id") or request.args.get("runId"),
+        period_key=request.args.get("period") or request.args.get("period_key"),
+        statuses=_query_values("status", "statuses"),
+        limit=int(request.args.get("limit") or 200),
+    )
+
+    return _success(
+        "Payroll bank exports fetched successfully.",
+        items=records,
+        count=len(records),
+    )
+
+
+@payroll_bp.post("/bank-exports/<export_id>/status")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_BANK_FINANCE_ACTION_ROLES)
+def update_payroll_bank_export_status(export_id: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    record = mark_bank_export_status(
+        db,
+        tenant_id=tenant_id,
+        export_id=export_id,
+        status=payload.get("status"),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        reference=safe_str(
+            payload.get("reference")
+            or payload.get("bank_reference")
+            or payload.get("bankReference")
+        ),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_bank_export_status_updated",
+        "payroll_bank_exports",
+        record.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "run_id": record.get("run_id"),
+            "period_key": record.get("period_key"),
+            "status": record.get("status"),
+            "reference": record.get("status_reference"),
+        },
+    )
+
+    return _success(
+        "Payroll bank export status updated successfully.",
+        bank_export=record,
+    )
+
+
+# ------------------------- Tax declarations and TDS -------------------------
+
+
+def _has_payroll_tax_management_access() -> bool:
+    return bool(
+        _current_roles().intersection(
+            PAYROLL_TAX_MANAGEMENT_ROLE_SET
+        )
+    )
+
+
+def _payroll_tax_employee_reference_for_access(
+    db: Any,
+    tenant_id: str,
+    requested_reference: Any = "",
+    *,
+    require_requested_for_management: bool = True,
+) -> str:
+    requested = safe_str(requested_reference)
+
+    if _has_payroll_tax_management_access():
+        if not requested and require_requested_for_management:
+            raise PayrollTaxError(
+                "employee_id is required.",
+                code="payroll_tax_employee_required",
+            )
+
+        if not requested:
+            return ""
+
+        employee = _find_employee(
+            db,
+            tenant_id,
+            requested,
+        )
+
+        if not employee:
+            raise PayrollTaxError(
+                "Employee was not found in the selected company.",
+                status_code=404,
+                code="payroll_employee_not_found",
+            )
+
+        return _canonical_employee_id(employee)
+
+    current_employee = _current_employee_for_user(
+        db,
+        tenant_id,
+    )
+
+    if not current_employee:
+        raise PayrollTaxError(
+            "No employee profile is linked to the current user.",
+            status_code=404,
+            code="current_employee_not_found",
+        )
+
+    current_employee_id = _canonical_employee_id(
+        current_employee
+    )
+
+    if requested:
+        requested_employee = _find_employee(
+            db,
+            tenant_id,
+            requested,
+        )
+
+        if (
+            not requested_employee
+            or _canonical_employee_id(requested_employee)
+            != current_employee_id
+        ):
+            raise PayrollTaxError(
+                "You can access tax declarations only for your own employee profile.",
+                status_code=403,
+                code="payroll_tax_employee_scope_forbidden",
+            )
+
+    return current_employee_id
+
+
+def _payroll_tax_limit(
+    payload: Mapping[str, Any] | None = None,
+    *,
+    default: int = 500,
+) -> int:
+    payload = payload or {}
+    raw_value = (
+        payload.get("limit")
+        or request.args.get("limit")
+        or default
+    )
+
+    try:
+        return max(1, min(int(raw_value), 2000))
+    except (TypeError, ValueError) as exc:
+        raise PayrollTaxError(
+            "limit must be a valid integer.",
+            code="invalid_payroll_tax_limit",
+        ) from exc
+
+
+@payroll_bp.get("/tax-declarations")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def get_payroll_tax_declarations():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    requested_employee = safe_str(
+        request.args.get("employee_id")
+        or request.args.get("employeeId")
+        or request.args.get("employee_code")
+        or request.args.get("employeeCode")
+    )
+    employee_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            requested_employee,
+            require_requested_for_management=False,
+        )
+    )
+    records = list_tax_declarations(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=employee_reference,
+        financial_years=_query_values(
+            "financial_year",
+            "financialYear",
+            "financial_years",
+        ),
+        statuses=_query_values(
+            "status",
+            "statuses",
+        ),
+        tax_regimes=_query_values(
+            "tax_regime",
+            "taxRegime",
+            "tax_regimes",
+        ),
+        limit=_payroll_tax_limit(),
+    )
+
+    return _success(
+        "Tax declarations fetched successfully.",
+        items=records,
+        declarations=records,
+        count=len(records),
+    )
+
+
+@payroll_bp.get(
+    "/tax-declarations/<employee_reference>/<financial_year>"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def get_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = get_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        include_cancelled=_truthy(
+            request.args.get("include_cancelled")
+            or request.args.get("includeCancelled")
+        ),
+    )
+
+    return _success(
+        "Tax declaration fetched successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.put(
+    "/tax-declarations/<employee_reference>/<financial_year>"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def save_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = upsert_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        payload=payload,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_tax_declaration_saved",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "revision_number": declaration.get("revision_number"),
+            "declared_total": declaration.get("declared_total"),
+        },
+    )
+
+    return _success(
+        "Tax declaration saved successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/submit"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def submit_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = submit_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_tax_declaration_submitted",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+        },
+    )
+
+    return _success(
+        "Tax declaration submitted for HR review.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/hr-review"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_HR_REVIEW_ROLES)
+def complete_employee_tax_hr_review(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    component_reviews = (
+        payload.get("component_reviews")
+        or payload.get("componentReviews")
+        or []
+    )
+
+    if not isinstance(component_reviews, list):
+        raise PayrollTaxError(
+            "component_reviews must be an array.",
+            code="invalid_tax_component_reviews",
+        )
+
+    declaration = complete_tax_hr_review(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        component_reviews=component_reviews,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_tax_hr_review_completed",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "approved_total": declaration.get("approved_total"),
+        },
+    )
+
+    return _success(
+        "Tax declaration HR review completed successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/approve"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def approve_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = approve_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_tax_declaration_approved",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "approved_total": declaration.get("approved_total"),
+        },
+    )
+
+    return _success(
+        "Tax declaration approved successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/reject"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_REJECTION_ROLES)
+def reject_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = reject_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        reason=safe_str(
+            payload.get("reason")
+            or payload.get("rejection_reason")
+            or payload.get("rejectionReason")
+        ),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_tax_declaration_rejected",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "rejection_reason": declaration.get("rejection_reason"),
+        },
+    )
+
+    return _success(
+        "Tax declaration rejected successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/cancel"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def cancel_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = cancel_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        reason=safe_str(
+            payload.get("reason")
+            or payload.get("cancellation_reason")
+            or payload.get("cancellationReason")
+        ),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_tax_declaration_cancelled",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "cancellation_reason": declaration.get(
+                "cancellation_reason"
+            ),
+        },
+    )
+
+    return _success(
+        "Tax declaration cancelled successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.post(
+    "/tax-declarations/<employee_reference>/<financial_year>/lock"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def lock_employee_tax_declaration(
+    employee_reference: str,
+    financial_year: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    declaration = lock_tax_declaration(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=financial_year,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_tax_declaration_locked",
+        "payroll_tax_declarations",
+        declaration.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": declaration.get("employee_id"),
+            "financial_year": declaration.get("financial_year"),
+            "status": declaration.get("status"),
+            "revision_number": declaration.get("revision_number"),
+        },
+    )
+
+    return _success(
+        "Tax declaration locked successfully.",
+        tax_declaration=declaration,
+        declaration=declaration,
+    )
+
+
+@payroll_bp.get("/tds-instructions")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def get_payroll_tds_instructions():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    records = list_tds_instructions(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=safe_str(
+            request.args.get("employee_id")
+            or request.args.get("employeeId")
+            or request.args.get("employee_code")
+            or request.args.get("employeeCode")
+        ),
+        financial_years=_query_values(
+            "financial_year",
+            "financialYear",
+            "financial_years",
+        ),
+        statuses=_query_values(
+            "status",
+            "statuses",
+        ),
+        modes=_query_values(
+            "mode",
+            "modes",
+        ),
+        limit=_payroll_tax_limit(),
+    )
+
+    return _success(
+        "TDS instructions fetched successfully.",
+        items=records,
+        instructions=records,
+        count=len(records),
+    )
+
+
+@payroll_bp.post("/tds-instructions")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def create_payroll_tds_instruction():
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    requested_employee = safe_str(
+        payload.get("employee_id")
+        or payload.get("employeeId")
+        or payload.get("employee_code")
+        or payload.get("employeeCode")
+    )
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            requested_employee,
+        )
+    )
+    instruction = create_tds_instruction(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        financial_year=(
+            payload.get("financial_year")
+            or payload.get("financialYear")
+        ),
+        effective_from_period=(
+            payload.get("effective_from_period")
+            or payload.get("effectiveFromPeriod")
+            or payload.get("period")
+        ),
+        mode=payload.get("mode"),
+        monthly_tds_amount=payload.get(
+            "monthly_tds_amount",
+            payload.get("monthlyTdsAmount", 0),
+        ),
+        external_reference=safe_str(
+            payload.get("external_reference")
+            or payload.get("externalReference")
+        ),
+        source_system=safe_str(
+            payload.get("source_system")
+            or payload.get("sourceSystem")
+        ),
+        note=safe_str(payload.get("note"))[:2000],
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        activate=not (
+            payload.get("activate") is False
+            or _normalize_key(payload.get("activate"))
+            in {"0", "false", "no", "off"}
+        ),
+    )
+
+    audit(
+        "payroll_tds_instruction_created",
+        "payroll_tax_instructions",
+        instruction.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": instruction.get("employee_id"),
+            "financial_year": instruction.get("financial_year"),
+            "effective_from_period": instruction.get(
+                "effective_from_period"
+            ),
+            "mode": instruction.get("mode"),
+            "monthly_tds_amount": instruction.get(
+                "monthly_tds_amount"
+            ),
+            "status": instruction.get("status"),
+        },
+    )
+
+    return _success(
+        "TDS instruction saved successfully.",
+        tds_instruction=instruction,
+        instruction=instruction,
+    )
+
+
+@payroll_bp.post(
+    "/tds-instructions/<instruction_id>/activate"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def activate_payroll_tds_instruction(
+    instruction_id: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    instruction = activate_tds_instruction(
+        db,
+        tenant_id=tenant_id,
+        instruction_id=instruction_id,
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_tds_instruction_activated",
+        "payroll_tax_instructions",
+        instruction.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": instruction.get("employee_id"),
+            "financial_year": instruction.get("financial_year"),
+            "status": instruction.get("status"),
+        },
+    )
+
+    return _success(
+        "TDS instruction activated successfully.",
+        tds_instruction=instruction,
+        instruction=instruction,
+    )
+
+
+@payroll_bp.post(
+    "/tds-instructions/<instruction_id>/deactivate"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_FINANCE_ROLES)
+def deactivate_payroll_tds_instruction(
+    instruction_id: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    instruction = deactivate_tds_instruction(
+        db,
+        tenant_id=tenant_id,
+        instruction_id=instruction_id,
+        reason=safe_str(
+            payload.get("reason")
+            or payload.get("deactivation_reason")
+            or payload.get("deactivationReason")
+        ),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+    )
+
+    audit(
+        "payroll_tds_instruction_deactivated",
+        "payroll_tax_instructions",
+        instruction.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": instruction.get("employee_id"),
+            "financial_year": instruction.get("financial_year"),
+            "status": instruction.get("status"),
+            "deactivation_reason": instruction.get(
+                "deactivation_reason"
+            ),
+        },
+    )
+
+    return _success(
+        "TDS instruction deactivated successfully.",
+        tds_instruction=instruction,
+        instruction=instruction,
+    )
+
+
+@payroll_bp.get(
+    "/tax-context/<employee_reference>/<period_key>"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def get_employee_payroll_tax_context(
+    employee_reference: str,
+    period_key: str,
+):
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    canonical_reference = (
+        _payroll_tax_employee_reference_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+    )
+    context = resolve_payroll_tax_context(
+        db,
+        tenant_id=tenant_id,
+        employee_reference=canonical_reference,
+        period_key=period_key,
+    )
+
+    return _success(
+        "Payroll tax context resolved successfully.",
+        tax_context=context,
+        context=context,
+    )
+
+
+# ------------------------------ Payroll reports -----------------------------
+
+
+def _has_payroll_report_management_access() -> bool:
+    return bool(
+        _current_roles().intersection(
+            PAYROLL_REPORT_MANAGEMENT_ROLE_SET
+        )
+    )
+
+
+def _report_payload_value(
+    payload: Mapping[str, Any],
+    *names: str,
+    default: Any = "",
+) -> Any:
+    for name in names:
+        if name in payload:
+            return payload.get(name)
+
+    for name in names:
+        if name in request.args:
+            return request.args.get(name)
+
+    return default
+
+
+def _report_payload_values(
+    payload: Mapping[str, Any],
+    *names: str,
+) -> list[str]:
+    values: list[str] = []
+
+    for name in names:
+        raw_payload_value = payload.get(name)
+
+        if isinstance(raw_payload_value, (list, tuple, set)):
+            raw_values = list(raw_payload_value)
+        elif raw_payload_value not in (None, ""):
+            raw_values = [raw_payload_value]
+        else:
+            raw_values = []
+
+        for raw_value in raw_values:
+            values.extend(
+                item.strip()
+                for item in safe_str(raw_value).split(",")
+                if item.strip()
+            )
+
+        for raw_value in request.args.getlist(name):
+            values.extend(
+                item.strip()
+                for item in safe_str(raw_value).split(",")
+                if item.strip()
+            )
+
+    return list(dict.fromkeys(values))
+
+
+def _report_payload_bool(
+    payload: Mapping[str, Any],
+    *names: str,
+    default: bool,
+) -> bool:
+    value: Any = None
+    found = False
+
+    for name in names:
+        if name in payload:
+            value = payload.get(name)
+            found = True
+            break
+
+    if not found:
+        for name in names:
+            if name in request.args:
+                value = request.args.get(name)
+                found = True
+                break
+
+    if not found:
+        return default
+
+    if isinstance(value, bool):
+        return value
+
+    normalized = _normalize_key(value)
+
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    return default
+
+
+def _report_limit(
+    payload: Mapping[str, Any],
+    *,
+    default: int = 10000,
+) -> int:
+    raw_value = _report_payload_value(
+        payload,
+        "limit",
+        default=default,
+    )
+
+    try:
+        return max(1, min(int(raw_value or default), 50000))
+    except (TypeError, ValueError) as exc:
+        raise PayrollReportingError(
+            "limit must be a valid integer.",
+            code="invalid_payroll_report_limit",
+        ) from exc
+
+
+def _report_common_filters(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "period_key": safe_str(
+            _report_payload_value(
+                payload,
+                "period",
+                "period_key",
+                "periodKey",
+            )
+        ),
+        "start_period": safe_str(
+            _report_payload_value(
+                payload,
+                "start_period",
+                "startPeriod",
+            )
+        ),
+        "end_period": safe_str(
+            _report_payload_value(
+                payload,
+                "end_period",
+                "endPeriod",
+            )
+        ),
+        "periods": _report_payload_values(
+            payload,
+            "periods",
+        ),
+        "statuses": _report_payload_values(
+            payload,
+            "status",
+            "statuses",
+        ),
+        "official_only": _report_payload_bool(
+            payload,
+            "official_only",
+            "officialOnly",
+            default=True,
+        ),
+        "employee_ids": _report_payload_values(
+            payload,
+            "employee_id",
+            "employeeId",
+            "employee_ids",
+            "employeeIds",
+        ),
+        "departments": _report_payload_values(
+            payload,
+            "department",
+            "departments",
+        ),
+        "designations": _report_payload_values(
+            payload,
+            "designation",
+            "designations",
+        ),
+        "locations": _report_payload_values(
+            payload,
+            "location",
+            "locations",
+        ),
+        "state_codes": _report_payload_values(
+            payload,
+            "state_code",
+            "stateCode",
+            "state_codes",
+            "stateCodes",
+        ),
+        "search": safe_str(
+            _report_payload_value(
+                payload,
+                "search",
+                "q",
+            )
+        ),
+        "limit": _report_limit(payload),
+    }
+
+
+def _report_management_required() -> None:
+    if not _has_payroll_report_management_access():
+        raise PayrollReportingError(
+            "You do not have permission to access company-wide payroll reports.",
+            status_code=403,
+            code="payroll_report_management_access_required",
+        )
+
+
+def _report_employee_id_for_access(
+    db: Any,
+    tenant_id: str,
+    requested_reference: Any,
+) -> str:
+    requested = safe_str(requested_reference)
+
+    if _has_payroll_report_management_access():
+        if not requested:
+            raise PayrollReportingError(
+                "employee_id is required.",
+                code="payroll_report_employee_required",
+            )
+
+        employee = _find_employee(
+            db,
+            tenant_id,
+            requested,
+        )
+
+        if not employee:
+            raise PayrollReportingError(
+                "Employee was not found in the selected company.",
+                status_code=404,
+                code="payroll_report_employee_not_found",
+            )
+
+        return _canonical_employee_id(employee)
+
+    current_employee = _current_employee_for_user(
+        db,
+        tenant_id,
+    )
+
+    if not current_employee:
+        raise PayrollReportingError(
+            "No employee profile is linked to the current user.",
+            status_code=404,
+            code="current_employee_not_found",
+        )
+
+    current_employee_id = _canonical_employee_id(
+        current_employee
+    )
+
+    if requested:
+        requested_employee = _find_employee(
+            db,
+            tenant_id,
+            requested,
+        )
+
+        if (
+            not requested_employee
+            or _canonical_employee_id(requested_employee)
+            != current_employee_id
+        ):
+            raise PayrollReportingError(
+                "You can access payroll statements only for your own employee profile.",
+                status_code=403,
+                code="employee_payroll_statement_scope_forbidden",
+            )
+
+    return current_employee_id
+
+
+def _employee_statement_periods(
+    payload: Mapping[str, Any],
+) -> tuple[str, str]:
+    period = safe_str(
+        _report_payload_value(
+            payload,
+            "period",
+            "period_key",
+            "periodKey",
+        )
+    )
+    start_period = safe_str(
+        _report_payload_value(
+            payload,
+            "start_period",
+            "startPeriod",
+        )
+    )
+    end_period = safe_str(
+        _report_payload_value(
+            payload,
+            "end_period",
+            "endPeriod",
+        )
+    )
+
+    if period:
+        return period, period
+
+    if not start_period or not end_period:
+        raise PayrollReportingError(
+            "Provide period or both start_period and end_period.",
+            code="employee_statement_period_required",
+        )
+
+    return start_period, end_period
+
+
+def _build_payroll_report(
+    db: Any,
+    *,
+    tenant_id: str,
+    report_type: Any,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized_report_type = normalize_report_type(
+        report_type
+    )
+    common_filters = _report_common_filters(payload)
+
+    if normalized_report_type == "payroll_register":
+        _report_management_required()
+        return payroll_register(
+            db,
+            tenant_id=tenant_id,
+            **common_filters,
+        )
+
+    if normalized_report_type == "payroll_summary":
+        _report_management_required()
+        return payroll_summary(
+            db,
+            tenant_id=tenant_id,
+            **common_filters,
+        )
+
+    if normalized_report_type == "statutory_summary":
+        _report_management_required()
+        return statutory_summary(
+            db,
+            tenant_id=tenant_id,
+            **common_filters,
+        )
+
+    if normalized_report_type == "department_summary":
+        _report_management_required()
+        return department_summary(
+            db,
+            tenant_id=tenant_id,
+            **common_filters,
+        )
+
+    if normalized_report_type == "employee_statement":
+        employee_reference = safe_str(
+            _report_payload_value(
+                payload,
+                "employee_id",
+                "employeeId",
+                "employee_code",
+                "employeeCode",
+            )
+        )
+        employee_id = _report_employee_id_for_access(
+            db,
+            tenant_id,
+            employee_reference,
+        )
+        start_period, end_period = (
+            _employee_statement_periods(payload)
+        )
+        is_management = (
+            _has_payroll_report_management_access()
+        )
+
+        return employee_statement(
+            db,
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            start_period=start_period,
+            end_period=end_period,
+            statuses=(
+                common_filters["statuses"]
+                if is_management
+                else ["locked", "disbursed"]
+            ),
+            official_only=(
+                common_filters["official_only"]
+                if is_management
+                else True
+            ),
+        )
+
+    if normalized_report_type == "period_variance":
+        _report_management_required()
+        return period_variance(
+            db,
+            tenant_id=tenant_id,
+            base_period=_report_payload_value(
+                payload,
+                "base_period",
+                "basePeriod",
+            ),
+            comparison_period=_report_payload_value(
+                payload,
+                "comparison_period",
+                "comparisonPeriod",
+            ),
+            statuses=common_filters["statuses"],
+            official_only=common_filters["official_only"],
+            employee_ids=common_filters["employee_ids"],
+            departments=common_filters["departments"],
+            designations=common_filters["designations"],
+            locations=common_filters["locations"],
+            state_codes=common_filters["state_codes"],
+            search=common_filters["search"],
+        )
+
+    if normalized_report_type == "payroll_trend":
+        _report_management_required()
+        return payroll_trend(
+            db,
+            tenant_id=tenant_id,
+            start_period=_report_payload_value(
+                payload,
+                "start_period",
+                "startPeriod",
+            ),
+            end_period=_report_payload_value(
+                payload,
+                "end_period",
+                "endPeriod",
+            ),
+            statuses=common_filters["statuses"],
+            official_only=common_filters["official_only"],
+            departments=common_filters["departments"],
+            locations=common_filters["locations"],
+        )
+
+    raise PayrollReportingError(
+        "Unsupported payroll report type.",
+        code="invalid_payroll_report_type",
+    )
+
+
+def _payroll_report_csv_response(
+    result: Mapping[str, Any],
+) -> Response:
+    export = result.get("export") or {}
+    filename = safe_str(export.get("filename")) or (
+        "payroll-report.csv"
+    )
+    response = Response(
+        export.get("csv_bytes") or b"",
+        status=200,
+        mimetype="text/csv",
+    )
+    response.headers[
+        "Content-Disposition"
+    ] = f'attachment; filename="{filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers[
+        "X-Payroll-Report-Export-Id"
+    ] = safe_str(export.get("id"))
+    response.headers[
+        "X-Payroll-Report-File-SHA256"
+    ] = safe_str(export.get("sha256"))
+    response.headers[
+        "X-Payroll-Report-Row-Count"
+    ] = safe_str(export.get("row_count"))
+    response.headers[
+        "X-Payroll-Report-Total-Amount"
+    ] = safe_str(export.get("total_amount"))
+    return response
+
+
+@payroll_bp.get("/reports/register")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_register_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="payroll_register",
+        payload={},
+    )
+
+    return _success(
+        "Payroll register generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get("/reports/summary")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_summary_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="payroll_summary",
+        payload={},
+    )
+
+    return _success(
+        "Payroll summary generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get("/reports/statutory")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_statutory_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="statutory_summary",
+        payload={},
+    )
+
+    return _success(
+        "Payroll statutory summary generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get("/reports/departments")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_department_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="department_summary",
+        payload={},
+    )
+
+    return _success(
+        "Department payroll summary generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get(
+    "/reports/employee-statement/<employee_reference>"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_ACCESS_ROLES)
+def get_employee_payroll_statement(
+    employee_reference: str,
+):
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    payload = {
+        "employee_id": employee_reference,
+    }
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="employee_statement",
+        payload=payload,
+    )
+
+    return _success(
+        "Employee payroll statement generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get("/reports/variance")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_variance_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="period_variance",
+        payload={},
+    )
+
+    return _success(
+        "Payroll period variance generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.get("/reports/trend")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_trend_report():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type="payroll_trend",
+        payload={},
+    )
+
+    return _success(
+        "Payroll trend generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.post("/reports/generate")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_ACCESS_ROLES)
+def generate_payroll_report():
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    report_type = payload.get(
+        "report_type",
+        payload.get("reportType"),
+    )
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type=report_type,
+        payload=payload,
+    )
+
+    return _success(
+        "Payroll report generated successfully.",
+        report=report,
+    )
+
+
+@payroll_bp.post("/reports/export")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_ACCESS_ROLES)
+def export_payroll_report():
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    report_type = payload.get(
+        "report_type",
+        payload.get("reportType"),
+    )
+    normalized_report_type = normalize_report_type(
+        report_type
+    )
+    report = _build_payroll_report(
+        db,
+        tenant_id=tenant_id,
+        report_type=normalized_report_type,
+        payload=payload,
+    )
+    delimiter = safe_str(
+        payload.get("delimiter")
+    ) or ","
+    columns = payload.get("columns")
+
+    if columns is not None and not isinstance(
+        columns,
+        (list, tuple),
+    ):
+        raise PayrollReportingError(
+            "columns must be an array.",
+            code="invalid_payroll_report_columns",
+        )
+
+    result = generate_payroll_report_csv(
+        db,
+        tenant_id=tenant_id,
+        report_type=normalized_report_type,
+        report=report,
+        columns=columns,
+        delimiter=delimiter,
+        include_utf8_bom=_report_payload_bool(
+            payload,
+            "include_utf8_bom",
+            "includeUtf8Bom",
+            default=True,
+        ),
+        filename_prefix=safe_str(
+            payload.get("filename_prefix")
+            or payload.get("filenamePrefix")
+        ),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        persist_export_metadata=True,
+    )
+    export = result.get("export") or {}
+
+    audit(
+        "payroll_report_export_generated",
+        "payroll_report_exports",
+        export.get("id"),
+        {
+            "tenant_id": tenant_id,
+            "report_type": normalized_report_type,
+            "periods": export.get("periods"),
+            "row_count": export.get("row_count"),
+            "total_amount": export.get("total_amount"),
+            "sha256": export.get("sha256"),
+        },
+    )
+
+    return _payroll_report_csv_response(result)
+
+
+@payroll_bp.get("/report-exports")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def get_payroll_report_exports():
+    db = get_db()
+    tenant_id = _requested_tenant_id()
+    records = list_payroll_report_exports(
+        db,
+        tenant_id=tenant_id,
+        report_types=_query_values(
+            "report_type",
+            "reportType",
+            "type",
+        ),
+        periods=_query_values(
+            "period",
+            "period_key",
+            "periods",
+        ),
+        statuses=_query_values(
+            "status",
+            "statuses",
+        ),
+        limit=_report_limit({}, default=200),
+    )
+
+    return _success(
+        "Payroll report exports fetched successfully.",
+        items=records,
+        count=len(records),
+    )
+
+
+@payroll_bp.post("/report-exports/<export_id>/status")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REPORT_MANAGEMENT_ROLES)
+def update_payroll_report_export(
+    export_id: str,
+):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+    record = update_payroll_report_export_status(
+        db,
+        tenant_id=tenant_id,
+        export_id=export_id,
+        status=payload.get("status"),
+        actor_id=_current_user_id(),
+        actor_name=_current_user_name(),
+        note=safe_str(payload.get("note"))[:1000],
+    )
+
+    audit(
+        "payroll_report_export_status_updated",
+        "payroll_report_exports",
+        record.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "report_type": record.get("report_type"),
+            "periods": record.get("periods"),
+            "status": record.get("status"),
+        },
+    )
+
+    return _success(
+        "Payroll report export status updated successfully.",
+        report_export=record,
+    )
+
+
 # --------------------------- Attendance synchronization ---------------------
 
 
@@ -3026,6 +5282,54 @@ def calculate_monthly_payroll():
                 raw_employee_inputs,
                 employee,
             )
+
+            # Payroll tax is never estimated here. The calculation receives
+            # only the effective disabled/manual/external instruction resolved
+            # by the dedicated payroll tax service. Request-body TDS values
+            # cannot override the active Finance instruction.
+            tax_context = resolve_payroll_tax_context(
+                db,
+                tenant_id=tenant_id,
+                employee_reference=employee_id,
+                period_key=period_key,
+            )
+            resolved_tds = tax_context.get("tds") or {}
+            resolved_tds_mode = _normalize_key(
+                resolved_tds.get("mode") or "disabled"
+            )
+            resolved_tds_amount = _number(
+                resolved_tds.get("tds_amount"),
+                0,
+            )
+            calculation_inputs.pop("tdsAmount", None)
+            calculation_inputs["tds_amount"] = resolved_tds_amount
+            calculation_inputs["tds_source"] = resolved_tds_mode
+            calculation_inputs["tds_instruction_id"] = safe_str(
+                resolved_tds.get("instruction_id")
+            )
+            calculation_inputs["tax_declaration_id"] = safe_str(
+                (tax_context.get("declaration") or {}).get(
+                    "tax_declaration_id"
+                )
+            )
+
+            effective_statutory_config = deepcopy(
+                statutory_config
+            )
+            effective_tds_config = dict(
+                effective_statutory_config.get("tds") or {}
+            )
+            effective_tds_config["mode"] = resolved_tds_mode
+            effective_tds_config[
+                "source"
+            ] = "payroll_tax_instruction"
+            effective_tds_config[
+                "instruction_id"
+            ] = safe_str(resolved_tds.get("instruction_id"))
+            effective_statutory_config["tds"] = (
+                effective_tds_config
+            )
+
             active_advances = _active_advances(
                 db,
                 tenant_id,
@@ -3044,7 +5348,7 @@ def calculate_monthly_payroll():
 
             calculation = calculate_payroll(
                 salary_structure=salary_structure,
-                statutory_config=statutory_config,
+                statutory_config=effective_statutory_config,
                 attendance=attendance,
                 inputs=calculation_inputs,
             )
@@ -3100,7 +5404,21 @@ def calculate_monthly_payroll():
                 "salary_structure_snapshot": _snapshot(salary_structure),
                 "statutory_config_id": safe_str(statutory_config.get("_id")),
                 "statutory_config_version": statutory_config.get("version"),
-                "statutory_config_snapshot": _snapshot(statutory_config),
+                # This snapshot records the exact configuration used by the
+                # engine, including the effective TDS mode overlay.
+                "statutory_config_snapshot": _snapshot(
+                    effective_statutory_config
+                ),
+                "statutory_config_source_snapshot": _snapshot(
+                    statutory_config
+                ),
+                "tax_context_snapshot": _snapshot(tax_context),
+                "tax_declaration_snapshot": _snapshot(
+                    tax_context.get("declaration") or {}
+                ),
+                "tds_instruction_snapshot": _snapshot(
+                    tax_context.get("tds") or {}
+                ),
                 "calculation_input_snapshot": _snapshot(calculation_inputs),
                 "calculated_at": _now(),
                 "calculated_by": _current_user_id(),
@@ -3127,6 +5445,15 @@ def calculate_monthly_payroll():
                 "code": exc.code,
             })
         except PayrollReimbursementError as exc:
+            validation_errors.append({
+                "employee_id": employee_id,
+                "employee_code": employee_code,
+                "employee_name": employee_name,
+                "message": exc.message,
+                "code": exc.code,
+                "details": _snapshot(exc.details),
+            })
+        except PayrollTaxError as exc:
             validation_errors.append({
                 "employee_id": employee_id,
                 "employee_code": employee_code,
@@ -3292,6 +5619,46 @@ def _assert_workflow_role(action: str) -> None:
         )
 
 
+def _release_bank_snapshots_after_failed_lock(
+    db: Any,
+    *,
+    tenant_id: str,
+    prepared_payslip_ids: Iterable[Any],
+) -> None:
+    object_ids = [
+        object_id
+        for object_id in (
+            _object_id(value)
+            for value in prepared_payslip_ids
+        )
+        if object_id
+    ]
+
+    if not object_ids:
+        return
+
+    db.payslips.update_many(
+        {
+            "_id": {"$in": object_ids},
+            "tenant_id": tenant_id,
+            "status": "finance_approved",
+            "is_locked": {"$ne": True},
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$unset": {
+                "bank_details_snapshot": "",
+                "bank_details_validated_at": "",
+                "bank_details_validated_by": "",
+                "bank_details_validated_by_name": "",
+            },
+            "$set": {
+                "updated_at": _now(),
+            },
+        },
+    )
+
+
 def _employee_user_ids_for_run(db: Any, tenant_id: str, run_id: str) -> list[str]:
     rows = db.payslips.find({
         "tenant_id": tenant_id,
@@ -3417,6 +5784,7 @@ def advance_payroll_run():
     now = _now()
     disbursement = payload.get("disbursement") or {}
     reimbursement_reservation: dict[str, Any] | None = None
+    bank_snapshot_validation: dict[str, Any] | None = None
 
     if action == "hr_review":
         reimbursement_reservation = _reserve_run_reimbursements(
@@ -3424,6 +5792,45 @@ def advance_payroll_run():
             tenant_id=tenant_id,
             run=run,
             payslips=payslips,
+        )
+
+    if action == "lock":
+        # Bank details may have changed after an earlier preview/validation.
+        # Rebuild snapshots from the latest verified bank revision immediately
+        # before locking so stale account data can never enter a locked run.
+        db.payslips.update_many(
+            {
+                "tenant_id": tenant_id,
+                "run_id": run_id_string,
+                "status": "finance_approved",
+                "is_locked": {"$ne": True},
+                "is_deleted": {"$ne": True},
+            },
+            {
+                "$unset": {
+                    "bank_details_snapshot": "",
+                    "bank_details_validated_at": "",
+                    "bank_details_validated_by": "",
+                    "bank_details_validated_by_name": "",
+                },
+                "$set": {"updated_at": _now()},
+            },
+        )
+        payslips = list(db.payslips.find({
+            "tenant_id": tenant_id,
+            "run_id": run_id_string,
+            "is_deleted": {"$ne": True},
+        }))
+
+    if action in {"lock", "disburse"}:
+        bank_snapshot_validation = prepare_payroll_bank_snapshots(
+            db,
+            tenant_id=tenant_id,
+            run_id=run_id_string,
+            payslips=payslips,
+            actor_id=_current_user_id(),
+            actor_name=_current_user_name(),
+            strict=True,
         )
 
     if action == "disburse":
@@ -3524,6 +5931,11 @@ def advance_payroll_run():
             "locked_at": now,
             "locked_by": _current_user_id(),
             "locked_by_name": _current_user_name(),
+            "bank_snapshot_validation_summary": _snapshot(
+                bank_snapshot_validation or {}
+            ),
+            "bank_snapshots_prepared_at": now,
+            "bank_snapshots_prepared_by": _current_user_id(),
         })
         payslip_set.update({
             "is_locked": True,
@@ -3555,6 +5967,15 @@ def advance_payroll_run():
                 tenant_id=tenant_id,
                 run_id=run_id_string,
                 reason="Released because the payroll HR-review transition failed.",
+            )
+        if action == "lock" and bank_snapshot_validation:
+            _release_bank_snapshots_after_failed_lock(
+                db,
+                tenant_id=tenant_id,
+                prepared_payslip_ids=[
+                    item.get("payslip_id")
+                    for item in bank_snapshot_validation.get("prepared") or []
+                ],
             )
         raise PayrollConfigError(
             "The payroll run changed while this action was being processed. Refresh and try again.",
@@ -3623,6 +6044,15 @@ def advance_payroll_run():
                 tenant_id=tenant_id,
                 run_id=run_id_string,
                 reason="Released because the payroll payslip workflow update was rolled back.",
+            )
+        if action == "lock" and bank_snapshot_validation:
+            _release_bank_snapshots_after_failed_lock(
+                db,
+                tenant_id=tenant_id,
+                prepared_payslip_ids=[
+                    item.get("payslip_id")
+                    for item in bank_snapshot_validation.get("prepared") or []
+                ],
             )
 
         raise PayrollConfigError(
@@ -3771,6 +6201,9 @@ def advance_payroll_run():
             "to_status": next_status,
             "employee_count": expected_count,
             "note": note,
+            "bank_snapshot_validation": _snapshot(
+                bank_snapshot_validation or {}
+            ),
         },
     )
 
@@ -3784,6 +6217,7 @@ def advance_payroll_run():
             loan_recovery and (loan_recovery.get("failures") or [])
         ),
         reimbursement_reservation=reimbursement_reservation,
+        bank_snapshot_validation=bank_snapshot_validation,
         reimbursement_payment=reimbursement_payment,
         reimbursement_payment_requires_retry=bool(
             reimbursement_payment

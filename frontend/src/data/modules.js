@@ -20,6 +20,7 @@ import {
   ClipboardList,
   ContactRound,
   Network,
+  Calculator,
 } from 'lucide-react';
 
 /*
@@ -201,6 +202,11 @@ export const PAYROLL_CONFIG_ROLES = ADMIN_HR_FINANCE_ROLES;
 export const PAYROLL_LOAN_ROLES = ALL_COMMON_ROLES;
 
 export const PAYROLL_REIMBURSEMENT_ROLES = ALL_COMMON_ROLES;
+
+export const PAYROLL_BANKING_ROLES = ALL_COMMON_ROLES;
+
+export const PAYROLL_REPORT_ROLES = ALL_COMMON_ROLES;
+export const PAYROLL_TAX_ROLES = ALL_COMMON_ROLES;
 
 export const ATTENDANCE_ROLES = EMPLOYEE_PORTAL_ROLES;
 
@@ -694,6 +700,29 @@ export const coreModules = [
     PAYROLL_REIMBURSEMENT_ROLES,
   ],
 
+  [
+    'payroll_banking',
+    'Payroll Banking',
+    Wallet,
+    'Manage employee bank details, verification, payroll bank snapshots, salary disbursement files and bank export tracking.',
+    PAYROLL_BANKING_ROLES,
+  ],
+
+  [
+  'payroll_reports',
+  'Payroll Reports',
+  BarChart3,
+  'Generate payroll registers, summaries, statutory reports, department reports, employee statements, payroll variance, trends and audited CSV exports.',
+  PAYROLL_REPORT_ROLES,
+],
+
+[
+  'tax_declarations',
+  'Tax Declarations & TDS',
+  Calculator,
+  'Manage employee tax declarations, investment proofs, HR and Finance approvals, tax regimes, payroll tax context and disabled, manual or external TDS instructions.',
+  PAYROLL_TAX_ROLES,
+],
   [
     'payroll_runs',
     'Payroll Runs',

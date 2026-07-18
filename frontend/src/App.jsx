@@ -37,6 +37,10 @@ import Payroll from './pages/Payroll.jsx';
 import PayrollConfiguration from './pages/PayrollConfiguration.jsx';
 import LoansAdvances from './pages/LoansAdvances.jsx';
 import Reimbursements from './pages/Reimbursements.jsx';
+import PayrollBanking from './pages/PayrollBanking.jsx';
+import PayrollReports from './pages/PayrollReports.jsx';
+import TaxDeclarations from './pages/TaxDeclarations.jsx';
+import Payslips from './pages/Payslips.jsx';
 import Leave from './pages/Leave';
 import ApplyLeave from './pages/ApplyLeave';
 import Projects from './pages/Projects';
@@ -99,6 +103,66 @@ const PAYROLL_LOAN_ROLES = [
 ];
 
 const PAYROLL_REIMBURSEMENT_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
+];
+
+const PAYROLL_BANKING_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
+];
+
+const PAYROLL_REPORT_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
+];
+
+const PAYROLL_TAX_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+  'finance',
+  'accounts_finance',
+  'employee',
+  'team_leader',
+  'reporting_officer',
+  'manager',
+  'ro',
+];
+
+const PAYSLIP_ROLES = [
   'super_admin',
   'admin',
   'hr_admin',
@@ -480,6 +544,81 @@ const PAGE_ALIASES = {
   'employee-claims': 'reimbursements',
   'expense-claims': 'reimbursements',
   'payroll-reimbursements': 'reimbursements',
+
+  payroll_banking: 'payroll_banking',
+  payroll_bank: 'payroll_banking',
+  bank_details: 'payroll_banking',
+  employee_bank_details: 'payroll_banking',
+  salary_disbursement: 'payroll_banking',
+  bank_exports: 'payroll_banking',
+
+  'payroll-banking': 'payroll_banking',
+  'payroll-bank': 'payroll_banking',
+  'bank-details': 'payroll_banking',
+  'employee-bank-details': 'payroll_banking',
+  'salary-disbursement': 'payroll_banking',
+  'bank-exports': 'payroll_banking',
+
+  payroll_reports: 'payroll_reports',
+  payroll_report: 'payroll_reports',
+  payroll_analytics: 'payroll_reports',
+  payroll_register: 'payroll_reports',
+  payroll_summary: 'payroll_reports',
+  statutory_reports: 'payroll_reports',
+  statutory_summary: 'payroll_reports',
+  department_payroll_report: 'payroll_reports',
+  employee_payroll_statement: 'payroll_reports',
+  payroll_variance: 'payroll_reports',
+  payroll_trend: 'payroll_reports',
+  salary_reports: 'payroll_reports',
+
+  'payroll-reports': 'payroll_reports',
+  'payroll-report': 'payroll_reports',
+  'payroll-analytics': 'payroll_reports',
+  'payroll-register': 'payroll_reports',
+  'payroll-summary': 'payroll_reports',
+  'statutory-reports': 'payroll_reports',
+  'statutory-summary': 'payroll_reports',
+  'department-payroll-report': 'payroll_reports',
+  'employee-payroll-statement': 'payroll_reports',
+  'payroll-variance': 'payroll_reports',
+  'payroll-trend': 'payroll_reports',
+  'salary-reports': 'payroll_reports',
+
+  tax_declarations: 'tax_declarations',
+  tax_declaration: 'tax_declarations',
+  employee_tax_declarations: 'tax_declarations',
+  income_tax_declarations: 'tax_declarations',
+  payroll_tax: 'tax_declarations',
+  payroll_tax_declarations: 'tax_declarations',
+  tds: 'tax_declarations',
+  tds_management: 'tax_declarations',
+  tds_instructions: 'tax_declarations',
+  tax_proofs: 'tax_declarations',
+  investment_declarations: 'tax_declarations',
+
+  'tax-declarations': 'tax_declarations',
+  'tax-declaration': 'tax_declarations',
+  'employee-tax-declarations': 'tax_declarations',
+  'income-tax-declarations': 'tax_declarations',
+  'payroll-tax': 'tax_declarations',
+  'payroll-tax-declarations': 'tax_declarations',
+  'tds-management': 'tax_declarations',
+  'tds-instructions': 'tax_declarations',
+  'tax-proofs': 'tax_declarations',
+  'investment-declarations': 'tax_declarations',
+
+  payslips: 'payslips',
+  payslip: 'payslips',
+  salary_slip: 'payslips',
+  salary_slips: 'payslips',
+  employee_payslip: 'payslips',
+  employee_payslips: 'payslips',
+
+  'salary-slip': 'payslips',
+  'salary-slips': 'payslips',
+  'employee-payslip': 'payslips',
+  'employee-payslips': 'payslips',
 
   profile: 'profile',
   my_profile: 'profile',
@@ -867,6 +1006,46 @@ function PageRouter({ page, user, setPage }) {
     }
 
     return <Reimbursements setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'payroll_banking') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_BANKING_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <PayrollBanking setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'payroll_reports') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_REPORT_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <PayrollReports setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'tax_declarations') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYROLL_TAX_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <TaxDeclarations setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'payslips') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYSLIP_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <Payslips setPage={setPage} user={safeUser} />;
   }
 
   if (!canAccessModule(safeUser, normalizedPage)) {
@@ -1303,6 +1482,46 @@ export default function App() {
       const userRoles = normalizeRoles(normalizedUser);
 
       if (!hasAnyRole(userRoles, PAYROLL_REIMBURSEMENT_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'payroll_banking') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_BANKING_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'payroll_reports') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_REPORT_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'tax_declarations') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYROLL_TAX_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'payslips') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYSLIP_ROLES)) {
         setPage('dashboard');
       }
 

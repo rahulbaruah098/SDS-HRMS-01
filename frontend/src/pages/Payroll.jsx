@@ -177,7 +177,6 @@ function emptyManualInput(totalDays) {
     working_days: '',
     paid_leave_days: '0',
     lwp_days: '',
-    tds_amount: '',
   };
 }
 
@@ -195,6 +194,59 @@ function resolveRunTotals(run = {}) {
 
 function resolvePayslipTotals(payslip = {}) {
   return payslip.totals || {};
+}
+
+function resolveTaxContextSnapshot(payslip = {}) {
+  return payslip.tax_context_snapshot || {};
+}
+
+function resolveTaxDeclarationSnapshot(payslip = {}) {
+  const taxContext = resolveTaxContextSnapshot(payslip);
+
+  return (
+    payslip.tax_declaration_snapshot ||
+    taxContext.declaration ||
+    {}
+  );
+}
+
+function resolveTdsInstructionSnapshot(payslip = {}) {
+  const taxContext = resolveTaxContextSnapshot(payslip);
+
+  return (
+    payslip.tds_instruction_snapshot ||
+    taxContext.tds ||
+    {}
+  );
+}
+
+function resolveTdsMode(payslip = {}) {
+  const instruction = resolveTdsInstructionSnapshot(payslip);
+  const calculationInput = payslip.calculation_input_snapshot || {};
+
+  return normalizeKey(
+    instruction.mode ||
+      calculationInput.tds_source ||
+      'disabled',
+  );
+}
+
+function resolveReimbursementTotal(totals = {}) {
+  return toNumber(
+    totals.reimbursements ??
+      totals.reimbursement_amount ??
+      totals.approved_reimbursements,
+    0,
+  );
+}
+
+function hasBankSnapshot(payslip = {}) {
+  return Boolean(
+    payslip.bank_snapshot_available ||
+      payslip.bank_details_snapshot ||
+      payslip.bank_snapshot ||
+      payslip.bank_account_snapshot,
+  );
 }
 
 function resolvePayslipEmployeeId(payslip = {}) {
@@ -320,7 +372,7 @@ function sortEmployees(items = []) {
   });
 }
 
-export default function Payroll({ user = {} }) {
+export default function Payroll({ user = {}, setPage = () => {} }) {
   const alerts = useCustomAlert();
   const superAdmin = isSuperAdmin(user);
 
@@ -774,9 +826,6 @@ export default function Payroll({ user = {} }) {
           return `Enter valid paid leave days for ${employeeName(employee)}.`;
         }
 
-        if (input.tds_amount !== '' && toNumber(input.tds_amount, -1) < 0) {
-          return `Enter a valid TDS amount for ${employeeName(employee)}.`;
-        }
       }
     }
 
@@ -813,23 +862,6 @@ export default function Payroll({ user = {} }) {
 
         return row;
       });
-    }
-
-    const employeeInputs = {};
-
-    targetEmployees.forEach((employee) => {
-      const id = employeeId(employee);
-      const input = manualInputs[id] || {};
-
-      if (input.tds_amount !== '') {
-        employeeInputs[id] = {
-          tds_amount: Number(input.tds_amount),
-        };
-      }
-    });
-
-    if (Object.keys(employeeInputs).length) {
-      payload.employee_inputs = employeeInputs;
     }
 
     return payload;
@@ -1049,6 +1081,51 @@ export default function Payroll({ user = {} }) {
           border-radius: 999px;
           padding: 9px 13px;
           font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .payroll-module-links {
+          display: grid;
+          grid-template-columns: repeat(6, minmax(150px, 1fr));
+          gap: 11px;
+        }
+
+        .payroll-module-link {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          min-height: 54px;
+          padding: 12px 13px;
+          border: 1px solid var(--line);
+          border-radius: 15px;
+          background: #fff;
+          color: var(--ink);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 900;
+          text-align: left;
+          cursor: pointer;
+          transition:
+            transform .15s ease,
+            border-color .15s ease,
+            box-shadow .15s ease;
+        }
+
+        .payroll-module-link:hover {
+          transform: translateY(-1px);
+          border-color: var(--primaryRing);
+          box-shadow: 0 10px 24px rgba(15, 23, 42, .07);
+        }
+
+        .payroll-module-link svg {
+          flex: 0 0 auto;
+          color: var(--primary);
+        }
+
+        .payroll-module-link span {
+          overflow: hidden;
+          text-overflow: ellipsis;
           white-space: nowrap;
         }
 
@@ -1351,7 +1428,36 @@ export default function Payroll({ user = {} }) {
         }
 
         .payroll-result-table table {
-          min-width: 1240px;
+          min-width: 1560px;
+        }
+
+        .payroll-tax-source {
+          display: grid;
+          gap: 4px;
+          min-width: 130px;
+        }
+
+        .payroll-tax-source small {
+          color: var(--muted);
+          font-size: 11px;
+        }
+
+        .payroll-bank-ready {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          color: #047857;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .payroll-bank-missing {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          color: #92400E;
+          font-size: 12px;
+          font-weight: 900;
         }
 
         .payroll-sync-summary {
@@ -1410,6 +1516,10 @@ export default function Payroll({ user = {} }) {
         }
 
         @media (max-width: 1180px) {
+          .payroll-module-links {
+            grid-template-columns: repeat(3, minmax(150px, 1fr));
+          }
+
           .payroll-metric-grid {
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }
@@ -1424,6 +1534,7 @@ export default function Payroll({ user = {} }) {
         }
 
         @media (max-width: 720px) {
+          .payroll-module-links,
           .payroll-metric-grid,
           .payroll-form-grid,
           .payroll-sync-metrics {
@@ -1441,9 +1552,10 @@ export default function Payroll({ user = {} }) {
         <div>
           <h2>Payroll Processing</h2>
           <p>
-            Calculate a Draft payroll using the employee’s active salary structure,
-            applicable state-wise statutory configuration, LWP attendance data, active
-            advances, and explicitly supplied TDS values.
+            Calculate Draft payroll using active salary structures, effective statutory
+            configuration, synchronized attendance and LWP, approved reimbursements,
+            active loan recoveries, verified bank data, and Finance-controlled Disabled,
+            Manual or External TDS instructions.
           </p>
         </div>
 
@@ -1451,6 +1563,62 @@ export default function Payroll({ user = {} }) {
           <WalletCards size={18} />
           Draft calculation stage
         </div>
+      </section>
+
+      <section className="payroll-module-links" aria-label="Payroll module shortcuts">
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('payroll_configuration')}
+        >
+          <Calculator size={18} />
+          <span>Payroll Configuration</span>
+        </button>
+
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('loans_advances')}
+        >
+          <IndianRupee size={18} />
+          <span>Loans & Advances</span>
+        </button>
+
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('reimbursements')}
+        >
+          <WalletCards size={18} />
+          <span>Reimbursements</span>
+        </button>
+
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('payroll_banking')}
+        >
+          <WalletCards size={18} />
+          <span>Payroll Banking</span>
+        </button>
+
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('payroll_reports')}
+        >
+          <FileText size={18} />
+          <span>Payroll Reports</span>
+        </button>
+
+        <button
+          type="button"
+          className="payroll-module-link"
+          onClick={() => setPage('tax_declarations')}
+        >
+          <CheckCircle2 size={18} />
+          <span>Tax Declarations & TDS</span>
+        </button>
       </section>
 
       <section className="payroll-metric-grid">
@@ -1856,10 +2024,11 @@ export default function Payroll({ user = {} }) {
         <section className="panel">
           <div className="payroll-table-head">
             <div>
-              <h3>Manual attendance and TDS input</h3>
+              <h3>Manual attendance input</h3>
               <p>
                 Calendar days are fixed from the selected month. Leave shown here is
-                tracking-only; only LWP reduces salary.
+                tracking-only; only LWP reduces salary. TDS is resolved automatically
+                from the active Finance instruction and cannot be entered here.
               </p>
             </div>
             <span className="payroll-hero-badge">
@@ -1876,7 +2045,6 @@ export default function Payroll({ user = {} }) {
                   <th>Working days</th>
                   <th>Paid leave</th>
                   <th>LWP days *</th>
-                  <th>Manual TDS</th>
                 </tr>
               </thead>
               <tbody>
@@ -1924,16 +2092,6 @@ export default function Payroll({ user = {} }) {
                           required
                         />
                       </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={input.tds_amount}
-                          onChange={(event) => updateManualInput(id, 'tds_amount', event.target.value)}
-                          placeholder="Only if finalized"
-                        />
-                      </td>
                     </tr>
                   );
                 })}
@@ -1950,6 +2108,18 @@ export default function Payroll({ user = {} }) {
           ) : null}
         </section>
       ) : null}
+
+      <section className="payroll-note">
+        <CheckCircle2 size={18} />
+        <div>
+          <strong>TDS and tax declarations are centrally controlled.</strong>
+          <div>
+            Payroll ignores client-entered TDS overrides. Each payslip stores the exact
+            approved declaration and effective Disabled, Manual or External TDS
+            instruction snapshots used during calculation.
+          </div>
+        </div>
+      </section>
 
       {calculationErrors.length ? (
         <section className="panel payroll-error-box">
@@ -2080,9 +2250,12 @@ export default function Payroll({ user = {} }) {
                 <th>Employer PF</th>
                 <th>PT</th>
                 <th>TDS</th>
+                <th>TDS source</th>
                 <th>Advances</th>
+                <th>Reimbursements</th>
                 <th>Total deductions</th>
                 <th>Net amount</th>
+                <th>Bank snapshot</th>
                 <th>Payslip PDF</th>
               </tr>
             </thead>
@@ -2090,6 +2263,10 @@ export default function Payroll({ user = {} }) {
               {payslips.map((payslip) => {
                 const totals = resolvePayslipTotals(payslip);
                 const attendance = payslip.attendance || {};
+                const taxDeclaration = resolveTaxDeclarationSnapshot(payslip);
+                const tdsInstruction = resolveTdsInstructionSnapshot(payslip);
+                const tdsMode = resolveTdsMode(payslip);
+                const bankSnapshotAvailable = hasBankSnapshot(payslip);
 
                 return (
                   <tr key={safeText(payslip._id || payslip.employee_id)}>
@@ -2112,10 +2289,43 @@ export default function Payroll({ user = {} }) {
                     <td>{formatCurrency(totals.pf_employer)}</td>
                     <td>{formatCurrency(totals.professional_tax)}</td>
                     <td>{formatCurrency(totals.tds)}</td>
+                    <td>
+                      <div className="payroll-tax-source">
+                        <span className={statusClass(
+                          tdsMode === 'disabled' ? 'draft' : 'reviewed'
+                        )}>
+                          {statusLabel(tdsMode)}
+                        </span>
+                        <small>
+                          Declaration: {statusLabel(
+                            taxDeclaration.status || 'not_found'
+                          )}
+                        </small>
+                        {tdsInstruction.effective_from_period ? (
+                          <small>
+                            Effective: {tdsInstruction.effective_from_period}
+                          </small>
+                        ) : null}
+                      </div>
+                    </td>
                     <td>{formatCurrency(totals.advances)}</td>
+                    <td>{formatCurrency(resolveReimbursementTotal(totals))}</td>
                     <td>{formatCurrency(totals.total_deductions)}</td>
                     <td>
                       <strong>{formatCurrency(totals.net_amount)}</strong>
+                    </td>
+                    <td>
+                      {bankSnapshotAvailable ? (
+                        <span className="payroll-bank-ready">
+                          <CheckCircle2 size={14} />
+                          Available
+                        </span>
+                      ) : (
+                        <span className="payroll-bank-missing">
+                          <AlertTriangle size={14} />
+                          Not prepared
+                        </span>
+                      )}
                     </td>
                     <td>
                       {(() => {

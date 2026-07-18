@@ -633,6 +633,199 @@ def ensure_indexes(database):
         },
     )
     
+    # Payroll banking and salary-disbursement lookups:
+    # - duplicate active employee bank-account protection
+    # - Finance verification queues
+    # - idempotent bank-export metadata persistence
+    # - payroll-run and payroll-period export history
+    create_index_safe(
+        database.bank_details,
+        [
+            ("tenant_id", ASCENDING),
+            ("account_number_fingerprint", ASCENDING),
+            ("is_active", ASCENDING),
+            ("is_deleted", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.bank_details,
+        [
+            ("tenant_id", ASCENDING),
+            ("verification_status", ASCENDING),
+            ("is_active", ASCENDING),
+            ("employee_name", ASCENDING),
+            ("employee_code", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_bank_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("export_key", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "export_key": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.payroll_bank_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("run_id", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_bank_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("period_key", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    # Payroll reporting:
+    # - official and internal payroll-register queries by period/status
+    # - idempotent CSV export metadata
+    # - report-type, period and export-status history
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("period_key", ASCENDING),
+            ("status", ASCENDING),
+            ("is_deleted", ASCENDING),
+            ("employee_code", ASCENDING),
+            ("employee_name", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_report_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("export_key", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "export_key": {"$exists": True},
+        },
+    )
+
+    create_index_safe(
+        database.payroll_report_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("report_type", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_report_exports,
+        [
+            ("tenant_id", ASCENDING),
+            ("periods", ASCENDING),
+            ("report_type", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
+    # Employee tax declarations:
+    # - employee/FY declaration resolution
+    # - HR and Finance workflow queues
+    # - company-wide financial-year reporting
+    create_index_safe(
+        database.payroll_tax_declarations,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("financial_year", ASCENDING),
+            ("status", ASCENDING),
+            ("is_deleted", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_tax_declarations,
+        [
+            ("tenant_id", ASCENDING),
+            ("financial_year", ASCENDING),
+            ("status", ASCENDING),
+            ("employee_name", ASCENDING),
+            ("employee_code", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_tax_declarations,
+        [
+            ("tenant_id", ASCENDING),
+            ("status", ASCENDING),
+            ("updated_at", ASCENDING),
+        ],
+    )
+
+    # TDS instructions:
+    # - only one active instruction per employee/FY
+    # - effective payroll-period resolution
+    # - fingerprint-based duplicate protection
+    # - Finance instruction history
+    create_index_safe(
+        database.payroll_tax_instructions,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("financial_year", ASCENDING),
+        ],
+        unique=True,
+        partialFilterExpression={
+            "status": "active",
+            "is_deleted": False,
+        },
+    )
+
+    create_index_safe(
+        database.payroll_tax_instructions,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("financial_year", ASCENDING),
+            ("status", ASCENDING),
+            ("effective_from_period", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_tax_instructions,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("fingerprint", ASCENDING),
+            ("status", ASCENDING),
+            ("is_deleted", ASCENDING),
+        ],
+    )
+
+    create_index_safe(
+        database.payroll_tax_instructions,
+        [
+            ("tenant_id", ASCENDING),
+            ("financial_year", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+    )
+
     # Master data duplicate safety
     create_index_safe(
         database.departments,

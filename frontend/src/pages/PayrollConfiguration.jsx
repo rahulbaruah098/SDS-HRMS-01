@@ -345,8 +345,8 @@ function emptyStatutoryForm(stateCode = 'ALL') {
       wage_base: 'gross_salary',
     },
     tds: {
-      mode: 'manual',
-      source: '',
+      mode: 'disabled',
+      source: 'payroll_tax_instruction',
     },
     lwp: {
       divisor_mode: '',
@@ -407,8 +407,8 @@ function statutoryFormFromDocument(document = {}) {
       wage_base: safeText(esi.wage_base, 'gross_salary'),
     },
     tds: {
-      mode: safeText(tds.mode, 'manual'),
-      source: safeText(tds.source),
+      mode: safeText(tds.mode, 'disabled'),
+      source: safeText(tds.source, 'payroll_tax_instruction'),
     },
     lwp: {
       divisor_mode: safeText(lwp.divisor_mode),
@@ -439,7 +439,33 @@ function listFromCommaText(value) {
     .filter(Boolean);
 }
 
-export default function PayrollConfiguration({ user = {} }) {
+function assamProfessionalTaxSlabs() {
+  return [
+    {
+      minimum_amount: '0',
+      maximum_amount: '15000',
+      minimum_inclusive: true,
+      maximum_inclusive: true,
+      tax_amount: '0',
+    },
+    {
+      minimum_amount: '15000',
+      maximum_amount: '25000',
+      minimum_inclusive: false,
+      maximum_inclusive: false,
+      tax_amount: '180',
+    },
+    {
+      minimum_amount: '25000',
+      maximum_amount: '',
+      minimum_inclusive: true,
+      maximum_inclusive: true,
+      tax_amount: '208',
+    },
+  ];
+}
+
+export default function PayrollConfiguration({ user = {}, setPage = () => {} }) {
   const alerts = useCustomAlert();
   const superAdmin = isSuperAdmin(user);
 
@@ -876,6 +902,34 @@ export default function PayrollConfiguration({ user = {} }) {
     }));
   }
 
+  function applyAssamProfessionalTaxPreset() {
+    setStateCode('AS');
+    setStatutoryForm((current) => ({
+      ...current,
+      state_code: 'AS',
+      state_name: current.state_name || 'Assam',
+      effective_from: '2025-04-01',
+      source_reference:
+        current.source_reference ||
+        'Assam Professional Tax rates effective April 2025',
+      professional_tax: {
+        ...current.professional_tax,
+        enabled: true,
+        basis: 'gross_salary',
+        slabs: assamProfessionalTaxSlabs(),
+      },
+    }));
+
+    alerts.success(
+      'Assam Professional Tax slabs effective April 2025 were loaded into the current draft. Review and save the draft before activation.',
+      'Assam PT Preset Loaded',
+    );
+  }
+
+  function openTaxDeclarations() {
+    setPage('tax_declarations');
+  }
+
   function statutoryPayload() {
     return {
       ...(statutoryForm.id ? { _id: statutoryForm.id } : {}),
@@ -917,8 +971,11 @@ export default function PayrollConfiguration({ user = {} }) {
         wage_base: normalizeKey(statutoryForm.esi.wage_base),
       },
       tds: {
-        mode: statutoryForm.tds.mode,
-        source: statutoryForm.tds.source,
+        mode: normalizeKey(statutoryForm.tds.mode || 'disabled'),
+        source: safeText(
+          statutoryForm.tds.source,
+          'payroll_tax_instruction',
+        ),
       },
       lwp: {
         divisor_mode: statutoryForm.lwp.divisor_mode,
@@ -1015,13 +1072,26 @@ export default function PayrollConfiguration({ user = {} }) {
           </span>
           <h1>Salary & Statutory Configuration</h1>
           <p>
-            Configure employee salary revisions and effective-dated statutory rules.
-            Percentages and slabs remain company/state controlled instead of being fixed in code.
+            Configure employee salary revisions and effective-dated PF, ESI,
+            Professional Tax and LWP rules. Employee declarations and monthly TDS
+            instructions are managed separately so payroll never accepts an
+            uncontrolled request-body TDS override.
           </p>
         </div>
 
-        <div className="payroll-config-hero-icon">
-          <BadgeIndianRupee size={34} />
+        <div className="payroll-config-hero-actions">
+          <button
+            type="button"
+            className="payroll-config-tax-button"
+            onClick={openTaxDeclarations}
+          >
+            <ShieldCheck size={17} />
+            Tax Declarations & TDS
+          </button>
+
+          <div className="payroll-config-hero-icon">
+            <BadgeIndianRupee size={34} />
+          </div>
         </div>
       </header>
 
@@ -1665,11 +1735,33 @@ export default function PayrollConfiguration({ user = {} }) {
           <section className="payroll-config-card">
             <div className="payroll-config-rule-head">
               <div><BadgeIndianRupee size={20} /><h2>Professional Tax</h2></div>
-              <label className="payroll-switch">
-                <input type="checkbox" checked={statutoryForm.professional_tax.enabled} onChange={(event) => updateStatutorySection('professional_tax', 'enabled', event.target.checked)} />
-                <span>Enabled</span>
-              </label>
+              <div className="payroll-config-rule-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={applyAssamProfessionalTaxPreset}
+                >
+                  Load Assam Apr 2025 Preset
+                </button>
+
+                <label className="payroll-switch">
+                  <input type="checkbox" checked={statutoryForm.professional_tax.enabled} onChange={(event) => updateStatutorySection('professional_tax', 'enabled', event.target.checked)} />
+                  <span>Enabled</span>
+                </label>
+              </div>
             </div>
+
+            {safeText(statutoryForm.state_code).toUpperCase() === 'AS' ? (
+              <div className="payroll-config-info-notice">
+                <CheckCircle2 size={17} />
+                <span>
+                  Assam preset boundaries: gross salary up to ₹15,000 = ₹0;
+                  above ₹15,000 and below ₹25,000 = ₹180; ₹25,000 and above = ₹208.
+                  The preset uses an effective date of 01 April 2025 and remains
+                  editable before activation.
+                </span>
+              </div>
+            ) : null}
 
             <div className="payroll-config-inline-field">
               <label>
@@ -1714,23 +1806,44 @@ export default function PayrollConfiguration({ user = {} }) {
 
           <div className="payroll-config-rule-grid">
             <section className="payroll-config-card payroll-config-rule-card">
-              <h2>TDS Handling</h2>
+              <div className="payroll-config-section-head">
+                <div>
+                  <span className="payroll-config-kicker">Company policy metadata</span>
+                  <h2>TDS Handling</h2>
+                </div>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={openTaxDeclarations}
+                >
+                  Manage Employee TDS
+                </button>
+              </div>
+
               <div className="payroll-config-form-grid">
                 <label>
-                  Mode
+                  Default policy mode
                   <select value={statutoryForm.tds.mode} onChange={(event) => updateStatutorySection('tds', 'mode', event.target.value)}>
-                    <option value="manual">Manual Input</option>
-                    <option value="external">External Calculation</option>
                     <option value="disabled">Disabled</option>
+                    <option value="manual">Manual Instruction</option>
+                    <option value="external">External Instruction</option>
                   </select>
                 </label>
                 <label>
-                  Source / system
-                  <input value={statutoryForm.tds.source} onChange={(event) => updateStatutorySection('tds', 'source', event.target.value)} placeholder="Optional" />
+                  Policy source
+                  <input value={statutoryForm.tds.source} onChange={(event) => updateStatutorySection('tds', 'source', event.target.value)} placeholder="payroll_tax_instruction" />
                 </label>
               </div>
+
               <div className="payroll-config-notice">
-                <AlertTriangle size={17} /> TDS is not estimated by this module until your company finalizes the calculation method.
+                <AlertTriangle size={17} />
+                <span>
+                  This section stores company-level policy metadata only. The
+                  authoritative monthly amount comes from the active employee TDS
+                  instruction in Tax Declarations & TDS. Automatic slab calculation
+                  remains disabled.
+                </span>
               </div>
             </section>
 
@@ -1854,6 +1967,39 @@ export default function PayrollConfiguration({ user = {} }) {
           letter-spacing: .09em;
           font-size: 11px;
           font-weight: 900;
+        }
+
+        .payroll-config-hero-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 12px;
+          flex: 0 0 auto;
+        }
+
+        .payroll-config-tax-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 42px;
+          padding: 10px 14px;
+          border: 1px solid rgba(255,255,255,.28);
+          border-radius: 12px;
+          background: rgba(255,255,255,.12);
+          color: #fff;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform .15s ease,
+            background .15s ease;
+        }
+
+        .payroll-config-tax-button:hover {
+          transform: translateY(-1px);
+          background: rgba(255,255,255,.2);
         }
 
         .payroll-config-hero-icon {
@@ -2297,6 +2443,29 @@ export default function PayrollConfiguration({ user = {} }) {
           gap: 8px;
         }
 
+        .payroll-config-rule-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 9px;
+          flex-wrap: wrap;
+        }
+
+        .payroll-config-info-notice {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          margin: -2px 0 14px;
+          padding: 11px 12px;
+          border: 1px solid rgba(5, 150, 105, .18);
+          border-radius: 11px;
+          background: rgba(5, 150, 105, .07);
+          color: #046c4e;
+          font-size: 12px;
+          font-weight: 750;
+          line-height: 1.5;
+        }
+
         .payroll-config-span-2 {
           grid-column: 1 / -1;
         }
@@ -2380,7 +2549,17 @@ export default function PayrollConfiguration({ user = {} }) {
 
         @media (max-width: 680px) {
           .payroll-config-hero {
+            flex-direction: column;
             padding: 20px;
+          }
+
+          .payroll-config-hero-actions {
+            width: 100%;
+            justify-content: stretch;
+          }
+
+          .payroll-config-tax-button {
+            flex: 1;
           }
 
           .payroll-config-hero-icon {
