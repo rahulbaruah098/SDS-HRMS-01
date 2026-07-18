@@ -26,6 +26,13 @@ from app.services.razorpay_service import (
 )
 from app.services.tenant_service import safe_str
 from app.services.email_service import send_premium_quotation_email
+from app.services.platform_notification_service import (
+    notify_payment_order_created,
+    notify_payment_received,
+    notify_payment_verification_failed,
+    notify_premium_action_required,
+    notify_premium_request_received,
+)
 from app.utils.auth import audit, current_user_required, roles_required
 from app.utils.serializers import clean_doc
 
@@ -47,6 +54,68 @@ def request_json():
 def current_user_id():
     user = getattr(g, "current_user", {}) or {}
     return str(user.get("_id") or user.get("id") or user.get("email") or "")
+
+
+def safe_platform_notification(callback, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except Exception as exc:
+        current_app.logger.exception(
+            "Platform Superadmin billing notification failed: %s",
+            exc,
+        )
+        return {
+            "ok": False,
+            "created_count": 0,
+            "error": str(exc),
+        }
+
+
+def platform_notification_record(
+    db,
+    record=None,
+    *,
+    tenant_id="",
+    extra=None,
+):
+    notification_record = dict(record or {})
+    resolved_tenant_id = safe_str(
+        tenant_id
+        or notification_record.get("tenant_id")
+        or notification_record.get("company_id")
+    )
+
+    tenant = {}
+
+    if resolved_tenant_id:
+        tenant = db.tenants.find_one(
+            {
+                "tenant_id": resolved_tenant_id,
+                "is_deleted": {"$ne": True},
+            }
+        ) or {}
+
+    notification_record["tenant_id"] = (
+        resolved_tenant_id
+        or safe_str(tenant.get("tenant_id"))
+    )
+    notification_record["company_name"] = (
+        safe_str(notification_record.get("company_name"))
+        or safe_str(tenant.get("company_name"))
+        or safe_str(tenant.get("name"))
+        or "Company"
+    )
+    notification_record["company_email"] = (
+        safe_str(notification_record.get("company_email"))
+        or safe_str(tenant.get("company_email"))
+        or safe_str(tenant.get("contact_email"))
+        or safe_str(tenant.get("email"))
+    )
+
+    if isinstance(extra, dict):
+        notification_record.update(extra)
+
+    return notification_record
 
 
 def current_tenant_id():
@@ -1205,6 +1274,47 @@ def create_order():
             },
         )
 
+        order_notification_record = platform_notification_record(
+            db,
+            order,
+            tenant_id=tenant_id,
+            extra={
+                "_id": (
+                    order.get("order_id")
+                    or order.get("razorpay_order_id")
+                ),
+                "order_id": order.get("order_id"),
+                "razorpay_order_id":
+                    order.get("razorpay_order_id"),
+                "amount": (
+                    checkout.get("amount_rupees")
+                    or checkout.get("amount")
+                ),
+                "currency":
+                    checkout.get("currency") or "INR",
+                "plan_code": (
+                    checkout.get("plan_code")
+                    or selected_plan.get("plan_code")
+                    or plan_code
+                ),
+                "plan_name": (
+                    checkout.get("plan_name")
+                    or selected_plan.get("plan_name")
+                ),
+                "premium_request_id":
+                    resolved_premium_request_id,
+                "quotation_reference":
+                    quotation_reference,
+                "status": "created",
+            },
+        )
+
+        safe_platform_notification(
+            notify_payment_order_created,
+            db,
+            order_notification_record,
+        )
+
         return jsonify({
             "ok": True,
             "message": "Payment order created successfully.",
@@ -1443,6 +1553,15 @@ def premium_plan_request():
             },
         )
 
+        safe_platform_notification(
+            notify_premium_request_received,
+            db,
+            {
+                **request_doc,
+                "_id": result.inserted_id,
+            },
+        )
+
         return jsonify({
             "ok": True,
             "message": (
@@ -1499,6 +1618,45 @@ def verify_payment():
         billing = result.get("billing") or {}
         subscription = result.get("subscription") or billing
 
+        payment_notification_record = platform_notification_record(
+            db,
+            result,
+            tenant_id=tenant_id,
+            extra={
+                "_id": (
+                    result.get("payment_id")
+                    or data.get("razorpay_payment_id")
+                ),
+                "payment_id": result.get("payment_id"),
+                "razorpay_order_id":
+                    data.get("razorpay_order_id"),
+                "razorpay_payment_id":
+                    data.get("razorpay_payment_id"),
+                "amount": (
+                    result.get("amount")
+                    or billing.get("amount")
+                    or subscription.get("amount")
+                ),
+                "currency": (
+                    result.get("currency")
+                    or billing.get("currency")
+                    or subscription.get("currency")
+                    or "INR"
+                ),
+                "plan_code": (
+                    billing.get("plan_code")
+                    or subscription.get("plan_code")
+                ),
+                "status": "paid",
+            },
+        )
+
+        safe_platform_notification(
+            notify_payment_received,
+            db,
+            payment_notification_record,
+        )
+
         return jsonify({
             "ok": True,
             "message": result.get("message") or "Payment verified successfully. Full HRMS access is now active.",
@@ -1522,6 +1680,46 @@ def verify_payment():
             "requires_payment": billing.get("requires_payment"),
         })
     except Exception as exc:
+        failed_order_id = safe_str(
+            data.get("razorpay_order_id")
+        )
+        stored_order = {}
+
+        if failed_order_id:
+            stored_order = db.payment_orders.find_one(
+                {
+                    "razorpay_order_id": failed_order_id,
+                    "is_deleted": {"$ne": True},
+                }
+            ) or {}
+
+        failed_payment_record = platform_notification_record(
+            db,
+            stored_order,
+            tenant_id=tenant_id,
+            extra={
+                "_id": (
+                    failed_order_id
+                    or safe_str(
+                        stored_order.get("_id")
+                    )
+                    or data.get("razorpay_payment_id")
+                ),
+                "razorpay_order_id":
+                    data.get("razorpay_order_id"),
+                "razorpay_payment_id":
+                    data.get("razorpay_payment_id"),
+                "status": "verification_failed",
+            },
+        )
+
+        safe_platform_notification(
+            notify_payment_verification_failed,
+            db,
+            failed_payment_record,
+            failure_message=str(exc),
+        )
+
         return error_response(exc)
 
 
@@ -1562,6 +1760,75 @@ def razorpay_webhook():
         }
 
         result = db.razorpay_webhooks.insert_one(webhook_doc)
+
+        normalized_event_name = event_name.lower()
+
+        if (
+            normalized_event_name.endswith(".failed")
+            or normalized_event_name
+            in {
+                "payment.failed",
+                "order.failed",
+                "payment.authorized.failed",
+            }
+        ):
+            razorpay_order_id = safe_str(
+                entity.get("order_id")
+            )
+            stored_order = {}
+
+            if razorpay_order_id:
+                stored_order = db.payment_orders.find_one(
+                    {
+                        "razorpay_order_id":
+                            razorpay_order_id,
+                        "is_deleted": {"$ne": True},
+                    }
+                ) or {}
+
+            failed_webhook_record = (
+                platform_notification_record(
+                    db,
+                    stored_order,
+                    tenant_id=stored_order.get(
+                        "tenant_id",
+                        "",
+                    ),
+                    extra={
+                        "_id": (
+                            razorpay_order_id
+                            or entity.get("id")
+                            or result.inserted_id
+                        ),
+                        "razorpay_order_id":
+                            razorpay_order_id,
+                        "razorpay_payment_id":
+                            entity.get("id"),
+                        "amount":
+                            entity.get("amount"),
+                        "currency":
+                            entity.get("currency"),
+                        "status":
+                            entity.get("status")
+                            or "failed",
+                    },
+                )
+            )
+
+            safe_platform_notification(
+                notify_payment_verification_failed,
+                db,
+                failed_webhook_record,
+                failure_message=(
+                    safe_str(
+                        entity.get("error_description")
+                    )
+                    or safe_str(
+                        entity.get("error_reason")
+                    )
+                    or f"Razorpay webhook event: {event_name}"
+                ),
+            )
 
         return jsonify({
             "ok": True,
@@ -2076,6 +2343,72 @@ def admin_update_premium_request(request_id):
         )
 
         updated = db.premium_plan_requests.find_one({"_id": object_id})
+
+        quotation_event_suffix = safe_str(
+            updated.get("quotation_sent_at")
+            if updated
+            else now_utc()
+        )
+
+        if (
+            updated
+            and updated.get("quotation_email_sent")
+            is False
+        ):
+            quotation_email_result = (
+                updated.get("quotation_email_result")
+                or {}
+            )
+
+            safe_platform_notification(
+                notify_premium_action_required,
+                db,
+                updated,
+                action="quotation_email_delivery_failed",
+                message=(
+                    f"{updated.get('company_name') or 'Company'}: "
+                    "Premium quotation email delivery was not confirmed. "
+                    "Review the email address or resend the quotation."
+                    + (
+                        " "
+                        + safe_str(
+                            quotation_email_result.get(
+                                "message"
+                            )
+                        )
+                        if safe_str(
+                            quotation_email_result.get(
+                                "message"
+                            )
+                        )
+                        else ""
+                    )
+                ),
+                event_suffix=quotation_event_suffix,
+            )
+
+        if (
+            updated
+            and int(
+                updated.get(
+                    "quotation_notification_count"
+                )
+                or 0
+            )
+            == 0
+        ):
+            safe_platform_notification(
+                notify_premium_action_required,
+                db,
+                updated,
+                action="client_notification_missing",
+                message=(
+                    f"{updated.get('company_name') or 'Company'}: "
+                    "the Premium quotation was published, but no "
+                    "client in-app notification recipient was found."
+                ),
+                event_suffix=quotation_event_suffix,
+            )
 
     audit(
         "billing.premium_request_updated",

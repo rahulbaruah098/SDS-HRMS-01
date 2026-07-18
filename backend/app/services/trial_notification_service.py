@@ -4,6 +4,9 @@ from bson import ObjectId
 from flask import current_app
 
 from app.services.email_service import send_trial_reminder_email
+from app.services.platform_notification_service import (
+    notify_platform_superadmins,
+)
 from app.services.tenant_service import (
     is_lifetime_tenant,
     is_paid_tenant,
@@ -44,6 +47,142 @@ def config_value(key, default=None):
         return current_app.config.get(key, default)
     except RuntimeError:
         return default
+
+
+def safe_platform_notification(callback, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except Exception as exc:
+        try:
+            current_app.logger.exception(
+                "Platform Superadmin trial notification failed: %s",
+                exc,
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": False,
+            "created_count": 0,
+            "error": str(exc),
+        }
+
+
+def notify_platform_trial_reminder(
+    db,
+    tenant,
+    reminder_type,
+    days_left,
+    *,
+    email_result=None,
+    force=False,
+):
+    tenant_id = tenant_identifier(tenant)
+    company = tenant_name(tenant)
+    email_result = email_result or {}
+    is_expired = days_left <= 0
+
+    if is_expired:
+        title = "Trial company expired"
+        body = (
+            f"{company}'s trial has expired and the company now "
+            "requires subscription payment or Superadmin review."
+        )
+        priority = "urgent"
+        notification_type = "platform_trial_expired"
+        action = "trial_expired"
+    else:
+        day_label = (
+            "tomorrow"
+            if days_left == 1
+            else f"in {days_left} days"
+        )
+        title = "Trial expiry reminder"
+        body = (
+            f"{company}'s trial expires {day_label}. "
+            "Monitor conversion or follow up before access expires."
+        )
+        priority = "high" if days_left <= 3 else "normal"
+        notification_type = "platform_trial_expiring"
+        action = "trial_expiring"
+
+    reminder_result = safe_platform_notification(
+        notify_platform_superadmins,
+        db,
+        title=title,
+        body=body,
+        notification_type=notification_type,
+        priority=priority,
+        target="companies",
+        event_key=(
+            f"{action}:{tenant_id}:{reminder_type}"
+        ),
+        source="trial_notifications",
+        source_id=tenant_id,
+        tenant_id=tenant_id,
+        tenant_name=company,
+        tenant_email=tenant_email(tenant),
+        meta={
+            "trial_reminder": True,
+            "reminder_type": reminder_type,
+            "days_left": days_left,
+            "trial_end_date": tenant.get("trial_end_date"),
+            "trial_status": tenant.get("trial_status"),
+            "subscription_status": tenant.get(
+                "subscription_status"
+            ),
+            "requires_payment": tenant.get(
+                "requires_payment",
+                False,
+            ),
+            "company_email_sent": bool(
+                email_result.get("ok")
+            ),
+        },
+        force=force,
+    )
+
+    if not bool(email_result.get("ok")):
+        safe_platform_notification(
+            notify_platform_superadmins,
+            db,
+            title="Trial reminder email delivery failed",
+            body=(
+                f"{company}'s trial reminder email was not "
+                "delivered successfully. Review the company email "
+                "or contact the company manually."
+                + (
+                    f" {safe_str(email_result.get('message'))}"
+                    if safe_str(email_result.get("message"))
+                    else ""
+                )
+            ),
+            notification_type=(
+                "platform_trial_reminder_email_failure"
+            ),
+            priority="urgent",
+            target="companies",
+            event_key=(
+                "trial_reminder_email_failure:"
+                f"{tenant_id}:{reminder_type}"
+            ),
+            source="trial_notifications",
+            source_id=tenant_id,
+            tenant_id=tenant_id,
+            tenant_name=company,
+            tenant_email=tenant_email(tenant),
+            meta={
+                "trial_reminder": True,
+                "reminder_type": reminder_type,
+                "days_left": days_left,
+                "delivery_error": safe_str(
+                    email_result.get("message")
+                ),
+            },
+            force=force,
+        )
+
+    return reminder_result
 
 
 def as_object_id(value):
@@ -560,6 +699,15 @@ def process_trial_notification_for_tenant(db, tenant, *, force=False, dry_run=Fa
         reminder_type,
         email_result=email_result,
         in_app_count=in_app_count,
+    )
+
+    notify_platform_trial_reminder(
+        db,
+        tenant,
+        reminder_type,
+        days_left,
+        email_result=email_result,
+        force=force,
     )
 
     return {

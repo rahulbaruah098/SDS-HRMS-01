@@ -25,6 +25,11 @@ ADMIN_ROLES = {
     "hr",
 }
 
+PLATFORM_CONFIGURATION_ROLES = {
+    "super_admin",
+    "admin",
+}
+
 PROJECT_CREATOR_ROLES = {
     "team_leader",
     "reporting_officer",
@@ -64,6 +69,8 @@ READ_ALLOWED_COLLECTIONS = {
     "users",
     "notifications",
     "performance_reviews",
+    "audit_logs",
+    "system_settings",
 }
 
 WRITE_ALLOWED_COLLECTIONS = {
@@ -80,6 +87,7 @@ WRITE_ALLOWED_COLLECTIONS = {
     "candidates",
     "trainings",
     "notifications",
+    "system_settings",
 }
 
 # Payroll financial records are readable through the generic collection routes,
@@ -90,6 +98,11 @@ PAYROLL_WORKFLOW_MANAGED_COLLECTIONS = {
     "payslips",
 }
 
+
+PLATFORM_SUPERADMIN_GLOBAL_COLLECTIONS = {
+    "audit_logs",
+    "system_settings",
+}
 
 
 # SaaS collection access mapping.
@@ -144,6 +157,7 @@ SOFT_DELETE_COLLECTIONS = {
     "candidates",
     "trainings",
     "notifications",
+    "system_settings",
 }
 
 SEARCH_FIELDS = {
@@ -300,6 +314,22 @@ SEARCH_FIELDS = {
         "title",
         "body",
         "status",
+    ],
+    "audit_logs": [
+        "tenant_id",
+        "action",
+        "entity",
+        "entity_id",
+        "actor_id",
+        "actor_name",
+        "actor_email",
+    ],
+    "system_settings": [
+        "tenant_id",
+        "setting_group",
+        "setting_key",
+        "setting_value",
+        "description",
     ],
     "performance_reviews": [
         "employee_name",
@@ -1532,11 +1562,23 @@ def can_update_project_status(project):
     return bool(project_member_ids(project).intersection(set(identifier_values)))
 
 
+def can_read_collection(collection):
+    roles = current_user_roles()
+
+    if collection in {"audit_logs", "system_settings"}:
+        return bool(roles.intersection(PLATFORM_CONFIGURATION_ROLES))
+
+    return True
+
+
 def can_write_collection(collection):
     roles = current_user_roles()
 
     if collection not in WRITE_ALLOWED_COLLECTIONS:
         return False
+
+    if collection == "system_settings":
+        return bool(roles.intersection(PLATFORM_CONFIGURATION_ROLES))
 
     if collection == "projects":
         return can_create_assign_or_collaborate_projects()
@@ -1834,8 +1876,11 @@ def base_scope_query(collection):
 
     tenant_arg = normalize_text(request.args.get("tenant_id"))
 
-    if is_super_admin() and tenant_arg:
-        q["tenant_id"] = tenant_arg
+    if is_super_admin():
+        if tenant_arg:
+            q["tenant_id"] = tenant_arg
+        elif collection not in PLATFORM_SUPERADMIN_GLOBAL_COLLECTIONS and collection not in {"companies"}:
+            q["tenant_id"] = current_tenant_id()
     elif collection not in {"companies"}:
         q["tenant_id"] = current_tenant_id()
 
@@ -3549,6 +3594,11 @@ def list_collection(collection):
             "message": f"Collection '{collection}' is not available"
         }), 404
 
+    if not can_read_collection(collection):
+        return jsonify({
+            "message": "You do not have permission to view this collection"
+        }), 403
+
     db = get_db()
     saas_denied = ensure_saas_collection_access(collection, "read", db=db)
 
@@ -3633,6 +3683,11 @@ def get_collection_item(collection, item_id):
         return jsonify({
             "message": f"Collection '{collection}' is not available"
         }), 404
+
+    if not can_read_collection(collection):
+        return jsonify({
+            "message": "You do not have permission to view this collection"
+        }), 403
 
     db = get_db()
     saas_denied = ensure_saas_collection_access(collection, "read", db=db)

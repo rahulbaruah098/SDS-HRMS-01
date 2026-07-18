@@ -5,7 +5,6 @@ from bson import ObjectId
 
 from app.extensions import get_db
 from app.utils.auth import roles_required
-from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
 from app.services.attendance_excel import (
@@ -1338,7 +1337,6 @@ def excel_safe_query_and(base_q, extra_q):
 
 @reports_bp.get("/summary")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def summary():
     db = get_db()
     base_q = build_report_query()
@@ -1507,7 +1505,6 @@ def summary():
 
 @reports_bp.get("/attendance-register.xlsx")
 @roles_required(*AUDIT_ROLES)
-@tenant_module_required("reports")
 def attendance_register_excel_export():
     db = get_db()
 
@@ -1798,7 +1795,6 @@ def attendance_register_excel_export():
 
 @reports_bp.get("/attendance")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def attendance_report():
     db = get_db()
 
@@ -1822,7 +1818,6 @@ def attendance_report():
 
 @reports_bp.get("/field-attendance")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def field_attendance_report():
     db = get_db()
 
@@ -1846,7 +1841,6 @@ def field_attendance_report():
 
 @reports_bp.get("/attendance-mode-requests")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def attendance_mode_requests_report():
     db = get_db()
 
@@ -1867,7 +1861,6 @@ def attendance_mode_requests_report():
 
 @reports_bp.get("/holiday-work-requests")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def holiday_work_requests_report():
     db = get_db()
 
@@ -1890,7 +1883,6 @@ def holiday_work_requests_report():
 
 @reports_bp.get("/holidays")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def holiday_report():
     db = get_db()
 
@@ -1925,7 +1917,6 @@ def holiday_report():
 
 @reports_bp.get("/compoffs")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def compoff_report():
     db = get_db()
 
@@ -1948,7 +1939,6 @@ def compoff_report():
 
 @reports_bp.get("/compoff-claims")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def compoff_claims_report():
     db = get_db()
 
@@ -1973,7 +1963,6 @@ def compoff_claims_report():
 
 @reports_bp.get("/expired-compoffs")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def expired_compoffs_report():
     db = get_db()
 
@@ -1998,7 +1987,6 @@ def expired_compoffs_report():
 
 @reports_bp.get("/leave-balances")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def leave_balances_report():
     db = get_db()
 
@@ -2030,7 +2018,6 @@ def leave_balances_report():
 
 @reports_bp.get("/leave-requests")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def leave_requests_report():
     db = get_db()
 
@@ -2104,7 +2091,6 @@ def leave_requests_report():
 
 @reports_bp.get("/leave-approvals")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def leave_approvals_report():
     db = get_db()
 
@@ -2145,7 +2131,6 @@ def leave_approvals_report():
 
 @reports_bp.get("/leave-deductions")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def leave_deductions_report():
     db = get_db()
 
@@ -2184,14 +2169,12 @@ def leave_deductions_report():
 
 @reports_bp.get("/leave-records")
 @roles_required(*REPORT_ROLES)
-@tenant_module_required("reports")
 def leave_records_report():
     return leave_requests_report()
 
 
 @reports_bp.get("/audit")
 @roles_required(*AUDIT_ROLES)
-@tenant_module_required("reports")
 def audits():
     db = get_db()
     q = build_report_query()

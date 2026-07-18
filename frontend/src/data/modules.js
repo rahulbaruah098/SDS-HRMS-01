@@ -845,6 +845,16 @@ export const coreModules = [
 
 export const allModules = [...superModules, ...coreModules];
 
+export const SUPERADMIN_PLATFORM_MODULE_KEYS = [
+  ...superModules.map((module) => module[0]),
+  'notifications',
+  'it_support',
+  'audit_logs',
+  'system_settings',
+  'employees',
+  'profile',
+];
+
 export function normalizeRoleValue(role) {
   return String(role || '')
     .trim()
@@ -1382,6 +1392,12 @@ export function moduleList(user) {
   const roles = effectiveRoleList(user);
 
   if (roles.includes('super_admin')) {
+    return allModules.filter((module) =>
+      SUPERADMIN_PLATFORM_MODULE_KEYS.includes(module[0]),
+    );
+  }
+
+  if (roles.includes('super_admin')) {
     return allModules.filter((module) => module[0] !== 'billing');
   }
 
@@ -1420,6 +1436,16 @@ export function moduleList(user) {
 
 export function canAccessModule(user, moduleKey) {
   const roles = effectiveRoleList(user);
+
+  const requestedModuleKey = String(moduleKey || '')
+    .trim()
+    .replaceAll('-', '_');
+
+  if (roles.includes('super_admin')) {
+    return SUPERADMIN_PLATFORM_MODULE_KEYS.includes(
+      requestedModuleKey,
+    );
+  }
 
   if (roles.includes('super_admin')) {
     return true;

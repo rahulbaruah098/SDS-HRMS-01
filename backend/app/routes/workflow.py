@@ -113,6 +113,235 @@ def fcm_string_data(data):
 
     return safe
 
+
+PLATFORM_NOTIFICATION_NAVIGATION = {
+    "companies": {
+        "page": "companies",
+        "label": "Open Companies",
+        "mobile_route": "/superadmin/companies",
+    },
+    "company": {
+        "page": "companies",
+        "label": "Open Companies",
+        "mobile_route": "/superadmin/companies",
+    },
+    "tenants": {
+        "page": "companies",
+        "label": "Open Companies",
+        "mobile_route": "/superadmin/companies",
+    },
+    "tenant": {
+        "page": "companies",
+        "label": "Open Companies",
+        "mobile_route": "/superadmin/companies",
+    },
+    "demo_requests": {
+        "page": "demo_requests",
+        "label": "Open Trial Requests",
+        "mobile_route": "/superadmin/trial-requests",
+    },
+    "trial_requests": {
+        "page": "demo_requests",
+        "label": "Open Trial Requests",
+        "mobile_route": "/superadmin/trial-requests",
+    },
+    "trial_request": {
+        "page": "demo_requests",
+        "label": "Open Trial Requests",
+        "mobile_route": "/superadmin/trial-requests",
+    },
+    "premium_requests": {
+        "page": "premium_requests",
+        "label": "Open Premium Requests",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "premium_request": {
+        "page": "premium_requests",
+        "label": "Open Premium Requests",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "subscriptions": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "subscription": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "payments": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "payment": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "orders": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+    "billing": {
+        "page": "subscriptions",
+        "label": "Open Billing & Subscriptions",
+        "mobile_route": "/superadmin/subscriptions-payments",
+    },
+}
+
+
+def is_platform_notification_payload(value):
+    value = value or {}
+    meta = value.get("meta") if isinstance(
+        value.get("meta"),
+        dict,
+    ) else {}
+
+    notification_type = normalize_text(
+        value.get("notification_type")
+        or value.get("type")
+        or meta.get("notification_type")
+        or meta.get("type")
+    ).lower()
+
+    return bool(
+        value.get("platform_notification")
+        or meta.get("platform_notification")
+        or notification_type.startswith("platform_")
+    )
+
+
+def canonical_platform_notification_navigation(value):
+    value = value or {}
+    meta = value.get("meta") if isinstance(
+        value.get("meta"),
+        dict,
+    ) else value
+
+    raw_target = normalize_text(
+        value.get("target")
+        or value.get("page")
+        or meta.get("target")
+        or meta.get("page")
+        or ""
+    ).lower().replace("-", "_").replace(" ", "_")
+
+    notification_type = normalize_text(
+        value.get("notification_type")
+        or value.get("type")
+        or meta.get("notification_type")
+        or meta.get("type")
+    ).lower()
+
+    if not raw_target:
+        if "trial" in notification_type:
+            raw_target = "demo_requests"
+        elif "premium" in notification_type:
+            raw_target = "premium_requests"
+        elif (
+            "payment" in notification_type
+            or "subscription" in notification_type
+            or "order" in notification_type
+        ):
+            raw_target = "subscriptions"
+        elif "company" in notification_type:
+            raw_target = "companies"
+
+    return PLATFORM_NOTIFICATION_NAVIGATION.get(
+        raw_target,
+        {
+            "page": raw_target or "notifications",
+            "label": "Open Notification",
+            "mobile_route": "/notifications",
+        },
+    )
+
+
+def normalize_platform_notification_meta(meta):
+    meta = dict(meta or {})
+
+    if not is_platform_notification_payload(meta):
+        return meta
+
+    navigation = canonical_platform_notification_navigation(
+        meta
+    )
+    page = navigation["page"]
+    route = navigation["mobile_route"]
+    label = navigation["label"]
+
+    meta["platform_notification"] = True
+    meta["target"] = page
+    meta["page"] = page
+    meta["action_page"] = page
+    meta["action_target"] = page
+    meta["action_label"] = label
+    meta["action_route"] = route
+    meta["mobile_route"] = route
+    meta["web_page"] = page
+
+    if not normalize_text(meta.get("link_id")):
+        meta["link_id"] = normalize_text(
+            meta.get("source_id")
+            or meta.get("request_id")
+            or meta.get("premium_request_id")
+            or meta.get("order_id")
+            or meta.get("payment_id")
+            or meta.get("tenant_id")
+        )
+
+    if not normalize_text(meta.get("link_type")):
+        meta["link_type"] = normalize_text(
+            meta.get("notification_type")
+            or meta.get("type")
+            or "platform_notification"
+        )
+
+    return meta
+
+
+def normalize_platform_notification_item(item):
+    item = dict(item or {})
+
+    if not is_platform_notification_payload(item):
+        return item
+
+    meta = normalize_platform_notification_meta(
+        item.get("meta") or {}
+    )
+    navigation = canonical_platform_notification_navigation(
+        {
+            **item,
+            "meta": meta,
+        }
+    )
+    page = navigation["page"]
+    label = navigation["label"]
+    route = navigation["mobile_route"]
+
+    item["platform_notification"] = True
+    item["target"] = page
+    item["page"] = page
+    item["action_page"] = page
+    item["action_target"] = page
+    item["action_label"] = label
+    item["action_route"] = route
+    item["mobile_route"] = route
+    item["web_page"] = page
+    item["meta"] = meta
+    item["action"] = {
+        "page": page,
+        "target": page,
+        "label": label,
+        "route": route,
+    }
+
+    return item
+
+
 def append_identity_value(values, value):
     text = normalize_text(value)
 
@@ -483,6 +712,9 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
 def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
     meta = meta or {}
 
+    if is_platform_notification_payload(meta):
+        meta = normalize_platform_notification_meta(meta)
+
     clean_user_ids = [
         str(user_id)
         for user_id in user_ids
@@ -515,6 +747,17 @@ def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
             "body": normalize_text(body),
             "message": normalize_text(body),
             "target": meta.get("target") or meta.get("page") or "notifications",
+            "page": meta.get("page") or meta.get("target") or "notifications",
+            "action_target": meta.get("action_target") or meta.get("target") or meta.get("page") or "notifications",
+            "action_page": meta.get("action_page") or meta.get("page") or meta.get("target") or "notifications",
+            "action_label": meta.get("action_label") or "",
+            "action_route": meta.get("action_route") or meta.get("mobile_route") or "",
+            "mobile_route": meta.get("mobile_route") or meta.get("action_route") or "",
+            "web_page": meta.get("web_page") or meta.get("page") or meta.get("target") or "notifications",
+            "platform_notification": meta.get("platform_notification", False),
+            "source_id": meta.get("source_id") or "",
+            "tenant_id": meta.get("source_tenant_id") or meta.get("tenant_id") or "",
+            "company_name": meta.get("company_name") or "",
             "notification_type": meta.get("notification_type") or meta.get("type") or "system",
             "priority": meta.get("priority") or "normal",
             "link_id": meta.get("link_id") or "",
@@ -4010,6 +4253,11 @@ def list_notifications():
         .sort("created_at", -1)
         .limit(limit)
     )
+
+    items = [
+        normalize_platform_notification_item(item)
+        for item in items
+    ]
 
     unread_count = db.notifications.count_documents(notification_scope_for_current_user({
         "read": {"$ne": True},

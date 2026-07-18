@@ -79,6 +79,25 @@ function priorityClass(priority = '') {
 }
 
 
+function isPlatformNotification(item = {}) {
+  const meta = item.meta || {};
+  const notificationType = String(
+    item.notification_type ||
+      item.type ||
+      meta.notification_type ||
+      meta.type ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
+
+  return Boolean(
+    item.platform_notification === true ||
+      meta.platform_notification === true ||
+      notificationType.startsWith('platform_'),
+  );
+}
+
 function getNotificationAction(item = {}) {
   const meta = item.meta || {};
   const target = String(
@@ -91,6 +110,71 @@ function getNotificationAction(item = {}) {
     .trim()
     .toLowerCase()
     .replaceAll('-', '_');
+
+  if (isPlatformNotification(item)) {
+    const action = item.action || {};
+    const actionTarget = String(
+      item.action_page ||
+        item.action_target ||
+        action.page ||
+        action.target ||
+        meta.action_page ||
+        meta.action_target ||
+        item.web_page ||
+        meta.web_page ||
+        target,
+    )
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+
+    const platformPageMap = {
+      company: 'companies',
+      companies: 'companies',
+      tenant: 'companies',
+      tenants: 'companies',
+
+      trial_request: 'demo_requests',
+      trial_requests: 'demo_requests',
+      demo_request: 'demo_requests',
+      demo_requests: 'demo_requests',
+
+      premium_request: 'premium_requests',
+      premium_requests: 'premium_requests',
+      premium_plan_request: 'premium_requests',
+      premium_plan_requests: 'premium_requests',
+
+      billing: 'subscriptions',
+      subscription: 'subscriptions',
+      subscriptions: 'subscriptions',
+      payment: 'subscriptions',
+      payments: 'subscriptions',
+      order: 'subscriptions',
+      orders: 'subscriptions',
+      payment_orders: 'subscriptions',
+    };
+
+    const page = platformPageMap[actionTarget];
+
+    if (page) {
+      const defaultLabels = {
+        companies: 'Open Companies',
+        demo_requests: 'Open Trial Requests',
+        premium_requests: 'Open Premium Requests',
+        subscriptions: 'Open Billing & Subscriptions',
+      };
+
+      return {
+        page,
+        label:
+          item.action_label ||
+          action.label ||
+          meta.action_label ||
+          defaultLabels[page],
+      };
+    }
+  }
 
   if (target === 'billing' || target === 'upgrade' || target === 'subscribe') {
     return {
@@ -283,6 +367,7 @@ function MultiSelectInput({
 function NotificationCard({ item, onMarkRead, onNavigate }) {
   const isUnread = item.read !== true && item.status !== 'read';
   const action = getNotificationAction(item);
+  const platformNotification = isPlatformNotification(item);
 
   return (
     <article className={`notif-card ${isUnread ? 'unread' : ''}`}>
@@ -296,6 +381,11 @@ function NotificationCard({ item, onMarkRead, onNavigate }) {
           <span className={`notif-pill ${isUnread ? 'notif-pill-green' : 'notif-pill-gray'}`}>
             {notificationStatusLabel(item)}
           </span>
+          {platformNotification ? (
+            <span className="notif-pill notif-pill-blue">
+              Platform
+            </span>
+          ) : null}
           {action ? (
             <button
               type="button"
@@ -382,6 +472,9 @@ export default function Notifications({ setPage } = {}) {
         item.notification_type,
         item.tenant_id,
         item.tenant_name,
+        item.company_name,
+        item.action_label,
+        item.action_page,
         item.created_by_name,
       ];
 
@@ -711,6 +804,11 @@ export default function Notifications({ setPage } = {}) {
       const routeMap = {
         billing: '/billing',
         subscription_expired: '/subscription-expired',
+        companies: '/companies',
+        demo_requests: '/demo-requests',
+        premium_requests: '/premium-requests',
+        subscriptions: '/subscriptions',
+        notifications: '/notifications',
       };
 
       window.history.pushState({}, '', routeMap[normalizedPage] || '/');

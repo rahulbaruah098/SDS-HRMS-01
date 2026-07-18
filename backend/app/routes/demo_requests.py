@@ -24,6 +24,11 @@ from app.services.otp_service import (
     generate_numeric_otp,
     verify_demo_request_otp,
 )
+from app.services.platform_notification_service import (
+    notify_trial_delivery_failure,
+    notify_trial_request_ready_for_review,
+    notify_trial_request_received,
+)
 from app.utils.auth import audit, roles_required
 from app.utils.serializers import clean_doc
 
@@ -73,6 +78,21 @@ def object_id(value):
 def current_actor_id():
     user = getattr(g, "current_user", {}) or {}
     return str(user.get("_id") or user.get("id") or user.get("email") or "system")
+
+
+def safe_platform_notification(callback, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except Exception as exc:
+        current_app.logger.exception(
+            "Platform Superadmin notification failed: %s",
+            exc,
+        )
+        return {
+            "ok": False,
+            "created_count": 0,
+            "error": str(exc),
+        }
 
 
 def sanitize_demo_request(doc, include_internal=False):
@@ -219,6 +239,29 @@ def apply_for_demo():
         },
     )
 
+    updated_request = db.demo_requests.find_one(
+        {"_id": insert_result.inserted_id}
+    ) or {
+        **doc,
+        "_id": insert_result.inserted_id,
+        "otp_email_sent": bool(mail_result.get("ok")),
+    }
+
+    safe_platform_notification(
+        notify_trial_request_received,
+        db,
+        updated_request,
+    )
+
+    if not bool(mail_result.get("ok")):
+        safe_platform_notification(
+            notify_trial_delivery_failure,
+            db,
+            updated_request,
+            delivery_type="otp_email",
+            failure_message=mail_result.get("message") or "",
+        )
+
     return jsonify({
         "ok": True,
         "message": "Trial registration submitted. Please verify the OTP sent to the registered company email.",
@@ -290,6 +333,33 @@ def verify_demo_otp():
         request_id=request_id,
         email=email,
     )
+
+    if updated_request:
+        safe_platform_notification(
+            notify_trial_request_ready_for_review,
+            db,
+            updated_request,
+        )
+
+        request_received_result = (
+            updated_request.get("request_received_email_result")
+            or {}
+        )
+
+        if (
+            updated_request.get("request_received_email_sent")
+            is False
+        ):
+            safe_platform_notification(
+                notify_trial_delivery_failure,
+                db,
+                updated_request,
+                delivery_type="request_received_email",
+                failure_message=(
+                    request_received_result.get("message")
+                    or ""
+                ),
+            )
 
     return jsonify({
         "ok": True,
@@ -371,6 +441,21 @@ def resend_demo_otp():
             }
         },
     )
+
+    if not bool(mail_result.get("ok")):
+        updated_request = find_demo_request(
+            db,
+            request_id=request_id,
+            email=email,
+        ) or demo_request
+
+        safe_platform_notification(
+            notify_trial_delivery_failure,
+            db,
+            updated_request,
+            delivery_type="otp_resend_email",
+            failure_message=mail_result.get("message") or "",
+        )
 
     return jsonify({
         "ok": True,
@@ -536,6 +621,20 @@ def approve_demo_request_for_admin(request_id):
         },
     )
 
+    if not bool(mail_result.get("ok")):
+        updated_request = find_demo_request(
+            db,
+            request_id=request_id,
+        ) or demo_request
+
+        safe_platform_notification(
+            notify_trial_delivery_failure,
+            db,
+            updated_request,
+            delivery_type="approval_credentials_email",
+            failure_message=mail_result.get("message") or "",
+        )
+
     audit(
         "approve_demo_request",
         "demo_request",
@@ -598,6 +697,20 @@ def reject_demo_request_for_admin(request_id):
                     "updated_at": now_utc(),
                 }
             },
+        )
+
+    if not bool(mail_result.get("ok")):
+        notification_request = demo_request or {
+            **result,
+            "_id": request_id,
+        }
+
+        safe_platform_notification(
+            notify_trial_delivery_failure,
+            db,
+            notification_request,
+            delivery_type="rejection_email",
+            failure_message=mail_result.get("message") or "",
         )
 
     audit(

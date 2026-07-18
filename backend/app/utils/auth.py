@@ -1,6 +1,10 @@
 from functools import wraps
 from datetime import datetime, timedelta, timezone
 
+import hashlib
+import secrets
+import uuid
+
 from flask import request, jsonify, g, current_app
 import jwt
 from bson import ObjectId
@@ -25,6 +29,8 @@ EMPLOYEE_CAPABILITY_ROLES = {
     "reporting_officer",
 }
 
+ACCESS_TOKEN_MINUTES = 30
+REFRESH_SESSION_DAYS = 180
 
 def safe_object_id(value):
     try:
@@ -133,10 +139,37 @@ def sync_effective_roles(db, user):
 
     return user
 
+def generate_refresh_token():
+    """
+    Generates the raw refresh token returned to the mobile app.
 
-def issue_token(user):
+    The raw value must never be stored directly in MongoDB.
+    """
+    return secrets.token_urlsafe(64)
+
+
+def hash_refresh_token(token):
+    """
+    Creates a SHA-256 hash for storing and searching refresh tokens.
+    """
+    return hashlib.sha256(
+        str(token or "").encode("utf-8")
+    ).hexdigest()
+
+
+def refresh_session_expiry():
+    """
+    Returns the MongoDB expiry time for the refresh session.
+    """
+    return now_utc() + timedelta(days=REFRESH_SESSION_DAYS)
+
+def issue_access_token(user):
+    """
+    Creates the short-lived JWT access token used for normal API requests.
+    """
     roles = normalize_roles(user.get("roles", []))
     tenant_id = user.get("tenant_id") or default_tenant_id()
+    current_time = datetime.now(timezone.utc)
 
     payload = {
         "sub": str(user["_id"]),
@@ -144,8 +177,10 @@ def issue_token(user):
         "name": user.get("name"),
         "roles": roles,
         "tenant_id": tenant_id,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=12),
-        "iat": datetime.now(timezone.utc),
+        "token_type": "access",
+        "jti": uuid.uuid4().hex,
+        "iat": current_time,
+        "exp": current_time + timedelta(minutes=ACCESS_TOKEN_MINUTES),
     }
 
     return jwt.encode(
@@ -153,6 +188,16 @@ def issue_token(user):
         current_app.config["JWT_SECRET_KEY"],
         algorithm="HS256",
     )
+
+
+def issue_token(user):
+    """
+    Backward-compatible alias.
+
+    Existing backend files calling issue_token() will continue working,
+    but they now receive a 30-minute access token.
+    """
+    return issue_access_token(user)
 
 
 def current_user_required(fn):
@@ -178,6 +223,13 @@ def current_user_required(fn):
             return jsonify({"message": "Token expired"}), 401
         except jwt.InvalidTokenError:
             return jsonify({"message": "Invalid token"}), 401
+        
+        token_type = payload.get("token_type", "access")
+
+        if token_type != "access":
+            return jsonify({
+                "message": "Invalid access token type"
+            }), 401
 
         user_obj_id = safe_object_id(payload.get("sub"))
 

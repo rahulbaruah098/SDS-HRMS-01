@@ -50,6 +50,12 @@ BACKEND_DIR = CURRENT_FILE.parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.services.platform_notification_service import (
+    notify_platform_superadmins,
+    notify_subscription_due,
+    notify_subscription_expired,
+)
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -76,6 +82,152 @@ def safe_int(value: Any, default: int | None = 0) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def safe_platform_notification(
+    app: Any,
+    callback: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    try:
+        return callback(*args, **kwargs)
+    except Exception as exc:
+        try:
+            app.logger.exception(
+                "Platform Superadmin subscription notification failed: %s",
+                exc,
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": False,
+            "created_count": 0,
+            "error": str(exc),
+        }
+
+
+def notify_platform_subscription_reminder(
+    db: Any,
+    tenant: dict[str, Any],
+    app: Any,
+    *,
+    reminder_type: str,
+    remaining_days: int,
+    due_date: datetime,
+    renewal: dict[str, Any],
+    email_result: dict[str, Any],
+    expired_updated: bool,
+    force: bool,
+) -> dict[str, Any]:
+    identifier = tenant_id(tenant)
+    due_cycle = due_date.date().isoformat()
+    cycle_key = f"{due_cycle}:{reminder_type}"
+
+    notification_tenant = {
+        **tenant,
+        "subscription_end_date": due_date,
+        "next_due_date": due_date,
+        "next_payment_due_date": due_date,
+        "payment_due_date": due_date,
+        "plan_code": renewal.get("plan_code"),
+        "plan_name": renewal.get("plan_name"),
+        "plan_label": renewal.get("plan_name"),
+        "renewal_amount": renewal.get("amount"),
+        "currency": renewal.get("currency"),
+        "billing_interval": renewal.get(
+            "billing_interval"
+        ),
+        "price_source": renewal.get("price_source"),
+        "premium_request_id": renewal.get(
+            "premium_request_id"
+        ),
+        "requires_payment": (
+            True
+            if remaining_days <= 0
+            else tenant.get("requires_payment", False)
+        ),
+    }
+
+    if remaining_days <= 0:
+        reminder_result = safe_platform_notification(
+            app,
+            notify_subscription_expired,
+            db,
+            notification_tenant,
+            cycle_key=cycle_key,
+        )
+    else:
+        reminder_result = safe_platform_notification(
+            app,
+            notify_subscription_due,
+            db,
+            notification_tenant,
+            days_left=remaining_days,
+            cycle_key=cycle_key,
+        )
+
+    if not bool(email_result.get("ok")):
+        safe_platform_notification(
+            app,
+            notify_platform_superadmins,
+            db,
+            title=(
+                "Subscription reminder email delivery failed"
+            ),
+            body=(
+                f"{company_name(tenant)}'s "
+                f"{'expiry notice' if remaining_days <= 0 else 'renewal reminder'} "
+                "email was not delivered successfully. "
+                "Review the company email address or follow up manually."
+                + (
+                    f" {safe_str(email_result.get('message'))}"
+                    if safe_str(email_result.get("message"))
+                    else ""
+                )
+            ),
+            notification_type=(
+                "platform_subscription_email_failure"
+            ),
+            priority="urgent",
+            target="subscriptions",
+            event_key=(
+                "subscription_email_failure:"
+                f"{identifier}:{cycle_key}"
+            ),
+            source="subscription_reminders",
+            source_id=identifier,
+            tenant_id=identifier,
+            tenant_name=company_name(tenant),
+            tenant_email=company_email(tenant),
+            meta={
+                "reminder_type": reminder_type,
+                "days_left": remaining_days,
+                "subscription_end_date": due_date,
+                "plan_code": renewal.get("plan_code"),
+                "plan_name": renewal.get("plan_name"),
+                "renewal_amount": renewal.get("amount"),
+                "currency": renewal.get("currency"),
+                "billing_interval": renewal.get(
+                    "billing_interval"
+                ),
+                "price_source": renewal.get(
+                    "price_source"
+                ),
+                "premium_request_id": renewal.get(
+                    "premium_request_id"
+                ),
+                "delivery_error": safe_str(
+                    email_result.get("message")
+                ),
+                "expired_status_updated":
+                    expired_updated,
+            },
+            force=force,
+        )
+
+    return reminder_result
 
 
 def normalized_roles(user: dict[str, Any]) -> set[str]:
@@ -972,6 +1124,19 @@ def process_tenant(
         email_result,
         in_app_count,
         expired_updated,
+    )
+
+    notify_platform_subscription_reminder(
+        db,
+        tenant,
+        app,
+        reminder_type=reminder_type,
+        remaining_days=remaining_days,
+        due_date=due_date,
+        renewal=renewal,
+        email_result=email_result,
+        expired_updated=expired_updated,
+        force=force,
     )
 
     return {

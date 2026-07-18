@@ -1,10 +1,23 @@
 from datetime import datetime
 
+from pymongo import ReturnDocument
+from pymongo import ReturnDocument
 from flask import Blueprint, request, jsonify, g, current_app
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import get_db
-from app.utils.auth import issue_token, current_user_required, audit
+from app.utils.auth import (
+    ACCESS_TOKEN_MINUTES,
+    REFRESH_SESSION_DAYS,
+    audit,
+    current_user_required,
+    generate_refresh_token,
+    hash_refresh_token,
+    issue_access_token,
+    now_utc,
+    refresh_session_expiry,
+    safe_object_id,
+)
 from app.utils.serializers import clean_doc
 from app.services.tenant_service import build_tenant_context, ensure_sds_tenant
 
@@ -509,6 +522,71 @@ def sync_user_employee_capabilities(db, user, employee):
 
     return user
 
+def ensure_auth_session_indexes(db):
+    """
+    Creates authentication-session indexes.
+
+    Calling create_index repeatedly is safe. MongoDB reuses an existing
+    index when its definition is unchanged.
+    """
+    db.auth_sessions.create_index(
+        "refresh_token_hash",
+        unique=True,
+        name="unique_refresh_token_hash",
+    )
+
+    db.auth_sessions.create_index(
+        "expires_at",
+        expireAfterSeconds=0,
+        name="auth_session_expiry_ttl",
+    )
+
+    db.auth_sessions.create_index(
+        [
+            ("user_id", 1),
+            ("is_revoked", 1),
+        ],
+        name="auth_session_user_revoked",
+    )
+
+#changes by atlanta
+def create_auth_session(db, user, login_data=None):
+    """
+    Creates a new refresh session and returns the raw refresh token.
+
+    Only the SHA-256 hash is stored in MongoDB.
+    """
+    login_data = login_data or {}
+
+    refresh_token = generate_refresh_token()
+    refresh_token_hash = hash_refresh_token(refresh_token)
+    current_time = now_utc()
+
+    db.auth_sessions.insert_one({
+        "user_id": str(user["_id"]),
+        "tenant_id": (
+            user.get("tenant_id")
+            or default_tenant_id()
+        ),
+        "refresh_token_hash": refresh_token_hash,
+        "device_id": normalize_text(
+            login_data.get("device_id")
+        ),
+        "device_name": normalize_text(
+            login_data.get("device_name")
+        ),
+        "platform": normalize_text(
+            login_data.get("platform")
+        ) or "mobile",
+        "is_revoked": False,
+        "created_at": current_time,
+        "updated_at": current_time,
+        "last_used_at": current_time,
+        "expires_at": refresh_session_expiry(),
+        "revoked_at": None,
+    })
+
+    return refresh_token
 
 @auth_bp.post("/login")
 def login():
@@ -543,7 +621,15 @@ def login():
     employee = employee_snapshot(raw_employee, user) if raw_employee else None
     user = sync_user_employee_capabilities(db, user, employee)
 
-    token = issue_token(user)
+    ensure_auth_session_indexes(db)
+
+    access_token = issue_access_token(user)
+
+    refresh_token = create_auth_session(
+        db,
+        user,
+        login_data=data,
+    )
 
     g.current_user = user
     g.tenant_id = user.get("tenant_id") or default_tenant_id()
@@ -553,94 +639,33 @@ def login():
     tenant_payload = build_auth_tenant_payload(db, user)
 
     return jsonify({
-        "token": token,
-        "user": clean_doc(sanitize_user_for_response(user)),
+        # Keep "token" temporarily for compatibility with older clients.
+        # Keep "token" temporarily for compatibility with older clients.
+        "token": access_token,
+
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_MINUTES * 60,
+        "refresh_expires_in": REFRESH_SESSION_DAYS * 24 * 60 * 60,
+
+
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_MINUTES * 60,
+        "refresh_expires_in": REFRESH_SESSION_DAYS * 24 * 60 * 60,
+
+        "user": clean_doc(
+            
+            sanitize_user_for_response(user)
+        
+        ),
         "employee": clean_doc(employee),
         "tenant": tenant_payload["tenant"],
         "subscription": tenant_payload["subscription"],
-        "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
-    })
-
-
-@auth_bp.post("/change-password")
-@current_user_required
-def change_password():
-    """Allow any authenticated user to securely change their own password."""
-
-    db = get_db()
-    data = request.get_json(silent=True) or {}
-
-    current_password = str(data.get("current_password") or "")
-    new_password = str(data.get("new_password") or "")
-    confirm_password = str(data.get("confirm_password") or "")
-
-    if not current_password or not new_password or not confirm_password:
-        return jsonify({
-            "message": (
-                "Current password, new password and confirm password are required"
-            )
-        }), 400
-
-    if new_password != confirm_password:
-        return jsonify({"message": "New password and confirm password do not match"}), 400
-
-    if len(new_password) < 6:
-        return jsonify({
-            "message": "New password must be at least 6 characters"
-        }), 400
-
-    user_id = g.current_user.get("_id")
-
-    user = db.users.find_one({
-        "_id": user_id,
-        "is_active": True,
-        "is_deleted": {"$ne": True},
-    })
-
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-
-    stored_password_hash = str(user.get("password_hash") or "")
-
-    if not stored_password_hash or not check_password_hash(
-        stored_password_hash,
-        current_password,
-    ):
-        return jsonify({"message": "Current password is incorrect"}), 400
-
-    if check_password_hash(stored_password_hash, new_password):
-        return jsonify({
-            "message": "New password cannot be the same as current password"
-        }), 400
-
-    now = datetime.utcnow()
-
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {
-            "$set": {
-                "password_hash": generate_password_hash(new_password),
-                "password_changed_at": now,
-                "password_changed_by": str(user["_id"]),
-                "updated_at": now,
-                "updated_by": str(user["_id"]),
-            }
-        },
-    )
-
-    audit(
-        "change_own_password",
-        "users",
-        user["_id"],
-        {
-            "email": user.get("email", ""),
-            "tenant_id": user.get("tenant_id") or default_tenant_id(),
-        },
-    )
-
-    return jsonify({
-        "message": "Password changed successfully",
-        "password_changed_at": now.isoformat(),
+        "is_platform_superadmin": ( tenant_payload["is_platform_superadmin"]
+                                   ),
     })
 
 
