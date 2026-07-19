@@ -1,7 +1,3 @@
-from datetime import datetime
-
-from pymongo import ReturnDocument
-from pymongo import ReturnDocument
 from flask import Blueprint, request, jsonify, g, current_app
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -16,7 +12,6 @@ from app.utils.auth import (
     issue_access_token,
     now_utc,
     refresh_session_expiry,
-    safe_object_id,
 )
 from app.utils.serializers import clean_doc
 from app.services.tenant_service import build_tenant_context, ensure_sds_tenant
@@ -114,6 +109,7 @@ def normalize_state(value):
 
 def truthy(value):
     return str(value or "").strip().lower() in ["true", "yes", "1", "on"]
+
 
 def safe_profile_photo_value(value):
     photo = normalize_text(value)
@@ -522,6 +518,7 @@ def sync_user_employee_capabilities(db, user, employee):
 
     return user
 
+
 def ensure_auth_session_indexes(db):
     """
     Creates authentication-session indexes.
@@ -549,7 +546,7 @@ def ensure_auth_session_indexes(db):
         name="auth_session_user_revoked",
     )
 
-#changes by atlanta
+# Changes by Atlanta
 def create_auth_session(db, user, login_data=None):
     """
     Creates a new refresh session and returns the raw refresh token.
@@ -587,6 +584,7 @@ def create_auth_session(db, user, login_data=None):
     })
 
     return refresh_token
+
 
 @auth_bp.post("/login")
 def login():
@@ -640,33 +638,130 @@ def login():
 
     return jsonify({
         # Keep "token" temporarily for compatibility with older clients.
-        # Keep "token" temporarily for compatibility with older clients.
         "token": access_token,
-
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
         "refresh_expires_in": REFRESH_SESSION_DAYS * 24 * 60 * 60,
-
-
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "Bearer",
-        "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": REFRESH_SESSION_DAYS * 24 * 60 * 60,
-
-        "user": clean_doc(
-            
-            sanitize_user_for_response(user)
-        
-        ),
+        "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
         "tenant": tenant_payload["tenant"],
         "subscription": tenant_payload["subscription"],
-        "is_platform_superadmin": ( tenant_payload["is_platform_superadmin"]
-                                   ),
+        "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
     })
+
+
+@auth_bp.post("/change-password")
+@current_user_required
+def change_password():
+    """
+    Allows any authenticated user to change only their own login password.
+
+    The current password must be verified before the stored hash is replaced.
+    Password values are never written to audit logs or API responses.
+    """
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    current_password = str(data.get("current_password") or "")
+    new_password = str(data.get("new_password") or "")
+    confirm_password = str(data.get("confirm_password") or "")
+
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({
+            "message": (
+                "Current password, new password and confirm password are required"
+            )
+        }), 400
+
+    if len(new_password) < 6:
+        return jsonify({
+            "message": "New password must be at least 6 characters"
+        }), 400
+
+    if new_password != confirm_password:
+        return jsonify({
+            "message": "New password and confirm password do not match"
+        }), 400
+
+    authenticated_user = g.current_user or {}
+    user_id = authenticated_user.get("_id")
+
+    user = db.users.find_one({
+        "_id": user_id,
+        "is_active": True,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not user:
+        return jsonify({"message": "Authenticated user was not found"}), 404
+
+    current_password_hash = user.get("password_hash") or ""
+
+    if (
+        not current_password_hash
+        or not check_password_hash(current_password_hash, current_password)
+    ):
+        return jsonify({"message": "Current password is incorrect"}), 400
+
+    if check_password_hash(current_password_hash, new_password):
+        return jsonify({
+            "message": "New password cannot be the same as the current password"
+        }), 400
+
+    changed_at = now_utc()
+    new_password_hash = generate_password_hash(new_password)
+
+    # Include the existing hash in the filter so simultaneous submissions
+    # cannot silently overwrite one another.
+    result = db.users.update_one(
+        {
+            "_id": user["_id"],
+            "password_hash": current_password_hash,
+            "is_active": True,
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "password_hash": new_password_hash,
+                "password_changed_at": changed_at,
+                "password_changed_by": str(user["_id"]),
+                "password_change_source": "self_service",
+                "updated_at": changed_at,
+            }
+        },
+    )
+
+    if result.modified_count != 1:
+        return jsonify({
+            "message": (
+                "Password could not be changed because the account was updated "
+                "by another request. Please try again."
+            )
+        }), 409
+
+    g.current_user = {
+        **authenticated_user,
+        "password_hash": new_password_hash,
+        "password_changed_at": changed_at,
+        "updated_at": changed_at,
+    }
+    g.tenant_id = user.get("tenant_id") or default_tenant_id()
+
+    audit(
+        "change_own_password",
+        "users",
+        user["_id"],
+        {
+            "email": user.get("email"),
+            "self_service": True,
+        },
+    )
+
+    return jsonify({
+        "message": "Password changed successfully"
+    }), 200
 
 
 @auth_bp.get("/me")

@@ -296,7 +296,6 @@ def create_app():
                 "Reports",
                 "Notifications",
                 "Super Admin",
-                "Password Requests",
             ],
         })
 

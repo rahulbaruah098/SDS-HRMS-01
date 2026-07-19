@@ -31,10 +31,6 @@ import Departments from './pages/Departments';
 import Designations from './pages/Designations';
 import States from './pages/States';
 import Profile from './pages/Profile';
-import AuditLogs from './pages/AuditLogs';
-import Settings from './pages/Settings';
-import AuditLogs from './pages/AuditLogs';
-import Settings from './pages/Settings';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports';
 import Payroll from './pages/Payroll.jsx';
@@ -456,11 +452,6 @@ const PAGE_ALIASES = {
   notification: 'notifications',
   notifications: 'notifications',
 
-  // The legacy Superadmin password-request screen has been retired.
-  // Old links now open My Profile, where users can change their own password.
-  password_request: 'profile',
-  password_requests: 'profile',
-
   policy: 'policies',
   policies: 'policies',
   policy_module: 'policies',
@@ -770,72 +761,6 @@ function isBillingPath(pathname) {
   );
 }
 
-function isCompaniesPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
-
-  return (
-    path === '/companies' ||
-    path === '/companies/' ||
-    path === '/company' ||
-    path === '/company/' ||
-    path === '/tenants' ||
-    path === '/tenants/' ||
-    path === '/superadmin/companies' ||
-    path === '/superadmin/companies/' ||
-    path === '/superadmin/tenants' ||
-    path === '/superadmin/tenants/'
-  );
-}
-
-function isDemoRequestsPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
-
-  return (
-    path === '/demo-requests' ||
-    path === '/demo-requests/' ||
-    path === '/trial-requests' ||
-    path === '/trial-requests/' ||
-    path === '/trial-applications' ||
-    path === '/trial-applications/' ||
-    path === '/superadmin/trial-requests' ||
-    path === '/superadmin/trial-requests/' ||
-    path === '/superadmin/demo-requests' ||
-    path === '/superadmin/demo-requests/'
-  );
-}
-
-function isSubscriptionsManagementPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
-
-  return (
-    path === '/subscriptions' ||
-    path === '/subscriptions/' ||
-    path === '/subscription-management' ||
-    path === '/subscription-management/' ||
-    path === '/billing-management' ||
-    path === '/billing-management/' ||
-    path === '/payment-management' ||
-    path === '/payment-management/' ||
-    path === '/superadmin/subscriptions' ||
-    path === '/superadmin/subscriptions/' ||
-    path === '/superadmin/subscriptions-payments' ||
-    path === '/superadmin/subscriptions-payments/'
-  );
-}
-
-function isNotificationsPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
-
-  return (
-    path === '/notifications' ||
-    path === '/notifications/' ||
-    path === '/notification' ||
-    path === '/notification/' ||
-    path === '/superadmin/notifications' ||
-    path === '/superadmin/notifications/'
-  );
-}
-
 function isPremiumRequestsPath(pathname) {
   const path = String(pathname || '/').trim().toLowerCase();
 
@@ -848,10 +773,6 @@ function isPremiumRequestsPath(pathname) {
     path === '/premium-plan-requests/' ||
     path === '/custom-premium-requests' ||
     path === '/custom-premium-requests/' ||
-    path === '/superadmin/premium-requests' ||
-    path === '/superadmin/premium-requests/' ||
-    path === '/superadmin/premium-plan-requests' ||
-    path === '/superadmin/premium-plan-requests/' ||
     path === '/sales-requests' ||
     path === '/sales-requests/'
   );
@@ -1196,15 +1117,10 @@ function PageRouter({ page, user, setPage }) {
     return <Profile setPage={setPage} user={safeUser} />;
   }
 
-  if (normalizedPage === 'audit_logs') {
-    return <AuditLogs setPage={setPage} user={safeUser} />;
-  }
-
   if (normalizedPage === 'system_settings') {
     return <Settings setPage={setPage} user={safeUser} />;
   }
- 
-  
+
   if (normalizedPage === 'leave') {
     return <Leave setPage={setPage} user={safeUser} />;
   }
@@ -1258,22 +1174,6 @@ export default function App() {
 
     if (isBillingPath(pathname)) {
       return 'billing';
-    }
-
-    if (isCompaniesPath(pathname)) {
-      return 'companies';
-    }
-
-    if (isDemoRequestsPath(pathname)) {
-      return 'demo_requests';
-    }
-
-    if (isSubscriptionsManagementPath(pathname)) {
-      return 'subscriptions';
-    }
-
-    if (isNotificationsPath(pathname)) {
-      return 'notifications';
     }
 
     if (isPremiumRequestsPath(pathname)) {
@@ -1362,104 +1262,6 @@ export default function App() {
     }
 
     setPage('billing');
-  }, [currentPath, normalizedUser]);
-
-  useEffect(() => {
-    if (!normalizedUser || !isCompaniesPath(currentPath)) {
-      return;
-    }
-
-    const userRoles = normalizeRoles(normalizedUser);
-
-    if (!userRoles.includes('super_admin')) {
-      setPage('dashboard');
-
-      try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
-      } catch {
-        // Ignore browser history errors.
-      }
-
-      return;
-    }
-
-    setPage('companies');
-  }, [currentPath, normalizedUser]);
-
-  useEffect(() => {
-    if (!normalizedUser || !isDemoRequestsPath(currentPath)) {
-      return;
-    }
-
-    const userRoles = normalizeRoles(normalizedUser);
-
-    if (!userRoles.includes('super_admin')) {
-      setPage('dashboard');
-
-      try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
-      } catch {
-        // Ignore browser history errors.
-      }
-
-      return;
-    }
-
-    setPage('demo_requests');
-  }, [currentPath, normalizedUser]);
-
-  useEffect(() => {
-    if (
-      !normalizedUser ||
-      !isSubscriptionsManagementPath(currentPath)
-    ) {
-      return;
-    }
-
-    const userRoles = normalizeRoles(normalizedUser);
-
-    if (!userRoles.includes('super_admin')) {
-      setPage('dashboard');
-
-      try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
-      } catch {
-        // Ignore browser history errors.
-      }
-
-      return;
-    }
-
-    setPage('subscriptions');
-  }, [currentPath, normalizedUser]);
-
-  useEffect(() => {
-    if (!normalizedUser || !isNotificationsPath(currentPath)) {
-      return;
-    }
-
-    const userRoles = normalizeRoles(normalizedUser);
-    const notificationAllowed =
-      userRoles.includes('super_admin') ||
-      canAccessModule(normalizedUser, 'notifications');
-
-    if (!notificationAllowed) {
-      setPage('dashboard');
-
-      try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
-      } catch {
-        // Ignore browser history errors.
-      }
-
-      return;
-    }
-
-    setPage('notifications');
   }, [currentPath, normalizedUser]);
 
   useEffect(() => {
@@ -1717,29 +1519,6 @@ export default function App() {
       const userRoles = normalizeRoles(normalizedUser);
 
       if (!hasAnyRole(userRoles, PAYSLIP_ROLES)) {
-        setPage('dashboard');
-      }
-
-      return;
-    }
-
-    if (normalizedPage === 'companies') {
-      const userRoles = normalizeRoles(normalizedUser);
-
-      if (!userRoles.includes('super_admin')) {
-        setPage('dashboard');
-      }
-
-      return;
-    }
-
-    if (normalizedPage === 'notifications') {
-      const userRoles = normalizeRoles(normalizedUser);
-
-      if (
-        !userRoles.includes('super_admin') &&
-        !canAccessModule(normalizedUser, 'notifications')
-      ) {
         setPage('dashboard');
       }
 
