@@ -4,7 +4,6 @@ import {
   CalendarClock,
   CheckCheck,
   CreditCard,
-  Crown,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -16,6 +15,7 @@ import {
   clearSession,
   getInitials,
   getProfilePhotoUrl,
+  normalizeProfilePhotoUrl,
   refreshCurrentSession,
 } from '../api/client';
 import {
@@ -23,6 +23,76 @@ import {
   getDisplayRole,
   getEmployeeCapabilities,
 } from '../data/modules';
+
+function safeBrandingText(value, fallback = '') {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+}
+
+function normalizeTenantBranding(data = {}) {
+  const branding = data.branding || data.tenant_branding || {};
+  const tenant = data.tenant || data.company || {};
+  const nestedBranding = tenant.branding || {};
+
+  return {
+    companyName: safeBrandingText(
+      branding.company_name ||
+        branding.name ||
+        tenant.company_name ||
+        tenant.name ||
+        tenant.tenant_name ||
+        nestedBranding.company_name,
+    ),
+    logo: safeBrandingText(
+      branding.company_logo ||
+        branding.company_logo_url ||
+        branding.logo ||
+        branding.logo_url ||
+        tenant.company_logo ||
+        tenant.company_logo_url ||
+        tenant.logo ||
+        tenant.logo_url ||
+        nestedBranding.company_logo ||
+        nestedBranding.company_logo_url ||
+        nestedBranding.logo ||
+        nestedBranding.logo_url,
+    ),
+  };
+}
+
+function normalizePlatformBranding(data = {}) {
+  const branding = data.branding || data.platform_branding || {};
+
+  return {
+    tagline: safeBrandingText(
+      branding.tagline || branding.platform_tagline,
+      'People, Process and Performance',
+    ),
+    logo: safeBrandingText(
+      branding.logo ||
+        branding.logo_url ||
+        branding.platform_logo ||
+        branding.platform_logo_url,
+    ),
+  };
+}
+
+function companyInitials(value = '') {
+  const words = String(value || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!words.length) {
+    return 'CO';
+  }
+
+  return words
+    .slice(0, 3)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase();
+}
 
 function normalizeRoleValue(role) {
   return String(role || '')
@@ -809,6 +879,16 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
   const [popupNotification, setPopupNotification] = useState(null);
+  const [tenantBranding, setTenantBranding] = useState({
+    companyName: '',
+    logo: '',
+  });
+  const [companyLogoFailed, setCompanyLogoFailed] = useState(false);
+  const [platformBranding, setPlatformBranding] = useState({
+    tagline: 'People, Process and Performance',
+    logo: '',
+  });
+  const [platformLogoFailed, setPlatformLogoFailed] = useState(false);
   const notificationRef = useRef(null);
 
   const safeUser = {
@@ -851,6 +931,32 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
   const saasSummary = useMemo(() => getSaasSummary(safeUser), [safeUser]);
+  const sessionBranding = normalizeTenantBranding({
+    branding:
+      safeUser.tenant_branding ||
+      safeUser.branding ||
+      safeUser.company_branding ||
+      {},
+    tenant: saasSummary.tenant || safeUser.tenant || safeUser.company || {},
+  });
+  const headerCompanyName =
+    tenantBranding.companyName ||
+    sessionBranding.companyName ||
+    saasSummary.companyName ||
+    'Your Company';
+  const headerCompanyLogo = tenantBranding.logo || sessionBranding.logo || '';
+  const headerCompanyLogoUrl = normalizeProfilePhotoUrl(headerCompanyLogo);
+  const platformLogoUrl = normalizeProfilePhotoUrl(platformBranding.logo);
+  const platformTagline =
+    platformBranding.tagline || 'People, Process and Performance';
+  const tenantIdentity = String(
+    safeUser.tenant_id ||
+      safeUser.company_id ||
+      saasSummary.tenant?._id ||
+      saasSummary.tenant?.id ||
+      saasSummary.tenantCode ||
+      '',
+  );
 
   const saasBanner = useMemo(() => {
     if (saasSummary.isSubscriptionExpired) {
@@ -1137,6 +1243,79 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   useEffect(() => {
     let cancelled = false;
 
+    async function loadPlatformBranding() {
+      try {
+        const data = await api('/platform-branding');
+
+        if (!cancelled) {
+          setPlatformBranding(normalizePlatformBranding(data));
+        }
+      } catch {
+        if (!cancelled) {
+          setPlatformBranding((current) => ({
+            tagline:
+              current.tagline || 'People, Process and Performance',
+            logo: current.logo || '',
+          }));
+        }
+      }
+    }
+
+    loadPlatformBranding();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page]);
+
+  useEffect(() => {
+    setPlatformLogoFailed(false);
+  }, [platformLogoUrl]);
+
+  useEffect(() => {
+    if (page !== 'dashboard') {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function loadTenantBranding() {
+      try {
+        const data = await api('/tenant-branding');
+
+        if (!cancelled) {
+          setTenantBranding(normalizeTenantBranding(data));
+        }
+      } catch {
+        if (!cancelled) {
+          setTenantBranding((current) => ({
+            companyName:
+              current.companyName ||
+              sessionBranding.companyName ||
+              saasSummary.companyName ||
+              '',
+            logo: current.logo || sessionBranding.logo || '',
+          }));
+        }
+      }
+    }
+
+    loadTenantBranding();
+
+    return () => {
+      cancelled = true;
+    };
+    // Reload when returning to Dashboard so recently updated branding appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, tenantIdentity]);
+
+  useEffect(() => {
+    setCompanyLogoFailed(false);
+  }, [headerCompanyLogoUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     async function refreshNotificationsFast() {
       if (cancelled) {
         return;
@@ -1320,8 +1499,336 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   return (
     <div className="app-shell layout-photo-aware">
       <style>{`
-        .layout-photo-aware .side-brand {
+        .layout-photo-aware {
+          --layout-sidebar-w: 330px;
+        }
+
+        .layout-photo-aware .side-brand.platform-side-brand {
+          position: relative;
+          isolation: isolate;
+          width: calc(100% - 16px);
+          min-width: 0;
+          min-height: 108px;
+          box-sizing: border-box;
+          display: grid;
+          grid-template-columns: 76px minmax(0, 1fr);
           align-items: center;
+          gap: 15px;
+          margin: 12px 8px 20px;
+          padding: 14px 16px 14px 14px;
+          overflow: hidden;
+          border: 1px solid rgba(99, 102, 241, .16);
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(167, 243, 208, .42), transparent 42%),
+            linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(238, 242, 255, .96));
+          box-shadow:
+            0 14px 30px rgba(15, 23, 42, .10),
+            inset 0 1px 0 rgba(255, 255, 255, .95);
+          transition:
+            transform .24s cubic-bezier(.22, 1, .36, 1),
+            border-color .24s ease,
+            box-shadow .24s ease;
+          animation: platformBrandEnter .5s cubic-bezier(.22, 1, .36, 1) both;
+        }
+
+        .layout-photo-aware .side-brand.platform-side-brand:hover {
+          transform: translateY(-2px);
+          border-color: rgba(79, 70, 229, .28);
+          box-shadow:
+            0 18px 38px rgba(15, 23, 42, .14),
+            inset 0 1px 0 rgba(255, 255, 255, .98);
+        }
+
+        .layout-photo-aware .side-brand.platform-side-brand::after {
+          content: '';
+          position: absolute;
+          z-index: -1;
+          width: 100px;
+          height: 100px;
+          right: -54px;
+          bottom: -62px;
+          border-radius: 999px;
+          background: rgba(79, 70, 229, .08);
+          pointer-events: none;
+          animation: platformAccentDrift 7s ease-in-out infinite;
+        }
+
+        .layout-photo-aware .platform-side-logo {
+          position: relative;
+          width: 76px;
+          height: 76px;
+          min-width: 76px;
+          padding: 0 !important;
+          box-sizing: border-box;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          border-radius: 18px;
+          border: 1px solid rgba(79, 70, 229, .16);
+          background: #ffffff;
+          color: #3730a3;
+          font-size: 18px;
+          font-weight: 950;
+          letter-spacing: .03em;
+          box-shadow:
+            0 10px 22px rgba(30, 41, 59, .13),
+            inset 0 0 0 1px rgba(255, 255, 255, .9);
+          animation: platformLogoBreathe 4.6s ease-in-out infinite;
+        }
+
+        .layout-photo-aware .platform-side-logo::after {
+          content: '';
+          position: absolute;
+          inset: 5px;
+          border-radius: 14px;
+          border: 1px solid rgba(99, 102, 241, .08);
+          pointer-events: none;
+        }
+
+        .layout-photo-aware .platform-side-logo img {
+          width: 100%;
+          height: 100%;
+          display: block;
+          object-fit: contain;
+          padding: 0 !important;
+          transform: scale(1.42);
+          transform-origin: center;
+        }
+
+        .layout-photo-aware .platform-side-copy {
+          min-width: 0;
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          animation: platformCopyEnter .58s .06s cubic-bezier(.22, 1, .36, 1) both;
+        }
+
+        .layout-photo-aware .platform-side-copy b {
+          display: block;
+          width: 100%;
+          max-width: none;
+          overflow: visible;
+          color: #111827;
+          text-overflow: clip;
+          white-space: normal;
+          word-break: normal;
+          overflow-wrap: normal;
+          font-size: clamp(20px, 1.65vw, 23px);
+          font-weight: 950;
+          line-height: 1.08;
+          letter-spacing: -.025em;
+          text-shadow: none;
+          animation: platformTitlePulse 4.8s ease-in-out infinite;
+        }
+
+        .layout-photo-aware .platform-side-copy small {
+          display: block;
+          width: 100%;
+          margin-top: 7px;
+          overflow: visible;
+          color: #52647f;
+          text-overflow: clip;
+          white-space: normal;
+          word-break: normal;
+          overflow-wrap: anywhere;
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1.42;
+          letter-spacing: .005em;
+          animation: platformTaglineEnter .66s .14s cubic-bezier(.22, 1, .36, 1) both;
+        }
+
+        @keyframes platformBrandEnter {
+          from {
+            opacity: 0;
+            transform: translateY(-8px) scale(.98);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        @keyframes platformCopyEnter {
+          from {
+            opacity: 0;
+            transform: translateX(-8px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes platformTaglineEnter {
+          from {
+            opacity: 0;
+            transform: translateY(5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes platformLogoBreathe {
+          0%, 100% {
+            transform: translateY(0) scale(1);
+          }
+          50% {
+            transform: translateY(-2px) scale(1.02);
+          }
+        }
+
+        @keyframes platformTitlePulse {
+          0%, 100% {
+            color: #111827;
+          }
+          50% {
+            color: #3730a3;
+          }
+        }
+
+        @keyframes platformAccentDrift {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+          50% {
+            transform: translate3d(-10px, -7px, 0) scale(1.08);
+          }
+        }
+
+        @media (max-width: 1366px) {
+          .layout-photo-aware {
+            --layout-sidebar-w: 318px;
+          }
+
+          .layout-photo-aware .side-brand.platform-side-brand {
+            min-height: 102px;
+            grid-template-columns: 72px minmax(0, 1fr);
+            gap: 13px;
+            padding: 13px 14px 13px 13px;
+          }
+
+          .layout-photo-aware .platform-side-logo {
+            width: 72px;
+            height: 72px;
+            min-width: 72px;
+            border-radius: 17px;
+          }
+
+          .layout-photo-aware .platform-side-copy b {
+            font-size: 21px;
+          }
+
+          .layout-photo-aware .platform-side-copy small {
+            font-size: 10.5px;
+          }
+        }
+
+        @media (max-width: 1100px) {
+          .layout-photo-aware {
+            --layout-sidebar-w: 320px;
+          }
+
+          .layout-photo-aware .sidebar {
+            width: min(320px, 88vw) !important;
+            max-width: 88vw !important;
+            left: min(-320px, -88vw) !important;
+            padding-inline: 14px !important;
+          }
+
+          .layout-photo-aware .sidebar.open {
+            left: 0 !important;
+          }
+
+          .layout-photo-aware .side-brand.platform-side-brand {
+            width: 100%;
+            margin: 56px 0 18px;
+          }
+
+          .layout-photo-aware .sidebar nav {
+            padding-right: 4px;
+            padding-bottom: calc(var(--safe-bottom) + 8px);
+          }
+        }
+
+        @media (max-width: 520px) {
+          .layout-photo-aware .sidebar {
+            width: min(306px, 90vw) !important;
+            max-width: 90vw !important;
+            left: min(-306px, -90vw) !important;
+            padding-inline: 12px !important;
+          }
+
+          .layout-photo-aware .sidebar.open {
+            left: 0 !important;
+          }
+
+          .layout-photo-aware .side-brand.platform-side-brand {
+            min-height: 88px;
+            grid-template-columns: 60px minmax(0, 1fr);
+            gap: 11px;
+            padding: 12px;
+            border-radius: 18px;
+          }
+
+          .layout-photo-aware .platform-side-logo {
+            width: 60px;
+            height: 60px;
+            min-width: 60px;
+            border-radius: 16px;
+          }
+
+          .layout-photo-aware .platform-side-copy b {
+            font-size: 17px;
+          }
+
+          .layout-photo-aware .platform-side-copy small {
+            margin-top: 5px;
+            font-size: 9.5px;
+            line-height: 1.32;
+          }
+        }
+
+        @media (max-width: 380px) {
+          .layout-photo-aware .sidebar {
+            width: 92vw !important;
+            max-width: 92vw !important;
+            left: -92vw !important;
+          }
+
+          .layout-photo-aware .sidebar.open {
+            left: 0 !important;
+          }
+
+          .layout-photo-aware .side-brand.platform-side-brand {
+            grid-template-columns: 56px minmax(0, 1fr);
+          }
+
+          .layout-photo-aware .platform-side-logo {
+            width: 56px;
+            height: 56px;
+            min-width: 56px;
+          }
+
+          .layout-photo-aware .platform-side-copy b {
+            font-size: 16px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .layout-photo-aware .side-brand.platform-side-brand,
+          .layout-photo-aware .side-brand.platform-side-brand::after,
+          .layout-photo-aware .platform-side-logo,
+          .layout-photo-aware .platform-side-copy,
+          .layout-photo-aware .platform-side-copy b,
+          .layout-photo-aware .platform-side-copy small {
+            animation: none !important;
+          }
         }
 
         .layout-avatar {
@@ -1362,44 +1869,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           font-size: 14px;
         }
 
-        .layout-sidebar-profile {
-          width: 100%;
-          margin: 14px 0 10px;
-          border: 1px solid rgba(255,255,255,.14);
-          border-radius: 18px;
-          padding: 11px;
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr);
-          gap: 10px;
-          align-items: center;
-          background: rgba(255,255,255,.06);
-          cursor: pointer;
-          text-align: left;
-          transition: background .18s ease, transform .18s ease;
-        }
-
-        .layout-sidebar-profile:hover {
-          background: rgba(255,255,255,.1);
-          transform: translateY(-1px);
-        }
-
-        .layout-sidebar-profile strong {
-          display: block;
-          color: #ffffff;
-          font-size: 13px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .layout-sidebar-profile small {
-          display: block;
-          margin-top: 3px;
-          color: rgba(255,255,255,.68);
-          font-size: 11px;
-          line-height: 1.35;
-        }
-
         .layout-photo-aware .user-chip {
           border: 0;
           display: inline-flex;
@@ -1429,6 +1898,69 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
         .layout-photo-aware .notification-item {
           text-align: left;
+        }
+
+        .topbar.topbar-dashboard {
+          display: grid;
+          grid-template-columns: minmax(150px, auto) minmax(220px, 1fr) auto;
+          align-items: center;
+          column-gap: clamp(16px, 2vw, 30px);
+          row-gap: 10px;
+        }
+
+        .topbar-title-block {
+          min-width: 0;
+        }
+
+        .topbar-company-brand {
+          min-width: 0;
+          max-width: 520px;
+          justify-self: end;
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          padding: 7px 12px 7px 7px;
+          border: 1px solid rgba(203, 213, 225, .8);
+          border-radius: 999px;
+          background: rgba(255, 255, 255, .78);
+          box-shadow: 0 12px 28px rgba(15, 23, 42, .07);
+          backdrop-filter: blur(14px);
+        }
+
+        .topbar-company-logo {
+          width: 38px;
+          height: 38px;
+          flex: 0 0 38px;
+          overflow: hidden;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          border: 1px solid rgba(199, 210, 254, .9);
+          background: linear-gradient(135deg, #ffffff, #f0fdf4);
+          color: #174c2d;
+          font-size: 11px;
+          font-weight: 950;
+          letter-spacing: .02em;
+        }
+
+        .topbar-company-logo img {
+          width: 100%;
+          height: 100%;
+          display: block;
+          object-fit: contain;
+          padding: 3px;
+        }
+
+        .topbar-company-name {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: #0f172a;
+          font-size: clamp(13px, 1.15vw, 16px);
+          font-weight: 850;
+          line-height: 1.25;
         }
 
         .notification-wrap {
@@ -1872,7 +2404,65 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           box-shadow: 0 12px 24px rgba(220, 38, 38, .18);
         }
 
+        @media (max-width: 920px) {
+          .topbar.topbar-dashboard {
+            grid-template-columns: minmax(0, 1fr) auto;
+          }
+
+          .topbar-dashboard .topbar-title-block {
+            grid-column: 1 / -1;
+          }
+
+          .topbar-dashboard .topbar-company-brand {
+            grid-column: 1;
+            grid-row: 2;
+            justify-self: start;
+            max-width: min(100%, 480px);
+          }
+
+          .topbar-dashboard .topbar-actions {
+            grid-column: 2;
+            grid-row: 2;
+            width: auto;
+            justify-content: flex-end;
+          }
+        }
+
         @media (max-width: 720px) {
+          .topbar.topbar-dashboard {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            padding-left: 0;
+          }
+
+          .topbar-dashboard .topbar-company-brand {
+            width: 100%;
+            max-width: 100%;
+          }
+
+          .topbar-dashboard .topbar-company-name {
+            font-size: 13px;
+          }
+
+          .topbar-dashboard .topbar-actions {
+            display: inline-flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+          }
+
+          .topbar-dashboard .user-chip {
+            width: 44px;
+            height: 44px;
+            min-width: 44px;
+            padding: 5px;
+            justify-content: center;
+          }
+
+          .topbar-dashboard .user-chip > span:last-child {
+            display: none;
+          }
+
           .saas-top-banner {
             align-items: stretch;
             flex-direction: column;
@@ -1930,40 +2520,24 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       )}
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="side-brand">
-          <span>SDS</span>
+        <div className="side-brand platform-side-brand">
+          <span className="platform-side-logo">
+            {platformLogoUrl && !platformLogoFailed ? (
+              <img
+                src={platformLogoUrl}
+                alt="YourComate logo"
+                onError={() => setPlatformLogoFailed(true)}
+              />
+            ) : (
+              <b>YC</b>
+            )}
+          </span>
 
-          <div>
-            <b>HRMS</b>
-            <small>Attendance • Leave • Projects</small>
+          <div className="platform-side-copy">
+            <b>YourComate</b>
+            <small>{platformTagline}</small>
           </div>
         </div>
-
-        <button
-          type="button"
-          className="layout-sidebar-profile"
-          onClick={() => goTo('profile')}
-          aria-label="Open my profile"
-        >
-          <UserAvatar user={safeUser} size="md" />
-
-          <div>
-            <strong>{safeUser?.name || safeUser?.email || 'User'}</strong>
-            <small>
-              {displayRole}
-              {capabilityText ? ` • ${capabilityText}` : ''}
-            </small>
-          </div>
-        </button>
-
-        {saasSummary.isSdsLifetime ? (
-          <div className="saas-sidebar-card">
-            <strong>
-              <Crown size={15} /> SDS Lifetime Access
-            </strong>
-            <p>Full HRMS access is active without renewal or recharge.</p>
-          </div>
-        ) : null}
 
         {saasSummary.showSaasBanner ? (
           <div className={`saas-sidebar-card ${saasBanner.expired ? 'expired' : ''}`}>
@@ -2021,22 +2595,52 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       </aside>
 
       <main className="main">
-        <header className="topbar">
-          <div>
+        <header
+          className={`topbar ${page === 'dashboard' ? 'topbar-dashboard' : ''}`}
+        >
+          <div className="topbar-title-block">
             <h2>{currentTitle}</h2>
 
-            <p>
-              {displayRole}
-              {capabilityText ? ` • ${capabilityText}` : ''}
-              {saasSummary.companyName ? ` • ${saasSummary.companyName}` : ''}
-            </p>
+            {page !== 'dashboard' ? (
+              <>
+                <p>
+                  {displayRole}
+                  {capabilityText ? ` • ${capabilityText}` : ''}
+                  {saasSummary.companyName ? ` • ${saasSummary.companyName}` : ''}
+                </p>
 
-            {safeUser.roles.length > 0 && (
-              <small>
-                Access: {safeUser.roles.map(roleLabel).join(', ')}
-              </small>
-            )}
+                {safeUser.roles.length > 0 ? (
+                  <small>
+                    Access: {safeUser.roles.map(roleLabel).join(', ')}
+                  </small>
+                ) : null}
+              </>
+            ) : null}
           </div>
+
+          {page === 'dashboard' ? (
+            <div
+              className="topbar-company-brand"
+              title={headerCompanyName}
+              aria-label={`Company: ${headerCompanyName}`}
+            >
+              <span className="topbar-company-logo">
+                {headerCompanyLogoUrl && !companyLogoFailed ? (
+                  <img
+                    src={headerCompanyLogoUrl}
+                    alt={`${headerCompanyName} logo`}
+                    onError={() => setCompanyLogoFailed(true)}
+                  />
+                ) : (
+                  <b>{companyInitials(headerCompanyName)}</b>
+                )}
+              </span>
+
+              <span className="topbar-company-name">
+                {headerCompanyName}
+              </span>
+            </div>
+          ) : null}
 
           <div className="topbar-actions">
             <div className="notification-wrap" ref={notificationRef}>

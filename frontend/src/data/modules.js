@@ -1405,9 +1405,7 @@ export function moduleList(user) {
     hasAnyRole(roles, module[4] || []),
   );
 
-  const clientModules = isSdsLifetimeTenant(user)
-    ? roleAllowedModules.filter((module) => module[0] !== 'billing')
-    : roleAllowedModules;
+const clientModules = roleAllowedModules;
 
   if (hasFullSaasAccess(user)) {
     return clientModules;
@@ -1457,7 +1455,6 @@ export function canAccessModule(user, moduleKey) {
 
 if (normalizedModuleKey === 'billing') {
   return (
-    !isSdsLifetimeTenant(user) &&
     !roles.includes('super_admin') &&
     roles.includes('admin')
   );

@@ -20,6 +20,7 @@ import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import EmployeeDashboard from './pages/EmployeeDashboard';
 import Attendance from './pages/Attendance';
+import AttendanceLogs from './pages/AttendanceLogs.jsx';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
@@ -33,6 +34,7 @@ import States from './pages/States';
 import Profile from './pages/Profile';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports';
+import AuditLogs from './pages/AuditLogs.jsx';
 import Payroll from './pages/Payroll.jsx';
 import PayrollConfiguration from './pages/PayrollConfiguration.jsx';
 import LoansAdvances from './pages/LoansAdvances.jsx';
@@ -1049,11 +1051,15 @@ function PageRouter({ page, user, setPage }) {
     return <UnauthorizedPage setPage={setPage} />;
   }
 
-  if (normalizedPage === 'attendance') {
-    return <Attendance setPage={setPage} user={safeUser} />;
-  }
+if (normalizedPage === 'attendance') {
+  return <Attendance setPage={setPage} user={safeUser} />;
+}
 
-  if (normalizedPage === 'companies') {
+if (normalizedPage === 'attendance_logs') {
+  return <AttendanceLogs setPage={setPage} user={safeUser} />;
+}
+
+if (normalizedPage === 'companies') {
     return <Companies setPage={setPage} user={safeUser} />;
   }
 
@@ -1117,13 +1123,17 @@ function PageRouter({ page, user, setPage }) {
     return <Profile setPage={setPage} user={safeUser} />;
   }
 
-  if (normalizedPage === 'system_settings') {
-    return <Settings setPage={setPage} user={safeUser} />;
-  }
+if (normalizedPage === 'system_settings') {
+  return <Settings setPage={setPage} user={safeUser} />;
+}
 
-  if (normalizedPage === 'leave') {
-    return <Leave setPage={setPage} user={safeUser} />;
-  }
+if (normalizedPage === 'audit_logs') {
+  return <AuditLogs setPage={setPage} user={safeUser} />;
+}
+
+if (normalizedPage === 'leave') {
+  return <Leave setPage={setPage} user={safeUser} />;
+}
 
   if (normalizedPage === 'leave_requests') {
     return <ApplyLeave setPage={setPage} user={safeUser} />;

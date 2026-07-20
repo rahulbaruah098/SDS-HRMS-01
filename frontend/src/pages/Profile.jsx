@@ -13,6 +13,7 @@ import {
   uploadEmployeeProfileCover,
 } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
+import { getDisplayRole, getEmployeeCapabilities } from '../data/modules';
 
 function normalizeRoles(user) {
   const userRoles = user?.roles;
@@ -30,7 +31,9 @@ function normalizeRoles(user) {
       .filter(Boolean);
   }
 
-  return [];
+  const singleRole = String(user?.role || '').trim();
+
+  return singleRole ? [singleRole] : [];
 }
 
 function displayValue(value) {
@@ -77,6 +80,57 @@ function roleLabel(role = '') {
   return normalized
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function companyNameFromPayload(data = {}, user = {}, employee = {}) {
+  const branding = data.branding || data.tenant_branding || {};
+  const tenant = data.tenant || data.company || user.tenant || user.company || {};
+  const nestedBranding = tenant.branding || {};
+
+  return firstValue(
+    branding.company_name,
+    branding.name,
+    tenant.company_name,
+    tenant.name,
+    tenant.tenant_name,
+    nestedBranding.company_name,
+    user.company_name,
+    user.tenant_name,
+    employee.company_name,
+    employee.organisation_name,
+    employee.organization_name,
+    employee.organisation,
+    employee.organization,
+  );
+}
+
+function profileCapabilityItems(user = {}, employee = {}) {
+  const capabilities = getEmployeeCapabilities({
+    ...(user || {}),
+    employee: employee || {},
+    employee_profile: employee || {},
+  });
+  const items = [];
+
+  if (capabilities.isTeamLeader) {
+    items.push('Team Leader');
+  }
+
+  if (capabilities.isReportingOfficer) {
+    items.push('Reporting Officer');
+  }
+
+  if (capabilities.isHrAdmin) {
+    items.push('HR Records');
+  }
+
+  if (capabilities.isItSupportHead) {
+    items.push('IT Support Head');
+  } else if (capabilities.isItSupportMember) {
+    items.push('IT Support Member');
+  }
+
+  return items;
 }
 
 function firstValue(...values) {
@@ -219,28 +273,6 @@ function profileCoverValue(record = {}) {
     cleanMediaValue(record.banner_url) ||
     ''
   );
-}
-
-function capabilityLabel(employee = {}, roles = []) {
-  const labels = [];
-
-  if (
-    boolLabel(employee.is_team_leader) === 'Yes' ||
-    roles.includes('team_leader')
-  ) {
-    labels.push('Team Leader');
-  }
-
-  if (
-    boolLabel(employee.is_reporting_officer) === 'Yes' ||
-    roles.includes('reporting_officer') ||
-    roles.includes('manager') ||
-    roles.includes('ro')
-  ) {
-    labels.push('Reporting Officer');
-  }
-
-  return labels.length ? labels.join(' + ') : 'No additional capability';
 }
 
 function employeeId(employee = {}) {
@@ -459,6 +491,9 @@ export default function Profile() {
   const [user, setUser] = useState(currentUser());
   const [employee, setEmployee] = useState(currentEmployee());
   const [hydrating, setHydrating] = useState(true);
+  const [companyName, setCompanyName] = useState(() =>
+    companyNameFromPayload({}, currentUser(), currentEmployee()),
+  );
 
   const userRoles = normalizeRoles(user);
   const initialPhoto = profilePhotoValue(employee) || profilePhotoValue(user);
@@ -501,7 +536,21 @@ export default function Profile() {
   );
 
   const mainRole = profileDesignationLine(employee, userRoles);
-  const capabilities = capabilityLabel(employee, userRoles);
+  const dashboardRole = getDisplayRole({
+    ...(user || {}),
+    employee: employee || {},
+    employee_profile: employee || {},
+  });
+  const capabilityItems = profileCapabilityItems(user, employee);
+  const capabilitySummary = capabilityItems.length
+    ? capabilityItems.join(' + ')
+    : 'No additional capability';
+  const loginAccess = userRoles.length
+    ? userRoles.map(roleLabel).join(', ')
+    : dashboardRole;
+  const dashboardIdentity = capabilityItems.length
+    ? `${dashboardRole} • ${capabilityItems.join(' + ')}`
+    : dashboardRole;
 
   const previewPhotoUrl = photo ? getProfilePhotoUrl({ avatar: photo }) : '';
   const previewCoverUrl = cover ? getProfileCoverUrl({ cover_image: cover }) : '';
@@ -573,6 +622,44 @@ export default function Profile() {
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCompanyIdentity() {
+      const localCompanyName = companyNameFromPayload({}, user, employee);
+
+      if (localCompanyName) {
+        setCompanyName(localCompanyName);
+      }
+
+      try {
+        const brandingResponse = await api('/tenant-branding');
+
+        if (!isMounted) {
+          return;
+        }
+
+        const resolvedCompanyName = companyNameFromPayload(
+          brandingResponse,
+          user,
+          employee,
+        );
+
+        if (resolvedCompanyName) {
+          setCompanyName(resolvedCompanyName);
+        }
+      } catch {
+        // Keep the company name already available in the session/profile data.
+      }
+    }
+
+    loadCompanyIdentity();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, employee]);
+
   const primaryDetails = useMemo(() => {
     return [
       ['Name', firstValue(employee.employee_name, employee.name, user.name)],
@@ -607,7 +694,8 @@ export default function Profile() {
 
   const organizationDetails = useMemo(() => {
     return [
-      ['Business unit', firstValue(
+      ['Company / Organisation', firstValue(
+        companyName,
         employee.business_unit,
         employee.organisation,
         employee.organization,
@@ -626,15 +714,39 @@ export default function Profile() {
       ['Shift', firstValue(employee.shift)],
       ['Weekly off policy', firstValue(employee.weekly_off_policy, employee.weekly_off)],
     ];
-  }, [employee, user]);
+  }, [companyName, employee, user]);
+
+  const roleAccessDetails = [
+    ['Company', companyName],
+    ['Primary Dashboard Role', dashboardRole],
+    ['Dashboard Identity', dashboardIdentity],
+    ['Additional Capabilities', capabilitySummary],
+    ['Login Access', loginAccess],
+    ['Department', firstValue(employee.department, employee.department_name)],
+    ['Designation', titleCase(firstValue(
+      employee.designation,
+      employee.designation_name,
+      employee.job_title,
+      employee.title,
+      employee.position,
+    ))],
+  ];
 
   const employmentDetails = [
-    ['Dashboard Role', 'Employee'],
-    ['Login Access', userRoles.map(roleLabel).join(', ')],
-    ['Employee Capability', capabilities],
     ['Employment Status', firstValue(employee.employment_status, employee.status)],
     ['Project', firstValue(employee.project, employee.project_name)],
     ['State', firstValue(employee.state)],
+    ['Work Type', firstValue(
+      employee.work_type,
+      employee.employee_type,
+      employee.job_type,
+      employee.employment_type,
+    )],
+    ['Date of Joining', firstValue(
+      employee.joining_date,
+      employee.date_of_joining,
+      employee.doj,
+    )],
   ];
 
   const salaryAndStatutoryRows = [
@@ -1851,6 +1963,11 @@ export default function Profile() {
       ) : null}
 
       <div className="profile-card-grid">
+        <ProfileSection
+          title="Role, Access & Company"
+          rows={roleAccessDetails}
+        />
+
         <ProfileSection
           title="Primary Details"
           rows={primaryDetails}

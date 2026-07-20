@@ -7,7 +7,7 @@ from flask import Blueprint, request, jsonify, g, current_app, send_from_directo
 from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
-from app.utils.auth import current_user_required
+from app.utils.auth import current_user_required, audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 
@@ -19,6 +19,15 @@ ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
 MAX_PROFILE_COVER_BYTES = 5 * 1024 * 1024
 MAX_COMPANY_LOGO_BYTES = 3 * 1024 * 1024
+MAX_PLATFORM_LOGO_BYTES = 3 * 1024 * 1024
+
+
+PLATFORM_BRANDING_TENANT_ID = "__platform__"
+PLATFORM_BRANDING_SETTING_GROUP = "platform_branding"
+PLATFORM_BRANDING_SETTING_KEY = "sidebar_identity"
+PLATFORM_PRODUCT_NAME = "YourComate"
+DEFAULT_PLATFORM_TAGLINE = "People, Process and Performance"
+MAX_PLATFORM_TAGLINE_LENGTH = 160
 
 
 ADMIN_ROLES = {
@@ -80,6 +89,11 @@ def is_admin_user():
 
 def can_manage_tenant_branding():
     return bool(current_roles().intersection(TENANT_BRANDING_ADMIN_ROLES))
+
+
+def can_manage_platform_branding():
+    """Only the global Platform Superadmin may change YourComate branding."""
+    return "super_admin" in current_roles()
 
 
 def current_tenant_id():
@@ -185,6 +199,63 @@ def company_logo_value(tenant):
     )
 
 
+def platform_branding_setting_query():
+    return {
+        "tenant_id": PLATFORM_BRANDING_TENANT_ID,
+        "setting_group": PLATFORM_BRANDING_SETTING_GROUP,
+        "setting_key": PLATFORM_BRANDING_SETTING_KEY,
+        "is_deleted": {"$ne": True},
+    }
+
+
+def find_platform_branding_setting(db):
+    return db.system_settings.find_one(platform_branding_setting_query())
+
+
+def serialize_datetime(value):
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+
+    return value
+
+
+def platform_branding_payload(setting=None):
+    setting = setting or {}
+    setting_value = (
+        setting.get("setting_value")
+        if isinstance(setting.get("setting_value"), dict)
+        else {}
+    )
+
+    tagline = normalize_text(
+        setting_value.get("tagline")
+        or setting.get("tagline")
+    ) or DEFAULT_PLATFORM_TAGLINE
+
+    logo_path = normalize_text(
+        setting_value.get("logo_url")
+        or setting_value.get("logo")
+        or setting_value.get("platform_logo_url")
+        or setting_value.get("platform_logo")
+        or setting.get("logo_url")
+        or setting.get("logo")
+        or setting.get("platform_logo_url")
+        or setting.get("platform_logo")
+    )
+
+    return {
+        "product_name": PLATFORM_PRODUCT_NAME,
+        "name": PLATFORM_PRODUCT_NAME,
+        "tagline": tagline,
+        "platform_logo": logo_path,
+        "platform_logo_url": logo_path,
+        "logo": logo_path,
+        "logo_url": logo_path,
+        "updated_at": serialize_datetime(setting.get("updated_at")),
+        "updated_by": normalize_text(setting.get("updated_by")),
+    }
+
+
 def tenant_branding_payload(tenant):
     tenant = tenant or {}
     logo_path = company_logo_value(tenant)
@@ -230,6 +301,9 @@ def get_upload_root(folder_type="profile_photos"):
     elif folder_type == "company_logos":
         configured = current_app.config.get("COMPANY_LOGO_UPLOAD_FOLDER")
         default_folder = "company_logos"
+    elif folder_type == "platform_logos":
+        configured = current_app.config.get("PLATFORM_LOGO_UPLOAD_FOLDER")
+        default_folder = "platform_logos"
     else:
         configured = current_app.config.get("PROFILE_PHOTO_UPLOAD_FOLDER")
         default_folder = "profile_photos"
@@ -548,6 +622,77 @@ def save_company_logo_file(file, tenant):
     return f"/api/v1/uploads/company_logos/{tenant_folder}/{final_name}", ""
 
 
+def save_platform_logo_file(file):
+    if not file:
+        return "", "Platform logo file is required"
+
+    original_filename = secure_filename(file.filename or "")
+
+    if not original_filename or not allowed_file(original_filename):
+        return "", "Only JPG, JPEG, PNG, and WEBP images are allowed"
+
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    if file_size > MAX_PLATFORM_LOGO_BYTES:
+        return "", "Platform logo must be below 3MB"
+
+    upload_root = get_upload_root("platform_logos")
+    fallback_ext = original_filename.rsplit(".", 1)[-1].lower()
+    temp_name = f"tmp_{uuid4().hex}.{fallback_ext}"
+    temp_path = os.path.join(upload_root, temp_name)
+
+    file.save(temp_path)
+
+    detected_ext = detect_extension(temp_path, fallback_ext)
+
+    if detected_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+        return "", "Invalid image file"
+
+    final_name = secure_filename(
+        f"yourcomate_logo_{uuid4().hex}.{detected_ext}"
+    )
+    final_path = os.path.join(upload_root, final_name)
+
+    os.replace(temp_path, final_path)
+
+    return f"/api/v1/uploads/platform_logos/{final_name}", ""
+
+
+def remove_managed_platform_logo(logo_path):
+    logo_path = normalize_text(logo_path)
+    route_prefix = "/api/v1/uploads/platform_logos/"
+
+    if not logo_path.startswith(route_prefix):
+        return
+
+    safe_filename = secure_filename(logo_path[len(route_prefix):])
+
+    if not safe_filename:
+        return
+
+    upload_root = get_upload_root("platform_logos")
+    file_path = os.path.abspath(os.path.join(upload_root, safe_filename))
+
+    try:
+        if os.path.commonpath([upload_root, file_path]) != upload_root:
+            return
+    except ValueError:
+        return
+
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
+
 def remove_managed_company_logo(logo_path):
     logo_path = normalize_text(logo_path)
     route_prefix = "/api/v1/uploads/company_logos/"
@@ -583,6 +728,219 @@ def remove_managed_company_logo(logo_path):
             os.remove(file_path)
     except OSError:
         pass
+
+
+@profile_photos_bp.get("/platform-branding")
+@current_user_required
+def get_platform_branding():
+    db = get_db()
+    setting = find_platform_branding_setting(db)
+
+    return jsonify({
+        "branding": platform_branding_payload(setting),
+        "can_manage_branding": can_manage_platform_branding(),
+    })
+
+
+@profile_photos_bp.post("/platform-branding")
+@current_user_required
+def update_platform_branding():
+    if not can_manage_platform_branding():
+        return jsonify({
+            "message": "Only the Platform Superadmin can update YourComate branding"
+        }), 403
+
+    db = get_db()
+    existing_setting = find_platform_branding_setting(db) or {}
+    existing_branding = platform_branding_payload(existing_setting)
+
+    json_payload = request.get_json(silent=True)
+    if not isinstance(json_payload, dict):
+        json_payload = {}
+
+    tagline_keys = ("tagline", "platform_tagline")
+    tagline_provided = any(key in json_payload for key in tagline_keys) or any(
+        key in request.form for key in tagline_keys
+    )
+
+    tagline_value = None
+    if tagline_provided:
+        tagline_value = normalize_text(
+            json_payload.get("tagline")
+            or json_payload.get("platform_tagline")
+            or request.form.get("tagline")
+            or request.form.get("platform_tagline")
+        )
+
+        if not tagline_value:
+            tagline_value = DEFAULT_PLATFORM_TAGLINE
+
+        if len(tagline_value) > MAX_PLATFORM_TAGLINE_LENGTH:
+            return jsonify({
+                "message": (
+                    "Platform tagline must not exceed "
+                    f"{MAX_PLATFORM_TAGLINE_LENGTH} characters"
+                )
+            }), 400
+
+    logo_file = (
+        request.files.get("logo")
+        or request.files.get("platform_logo")
+        or request.files.get("file")
+        or request.files.get("image")
+    )
+
+    if not tagline_provided and not logo_file:
+        return jsonify({
+            "message": "Provide a tagline or a platform logo to update"
+        }), 400
+
+    previous_logo = existing_branding.get("logo_url", "")
+    logo_path = previous_logo
+
+    if logo_file:
+        logo_path, error = save_platform_logo_file(logo_file)
+
+        if error:
+            return jsonify({"message": error}), 400
+
+    tagline = (
+        tagline_value
+        if tagline_provided
+        else existing_branding.get("tagline") or DEFAULT_PLATFORM_TAGLINE
+    )
+
+    changed_at = datetime.utcnow()
+    changed_by = current_user_id()
+    setting_value = {
+        "product_name": PLATFORM_PRODUCT_NAME,
+        "tagline": tagline,
+        "platform_logo": logo_path,
+        "platform_logo_url": logo_path,
+        "logo": logo_path,
+        "logo_url": logo_path,
+    }
+
+    query = platform_branding_setting_query()
+    query.pop("is_deleted", None)
+
+    db.system_settings.update_one(
+        query,
+        {
+            "$set": {
+                "tenant_id": PLATFORM_BRANDING_TENANT_ID,
+                "setting_group": PLATFORM_BRANDING_SETTING_GROUP,
+                "setting_key": PLATFORM_BRANDING_SETTING_KEY,
+                "setting_value": setting_value,
+                "product_name": PLATFORM_PRODUCT_NAME,
+                "tagline": tagline,
+                "platform_logo": logo_path,
+                "platform_logo_url": logo_path,
+                "logo": logo_path,
+                "logo_url": logo_path,
+                "description": "Global YourComate sidebar logo and tagline",
+                "updated_at": changed_at,
+                "updated_by": changed_by,
+                "is_deleted": False,
+            },
+            "$setOnInsert": {
+                "created_at": changed_at,
+                "created_by": changed_by,
+            },
+        },
+        upsert=True,
+    )
+
+    updated_setting = find_platform_branding_setting(db)
+
+    if logo_file and previous_logo and previous_logo != logo_path:
+        remove_managed_platform_logo(previous_logo)
+
+    audit(
+        "platform_branding_updated",
+        "system_settings",
+        updated_setting.get("_id") if updated_setting else None,
+        {
+            "tagline_updated": tagline_provided,
+            "logo_updated": bool(logo_file),
+        },
+    )
+
+    return jsonify({
+        "message": "YourComate branding updated successfully",
+        "branding": platform_branding_payload(updated_setting),
+        "can_manage_branding": True,
+    })
+
+
+@profile_photos_bp.delete("/platform-branding/logo")
+@current_user_required
+def delete_platform_logo():
+    if not can_manage_platform_branding():
+        return jsonify({
+            "message": "Only the Platform Superadmin can remove the YourComate logo"
+        }), 403
+
+    db = get_db()
+    existing_setting = find_platform_branding_setting(db) or {}
+    existing_branding = platform_branding_payload(existing_setting)
+    previous_logo = existing_branding.get("logo_url", "")
+    tagline = existing_branding.get("tagline") or DEFAULT_PLATFORM_TAGLINE
+    changed_at = datetime.utcnow()
+    changed_by = current_user_id()
+
+    query = platform_branding_setting_query()
+    query.pop("is_deleted", None)
+
+    db.system_settings.update_one(
+        query,
+        {
+            "$set": {
+                "tenant_id": PLATFORM_BRANDING_TENANT_ID,
+                "setting_group": PLATFORM_BRANDING_SETTING_GROUP,
+                "setting_key": PLATFORM_BRANDING_SETTING_KEY,
+                "setting_value": {
+                    "product_name": PLATFORM_PRODUCT_NAME,
+                    "tagline": tagline,
+                    "platform_logo": "",
+                    "platform_logo_url": "",
+                    "logo": "",
+                    "logo_url": "",
+                },
+                "product_name": PLATFORM_PRODUCT_NAME,
+                "tagline": tagline,
+                "platform_logo": "",
+                "platform_logo_url": "",
+                "logo": "",
+                "logo_url": "",
+                "description": "Global YourComate sidebar logo and tagline",
+                "updated_at": changed_at,
+                "updated_by": changed_by,
+                "is_deleted": False,
+            },
+            "$setOnInsert": {
+                "created_at": changed_at,
+                "created_by": changed_by,
+            },
+        },
+        upsert=True,
+    )
+
+    updated_setting = find_platform_branding_setting(db)
+    remove_managed_platform_logo(previous_logo)
+
+    audit(
+        "platform_logo_removed",
+        "system_settings",
+        updated_setting.get("_id") if updated_setting else None,
+        {"previous_logo_present": bool(previous_logo)},
+    )
+
+    return jsonify({
+        "message": "YourComate logo removed successfully",
+        "branding": platform_branding_payload(updated_setting),
+        "can_manage_branding": True,
+    })
 
 
 @profile_photos_bp.get("/tenant-branding")
@@ -852,6 +1210,14 @@ def serve_profile_cover(tenant, filename):
     directory = os.path.join(upload_root, tenant_folder)
 
     return send_from_directory(directory, safe_filename)
+
+@profile_photos_bp.get("/uploads/platform_logos/<filename>")
+def serve_platform_logo(filename):
+    upload_root = get_upload_root("platform_logos")
+    safe_filename = secure_filename(filename)
+
+    return send_from_directory(upload_root, safe_filename)
+
 
 @profile_photos_bp.get("/uploads/company_logos/<tenant>/<filename>")
 def serve_company_logo(tenant, filename):
