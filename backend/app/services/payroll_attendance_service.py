@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+UTC = timezone.utc  # Python 3.10 compatible replacement for datetime.UTC
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 

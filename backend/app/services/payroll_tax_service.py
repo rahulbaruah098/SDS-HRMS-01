@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
+
+UTC = timezone.utc  # Python 3.10 compatible replacement for datetime.UTC
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Sequence
 
