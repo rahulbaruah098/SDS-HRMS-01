@@ -61,6 +61,8 @@ class CheckResult:
     warning: bool = False
 
 
+SAYA_SMOKE_CHECK_VERSION = "2026-07-21-FILE8-R2-PY310"
+
 def safe_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -550,12 +552,13 @@ def source_name_checks() -> List[CheckResult]:
             else 0
         )
         unexpected_legacy = max(0, legacy_count - allowed_legacy_count)
+        saya_count = len(re.findall(r"\bSaya\b", text))
 
         results.append(make_result(
             f"assistant_name_source:{path.name}",
             saya_present and unexpected_legacy == 0,
             (
-                f"Saya references={len(re.findall(r'\bSaya\b', text))}; "
+                f"Saya references={saya_count}; "
                 f"legacy compatibility references={legacy_count}; "
                 f"unexpected legacy references={unexpected_legacy}"
             ),
