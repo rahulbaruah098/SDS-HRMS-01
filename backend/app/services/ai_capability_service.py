@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -7,7 +8,16 @@ from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
 from app.extensions import get_db
+from app.ai_knowledge.role_profiles import (
+    build_role_subscription_guidance,
+    derive_effective_ai_roles,
+    normalise_roles,
+    resolve_primary_role,
+    resolve_subscription_profile,
+)
 
+
+SAYA_CAPABILITY_SERVICE_VERSION = "2026-07-21-FILE3-R3"
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -163,9 +173,35 @@ def _safe_doc(doc):
     return cleaned
 
 
+def _normalise_match_text(value):
+    """Normalize user text for boundary-safe phrase matching."""
+
+    text = _lower(value)
+    text = text.replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _keyword_in_text(question, keyword):
+    """Match a complete word/phrase instead of an arbitrary substring.
+
+    This prevents short workflow terms such as ``ro``, ``cl``, and ``report``
+    from matching unrelated words such as ``growth``, ``client``, and
+    ``reporting``. Multi-word phrases still tolerate repeated whitespace.
+    """
+
+    text = _normalise_match_text(question)
+    phrase = _normalise_match_text(keyword)
+
+    if not text or not phrase:
+        return False
+
+    escaped_phrase = re.escape(phrase).replace(r"\ ", r"\s+")
+    pattern = rf"(?<![a-z0-9]){escaped_phrase}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
+
+
 def _contains_any(question, keywords):
-    text = _lower(question)
-    return any(keyword in text for keyword in keywords)
+    return any(_keyword_in_text(question, keyword) for keyword in keywords)
 
 
 def _date_range(period):
@@ -183,8 +219,10 @@ def _date_range(period):
 
 def detect_ai_capabilities(question):
     """
-    Detects which HRMS real-data capabilities should be attached to the AI answer.
-    This is deterministic and role-safe.
+    Detect the read-only live context that may help Saya answer the question.
+
+    Capability detection never grants access. Role, tenant, capability, and
+    subscription checks are applied separately before any context is returned.
     """
 
     capabilities = set()
@@ -202,6 +240,65 @@ def detect_ai_capabilities(question):
         "which tenant",
     ]):
         capabilities.add("tenant_profile")
+
+    if _contains_any(text, [
+        "pricing",
+        "price",
+        "plan price",
+        "plan cost",
+        "subscription cost",
+        "how much is essential",
+        "how much is growth",
+        "how much is premium",
+        "essential plan",
+        "growth plan",
+        "premium plan",
+        "compare plans",
+        "which plan",
+        "employee limit",
+        "included employees",
+    ]):
+        capabilities.add("pricing_plans")
+
+    if _contains_any(text, [
+        "my subscription",
+        "subscription status",
+        "current subscription",
+        "current plan",
+        "my plan",
+        "trial status",
+        "trial days",
+        "days left",
+        "subscription days",
+        "subscription expiry",
+        "subscription expired",
+        "renewal",
+        "renew my plan",
+        "upgrade",
+        "upgrade plan",
+        "billing status",
+        "payment required",
+        "employee limit",
+        "allowed modules",
+        "enabled modules",
+    ]):
+        capabilities.add("subscription_summary")
+
+    if _contains_any(text, [
+        "premium request",
+        "premium quote",
+        "premium quotation",
+        "quoted amount",
+        "quotation amount",
+        "quotation status",
+        "contact sales",
+        "premium payment",
+        "premium activation",
+        "premium renewal",
+        "upgrade to premium",
+        "upgrade premium",
+    ]):
+        capabilities.add("premium_quotation")
 
     if _contains_any(text, ["weather", "temperature", "rain", "forecast"]):
         capabilities.add("weather")
@@ -296,7 +393,8 @@ def detect_ai_capabilities(question):
     ]):
         capabilities.add("team_scope")
 
-    return list(capabilities)
+    return sorted(capabilities)
+
 def get_tenant_profile_context(user_context=None):
     """
     Builds safe tenant/company context for the AI assistant.
@@ -1098,15 +1196,14 @@ def get_performance_summary_context(user_context=None, period="month", limit=8):
 
 
 def _roles(user_context=None):
-    roles = []
+    """
+    Return Saya's effective response roles.
 
-    if isinstance(user_context, dict):
-        roles = user_context.get("roles") or []
+    Team Leader and Reporting Officer are derived from verified employee flags.
+    A designation such as Manager or Managing Director never grants a role.
+    """
 
-        if not roles and user_context.get("role"):
-            roles = [user_context.get("role")]
-
-    return [_lower(role) for role in roles if _safe_str(role)] or ["employee"]
+    return derive_effective_ai_roles(user_context or {})
 
 
 def _is_admin_like_role(user_context=None):
@@ -1117,7 +1214,6 @@ def _is_admin_like_role(user_context=None):
         "hr_admin",
         "hr_manager",
     }))
-
 
 def _unique_values(values):
     unique = []
@@ -1751,21 +1847,609 @@ def get_projects_context(user_context=None, limit=12):
         "title": "Projects",
         "content": "\n".join(lines)
     }
+
+
+def _truthy(value):
+    if isinstance(value, bool):
+        return value
+
+    return _lower(value) in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_datetime(value):
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    text = _safe_str(value)
+
+    if not text:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _days_left(value):
+    parsed = _parse_datetime(value)
+
+    if not parsed:
+        return None
+
+    remaining = parsed - _now_utc()
+
+    if remaining.total_seconds() <= 0:
+        return 0
+
+    return max(1, int((remaining.total_seconds() + 86399) // 86400))
+
+
+def _format_money(amount, currency="INR"):
+    if amount in [None, ""]:
+        return "Not available"
+
+    try:
+        number = float(amount)
+    except (TypeError, ValueError):
+        return "Not available"
+
+    if number.is_integer():
+        amount_text = f"{int(number):,}"
+    else:
+        amount_text = f"{number:,.2f}".rstrip("0").rstrip(".")
+
+    currency = _safe_str(currency or "INR").upper()
+
+    if currency == "INR":
+        return f"₹{amount_text}"
+
+    return f"{currency} {amount_text}"
+
+
+def _tenant_document(user_context=None):
+    context = user_context or {}
+    tenant = context.get("tenant") or {}
+
+    if isinstance(tenant, dict) and tenant:
+        return tenant
+
+    tenant_values = _tenant_values(context)
+
+    if not tenant_values:
+        return {}
+
+    db = get_db()
+
+    return (
+        db.tenants.find_one({"_id": {"$in": tenant_values}})
+        or db.tenants.find_one({"tenant_id": {"$in": tenant_values}})
+        or db.companies.find_one({"_id": {"$in": tenant_values}})
+        or db.companies.find_one({"tenant_id": {"$in": tenant_values}})
+        or {}
+    )
+
+
+def _latest_subscription_document(user_context=None):
+    tenant_values = _tenant_values(user_context)
+
+    if not tenant_values:
+        return {}
+
+    db = get_db()
+    query = {
+        "$and": [
+            {
+                "$or": [
+                    {"tenant_id": {"$in": tenant_values}},
+                    {"company_id": {"$in": tenant_values}},
+                    {"tenant": {"$in": tenant_values}},
+                ]
+            },
+            {"is_deleted": {"$ne": True}},
+        ]
+    }
+
+    return db.subscriptions.find_one(
+        query,
+        sort=[("created_at", -1), ("updated_at", -1)],
+    ) or {}
+
+
+def _active_employee_count(user_context=None):
+    tenant_query = _tenant_query(user_context)
+
+    if not tenant_query:
+        return None
+
+    query = {
+        "$and": [
+            tenant_query,
+            {
+                "$or": [
+                    {"is_deleted": {"$exists": False}},
+                    {"is_deleted": False},
+                ]
+            },
+            {
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": {"$nin": ["inactive", "resigned", "alumni", "deleted"]}},
+                ]
+            },
+        ]
+    }
+
+    try:
+        return get_db().employees.count_documents(query)
+    except Exception:
+        return None
+
+
+def build_subscription_snapshot(user_context=None):
+    """Build a safe, tenant-scoped subscription snapshot for Saya."""
+
+    context = user_context or {}
+
+    if isinstance(context, dict):
+        cached = context.get("_saya_subscription_snapshot")
+        if isinstance(cached, dict):
+            return cached
+
+    tenant = _tenant_document(context)
+    subscription = _latest_subscription_document(context)
+
+    def pick(*keys, default=None):
+        for key in keys:
+            if subscription.get(key) not in [None, ""]:
+                return subscription.get(key)
+            if tenant.get(key) not in [None, ""]:
+                return tenant.get(key)
+        return default
+
+    plan_code = _lower(
+        pick("plan_code", "selected_plan_code", default="")
+    ).replace("-", "_").replace(" ", "_")
+
+    plan_type = _lower(pick("plan_type", default=""))
+    subscription_status = _lower(
+        pick("subscription_status", "status", default="")
+    )
+    trial_status = _lower(pick("trial_status", default=""))
+
+    is_lifetime = bool(
+        _truthy(pick("is_lifetime", "is_sds_company", default=False))
+        or plan_type == "lifetime"
+        or subscription_status == "lifetime"
+    )
+    is_demo = bool(
+        _truthy(pick("is_demo_company", default=False))
+        or plan_type == "demo"
+        or subscription_status == "demo"
+        or trial_status in {"active", "trial", "running"}
+    )
+    is_paid = bool(
+        _truthy(pick("is_paid_company", default=False))
+        or plan_type == "paid"
+        or subscription_status in {"active", "paid", "active_paid"}
+        or (plan_code in {"essential", "growth", "premium"} and not is_demo and not is_lifetime)
+    )
+
+    trial_end_date = pick("trial_end_date")
+    subscription_end_date = pick(
+        "subscription_end_date",
+        "ends_at",
+        "next_due_date",
+        "payment_due_date",
+        "premium_next_due_date",
+    )
+    trial_days_left = _days_left(trial_end_date)
+    subscription_days_left = _days_left(subscription_end_date)
+
+    status_is_expired = subscription_status in {
+        "expired",
+        "suspended",
+        "blocked",
+        "inactive",
+    }
+    trial_is_expired = bool(is_demo and trial_days_left == 0)
+    paid_is_expired = bool(is_paid and subscription_days_left == 0)
+    is_suspended = bool(
+        _truthy(pick("is_suspended", default=False))
+        or subscription_status in {"suspended", "blocked"}
+        or _lower(pick("status", default="")) in {"suspended", "blocked"}
+    )
+    is_expired = bool(status_is_expired or trial_is_expired or paid_is_expired)
+
+    employee_limit = pick("employee_limit", "included_employees")
+    is_unlimited = bool(
+        _truthy(pick("is_unlimited_employees", default=False))
+        or employee_limit in [None, "", 0, "0", "unlimited", "Unlimited"]
+        and plan_code == "premium"
+    )
+
+    if is_unlimited:
+        employee_limit = None
+
+    allowed_modules = pick("allowed_modules", default=[])
+    if isinstance(allowed_modules, str):
+        allowed_modules = [
+            item.strip()
+            for item in allowed_modules.split(",")
+            if item.strip()
+        ]
+    if not isinstance(allowed_modules, list):
+        allowed_modules = []
+
+    snapshot = {
+        "tenant_id": _safe_str(
+            tenant.get("tenant_id")
+            or subscription.get("tenant_id")
+            or context.get("tenant_id")
+        ),
+        "company_name": _safe_str(
+            tenant.get("company_name")
+            or tenant.get("name")
+            or subscription.get("company_name")
+            or context.get("tenant_name")
+        ),
+        "plan_code": plan_code,
+        "selected_plan_code": plan_code,
+        "plan_name": _safe_str(
+            pick("plan_name", "selected_plan_name", "plan_label", "plan", default="")
+        ),
+        "plan_type": plan_type,
+        "subscription_status": subscription_status,
+        "trial_status": trial_status,
+        "trial_start_date": pick("trial_start_date"),
+        "trial_end_date": trial_end_date,
+        "trial_days_left": trial_days_left,
+        "subscription_start_date": pick("subscription_start_date", "started_at"),
+        "subscription_end_date": subscription_end_date,
+        "subscription_days_left": subscription_days_left,
+        "next_payment_due_date": pick(
+            "next_payment_due_date",
+            "next_due_date",
+            "payment_due_date",
+            "premium_next_due_date",
+        ),
+        "billing_interval": _safe_str(
+            pick("billing_interval", "plan_interval", "premium_billing_interval", default="")
+        ),
+        "renewal_amount": pick("premium_renewal_amount", "renewal_amount", "amount"),
+        "renewal_currency": _safe_str(
+            pick("premium_quoted_currency", "currency", default="INR")
+        ).upper() or "INR",
+        "renewal_price_source": _safe_str(pick("renewal_price_source", default="")),
+        "employee_count": _active_employee_count(context),
+        "employee_limit": employee_limit,
+        "is_unlimited_employees": is_unlimited,
+        "allowed_modules": allowed_modules,
+        "premium_request_id": _safe_str(
+            pick("premium_request_id", "pending_premium_request_id", default="")
+        ),
+        "premium_quote_status": _safe_str(pick("premium_quote_status", default="")),
+        "premium_payment_status": _safe_str(pick("premium_payment_status", default="")),
+        "is_sds_company": _truthy(pick("is_sds_company", default=False)),
+        "is_lifetime": is_lifetime,
+        "is_demo_company": is_demo,
+        "is_paid_company": is_paid,
+        "is_expired": is_expired,
+        "is_suspended": is_suspended,
+        "requires_payment": bool(not is_lifetime and is_expired),
+    }
+
+    snapshot["profile_key"] = resolve_subscription_profile(
+        snapshot,
+        is_platform_superadmin=("super_admin" in _roles(context)),
+    )
+
+    if isinstance(context, dict):
+        context["_saya_subscription_snapshot"] = snapshot
+
+    return snapshot
+
+
+def _requested_plan_codes(question):
+    text = _lower(question)
+    codes = []
+
+    for code in ("essential", "growth", "premium"):
+        if code in text:
+            codes.append(code)
+
+    return codes
+
+
+def get_pricing_plans_context(question="", user_context=None):
+    """Return public-safe, database-backed active SaaS plan information."""
+
+    db = get_db()
+    query = {
+        "is_deleted": {"$ne": True},
+        "is_active": {"$ne": False},
+    }
+    requested_codes = _requested_plan_codes(question)
+
+    if requested_codes:
+        query["plan_code"] = {"$in": requested_codes}
+
+    plans = list(
+        db.pricing_plans.find(query).sort([
+            ("sort_order", 1),
+            ("amount", 1),
+            ("plan_name", 1),
+        ])
+    )
+
+    if not plans:
+        return {
+            "title": "Current SaaS Pricing",
+            "content": (
+                "No active pricing-plan record was found in the pricing_plans collection. "
+                "Saya must not quote an amount or invent a plan price. Ask the user to check "
+                "the Pricing/Billing page or contact the Sales team."
+            ),
+        }
+
+    lines = [
+        "Use these database values as the current authoritative public pricing."
+    ]
+
+    for index, plan in enumerate(plans, start=1):
+        code = _lower(plan.get("plan_code"))
+        name = _safe_str(
+            plan.get("display_name")
+            or plan.get("plan_name")
+            or code.title()
+        )
+        interval = _safe_str(plan.get("billing_interval") or "monthly")
+        is_custom = bool(plan.get("is_custom_pricing"))
+        online_payment = bool(plan.get("allow_online_payment"))
+        unlimited = bool(plan.get("is_unlimited_employees"))
+        employee_limit = plan.get("employee_limit")
+        amount = plan.get("amount")
+        currency = plan.get("currency") or "INR"
+
+        if is_custom or code == "premium":
+            price_text = "Custom quotation required"
+        else:
+            price_text = f"{_format_money(amount, currency)} per {interval}"
+
+        employee_text = (
+            "Unlimited employees"
+            if unlimited
+            else f"Up to {employee_limit} employees"
+            if employee_limit not in [None, ""]
+            else "Employee limit not configured"
+        )
+
+        payment_text = (
+            "Direct online payment available"
+            if online_payment and not is_custom
+            else "Quotation-first payment workflow"
+            if is_custom or code == "premium"
+            else "Online payment unavailable"
+        )
+
+        recommended_text = " | Recommended" if plan.get("is_recommended") else ""
+
+        lines.append(
+            f"{index}. {name} ({code or 'plan'}): {price_text} | "
+            f"{employee_text} | {payment_text}{recommended_text}"
+        )
+
+        features = plan.get("features") or []
+        if isinstance(features, list) and features:
+            safe_features = [
+                _safe_str(item)
+                for item in features[:6]
+                if _safe_str(item)
+            ]
+            if safe_features:
+                lines.append("   Features: " + "; ".join(safe_features))
+
+    lines.extend([
+        "Essential and Growth prices must always come from these live records.",
+        "Premium must follow Contact Sales -> request -> quotation -> client review -> payment -> activation.",
+        "Never invent a discount, promotional price, testimonial, guarantee, or custom Premium amount.",
+    ])
+
+    return {
+        "title": "Current SaaS Pricing",
+        "content": "\n".join(lines),
+    }
+
+
+def get_subscription_context(user_context=None):
+    snapshot = build_subscription_snapshot(user_context)
+
+    if not snapshot.get("tenant_id") and not snapshot.get("company_name"):
+        return {
+            "title": "Current Subscription",
+            "content": "No tenant subscription record was found for the logged-in user.",
+        }
+
+    if snapshot.get("is_lifetime"):
+        plan_label = "Lifetime Full Access"
+    elif snapshot.get("plan_name"):
+        plan_label = snapshot.get("plan_name")
+    elif snapshot.get("is_demo_company"):
+        plan_label = "Trial / Demo"
+    else:
+        plan_label = snapshot.get("plan_code") or "Not configured"
+
+    employee_limit = (
+        "Unlimited"
+        if snapshot.get("is_unlimited_employees")
+        else snapshot.get("employee_limit")
+        if snapshot.get("employee_limit") not in [None, ""]
+        else "Not configured"
+    )
+    renewal_amount = snapshot.get("renewal_amount")
+    renewal_text = (
+        _format_money(renewal_amount, snapshot.get("renewal_currency"))
+        if renewal_amount not in [None, ""]
+        else "Not available"
+    )
+    modules = snapshot.get("allowed_modules") or []
+    module_text = "All enabled modules" if "all" in [
+        _lower(item) for item in modules
+    ] else ", ".join(str(item) for item in modules) or "Not configured"
+
+    content = (
+        f"Company: {snapshot.get('company_name') or 'Current tenant'}\n"
+        f"Subscription profile: {snapshot.get('profile_key') or 'unknown'}\n"
+        f"Plan: {plan_label}\n"
+        f"Plan code: {snapshot.get('plan_code') or 'Not configured'}\n"
+        f"Subscription status: {snapshot.get('subscription_status') or 'Not configured'}\n"
+        f"Trial status: {snapshot.get('trial_status') or 'Not applicable'}\n"
+        f"Trial days left: {snapshot.get('trial_days_left') if snapshot.get('trial_days_left') is not None else 'Not applicable'}\n"
+        f"Subscription days left: {snapshot.get('subscription_days_left') if snapshot.get('subscription_days_left') is not None else 'Not applicable'}\n"
+        f"Billing interval: {snapshot.get('billing_interval') or 'Not configured'}\n"
+        f"Renewal amount: {renewal_text}\n"
+        f"Renewal price source: {snapshot.get('renewal_price_source') or 'Not configured'}\n"
+        f"Employees in use: {snapshot.get('employee_count') if snapshot.get('employee_count') is not None else 'Not available'}\n"
+        f"Employee limit: {employee_limit}\n"
+        f"Allowed modules: {module_text}\n"
+        f"Expired: {'Yes' if snapshot.get('is_expired') else 'No'}\n"
+        f"Suspended: {'Yes' if snapshot.get('is_suspended') else 'No'}\n"
+        f"Payment required: {'Yes' if snapshot.get('requires_payment') else 'No'}"
+    )
+
+    return {
+        "title": "Current Subscription",
+        "content": content,
+    }
+
+
+def get_premium_quotation_context(user_context=None):
+    """
+    Return tenant-scoped Premium quotation details only to billing-authorized roles.
+
+    Other users can still receive the generic Premium workflow from File 2, but
+    Saya must not expose their company's custom quotation amount or payment state.
+    """
+
+    roles = set(_roles(user_context))
+
+    if not roles.intersection({"super_admin", "admin"}):
+        return {
+            "title": "Premium Quotation",
+            "content": (
+                "The generic Premium workflow may be explained, but this login role "
+                "must not receive the tenant's custom quotation amount or payment details. "
+                "Ask the tenant Admin or Platform Super Admin to review Billing."
+            ),
+        }
+
+    tenant_values = _tenant_values(user_context)
+
+    if not tenant_values:
+        return {
+            "title": "Premium Quotation",
+            "content": "No tenant was resolved for this request.",
+        }
+
+    query = {
+        "$and": [
+            {
+                "$or": [
+                    {"tenant_id": {"$in": tenant_values}},
+                    {"company_id": {"$in": tenant_values}},
+                    {"tenant": {"$in": tenant_values}},
+                ]
+            },
+            {"is_deleted": {"$ne": True}},
+        ]
+    }
+
+    request_doc = get_db().premium_plan_requests.find_one(
+        query,
+        sort=[("quotation_sent_at", -1), ("updated_at", -1), ("created_at", -1)],
+    ) or {}
+
+    if not request_doc:
+        return {
+            "title": "Premium Quotation",
+            "content": (
+                "No Premium request or quotation was found for this tenant. "
+                "Use Billing -> Premium -> Contact Sales / Submit Premium Request."
+            ),
+        }
+
+    client_visible = request_doc.get("client_visible") is True
+    quotation_status = _safe_str(request_doc.get("quotation_status") or "pending")
+    request_status = _safe_str(request_doc.get("status") or "pending")
+    payment_status = _safe_str(request_doc.get("payment_status") or "not_started")
+    amount = request_doc.get("renewal_amount") or request_doc.get("quoted_amount")
+    currency = request_doc.get("quoted_currency") or request_doc.get("currency") or "INR"
+
+    if not client_visible:
+        amount_text = "Not released to client"
+    else:
+        amount_text = _format_money(amount, currency)
+
+    content = (
+        f"Request reference: {request_doc.get('request_reference') or 'Not available'}\n"
+        f"Request status: {request_status}\n"
+        f"Quotation reference: {request_doc.get('quotation_reference') or 'Not available'}\n"
+        f"Quotation status: {quotation_status}\n"
+        f"Client visible: {'Yes' if client_visible else 'No'}\n"
+        f"Quoted recurring amount: {amount_text}\n"
+        f"Billing interval: {request_doc.get('billing_interval') or request_doc.get('quoted_billing_interval') or 'Not configured'}\n"
+        f"Payment status: {payment_status}\n"
+        f"Quotation valid until: {request_doc.get('quotation_valid_until') or 'Not configured'}\n"
+        "Premium payment must not be recommended until client_visible is Yes and quotation_status is sent or converted."
+    )
+
+    return {
+        "title": "Premium Quotation",
+        "content": content,
+    }
+
+
+def get_role_subscription_guidance_context(user_context=None):
+    context = dict(user_context or {})
+    roles = _roles(context)
+    snapshot = build_subscription_snapshot(context)
+
+    context["roles"] = roles
+    context["role"] = resolve_primary_role(roles)
+    context["subscription"] = snapshot
+    context["is_platform_superadmin"] = "super_admin" in roles
+
+    return {
+        "title": "Saya Role and Subscription Guidance",
+        "content": build_role_subscription_guidance(context),
+    }
+
 def build_capability_context(question, user_context=None):
     """
-    Returns real HRMS data context based on user question.
-    This does not perform write actions.
+    Return tenant-safe, read-only context based on the question.
+
+    Saya's verified role/subscription guidance is always attached. Live records
+    are added only when a matching capability is detected.
     """
 
     capabilities = detect_ai_capabilities(question)
-
-    if not capabilities:
-        return ""
-
     blocks = []
 
-    text = _lower(question)
+    role_result = get_role_subscription_guidance_context(user_context)
+    blocks.append(
+        f"""
+Capability: {role_result.get("title")}
+Data:
+{role_result.get("content")}
+"""
+    )
 
+    text = _lower(question)
     period = "month"
     if "week" in text:
         period = "week"
@@ -1775,6 +2459,15 @@ def build_capability_context(question, user_context=None):
     for capability in capabilities:
         if capability == "tenant_profile":
             result = get_tenant_profile_context(user_context)
+
+        elif capability == "pricing_plans":
+            result = get_pricing_plans_context(question, user_context)
+
+        elif capability == "subscription_summary":
+            result = get_subscription_context(user_context)
+
+        elif capability == "premium_quotation":
+            result = get_premium_quotation_context(user_context)
 
         elif capability == "weather":
             result = get_tenant_weather_context(user_context)
@@ -1801,8 +2494,6 @@ def build_capability_context(question, user_context=None):
             result = get_team_scope_context(user_context)
 
         elif capability == "projects":
-            # Project answers also need Team Scope so the AI cannot invent or
-            # mix Team Leader/Reporting Officer/member details from elsewhere.
             team_result = get_team_scope_context(user_context)
             blocks.append(
                 f"""
@@ -1825,437 +2516,360 @@ Data:
         )
 
     return "\n\n".join(blocks).strip()
+
 ROLE_MODULES = {
     "super_admin": [
-        "companies",
-        "users",
-        "employees",
-        "organisations",
-        "employee_directory",
-        "management_groups",
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "leave_balances",
-        "holiday_calendar",
-        "attendance_mode_requests",
-        "attendance_logs",
-        "compoff_credits",
-        "reports",
-        "payroll",
-        "recruitment",
-        "training",
-        "performance",
-        "expenses",
-        "assets",
-        "notifications",
-        "policies",
-        "departments",
-        "designations",
-        "states",
-        "settings",
-        "audit_logs",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "billing", "premium", "trial",
+        "companies", "users", "employees", "organisations", "employee_directory",
+        "management_groups", "attendance", "leave", "projects", "team_approvals",
+        "application_status", "grievance", "it_support", "leave_balances",
+        "holiday_calendar", "attendance_mode_requests", "attendance_logs",
+        "compoff_credits", "reports", "payroll", "recruitment", "training",
+        "performance", "expenses", "assets", "notifications", "policies",
+        "departments", "designations", "states", "settings", "audit_logs",
+        "profile", "weather", "general_writing",
     ],
     "admin": [
-        "employees",
-        "organisations",
-        "employee_directory",
-        "management_groups",
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "leave_balances",
-        "holiday_calendar",
-        "attendance_mode_requests",
-        "attendance_logs",
-        "compoff_credits",
-        "reports",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "departments",
-        "designations",
-        "states",
-        "payroll",
-        "profile",
-        "weather",
+        "product_overview", "pricing", "subscription", "billing", "premium", "trial",
+        "employees", "organisations", "employee_directory", "management_groups",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "leave_balances", "holiday_calendar",
+        "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
+        "performance", "assets", "notifications", "policies", "departments",
+        "designations", "states", "payroll", "settings", "profile", "weather",
         "general_writing",
     ],
     "hr": [
-        "employees",
-        "organisations",
-        "employee_directory",
-        "management_groups",
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "leave_balances",
-        "holiday_calendar",
-        "attendance_mode_requests",
-        "attendance_logs",
-        "compoff_credits",
-        "reports",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "departments",
-        "designations",
-        "states",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "employees", "organisations", "employee_directory", "management_groups",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "leave_balances", "holiday_calendar",
+        "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
+        "performance", "assets", "notifications", "policies", "departments",
+        "designations", "states", "payroll", "profile", "weather", "general_writing",
     ],
     "hr_admin": [
-        "employees",
-        "organisations",
-        "employee_directory",
-        "management_groups",
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "leave_balances",
-        "holiday_calendar",
-        "attendance_mode_requests",
-        "attendance_logs",
-        "compoff_credits",
-        "reports",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "departments",
-        "designations",
-        "states",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "employees", "organisations", "employee_directory", "management_groups",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "leave_balances", "holiday_calendar",
+        "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
+        "performance", "assets", "notifications", "policies", "departments",
+        "designations", "states", "payroll", "profile", "weather", "general_writing",
     ],
     "hr_manager": [
-        "employees",
-        "organisations",
-        "employee_directory",
-        "management_groups",
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "leave_balances",
-        "holiday_calendar",
-        "attendance_mode_requests",
-        "attendance_logs",
-        "compoff_credits",
-        "reports",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "departments",
-        "designations",
-        "states",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
-    ],
-    "team_leader": [
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
-    ],
-    "reporting_officer": [
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
-    ],
-    "ro": [
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
-    ],
-    "manager": [
-        "attendance",
-        "leave",
-        "projects",
-        "team_approvals",
-        "application_status",
-        "grievance",
-        "it_support",
-        "performance",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "employees", "organisations", "employee_directory", "management_groups",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "leave_balances", "holiday_calendar",
+        "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
+        "performance", "assets", "notifications", "policies", "departments",
+        "designations", "states", "payroll", "profile", "weather", "general_writing",
     ],
     "finance": [
-        "attendance",
-        "leave",
-        "application_status",
-        "grievance",
-        "it_support",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "attendance", "leave", "application_status", "grievance", "it_support",
+        "assets", "notifications", "policies", "payroll", "reports", "profile",
+        "weather", "general_writing",
     ],
     "accounts_finance": [
-        "attendance",
-        "leave",
-        "application_status",
-        "grievance",
-        "it_support",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "attendance", "leave", "application_status", "grievance", "it_support",
+        "assets", "notifications", "policies", "payroll", "reports", "profile",
+        "weather", "general_writing",
+    ],
+    "team_leader": [
+        "product_overview", "pricing", "subscription", "trial",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "performance", "assets", "notifications",
+        "policies", "payroll", "profile", "weather", "general_writing",
+    ],
+    "reporting_officer": [
+        "product_overview", "pricing", "subscription", "trial",
+        "attendance", "leave", "projects", "team_approvals", "application_status",
+        "grievance", "it_support", "performance", "assets", "notifications",
+        "policies", "payroll", "profile", "weather", "general_writing",
     ],
     "employee": [
-        "attendance",
-        "leave",
-        "application_status",
-        "grievance",
-        "it_support",
-        "assets",
-        "notifications",
-        "policies",
-        "payroll",
-        "profile",
-        "weather",
-        "general_writing",
+        "product_overview", "pricing", "subscription", "trial",
+        "attendance", "leave", "application_status", "grievance", "it_support",
+        "assets", "notifications", "policies", "payroll", "projects", "profile",
+        "weather", "general_writing",
     ],
 }
 
 
+PUBLIC_PRODUCT_MODULES = {
+    "product_overview",
+    "pricing",
+    "subscription",
+    "trial",
+}
+
+TENANT_ALWAYS_ALLOWED_MODULES = {
+    "product_overview",
+    "pricing",
+    "subscription",
+    "billing",
+    "premium",
+    "trial",
+    "profile",
+    "notifications",
+    "general_writing",
+    "weather",
+}
+
+AI_TO_TENANT_MODULE_ALIASES = {
+    "attendance": {"attendance", "attendance_logs", "attendance_mode_requests"},
+    "leave": {"leave", "apply_leave", "leave_balances", "compoff_credits", "holiday_calendar"},
+    "projects": {"project", "projects", "project_progress", "project_assignment"},
+    "payroll": {"payroll", "payslip", "salary"},
+    "reports": {"reports", "report"},
+    "employees": {"employees", "employee_management"},
+    "employee_directory": {"employee_directory"},
+    "management_groups": {"management_groups", "management_group"},
+    "grievance": {"grievance", "grievances"},
+    "it_support": {"it_support", "support"},
+    "assets": {"assets", "asset"},
+    "policies": {"policies", "policy"},
+    "performance": {"performance"},
+    "organisations": {"organisations", "organizations", "organisation", "organization"},
+    "departments": {"departments", "department"},
+    "designations": {"designations", "designation"},
+    "states": {"states", "state"},
+    "settings": {"settings", "system_settings"},
+    "audit_logs": {"audit_logs", "audit"},
+}
+
 QUESTION_MODULE_KEYWORDS = {
+    "product_overview": [
+        "yourcomate", "your comate", "hrms features", "why yourcomate",
+        "why should i choose", "benefits of yourcomate", "what can this hrms do",
+    ],
+    "pricing": [
+        "pricing", "price", "plan price", "plan cost", "subscription cost",
+        "essential plan", "growth plan", "premium plan", "compare plans",
+        "how much is essential", "how much is growth", "how much is premium",
+    ],
+    "subscription": [
+        "subscription", "current plan", "my plan", "trial", "demo",
+        "days left", "expire", "expiry", "renew", "renewal", "upgrade",
+        "upgrade plan", "upgrade to premium", "upgrade to growth", "upgrade to essential",
+        "employee limit", "enabled modules", "allowed modules",
+    ],
+    "billing": [
+        "billing", "payment", "razorpay", "invoice", "receipt", "pay now",
+        "payment failed", "payment verification",
+    ],
+    "premium": [
+        "premium request", "premium quotation", "premium quote", "contact sales",
+        "quoted amount", "custom quote", "premium activation", "premium payment",
+        "upgrade to premium",
+    ],
     "weather": ["weather", "temperature", "rain", "forecast"],
     "notifications": ["notification", "notifications", "alert", "alerts", "unread"],
     "leave": [
-        "leave",
-        "cl",
-        "el",
-        "casual leave",
-        "earned leave",
-        "half day",
-        "leave balance",
-        "leave status",
-        "approved my leave",
+        "leave", "cl", "el", "casual leave", "earned leave", "half day",
+        "lwp", "leave balance", "leave status", "approved my leave", "comp off",
+        "compoff", "holiday work",
     ],
     "attendance": [
-        "attendance",
-        "check in",
-        "check-in",
-        "check out",
-        "check-out",
-        "late",
-        "on time",
-        "absent",
-        "present",
-        "wfh",
-        "field",
+        "attendance", "check in", "check-in", "check out", "check-out", "late",
+        "on time", "absent", "present", "wfh", "work from home", "field attendance",
+        "attendance correction",
     ],
-    "projects": ["project", "projects", "task", "progress", "department projects"],
+    "projects": [
+        "project", "projects", "task", "progress", "department projects",
+        "collaborator", "project assignment",
+    ],
     "grievance": ["grievance", "complaint"],
-    "it_support": ["it support", "ticket", "issue", "technical issue"],
-    "assets": ["asset", "assets", "laptop", "hardware", "software"],
-    "reports": ["report", "reports", "excel", "attendance register"],
+    "it_support": ["it support", "support ticket", "technical issue", "ticket escalation"],
+    "assets": ["asset", "assets", "laptop", "hardware", "software allocation"],
+    "reports": ["report", "reports", "excel", "attendance register", "dashboard analytics"],
     "payroll": [
-        "payroll",
-        "salary",
-        "salary structure",
-        "gross salary",
-        "net salary",
-        "payslip",
-        "pay slip",
-        "salary slip",
-        "payroll run",
-        "hr review",
-        "finance approval",
-        "salary disbursement",
-        "bank verification",
-        "bank details",
-        "loan advance",
-        "loan recovery",
-        "reimbursement",
-        "tax declaration",
-        "tds",
-        "provident fund",
-        "professional tax",
-        "esi",
-        "pf deduction",
+        "payroll", "salary", "salary structure", "gross salary", "net salary",
+        "payslip", "pay slip", "salary slip", "payroll run", "hr review",
+        "finance approval", "salary disbursement", "bank verification", "bank details",
+        "bank file", "loan advance", "loan recovery", "reimbursement", "tax declaration",
+        "tds", "provident fund", "professional tax", "esi", "pf deduction", "lwp deduction",
     ],
-    "performance": ["performance", "review", "rating", "weekly performance", "monthly performance"],
+    "performance": [
+        "performance", "performance review", "rating", "weekly performance",
+        "monthly performance",
+    ],
     "management_groups": [
-        "management group",
-        "meeting",
-        "minutes",
-        "minutes writer",
-        "agenda",
+        "management group", "management meeting", "meeting minutes", "minutes writer", "agenda",
     ],
-    "team_approvals": ["approval", "approvals", "team approval", "approve request"],
-    "employee_directory": ["employee directory", "phone number", "contact", "employee contact"],
-    "employees": ["employee master", "employee list", "employee management"],
-    "policies": ["policy", "policies"],
+    "team_approvals": [
+        "team approval", "team approvals", "approve request", "first level approval",
+        "reporting officer approval",
+    ],
+    "employee_directory": [
+        "employee directory", "phone number", "employee contact", "staff contact",
+    ],
+    "employees": [
+        "employee master", "employee list", "employee management",
+        "create employee", "create an employee", "create new employee",
+        "create a new employee", "add employee", "add an employee",
+        "add new employee", "add a new employee", "register employee",
+        "register a new employee", "resign employee", "alumni",
+        "restore employee",
+    ],
+    "organisations": ["organisation master", "organization master", "organisation setup"],
+    "departments": ["department master", "create department", "add department"],
+    "designations": ["designation master", "create designation", "add designation"],
+    "states": ["state master", "create state", "add state"],
+    "policies": ["policy", "policies", "company policy"],
+    "settings": ["system settings", "tenant settings", "company settings", "branding"],
+    "audit_logs": ["audit log", "audit logs", "activity log"],
     "profile": [
-        "profile",
-        "my profile",
-        "change password",
-        "update password",
-        "current password",
-        "new password",
-        "forgot password",
+        "profile", "my profile", "change password", "update password",
+        "current password", "new password", "forgot password",
     ],
     "general_writing": [
-        "write",
-        "generate",
-        "draft",
-        "compose",
-        "email",
-        "mail",
-        "letter",
-        "caption",
-        "message",
-        "reason",
-        "notice",
+        "write", "generate", "draft", "compose", "email", "mail", "letter",
+        "caption", "message", "reason", "notice",
     ],
 }
 
 
 def detect_question_modules(question):
     text = _lower(question)
-
     matched_modules = []
 
     for module, keywords in QUESTION_MODULE_KEYWORDS.items():
-        if any(keyword in text for keyword in keywords):
+        if _contains_any(text, keywords):
             matched_modules.append(module)
 
     if not matched_modules:
         matched_modules.append("general_writing")
 
-    return matched_modules
+    return sorted(set(matched_modules))
 
 
 def allowed_modules_for_roles(roles):
-    allowed = set()
+    allowed = set(PUBLIC_PRODUCT_MODULES)
 
-    for role in roles or []:
-        normalized_role = _lower(role)
-        for module in ROLE_MODULES.get(normalized_role, []):
-            allowed.add(module)
+    normalized_roles = normalise_roles(roles or []) or ["employee"]
+
+    for role in normalized_roles:
+        allowed.update(ROLE_MODULES.get(role, []))
 
     if not allowed:
-        for module in ROLE_MODULES.get("employee", []):
-            allowed.add(module)
+        allowed.update(ROLE_MODULES.get("employee", []))
 
     return sorted(allowed)
 
 
+def _tenant_enabled_modules(user_context=None):
+    tenant = _tenant_document(user_context)
+    modules = tenant.get("allowed_modules") or []
+
+    if isinstance(modules, str):
+        modules = [
+            item.strip()
+            for item in modules.split(",")
+            if item.strip()
+        ]
+
+    if not isinstance(modules, list):
+        return []
+
+    return sorted({
+        _lower(item).replace("-", "_").replace(" ", "_")
+        for item in modules
+        if _safe_str(item)
+    })
+
+
+def _module_enabled_for_tenant(module, enabled_modules):
+    if not enabled_modules or "all" in enabled_modules:
+        return True
+
+    if module in TENANT_ALWAYS_ALLOWED_MODULES:
+        return True
+
+    aliases = AI_TO_TENANT_MODULE_ALIASES.get(module, {module})
+    return bool(set(enabled_modules).intersection(aliases))
+
+
 def check_ai_role_permission(question, user_context=None):
-    roles = []
+    """
+    Validate Saya's answer scope against verified roles and tenant modules.
 
-    if isinstance(user_context, dict):
-        roles = user_context.get("roles") or []
+    This function controls answer scope only. It never replaces route-level
+    authorization and never grants an HRMS write action.
+    """
 
-        if not roles and user_context.get("role"):
-            roles = [user_context.get("role")]
-
-    if not roles:
-        roles = ["employee"]
-
+    context = user_context or {}
+    roles = _roles(context)
+    primary_role = resolve_primary_role(roles)
     allowed_modules = allowed_modules_for_roles(roles)
     asked_modules = detect_question_modules(question)
 
     blocked_modules = [
-        module for module in asked_modules
+        module
+        for module in asked_modules
         if module not in allowed_modules
     ]
+
+    enabled_modules = _tenant_enabled_modules(context)
+    tenant_blocked_modules = [
+        module
+        for module in asked_modules
+        if module not in blocked_modules
+        and not _module_enabled_for_tenant(module, enabled_modules)
+    ]
+
+    snapshot = build_subscription_snapshot(context)
+    subscription_profile = snapshot.get("profile_key") or "unknown"
 
     if blocked_modules:
         return {
             "allowed": False,
+            "primary_role": primary_role,
+            "effective_roles": roles,
+            "subscription_profile": subscription_profile,
             "asked_modules": asked_modules,
             "allowed_modules": allowed_modules,
+            "enabled_tenant_modules": enabled_modules,
             "blocked_modules": blocked_modules,
+            "tenant_blocked_modules": tenant_blocked_modules,
             "message": (
-                "This question belongs to a module that is not available for your login role. "
-                "Please ask about the modules available in your HRMS account, or contact HR/Admin if you need access."
-            )
+                "This request belongs to a module that is not available for the "
+                "logged-in role. Saya may explain which authorized role handles it, "
+                "but must not provide private records or action instructions as if the "
+                "current user had that permission."
+            ),
+        }
+
+    if tenant_blocked_modules:
+        return {
+            "allowed": False,
+            "primary_role": primary_role,
+            "effective_roles": roles,
+            "subscription_profile": subscription_profile,
+            "asked_modules": asked_modules,
+            "allowed_modules": allowed_modules,
+            "enabled_tenant_modules": enabled_modules,
+            "blocked_modules": [],
+            "tenant_blocked_modules": tenant_blocked_modules,
+            "message": (
+                "This module is not enabled for the current tenant/subscription. "
+                "Saya may explain the relevant upgrade or Admin contact path, but must "
+                "not claim that the module is currently available."
+            ),
         }
 
     return {
         "allowed": True,
+        "primary_role": primary_role,
+        "effective_roles": roles,
+        "subscription_profile": subscription_profile,
         "asked_modules": asked_modules,
         "allowed_modules": allowed_modules,
+        "enabled_tenant_modules": enabled_modules,
         "blocked_modules": [],
-        "message": ""
+        "tenant_blocked_modules": [],
+        "message": "",
     }

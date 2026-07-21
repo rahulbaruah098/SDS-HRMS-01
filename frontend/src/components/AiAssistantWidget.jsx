@@ -14,6 +14,8 @@ import {
 import {
   askAiAssistant,
   checkInAttendance,
+  currentEmployee,
+  currentUser,
   checkOutAttendance,
   getAiAssistantVoiceContext,
   getAttendanceStatus,
@@ -21,33 +23,367 @@ import {
   transcribeAiAssistantAudio,
 } from "../api/client";
 
-const QUICK_QUESTIONS = [
-  "How to apply leave?",
-  "I want to apply leave",
-  "Any notifications?",
-  "How many CL are left?",
-  "How many assets do I have?",
-  "Schedule management group meeting",
-  "Remind me",
+const ASSISTANT_NAME = "Saya";
+const PRODUCT_NAME = "YourComate HRMS";
+
+const ROLE_PRIORITY = [
+  "super_admin",
+  "admin",
+  "hr_admin",
+  "hr_manager",
+  "hr",
+  "accounts_finance",
+  "finance",
+  "reporting_officer",
+  "team_leader",
+  "employee",
 ];
 
-const PROJECT_MODULES = [
-  "Leave",
-  "Attendance",
-  "Projects",
-  "Approvals",
-  "Assets",
-  "Reports",
-  "Notifications",
-  "Policies",
-  "IT Support",
-];
-
-const WELCOME_MESSAGE = {
-  role: "assistant",
-  text:
-    "Hi, I am Saya, your SDS HRMS Assistant. Ask me about HRMS workflows, leave, attendance, assets, reports, notifications, approvals, policies, or ask me to draft emails, leave reasons, messages, and other professional text.",
+const ROLE_ALIASES = {
+  superadmin: "super_admin",
+  "super admin": "super_admin",
+  platform_superadmin: "super_admin",
+  platform_admin: "super_admin",
+  administrator: "admin",
+  tenant_admin: "admin",
+  hradmin: "hr_admin",
+  "hr admin": "hr_admin",
+  hrmanager: "hr_manager",
+  "hr manager": "hr_manager",
+  human_resources: "hr",
+  "human resources": "hr",
+  accounts: "accounts_finance",
+  "accounts finance": "accounts_finance",
+  finance_accounts: "accounts_finance",
+  "finance accounts": "accounts_finance",
+  teamleader: "team_leader",
+  "team leader": "team_leader",
+  reporting_officer: "reporting_officer",
+  "reporting officer": "reporting_officer",
+  manager: "employee",
+  staff: "employee",
+  user: "employee",
 };
+
+const ROLE_LABELS = {
+  super_admin: "Platform Super Admin",
+  admin: "Tenant Admin",
+  hr_admin: "HR Admin",
+  hr_manager: "HR Manager",
+  hr: "HR",
+  accounts_finance: "Accounts & Finance",
+  finance: "Finance",
+  reporting_officer: "Reporting Officer",
+  team_leader: "Team Leader",
+  employee: "Employee",
+};
+
+const SUBSCRIPTION_LABELS = {
+  platform_superadmin: "Platform administration",
+  lifetime: "Lifetime access",
+  demo: "Demo / trial",
+  essential: "Essential plan",
+  growth: "Growth plan",
+  premium: "Premium plan",
+  paid_other: "Paid subscription",
+  expired: "Renewal required",
+  unknown: "Subscription status unavailable",
+};
+
+const ROLE_QUICK_QUESTIONS = {
+  super_admin: [
+    "What is the current Growth plan price?",
+    "How do I approve a trial company?",
+    "Show the complete Premium quotation workflow",
+    "How do I manage tenant subscriptions?",
+    "How do employee limits work?",
+    "Which platform notifications need attention?",
+  ],
+  admin: [
+    "How do I create and onboard an employee?",
+    "How do I manage attendance and leave?",
+    "Which subscription plan is my company using?",
+    "How do I upgrade to Premium?",
+    "How do I configure company branding?",
+    "How do I view tenant reports?",
+  ],
+  hr_admin: [
+    "Show the complete employee onboarding workflow",
+    "How does leave approval hierarchy work?",
+    "How do I synchronize attendance for payroll?",
+    "How do I complete payroll HR Review?",
+    "How do I manage employee resignation and alumni?",
+    "How do I run performance reviews?",
+  ],
+  hr_manager: [
+    "Show the complete employee onboarding workflow",
+    "How does leave approval hierarchy work?",
+    "How do I synchronize attendance for payroll?",
+    "How do I complete payroll HR Review?",
+    "How do I manage policies and grievances?",
+    "Which HR reports are available?",
+  ],
+  hr: [
+    "How do I create and onboard an employee?",
+    "How does leave approval hierarchy work?",
+    "How do I correct attendance?",
+    "How do I synchronize attendance for payroll?",
+    "How do I complete payroll HR Review?",
+    "How do I manage holiday work and comp-off?",
+  ],
+  accounts_finance: [
+    "Show the complete monthly payroll workflow",
+    "How do I complete Finance Approval?",
+    "How do I lock and disburse payroll?",
+    "How do I verify employee bank details?",
+    "How do I generate PF, PT and TDS reports?",
+    "How do loans, advances and reimbursements work?",
+  ],
+  finance: [
+    "Show the complete monthly payroll workflow",
+    "How do I complete Finance Approval?",
+    "How do I lock and disburse payroll?",
+    "How do I verify employee bank details?",
+    "How do I generate PF, PT and TDS reports?",
+    "How do loans, advances and reimbursements work?",
+  ],
+  reporting_officer: [
+    "How do I review final team approvals?",
+    "How do I monitor project progress?",
+    "How do I review team performance?",
+    "How do I view my attendance and leave?",
+    "How do I download my payslip?",
+    "How do I raise an IT support request?",
+  ],
+  team_leader: [
+    "How do I review first-level team approvals?",
+    "How do I update project progress?",
+    "How do I review my team workload?",
+    "How do I view my attendance and leave?",
+    "How do I download my payslip?",
+    "How do I raise an IT support request?",
+  ],
+  employee: [
+    "How do I apply for leave?",
+    "How do I check in or check out?",
+    "How do I view my leave balance?",
+    "How do I download my payslip?",
+    "How do I update project progress?",
+    "How do I raise an IT support request?",
+  ],
+};
+
+const ROLE_MODULES = {
+  super_admin: ["Tenants", "Trials", "Pricing", "Premium", "Billing", "Notifications", "Audit Logs"],
+  admin: ["Employees", "Attendance", "Leave", "Projects", "Payroll", "Reports", "Billing", "Settings"],
+  hr_admin: ["Employees", "Attendance", "Leave", "Payroll", "Performance", "Policies", "Reports"],
+  hr_manager: ["Employees", "Attendance", "Leave", "Payroll", "Performance", "Policies", "Reports"],
+  hr: ["Employees", "Attendance", "Leave", "Payroll", "Assets", "Policies", "Reports"],
+  accounts_finance: ["Payroll", "Banking", "PF / PT / TDS", "Loans", "Reimbursements", "Tax", "Reports"],
+  finance: ["Payroll", "Banking", "PF / PT / TDS", "Loans", "Reimbursements", "Tax", "Reports"],
+  reporting_officer: ["Team Approvals", "Projects", "Performance", "Attendance", "Leave", "Payslips"],
+  team_leader: ["Team Approvals", "Projects", "Progress", "Attendance", "Leave", "Payslips"],
+  employee: ["Attendance", "Leave", "Projects", "Payslips", "Assets", "Policies", "IT Support"],
+};
+
+function normalizeRole(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_")
+    .replace(/\s+/g, " ");
+
+  if (!normalized) return "";
+
+  return ROLE_ALIASES[normalized] || ROLE_ALIASES[normalized.replace(/ /g, "_")] || normalized.replace(/ /g, "_");
+}
+
+function uniqueValues(values = []) {
+  return values.filter((value, index, list) => value && list.indexOf(value) === index);
+}
+
+function resolvePrimaryRole(roles = []) {
+  const normalizedRoles = uniqueValues(roles.map(normalizeRole));
+  return ROLE_PRIORITY.find((role) => normalizedRoles.includes(role)) || normalizedRoles[0] || "employee";
+}
+
+function deriveSubscriptionProfile(user = {}) {
+  const subscription = user?.subscription || user?.tenant?.subscription || {};
+  const status = String(
+    subscription?.subscription_status ||
+      subscription?.status ||
+      user?.subscription_status ||
+      ""
+  ).toLowerCase();
+  const planCode = String(
+    subscription?.selected_plan_code ||
+      subscription?.plan_code ||
+      subscription?.plan ||
+      user?.selected_plan_code ||
+      user?.plan_code ||
+      ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (user?.is_platform_superadmin || normalizeRole(user?.role) === "super_admin") {
+    return "platform_superadmin";
+  }
+
+  if (subscription?.is_lifetime || status === "lifetime") return "lifetime";
+  if (
+    subscription?.is_expired ||
+    subscription?.is_suspended ||
+    subscription?.requires_payment ||
+    ["expired", "suspended", "payment_required"].includes(status)
+  ) {
+    return "expired";
+  }
+
+  if (subscription?.is_demo_company || user?.is_demo_company) return "demo";
+  if (["essential", "growth", "premium"].includes(planCode)) return planCode;
+  if (subscription?.is_paid_company || user?.is_paid_company) return "paid_other";
+
+  const planType = String(subscription?.plan_type || user?.plan_type || "").toLowerCase();
+  const trialStatus = String(subscription?.trial_status || user?.trial_status || "").toLowerCase();
+
+  if (planType === "demo" || ["active", "trial", "running"].includes(trialStatus)) {
+    return "demo";
+  }
+
+  return "unknown";
+}
+
+function buildInitialAssistantContext() {
+  let user = {};
+  let employee = {};
+
+  try {
+    user = currentUser?.() || {};
+  } catch {
+    user = {};
+  }
+
+  try {
+    employee = currentEmployee?.() || {};
+  } catch {
+    employee = {};
+  }
+
+  const roleCandidates = [
+    ...(Array.isArray(user?.roles) ? user.roles : []),
+    user?.role,
+  ]
+    .map(normalizeRole)
+    .filter(Boolean);
+
+  const hasProtectedRole = roleCandidates.some((role) =>
+    ["super_admin", "admin", "hr_admin", "hr_manager", "hr", "finance", "accounts_finance"].includes(role)
+  );
+
+  const effectiveRoles = hasProtectedRole
+    ? [...roleCandidates]
+    : ["employee"];
+
+  if (employee?.is_team_leader) effectiveRoles.push("team_leader");
+  if (employee?.is_reporting_officer) effectiveRoles.push("reporting_officer");
+
+  const roles = uniqueValues(effectiveRoles.map(normalizeRole));
+  const primaryRole = resolvePrimaryRole(roles);
+  const designation = String(
+    employee?.designation_name ||
+      employee?.designation ||
+      user?.designation_name ||
+      user?.designation ||
+      ""
+  ).trim();
+
+  return {
+    assistant_name: ASSISTANT_NAME,
+    primary_role: primaryRole,
+    effective_roles: roles.length ? roles : ["employee"],
+    subscription_profile: deriveSubscriptionProfile(user),
+    designation,
+    detected_modules: [],
+  };
+}
+
+function mergeAssistantContext(current = {}, incoming = {}) {
+  const incomingRoles = Array.isArray(incoming?.effective_roles)
+    ? incoming.effective_roles.map(normalizeRole).filter(Boolean)
+    : [];
+  const currentRoles = Array.isArray(current?.effective_roles)
+    ? current.effective_roles.map(normalizeRole).filter(Boolean)
+    : [];
+  const effectiveRoles = uniqueValues(incomingRoles.length ? incomingRoles : currentRoles);
+  const incomingPrimary = normalizeRole(incoming?.primary_role);
+  const primaryRole = incomingPrimary || resolvePrimaryRole(effectiveRoles) || current?.primary_role || "employee";
+
+  return {
+    ...current,
+    ...incoming,
+    assistant_name: String(incoming?.assistant_name || current?.assistant_name || ASSISTANT_NAME).trim() || ASSISTANT_NAME,
+    primary_role: primaryRole,
+    effective_roles: effectiveRoles.length ? effectiveRoles : [primaryRole],
+    subscription_profile:
+      String(incoming?.subscription_profile || current?.subscription_profile || "unknown").trim().toLowerCase() || "unknown",
+    designation: String(incoming?.designation || current?.designation || "").trim(),
+    detected_modules: Array.isArray(incoming?.detected_modules)
+      ? uniqueValues(incoming.detected_modules.map((item) => String(item || "").trim()).filter(Boolean))
+      : current?.detected_modules || [],
+  };
+}
+
+function getRoleLabel(context = {}) {
+  const primaryRole = normalizeRole(context?.primary_role) || "employee";
+  return ROLE_LABELS[primaryRole] || "Employee";
+}
+
+function getSubscriptionLabel(context = {}) {
+  const profile = String(context?.subscription_profile || "unknown").toLowerCase();
+  return SUBSCRIPTION_LABELS[profile] || SUBSCRIPTION_LABELS.unknown;
+}
+
+function buildRoleQuickQuestions(context = {}) {
+  const primaryRole = normalizeRole(context?.primary_role) || "employee";
+  const baseQuestions = ROLE_QUICK_QUESTIONS[primaryRole] || ROLE_QUICK_QUESTIONS.employee;
+  const designation = String(context?.designation || "").toLowerCase();
+
+  if (/managing director|chief executive officer|\bceo\b|\bdirector\b/.test(designation)) {
+    return uniqueValues([
+      "Which dashboards and reports should I review?",
+      "How do I monitor organisation-wide performance?",
+      ...baseQuestions,
+    ]).slice(0, 7);
+  }
+
+  return baseQuestions.slice(0, 7);
+}
+
+function buildRoleModules(context = {}) {
+  const primaryRole = normalizeRole(context?.primary_role) || "employee";
+  return ROLE_MODULES[primaryRole] || ROLE_MODULES.employee;
+}
+
+function buildWelcomeMessage(context = {}) {
+  const roleLabel = getRoleLabel(context);
+  const subscriptionLabel = getSubscriptionLabel(context);
+
+  return {
+    role: "assistant",
+    text:
+      `Hi, I am ${ASSISTANT_NAME}, your ${PRODUCT_NAME} Assistant. ` +
+      `I will guide you according to your ${roleLabel} access and ${subscriptionLabel}. ` +
+      "Ask me for exact steps, workflow explanations, live information available to your login, or help using any module you are permitted to access.",
+  };
+}
+
+function normalizeAssistantAnswer(value) {
+  return String(value || "")
+    .replace(/SDS HRMS Assistant/gi, `${PRODUCT_NAME} Assistant`)
+    .trim();
+}
 
 function getSpeechRecognition() {
   if (typeof window === "undefined") return null;
@@ -252,7 +588,6 @@ function speakText(text, onEnd) {
 
 const DEFAULT_WAKE_WORD = "hey saya";
 const FINAL_IPHONE_WAKE_AND_AUDIO_STABILITY_FIX = true;
-const FINAL_ASSISTANT_NAME_SAYA_FIX = true;
 const FILE_ONE_SAYA_WAKE_MOBILE_FIX = true;
 
 const WAKE_WORD_VARIANTS = [
@@ -285,13 +620,6 @@ const WAKE_WORD_VARIANTS = [
   "hey sayaa",
   "hi sayaa",
   "hello sayaa",
-  // Temporary legacy Eve support. Remove later only after all users know the new name.
-  "hey eve",
-  "hi eve",
-  "hello eve",
-  "eve",
-  "evie",
-  "eevee",
 
   "bisa ya",
   "besa ya",
@@ -663,16 +991,23 @@ function buildQuickReplies(messages, loading) {
 }
 
 export default function AiAssistantWidget() {
+  const initialAssistantContextRef = useRef(null);
+
+  if (!initialAssistantContextRef.current) {
+    initialAssistantContextRef.current = buildInitialAssistantContext();
+  }
+
+  const [assistantContext, setAssistantContext] = useState(initialAssistantContextRef.current);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
+  const [messages, setMessages] = useState([buildWelcomeMessage(initialAssistantContextRef.current)]);
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceHint, setVoiceHint] = useState("");
   const [iosVoicePlayRequest, setIosVoicePlayRequest] = useState(null);
   const [voiceError, setVoiceError] = useState("");
   const [voiceContext, setVoiceContext] = useState(null);
-  const [eveActive, setEveActive] = useState(false);
+  const [sayaActive, setSayaActive] = useState(false);
   const [autoWakeActive, setAutoWakeActive] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [manualChatOpen, setManualChatOpen] = useState(false);
@@ -696,7 +1031,7 @@ export default function AiAssistantWidget() {
   const isStartingRecognitionRef = useRef(false);
   const loadingRef = useRef(false);
   const listeningRef = useRef(false);
-  const messagesRef = useRef([WELCOME_MESSAGE]);
+  const messagesRef = useRef([buildWelcomeMessage(initialAssistantContextRef.current)]);
   const voiceContextRef = useRef(null);
   const audioStreamRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -741,6 +1076,22 @@ export default function AiAssistantWidget() {
     [showChat, messages]
   );
 
+  const roleQuickQuestions = useMemo(
+    () => buildRoleQuickQuestions(assistantContext),
+    [assistantContext]
+  );
+  const roleModules = useMemo(
+    () => buildRoleModules(assistantContext),
+    [assistantContext]
+  );
+  const roleLabel = useMemo(
+    () => getRoleLabel(assistantContext),
+    [assistantContext]
+  );
+  const subscriptionLabel = useMemo(
+    () => getSubscriptionLabel(assistantContext),
+    [assistantContext]
+  );
   const actionMode = useMemo(() => detectActionMode(messages), [messages]);
   const quickReplies = useMemo(
     () => buildQuickReplies(messages, loading),
@@ -1088,7 +1439,7 @@ export default function AiAssistantWidget() {
     listeningRef.current = false;
     isSpeakingRef.current = false;
     isStartingRecognitionRef.current = false;
-    setEveActive(false);
+    setSayaActive(false);
     stopVoiceMeter();
     setManualChatOpen(false);
     setVoiceError("");
@@ -1143,7 +1494,7 @@ export default function AiAssistantWidget() {
     setListening(false);
     listeningRef.current = false;
     isStartingRecognitionRef.current = false;
-    setEveActive(false);
+    setSayaActive(false);
     stopVoiceMeter();
 
     if (typeof window !== "undefined" && window.speechSynthesis) {
@@ -1453,7 +1804,7 @@ export default function AiAssistantWidget() {
     }
   }
 
-  async function activateEve() {
+  async function activateSaya() {
     if (showVoiceQuotaCooldownHint()) {
       return;
     }
@@ -1466,7 +1817,7 @@ export default function AiAssistantWidget() {
     pendingGreetingRef.current = "";
     oneShotVoiceModeRef.current = true;
 
-    setEveActive(true);
+    setSayaActive(true);
     setOpen(true);
     setManualChatOpen(false);
     setMessage("");
@@ -1520,7 +1871,7 @@ export default function AiAssistantWidget() {
       return;
     }
 
-    setEveActive(true);
+    setSayaActive(true);
     setOpen(true);
     setManualChatOpen(false);
     setVoiceError("");
@@ -1569,7 +1920,7 @@ export default function AiAssistantWidget() {
     if (hasWakeWord) {
       // FINAL_NO_GREETING_TTS_BEFORE_COMMAND_FIX
       // Do not speak an intermediate greeting before the real answer.
-      // On iPhone this was the main reason the UI got stuck on "Eve is speaking" with no answer audio.
+      // On iPhone this was the main reason the UI got stuck on a speaking state with no answer audio.
       setVoiceHint("Processing your command...");
       stopRecognition({ suppressRestart: true });
 
@@ -2056,10 +2407,20 @@ export default function AiAssistantWidget() {
 
       const response = await askAiAssistant(aiMessage, historyBeforeQuestion);
 
-      const answer =
+      const responseContext = {
+        ...(response?.context || {}),
+        assistant_name: response?.assistant_name || ASSISTANT_NAME,
+      };
+
+      setAssistantContext((current) =>
+        mergeAssistantContext(current, responseContext)
+      );
+
+      const answer = normalizeAssistantAnswer(
         response?.answer ||
-        response?.message ||
-        "I could not generate a response right now. Please try again.";
+          response?.message ||
+          `${ASSISTANT_NAME} could not generate a response right now. Please try again.`
+      );
 
       if (options?.voiceInput) {
         setSiriStatus(answer);
@@ -2115,7 +2476,7 @@ export default function AiAssistantWidget() {
     } catch (error) {
       const errorMessage =
         error?.message ||
-        "AI Assistant could not respond. Please check backend and try again.";
+        `${ASSISTANT_NAME} could not respond. Please check the backend and try again.`;
 
       if (options?.voiceInput) {
         setSiriStatus(errorMessage);
@@ -2974,7 +3335,7 @@ export default function AiAssistantWidget() {
         timeoutMs: isMobileBrowser() ? 30000 : 22000,
         language: "en-IN",
         filename: isIosDevice()
-          ? (audioBlob.type && audioBlob.type.includes("mp4") ? "eve-ios-audio.mp4" : "eve-ios-audio.webm")
+          ? (audioBlob.type && audioBlob.type.includes("mp4") ? "saya-ios-audio.mp4" : "saya-ios-audio.webm")
           : undefined,
       });
 
@@ -3093,7 +3454,7 @@ export default function AiAssistantWidget() {
     }
 
     setAutoWakeMode(true);
-    setEveActive(true);
+    setSayaActive(true);
     setManualChatOpen(false);
     setVoiceError("");
     primeMobileSpeechSynthesis();
@@ -3127,7 +3488,7 @@ export default function AiAssistantWidget() {
     setManualChatOpen(false);
     setSiriStatus("Click once to activate Saya voice");
     setLastVoiceTranscript("");
-    setMessages([WELCOME_MESSAGE]);
+    setMessages([buildWelcomeMessage(assistantContext)]);
     setMessage("");
     setVoiceHint("");
     setVoiceError("");
@@ -3140,8 +3501,8 @@ export default function AiAssistantWidget() {
       {!open && (
         <button
           type="button"
-          onClick={activateEve}
-          title="Open SDS HRMS AI Assistant"
+          onClick={activateSaya}
+          title={`Open ${ASSISTANT_NAME} — ${PRODUCT_NAME} Assistant`}
           className="ai-assistant-launcher-fixed"
         >
           <span className="ai-assistant-online-dot-fixed" />
@@ -3166,7 +3527,7 @@ export default function AiAssistantWidget() {
             </button>
 
             <div className="ai-brand-mark">
-              <span>SDS</span>
+              <span>SAYA</span>
             </div>
 
             <button
@@ -3184,14 +3545,18 @@ export default function AiAssistantWidget() {
               <div className="ai-soft-grid" />
 
               <div className="ai-intro-copy">
-                <p>SDS HRMS Assistant</p>
+                <p>{ASSISTANT_NAME} · {PRODUCT_NAME}</p>
                 <h2>
-                  AI Powers <span>Leave, Attendance</span> And HR Workflows
+                  Role-aware guidance for <span>{roleLabel}</span> workflows
                 </h2>
+                <div className="ai-context-strip" aria-label="Saya access context">
+                  <span>{roleLabel}</span>
+                  <span>{subscriptionLabel}</span>
+                </div>
               </div>
 
               <div className="ai-project-scope-grid">
-                {PROJECT_MODULES.map((item) => (
+                {roleModules.map((item) => (
                   <span key={item}>{item}</span>
                 ))}
               </div>
@@ -3244,7 +3609,7 @@ export default function AiAssistantWidget() {
                 ) : (
                   <>
                     <small>Ready</small>
-                    <strong>{eveActive ? siriStatus : "Click Saya once to activate voice"}</strong>
+                    <strong>{sayaActive ? siriStatus : "Click Saya once to activate voice"}</strong>
                     <span>Manual typing opens the full chat. Voice stays in Siri mode.</span>
                   </>
                 )}
@@ -3261,7 +3626,7 @@ export default function AiAssistantWidget() {
 
           {!showChat && (
             <div className="ai-assistant-quick-row">
-              {QUICK_QUESTIONS.map((question) => (
+              {roleQuickQuestions.map((question) => (
                 <button
                   key={question}
                   type="button"
@@ -3329,7 +3694,7 @@ export default function AiAssistantWidget() {
                   <div className="ai-message-row assistant">
                     <div className="ai-thinking">
                       <Loader2 size={15} className="ai-spin" />
-                      Assistant is preparing your response...
+                      Saya is preparing your response...
                     </div>
                   </div>
                 )}
@@ -3422,7 +3787,7 @@ export default function AiAssistantWidget() {
                     sendMessage();
                   }
                 }}
-                placeholder={listening ? 'Speak your command...' : 'Ask me anything or tap Hey Saya...'}
+                placeholder={listening ? 'Speak your command...' : 'Ask Saya for steps, workflows, pricing, or live HRMS information...'}
                 rows={3}
               />
 
@@ -3439,7 +3804,7 @@ export default function AiAssistantWidget() {
                 <button
                   type="button"
                   className="ai-voice-pill"
-                  onClick={activateEve}
+                  onClick={activateSaya}
                   disabled={loading}
                 >
                   <Volume2 size={16} />
@@ -3467,7 +3832,7 @@ export default function AiAssistantWidget() {
 
             <div className="ai-assistant-footer">
               <span>{autoWakeActive ? 'Saya is active in this browser session' : 'Click once to activate Saya voice'}</span>
-              <span>Enter to send</span>
+              <span>{roleLabel} · {subscriptionLabel}</span>
             </div>
           </div>
         </div>
@@ -3558,9 +3923,9 @@ export default function AiAssistantWidget() {
         }
 
         .ai-brand-mark {
-          width: 42px;
+          width: 50px;
           height: 42px;
-          border-radius: 999px;
+          border-radius: 14px;
           display: grid;
           place-items: center;
           background:
@@ -3570,8 +3935,8 @@ export default function AiAssistantWidget() {
             inset 0 0 0 1px rgba(255,255,255,.8);
           color: #0f172a;
           font-weight: 900;
-          font-size: 11px;
-          letter-spacing: .08em;
+          font-size: 10px;
+          letter-spacing: .06em;
         }
 
         .ai-hero-zone {
@@ -3601,6 +3966,31 @@ export default function AiAssistantWidget() {
           z-index: 1;
           text-align: center;
           margin-top: 12px;
+        }
+
+        .ai-context-strip {
+          margin-top: 10px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 7px;
+          flex-wrap: wrap;
+        }
+
+        .ai-context-strip span {
+          min-height: 27px;
+          padding: 5px 10px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(148,163,184,.25);
+          background: rgba(255,255,255,.72);
+          color: #334155;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .02em;
+          box-shadow: 0 8px 18px rgba(15,23,42,.05);
         }
 
         .ai-intro-copy p {
@@ -4352,5 +4742,3 @@ export default function AiAssistantWidget() {
     </>
   );
 }
-
-

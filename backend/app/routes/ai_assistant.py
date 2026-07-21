@@ -13,6 +13,15 @@ from flask import Blueprint, request, jsonify, g, Response
 
 from app.extensions import get_db
 from app.services.ai_assistant_service import generate_ai_answer, seed_ai_knowledge
+from app.services.ai_capability_service import (
+    build_subscription_snapshot,
+    check_ai_role_permission,
+    detect_question_modules,
+)
+from app.ai_knowledge.role_profiles import (
+    derive_effective_ai_roles,
+    resolve_primary_role,
+)
 from app.services.ai_provider_service import (
     AiProviderError,
     synthesize_ai_speech,
@@ -200,7 +209,7 @@ def _build_voice_transcription_prompt(user_context):
         "Transcribe this audio into plain text only.",
         "If there is no clear speech, return empty text only.",
         "Do not answer the user. Do not explain. Do not add markdown.",
-        "Context: SDS HRMS voice assistant Saya. Wake phrases: Hey Saya, Hi Saya, Hello Saya, Saya, Saaya, Saiya, Sayaa. Also preserve old temporary wake phrases: Hey Eve, Hi Eve, Eve.",
+        "Context: YourComate HRMS voice assistant Saya. Wake phrases: Hey Saya, Hi Saya, Hello Saya, Saya, Saaya, Saiya, Sayaa.",
         "Preserve HRMS terms: CL, EL, WFH, attendance, leave, handover, reporting officer, team leader.",
         "Preserve Indian and Assamese names carefully.",
         f"Logged-in employee: {employee_name}.",
@@ -223,8 +232,6 @@ def _voice_transcription_hints(user_context):
         "Saaya",
         "Saiya",
         "Sayaa",
-        "Eve",
-        "Hey Eve",
         "CL",
         "EL",
         "WFH",
@@ -548,40 +555,98 @@ def _unread_notification_count(user_context):
         return 0
 
 def _safe_doc(doc):
+    """
+    Return a recursively sanitized copy of a MongoDB document.
+
+    Saya receives only operational context. Authentication secrets, private
+    keys, OTP values, payment signatures, and token-like fields are removed
+    before any document is added to the AI context.
+    """
+
     if not doc:
         return {}
 
-    blocked_keys = {
+    blocked_exact_keys = {
         "password",
         "password_hash",
+        "hashed_password",
         "secret",
-        "token",
+        "client_secret",
+        "private_key",
+        "private_key_id",
         "jwt",
         "api_key",
         "refresh_token",
         "reset_token",
+        "access_token",
+        "id_token",
         "otp",
         "otp_code",
+        "otp_hash",
+        "razorpay_signature",
+        "payment_signature",
+        "firebase_private_key",
+        "service_account",
     }
 
-    cleaned = {}
+    blocked_key_fragments = (
+        "password",
+        "secret",
+        "private_key",
+        "api_key",
+        "refresh_token",
+        "reset_token",
+        "access_token",
+        "otp_",
+        "_otp",
+        "signature",
+    )
 
-    for key, value in dict(doc).items():
-        if key in blocked_keys:
-            continue
+    def sanitize(value, key=""):
+        key_lower = _safe_str(key).lower()
 
-        if key == "_id":
-            cleaned["id"] = str(value)
-            cleaned["_id"] = str(value)
-            continue
+        if key_lower in blocked_exact_keys:
+            return None, False
+
+        if any(fragment in key_lower for fragment in blocked_key_fragments):
+            return None, False
 
         if isinstance(value, ObjectId):
-            cleaned[key] = str(value)
-            continue
+            return str(value), True
 
-        cleaned[key] = value
+        if isinstance(value, datetime):
+            return value.isoformat(), True
 
-    return cleaned
+        if isinstance(value, dict):
+            cleaned_dict = {}
+
+            for nested_key, nested_value in value.items():
+                safe_value, include = sanitize(nested_value, nested_key)
+                if not include:
+                    continue
+
+                output_key = "id" if nested_key == "_id" else nested_key
+                cleaned_dict[output_key] = safe_value
+
+                if nested_key == "_id":
+                    cleaned_dict["_id"] = safe_value
+
+            return cleaned_dict, True
+
+        if isinstance(value, (list, tuple, set)):
+            cleaned_items = []
+
+            for item in value:
+                safe_value, include = sanitize(item, key)
+                if include:
+                    cleaned_items.append(safe_value)
+
+            return cleaned_items, True
+
+        return value, True
+
+    cleaned, included = sanitize(dict(doc))
+    return cleaned if included and isinstance(cleaned, dict) else {}
 
 
 def _safe_chat_history(raw_history):
@@ -784,19 +849,46 @@ def _find_tenant_for_user(tenant_id):
 
 
 def _build_ai_user_context(current_user):
+    """
+    Build Saya's authoritative request context.
+
+    The tenant guard has already authenticated the request and, where
+    available, attached g.current_tenant and g.subscription. This function
+    combines that trusted request context with the mapped employee record.
+
+    Designation values are descriptive only. Team Leader and Reporting Officer
+    capabilities are accepted only from verified employee flags.
+    """
+
     current_user = current_user or {}
 
-    tenant_id = getattr(g, "tenant_id", None) or current_user.get("tenant_id")
-    roles = normalize_roles(current_user.get("roles", []))
-
-    if not roles:
-        single_role = _safe_str(current_user.get("role")).lower()
-        roles = [single_role] if single_role else []
-
-    primary_role = roles[0] if roles else "employee"
+    tenant_id = (
+        getattr(g, "tenant_id", None)
+        or current_user.get("tenant_id")
+    )
 
     employee = _find_employee_for_user(current_user, tenant_id)
-    tenant = _find_tenant_for_user(tenant_id)
+
+    request_tenant = getattr(g, "current_tenant", None) or {}
+    tenant = _safe_doc(request_tenant) or _find_tenant_for_user(tenant_id)
+
+    request_subscription = getattr(g, "subscription", None) or {}
+    raw_subscription = _safe_doc(request_subscription)
+
+    login_roles = normalize_roles(
+        current_user.get("roles")
+        or current_user.get("role")
+        or []
+    )
+
+    role_derivation_context = {
+        "roles": login_roles,
+        "role": current_user.get("role"),
+        "employee": employee,
+    }
+
+    effective_roles = derive_effective_ai_roles(role_derivation_context)
+    primary_role = resolve_primary_role(effective_roles)
 
     employee_id = (
         employee.get("_id")
@@ -837,27 +929,53 @@ def _build_ai_user_context(current_user):
         or "Employee"
     )
 
-    return {
+    is_team_leader = str(
+        employee.get("is_team_leader") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+    is_reporting_officer = str(
+        employee.get("is_reporting_officer") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+    allowed_modules = (
+        raw_subscription.get("allowed_modules")
+        or tenant.get("allowed_modules")
+        or []
+    )
+
+    context = {
+        "assistant_name": "Saya",
         "user_id": _safe_str(current_user.get("_id") or current_user.get("id")),
         "_id": _safe_str(current_user.get("_id") or current_user.get("id")),
         "tenant_id": tenant_id,
         "tenant": tenant,
         "tenant_name": tenant_name,
         "role": primary_role,
-        "roles": roles,
+        "roles": effective_roles,
+        "login_roles": login_roles,
+        "is_platform_superadmin": "super_admin" in effective_roles,
         "email": current_user.get("email"),
         "gender": gender,
         "formal_title": _formal_title_from_gender(gender),
         "name": employee_display_name,
         "display_name": employee_display_name,
         "employee_name": employee_display_name,
-
         "employee_id": _safe_str(employee_id),
         "employee": employee,
         "department": department,
         "department_name": department,
         "designation": designation,
         "designation_name": designation,
+        "is_team_leader": is_team_leader,
+        "is_reporting_officer": is_reporting_officer,
+        "employee_capabilities": [
+            capability
+            for capability, enabled in (
+                ("team_leader", is_team_leader),
+                ("reporting_officer", is_reporting_officer),
+            )
+            if enabled
+        ],
         "team_leader_id": (
             employee.get("team_leader_id")
             or employee.get("team_leader_user_id")
@@ -868,7 +986,26 @@ def _build_ai_user_context(current_user):
             or employee.get("reporting_officer_user_id")
             or employee.get("ro_id")
         ),
+        "allowed_modules": allowed_modules,
     }
+
+    # Use the tenant guard's already-loaded subscription as a safe fallback
+    # source for the snapshot. The capability service can still prefer the
+    # latest subscriptions collection record when one exists.
+    snapshot_context = dict(context)
+    snapshot_context["tenant"] = {
+        **tenant,
+        **raw_subscription,
+    }
+
+    subscription_snapshot = build_subscription_snapshot(snapshot_context)
+    context["_saya_subscription_snapshot"] = subscription_snapshot
+    context["subscription"] = subscription_snapshot
+    context["subscription_profile"] = (
+        subscription_snapshot.get("profile_key") or "unknown"
+    )
+
+    return context
 
 
 @ai_assistant_bp.post("/chat")
@@ -882,31 +1019,62 @@ def chat():
     if not question:
         return jsonify({
             "success": False,
-            "error": "Message is required"
+            "assistant_name": "Saya",
+            "error": "Message is required",
+        }), 400
+
+    if len(question) > 6000:
+        return jsonify({
+            "success": False,
+            "assistant_name": "Saya",
+            "error": "Message is too long",
+            "message": "Please keep a single Saya request within 6,000 characters.",
         }), 400
 
     current_user = getattr(g, "current_user", {}) or {}
     user_context = _build_ai_user_context(current_user)
 
+    detected_modules = detect_question_modules(question)
+    permission_result = check_ai_role_permission(
+        question,
+        user_context=user_context,
+    )
+
+    # Keep the preflight result in request context. File 5 will consume this
+    # cache directly, avoiding duplicate permission work inside the AI service.
+    user_context["_saya_detected_modules"] = detected_modules
+    user_context["_saya_permission_result"] = permission_result
+
     try:
         answer = generate_ai_answer(
             question,
             user_context=user_context,
-            history=history
+            history=history,
         )
 
         return jsonify({
             "success": True,
+            "assistant_name": "Saya",
             "question": question,
-            "answer": answer
+            "answer": answer,
+            "context": {
+                "primary_role": permission_result.get("primary_role"),
+                "effective_roles": permission_result.get("effective_roles") or [],
+                "subscription_profile": permission_result.get("subscription_profile"),
+                "detected_modules": detected_modules,
+            },
         }), 200
 
-    except Exception as e:
+    except Exception as exc:
+        print(f"Saya chat failed: {exc}")
+
         return jsonify({
             "success": False,
-            "error": "AI assistant failed",
-            "details": str(e)
+            "assistant_name": "Saya",
+            "error": "Saya could not process this request",
+            "message": "Please try again or contact the IT team if the issue continues.",
         }), 500
+
 
 @ai_assistant_bp.get("/voice-context")
 @tenant_module_required("ai_assistant")
@@ -938,6 +1106,7 @@ def voice_context():
 
     return jsonify({
         "success": True,
+        "assistant_name": "Saya",
         "wake_word": "hey saya",
         "employee_name": employee_name,
         "name": employee_name,
@@ -946,6 +1115,10 @@ def voice_context():
         "formal_title": _formal_title_from_gender(gender),
         "unread_notification_count": unread_count,
         "notification_phrase": notification_phrase,
+        "primary_role": user_context.get("role") or "employee",
+        "effective_roles": user_context.get("roles") or ["employee"],
+        "designation": user_context.get("designation_name") or "",
+        "subscription_profile": user_context.get("subscription_profile") or "unknown",
     }), 200
 
 
@@ -953,7 +1126,7 @@ def voice_context():
 @tenant_module_required("ai_assistant")
 def transcribe_voice():
     """
-    Provider-powered speech-to-text for Eve.
+    Provider-powered speech-to-text for Saya.
 
     Current recommended provider from backend/.env:
     - AI_STT_PROVIDER=deepgram
@@ -1166,7 +1339,7 @@ def _write_tts_cache(cache_key, audio_bytes, mime_type):
 @tenant_module_required("ai_assistant")
 def speak_voice():
     """
-    Provider-powered text-to-speech for Eve.
+    Provider-powered text-to-speech for Saya.
 
     Current recommended provider from backend/.env:
     - AI_TTS_PROVIDER=sarvam
@@ -1313,7 +1486,7 @@ def seed():
 
         return jsonify({
             "success": True,
-            "message": "AI knowledge seeded successfully",
+            "message": "Saya knowledge seeded successfully",
             "global_seed_result": global_seed_result,
             "tenant_seed_result": tenant_seed_result
         }), 200
