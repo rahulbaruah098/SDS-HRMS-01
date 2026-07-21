@@ -2,22 +2,22 @@
 Email service for YourComate HRMS SaaS workflows.
 
 Used for:
-- demo OTP email
-- demo request confirmation
-- demo approval with generated admin credentials
-- demo rejection
-- 15-day full-access trial reminders
-- payment success confirmation
+- demo and SaaS subscription communication
+- payment and Premium quotation communication
+- recruitment approval and interview communication
+- candidate offer, document, rejection and joining communication
 
 Important:
 - This service never stores secrets.
 - SMTP credentials come from Flask config / .env.
 """
 
+import mimetypes
 import smtplib
 import ssl
 from email.message import EmailMessage
 from html import escape
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -67,18 +67,64 @@ def smtp_ready(config):
     )
 
 
-def send_email(config, to_email, subject, text_body, html_body=None, cc=None, bcc=None):
-    """
-    Sends an email through configured SMTP.
+def _attachment_payload(attachment):
+    """Normalise an attachment dictionary for EmailMessage.add_attachment."""
 
-    Returns:
-    {
-      "ok": True/False,
-      "message": "...",
-      "to": "...",
-      "subject": "..."
-    }
-    """
+    if not isinstance(attachment, dict):
+        raise EmailServiceError(
+            "Email attachments must be dictionaries.",
+            code="invalid_attachment",
+        )
+
+    filename = safe_str(attachment.get("filename"))
+    data = attachment.get("data")
+    path_value = attachment.get("path")
+    mime_type = safe_str(attachment.get("mime_type"))
+
+    if path_value:
+        path = Path(path_value)
+        if not path.is_file():
+            raise EmailServiceError(
+                f"Attachment file was not found: {path}",
+                code="attachment_not_found",
+            )
+        data = path.read_bytes()
+        filename = filename or path.name
+
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        raise EmailServiceError(
+            "Attachment data is missing.",
+            code="invalid_attachment_data",
+        )
+
+    filename = filename or "attachment"
+    mime_type = (
+        mime_type
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
+    if "/" not in mime_type:
+        mime_type = "application/octet-stream"
+
+    maintype, subtype = mime_type.split("/", 1)
+    return filename, bytes(data), maintype, subtype
+
+
+def send_email(
+    config,
+    to_email,
+    subject,
+    text_body,
+    html_body=None,
+    cc=None,
+    bcc=None,
+    reply_to=None,
+    attachments=None,
+):
+    """Send an email through configured SMTP."""
 
     to_email = safe_str(to_email)
     subject = safe_str(subject)
@@ -111,14 +157,33 @@ def send_email(config, to_email, subject, text_body, html_body=None, cc=None, bc
 
     if cc:
         message["Cc"] = cc if isinstance(cc, str) else ", ".join(cc)
-
     if bcc:
         message["Bcc"] = bcc if isinstance(bcc, str) else ", ".join(bcc)
+    if reply_to:
+        message["Reply-To"] = safe_str(reply_to)
 
     message.set_content(text_body or "")
-
     if html_body:
         message.add_alternative(html_body, subtype="html")
+
+    try:
+        for attachment in attachments or []:
+            filename, data, maintype, subtype = _attachment_payload(attachment)
+            message.add_attachment(
+                data,
+                maintype=maintype,
+                subtype=subtype,
+                filename=filename,
+            )
+    except EmailServiceError as exc:
+        return {
+            "ok": False,
+            "message": exc.message,
+            "code": exc.code,
+            "details": exc.details,
+            "to": to_email,
+            "subject": subject,
+        }
 
     try:
         if use_ssl:
@@ -129,11 +194,9 @@ def send_email(config, to_email, subject, text_body, html_body=None, cc=None, bc
         else:
             with smtplib.SMTP(server, port, timeout=30) as smtp:
                 smtp.ehlo()
-
                 if use_tls:
                     smtp.starttls(context=ssl.create_default_context())
                     smtp.ehlo()
-
                 smtp.login(username, password)
                 smtp.send_message(message)
 
@@ -797,3 +860,997 @@ YourComate HRMS
     )
 
     return send_email(config, to_email, subject, text_body, html_body)
+
+
+def _recruitment_value(value, fallback="Not specified"):
+    value = safe_str(value)
+    return value or fallback
+
+
+def _recruitment_lines_html(rows):
+    rendered = []
+    for label, value in rows:
+        value = safe_str(value)
+        if not value:
+            continue
+        rendered.append(
+            '<p style="margin:8px 0 0;color:#334155;line-height:1.6;">'
+            f'{escape(safe_str(label))}: <strong>{escape(value)}</strong></p>'
+        )
+    return "".join(rendered)
+
+
+def _recruitment_lines_text(rows):
+    return "\n".join(
+        f"{safe_str(label)}: {safe_str(value)}"
+        for label, value in rows
+        if safe_str(value)
+    )
+
+
+def _recruitment_action_button(label, url):
+    label = safe_str(label)
+    url = safe_str(url)
+    if not label or not url:
+        return ""
+    return f"""
+        <p style="margin:20px 0 0;">
+          <a href="{escape(url)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:12px;padding:12px 18px;font-weight:800;">{escape(label)}</a>
+        </p>
+    """
+
+
+def send_recruitment_internal_action_email(
+    config,
+    to_email,
+    recipient_name,
+    company_name,
+    action_title,
+    action_message,
+    action_url=None,
+    action_label="Open Recruitment",
+    reference=None,
+    due_text=None,
+    reply_to=None,
+):
+    """Send an internal recruitment approval or action email."""
+
+    recipient_name = _recruitment_value(recipient_name, "Team Member")
+    company_name = _recruitment_value(company_name, "Your company")
+    action_title = _recruitment_value(action_title, "Recruitment action required")
+    action_message = _recruitment_value(
+        action_message,
+        "A recruitment item requires your attention.",
+    )
+    action_url = safe_str(action_url)
+    detail_rows = [("Reference", reference), ("Due", due_text)]
+    details_text = _recruitment_lines_text(detail_rows)
+    subject = f"{action_title} - {company_name}"
+
+    text_body = f"""Dear {recipient_name},
+
+{action_message}
+
+Company: {company_name}
+{details_text}
+
+{('Open Recruitment: ' + action_url) if action_url else ''}
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        action_title,
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(recipient_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">{escape(action_message)}</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#0f172a;font-weight:900;">Recruitment Details</p>
+          <p style="margin:8px 0 0;color:#334155;">Company: <strong>{escape(company_name)}</strong></p>
+          {_recruitment_lines_html(detail_rows)}
+        </div>
+        {_recruitment_action_button(action_label, action_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_application_received_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    application_reference=None,
+    career_url=None,
+    reply_to=None,
+):
+    """Confirm that a candidate application was received."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the advertised position")
+    application_reference = safe_str(application_reference)
+    career_url = safe_str(career_url)
+    subject = f"Application received - {job_title}"
+    reference_line = (
+        f"\nApplication Reference: {application_reference}"
+        if application_reference
+        else ""
+    )
+
+    text_body = f"""Dear {candidate_name},
+
+Thank you for applying for the position of {job_title} at {company_name}.
+
+Your application has been received and will be reviewed by the recruitment team.{reference_line}
+
+The company will contact you if additional information or an interview is required.
+
+{('Career Page: ' + career_url) if career_url else ''}
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Application received",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">Thank you for applying for <strong>{escape(job_title)}</strong> at <strong>{escape(company_name)}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#166534;font-weight:900;">Application received successfully</p>
+          {_recruitment_lines_html([('Application Reference', application_reference)])}
+        </div>
+        <p style="margin:0;color:#475569;line-height:1.7;">The recruitment team will review your application and contact you if additional information or an interview is required.</p>
+        {_recruitment_action_button('View Career Page', career_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def _send_recruitment_interview_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    interview_round,
+    interview_date,
+    interview_time,
+    interview_mode,
+    location_or_meeting_link=None,
+    interviewer_names=None,
+    contact_details=None,
+    notes=None,
+    subject_prefix="Interview invitation",
+    introduction=None,
+    reply_to=None,
+):
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the position")
+    interview_round = _recruitment_value(interview_round, "Interview")
+    interview_date = _recruitment_value(interview_date)
+    interview_time = _recruitment_value(interview_time)
+    interview_mode = _recruitment_value(interview_mode)
+    location_or_meeting_link = safe_str(location_or_meeting_link)
+    interviewer_names = safe_str(interviewer_names)
+    contact_details = safe_str(contact_details)
+    notes = safe_str(notes)
+    introduction = safe_str(introduction) or (
+        f"You are invited to attend an interview for {job_title} at {company_name}."
+    )
+    subject = f"{subject_prefix} - {job_title}"
+    rows = [
+        ("Interview Round", interview_round),
+        ("Date", interview_date),
+        ("Time", interview_time),
+        ("Mode", interview_mode),
+        ("Location / Meeting Link", location_or_meeting_link),
+        ("Interviewer", interviewer_names),
+        ("Contact", contact_details),
+    ]
+    notes_text = f"\nNotes: {notes}" if notes else ""
+    notes_html = ""
+    if notes:
+        notes_html = f"""
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#0f172a;font-weight:900;">Additional Notes</p>
+          <p style="margin:8px 0 0;color:#334155;line-height:1.7;">{escape(notes)}</p>
+        </div>
+        """
+
+    text_body = f"""Dear {candidate_name},
+
+{introduction}
+
+{_recruitment_lines_text(rows)}{notes_text}
+
+Please reply to this email if you need clarification or cannot attend at the scheduled time.
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        subject_prefix,
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">{escape(introduction)}</p>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#1e3a8a;font-weight:900;">Interview Details</p>
+          {_recruitment_lines_html(rows)}
+        </div>
+        {notes_html}
+        <p style="margin:0;color:#475569;line-height:1.7;">Please reply to this email if you need clarification or cannot attend at the scheduled time.</p>
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_interview_invitation_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    interview_round,
+    interview_date,
+    interview_time,
+    interview_mode,
+    location_or_meeting_link=None,
+    interviewer_names=None,
+    contact_details=None,
+    notes=None,
+    reply_to=None,
+):
+    """Send an interview invitation to a candidate."""
+
+    return _send_recruitment_interview_email(
+        config=config,
+        to_email=to_email,
+        candidate_name=candidate_name,
+        company_name=company_name,
+        job_title=job_title,
+        interview_round=interview_round,
+        interview_date=interview_date,
+        interview_time=interview_time,
+        interview_mode=interview_mode,
+        location_or_meeting_link=location_or_meeting_link,
+        interviewer_names=interviewer_names,
+        contact_details=contact_details,
+        notes=notes,
+        subject_prefix="Interview invitation",
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_interview_rescheduled_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    interview_round,
+    interview_date,
+    interview_time,
+    interview_mode,
+    location_or_meeting_link=None,
+    interviewer_names=None,
+    contact_details=None,
+    notes=None,
+    reply_to=None,
+):
+    """Send revised interview details to a candidate."""
+
+    return _send_recruitment_interview_email(
+        config=config,
+        to_email=to_email,
+        candidate_name=candidate_name,
+        company_name=company_name,
+        job_title=job_title,
+        interview_round=interview_round,
+        interview_date=interview_date,
+        interview_time=interview_time,
+        interview_mode=interview_mode,
+        location_or_meeting_link=location_or_meeting_link,
+        interviewer_names=interviewer_names,
+        contact_details=contact_details,
+        notes=notes,
+        subject_prefix="Interview rescheduled",
+        introduction=(
+            f"Your interview for {job_title} at {company_name} has been rescheduled. "
+            "Please use the revised details below."
+        ),
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_interview_cancelled_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    interview_round=None,
+    reason=None,
+    reply_to=None,
+):
+    """Notify a candidate that an interview was cancelled."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the position")
+    interview_round = safe_str(interview_round)
+    reason = safe_str(reason) or "The interview could not proceed as scheduled."
+    subject = f"Interview cancelled - {job_title}"
+
+    text_body = f"""Dear {candidate_name},
+
+Your {interview_round or 'interview'} for {job_title} at {company_name} has been cancelled.
+
+Reason: {reason}
+
+The recruitment team will contact you if a new interview is arranged.
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Interview cancelled",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">Your {escape(interview_round or 'interview')} for <strong>{escape(job_title)}</strong> at <strong>{escape(company_name)}</strong> has been cancelled.</p>
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#9a3412;font-weight:900;">Reason</p>
+          <p style="margin:8px 0 0;color:#334155;line-height:1.7;">{escape(reason)}</p>
+        </div>
+        <p style="margin:0;color:#475569;line-height:1.7;">The recruitment team will contact you if a new interview is arranged.</p>
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_interviewer_assignment_email(
+    config,
+    to_email,
+    interviewer_name,
+    company_name,
+    candidate_name,
+    job_title,
+    interview_round,
+    interview_date,
+    interview_time,
+    interview_mode,
+    recruitment_url=None,
+    location_or_meeting_link=None,
+    feedback_due=None,
+    reply_to=None,
+):
+    """Send an interview assignment to an interviewer."""
+
+    interviewer_name = _recruitment_value(interviewer_name, "Interviewer")
+    company_name = _recruitment_value(company_name, "Your company")
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    job_title = _recruitment_value(job_title, "the position")
+    interview_round = _recruitment_value(interview_round, "Interview")
+    recruitment_url = safe_str(recruitment_url)
+    rows = [
+        ("Candidate", candidate_name),
+        ("Position", job_title),
+        ("Round", interview_round),
+        ("Date", interview_date),
+        ("Time", interview_time),
+        ("Mode", interview_mode),
+        ("Location / Meeting Link", location_or_meeting_link),
+        ("Feedback Due", feedback_due),
+    ]
+    subject = f"Interview assigned - {candidate_name}"
+
+    text_body = f"""Dear {interviewer_name},
+
+You have been assigned to conduct an interview for {company_name}.
+
+{_recruitment_lines_text(rows)}
+
+Please submit written feedback through YourComate after the interview.
+
+{('Open Recruitment: ' + recruitment_url) if recruitment_url else ''}
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Interview assigned",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(interviewer_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">You have been assigned to conduct an interview for <strong>{escape(company_name)}</strong>.</p>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#1e3a8a;font-weight:900;">Interview Assignment</p>
+          {_recruitment_lines_html(rows)}
+        </div>
+        <p style="margin:0;color:#475569;line-height:1.7;">Please submit written feedback through YourComate after the interview.</p>
+        {_recruitment_action_button('Open Recruitment', recruitment_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_feedback_reminder_email(
+    config,
+    to_email,
+    interviewer_name,
+    company_name,
+    candidate_name,
+    job_title,
+    interview_round,
+    recruitment_url=None,
+    due_text=None,
+    reply_to=None,
+):
+    """Remind an interviewer to submit pending feedback."""
+
+    return send_recruitment_internal_action_email(
+        config=config,
+        to_email=to_email,
+        recipient_name=interviewer_name,
+        company_name=company_name,
+        action_title="Interview feedback pending",
+        action_message=(
+            f"Please submit feedback for {safe_str(candidate_name) or 'the candidate'} "
+            f"for {safe_str(job_title) or 'the position'} "
+            f"({safe_str(interview_round) or 'interview'})."
+        ),
+        action_url=recruitment_url,
+        action_label="Submit Feedback",
+        reference=candidate_name,
+        due_text=due_text,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_offer_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    designation=None,
+    department=None,
+    work_location=None,
+    employment_type=None,
+    joining_date=None,
+    response_deadline=None,
+    offer_url=None,
+    offer_reference=None,
+    salary_summary=None,
+    message=None,
+    offer_attachment=None,
+    reply_to=None,
+):
+    """Send an approved offer with a secure response link or attachment."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the offered position")
+    offer_url = safe_str(offer_url)
+    message = safe_str(message)
+    rows = [
+        ("Offer Reference", offer_reference),
+        ("Position", designation or job_title),
+        ("Department", department),
+        ("Work Location", work_location),
+        ("Employment Type", employment_type),
+        ("Proposed Joining Date", joining_date),
+        ("Response Deadline", response_deadline),
+        ("Salary Summary", salary_summary),
+    ]
+    attachments = [offer_attachment] if offer_attachment else None
+    subject = f"Employment offer - {job_title}"
+
+    text_body = f"""Dear {candidate_name},
+
+We are pleased to offer you the position of {job_title} with {company_name}.
+
+{_recruitment_lines_text(rows)}
+
+{message}
+
+{('Review and respond to the offer: ' + offer_url) if offer_url else 'Please review the attached offer letter and respond before the stated deadline.'}
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    message_html = ""
+    if message:
+        message_html = f'<p style="margin:0 0 18px;color:#334155;line-height:1.7;">{escape(message)}</p>'
+
+    html_body = html_shell(
+        "Employment offer",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">We are pleased to offer you the position of <strong>{escape(job_title)}</strong> with <strong>{escape(company_name)}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#166534;font-weight:900;">Offer Details</p>
+          {_recruitment_lines_html(rows)}
+        </div>
+        {message_html}
+        {_recruitment_action_button('Review and Respond', offer_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+        attachments=attachments,
+    )
+
+
+def send_recruitment_offer_reminder_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    response_deadline,
+    offer_url=None,
+    offer_reference=None,
+    reply_to=None,
+):
+    """Remind a candidate that an offer is awaiting response."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the offered position")
+    response_deadline = _recruitment_value(response_deadline)
+    offer_url = safe_str(offer_url)
+    offer_reference = safe_str(offer_reference)
+    subject = f"Offer response reminder - {job_title}"
+
+    text_body = f"""Dear {candidate_name},
+
+This is a reminder that your offer for {job_title} with {company_name} is awaiting your response.
+
+Response Deadline: {response_deadline}
+{('Offer Reference: ' + offer_reference) if offer_reference else ''}
+
+{('Review and respond: ' + offer_url) if offer_url else 'Please contact the recruitment team to submit your response.'}
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Offer response reminder",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">Your offer for <strong>{escape(job_title)}</strong> with <strong>{escape(company_name)}</strong> is awaiting your response.</p>
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#9a3412;font-weight:900;">Response required</p>
+          {_recruitment_lines_html([('Response Deadline', response_deadline), ('Offer Reference', offer_reference)])}
+        </div>
+        {_recruitment_action_button('Review and Respond', offer_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_document_request_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    document_names,
+    submission_deadline=None,
+    upload_url=None,
+    instructions=None,
+    correction_required=False,
+    reply_to=None,
+):
+    """Request missing or corrected pre-joining documents."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the position")
+    submission_deadline = safe_str(submission_deadline)
+    upload_url = safe_str(upload_url)
+    instructions = safe_str(instructions)
+
+    if isinstance(document_names, str):
+        documents = [item.strip() for item in document_names.split(",") if item.strip()]
+    else:
+        documents = [safe_str(item) for item in (document_names or []) if safe_str(item)]
+
+    documents = documents or ["Required joining documents"]
+    heading = "Document correction required" if correction_required else "Joining documents required"
+    subject = f"{heading} - {job_title}"
+    bullet_text = "\n".join(f"- {item}" for item in documents)
+    bullet_html = "".join(f"<li>{escape(item)}</li>" for item in documents)
+
+    text_body = f"""Dear {candidate_name},
+
+Please provide the following documents for your {job_title} recruitment process with {company_name}:
+
+{bullet_text}
+
+{('Submission Deadline: ' + submission_deadline) if submission_deadline else ''}
+{instructions}
+
+{('Upload Documents: ' + upload_url) if upload_url else 'Please send the documents through the approved company method.'}
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    instructions_html = ""
+    if instructions:
+        instructions_html = f'<p style="margin:0 0 18px;color:#334155;line-height:1.7;">{escape(instructions)}</p>'
+
+    html_body = html_shell(
+        heading,
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">Please provide the following documents for your <strong>{escape(job_title)}</strong> recruitment process with <strong>{escape(company_name)}</strong>.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#0f172a;font-weight:900;">Required Documents</p>
+          <ul style="margin:10px 0 0;padding-left:20px;color:#334155;line-height:1.8;">{bullet_html}</ul>
+          {_recruitment_lines_html([('Submission Deadline', submission_deadline)])}
+        </div>
+        {instructions_html}
+        {_recruitment_action_button('Upload Documents', upload_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_rejection_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    message=None,
+    future_opportunities=False,
+    career_url=None,
+    reply_to=None,
+):
+    """Send a respectful candidate rejection notification."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the position")
+    message = safe_str(message) or (
+        "After reviewing the completed recruitment process, we will not be "
+        "progressing your application further for this position."
+    )
+    future_line = (
+        "We may consider your profile for suitable future opportunities in accordance with company policy."
+        if future_opportunities
+        else ""
+    )
+    career_url = safe_str(career_url)
+    subject = f"Application update - {job_title}"
+
+    text_body = f"""Dear {candidate_name},
+
+Thank you for your interest in {job_title} at {company_name} and for the time you invested in the recruitment process.
+
+{message}
+
+{future_line}
+
+We wish you success in your job search.
+
+{('Career Page: ' + career_url) if career_url else ''}
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    future_html = ""
+    if future_line:
+        future_html = f'<p style="margin:16px 0 0;color:#475569;line-height:1.7;">{escape(future_line)}</p>'
+
+    html_body = html_shell(
+        "Application update",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0 0 16px;line-height:1.7;">Thank you for your interest in <strong>{escape(job_title)}</strong> at <strong>{escape(company_name)}</strong> and for the time you invested in the recruitment process.</p>
+        <p style="margin:0;color:#334155;line-height:1.7;">{escape(message)}</p>
+        {future_html}
+        <p style="margin:16px 0 0;color:#475569;line-height:1.7;">We wish you success in your job search.</p>
+        {_recruitment_action_button('View Career Page', career_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_offer_response_email(
+    config,
+    to_email,
+    recipient_name,
+    company_name,
+    candidate_name,
+    job_title,
+    response_status,
+    response_date=None,
+    recruitment_url=None,
+    reply_to=None,
+):
+    """Notify HR when a candidate responds to an offer."""
+
+    status = _recruitment_value(response_status, "Updated")
+    return send_recruitment_internal_action_email(
+        config=config,
+        to_email=to_email,
+        recipient_name=recipient_name,
+        company_name=company_name,
+        action_title=f"Offer {status.lower()}",
+        action_message=(
+            f"{safe_str(candidate_name) or 'The candidate'} has marked the offer "
+            f"for {safe_str(job_title) or 'the position'} as {status}."
+        ),
+        action_url=recruitment_url,
+        action_label="Open Offer",
+        reference=candidate_name,
+        due_text=response_date,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_joining_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    joining_date,
+    reporting_time=None,
+    reporting_location=None,
+    reporting_contact=None,
+    pre_joining_url=None,
+    instructions=None,
+    email_title="Joining confirmation",
+    reply_to=None,
+):
+    """Send joining confirmation or reminder details."""
+
+    candidate_name = _recruitment_value(candidate_name, "Candidate")
+    company_name = _recruitment_value(company_name, "the company")
+    job_title = _recruitment_value(job_title, "the position")
+    joining_date = _recruitment_value(joining_date)
+    pre_joining_url = safe_str(pre_joining_url)
+    instructions = safe_str(instructions)
+    rows = [
+        ("Position", job_title),
+        ("Joining Date", joining_date),
+        ("Reporting Time", reporting_time),
+        ("Reporting Location", reporting_location),
+        ("Reporting Contact", reporting_contact),
+    ]
+    subject = f"{email_title} - {company_name}"
+
+    text_body = f"""Dear {candidate_name},
+
+We look forward to welcoming you to {company_name} for the position of {job_title}.
+
+{_recruitment_lines_text(rows)}
+
+{instructions}
+
+{('Open Pre-Joining: ' + pre_joining_url) if pre_joining_url else ''}
+
+Please contact the recruitment team promptly if your joining plan changes.
+
+Regards,
+{company_name} Recruitment Team
+Powered by YourComate HRMS
+"""
+
+    instructions_html = ""
+    if instructions:
+        instructions_html = f'<p style="margin:0 0 18px;color:#334155;line-height:1.7;">{escape(instructions)}</p>'
+
+    html_body = html_shell(
+        email_title,
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(candidate_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;">We look forward to welcoming you to <strong>{escape(company_name)}</strong> for the position of <strong>{escape(job_title)}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:18px;margin:18px 0;">
+          <p style="margin:0;color:#166534;font-weight:900;">Joining Details</p>
+          {_recruitment_lines_html(rows)}
+        </div>
+        {instructions_html}
+        {_recruitment_action_button('Open Pre-Joining', pre_joining_url)}
+        <p style="margin:18px 0 0;color:#475569;line-height:1.7;">Please contact the recruitment team promptly if your joining plan changes.</p>
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_joining_confirmation_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    joining_date,
+    reporting_time=None,
+    reporting_location=None,
+    reporting_contact=None,
+    pre_joining_url=None,
+    instructions=None,
+    reply_to=None,
+):
+    """Send final joining confirmation details."""
+
+    return send_recruitment_joining_email(
+        config=config,
+        to_email=to_email,
+        candidate_name=candidate_name,
+        company_name=company_name,
+        job_title=job_title,
+        joining_date=joining_date,
+        reporting_time=reporting_time,
+        reporting_location=reporting_location,
+        reporting_contact=reporting_contact,
+        pre_joining_url=pre_joining_url,
+        instructions=instructions,
+        email_title="Joining confirmation",
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_joining_reminder_email(
+    config,
+    to_email,
+    candidate_name,
+    company_name,
+    job_title,
+    joining_date,
+    reporting_time=None,
+    reporting_location=None,
+    reporting_contact=None,
+    pre_joining_url=None,
+    instructions=None,
+    reply_to=None,
+):
+    """Send a reminder before the confirmed joining date."""
+
+    return send_recruitment_joining_email(
+        config=config,
+        to_email=to_email,
+        candidate_name=candidate_name,
+        company_name=company_name,
+        job_title=job_title,
+        joining_date=joining_date,
+        reporting_time=reporting_time,
+        reporting_location=reporting_location,
+        reporting_contact=reporting_contact,
+        pre_joining_url=pre_joining_url,
+        instructions=instructions,
+        email_title="Joining reminder",
+        reply_to=reply_to,
+    )
+
+
+def send_recruitment_joining_status_email(
+    config,
+    to_email,
+    recipient_name,
+    company_name,
+    candidate_name,
+    job_title,
+    joining_status,
+    joining_date=None,
+    recruitment_url=None,
+    reply_to=None,
+):
+    """Notify HR when a joining status changes."""
+
+    joining_status = _recruitment_value(joining_status, "Updated")
+    return send_recruitment_internal_action_email(
+        config=config,
+        to_email=to_email,
+        recipient_name=recipient_name,
+        company_name=company_name,
+        action_title=f"Joining status: {joining_status}",
+        action_message=(
+            f"The joining status for {safe_str(candidate_name) or 'the candidate'} "
+            f"for {safe_str(job_title) or 'the position'} is now {joining_status}."
+        ),
+        action_url=recruitment_url,
+        action_label="Open Joining Record",
+        reference=candidate_name,
+        due_text=joining_date,
+        reply_to=reply_to,
+    )

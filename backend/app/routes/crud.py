@@ -83,8 +83,6 @@ WRITE_ALLOWED_COLLECTIONS = {
     "leave_balances",
     "holiday_calendar",
     "expenses",
-    "job_openings",
-    "candidates",
     "trainings",
     "notifications",
     "system_settings",
@@ -96,6 +94,14 @@ WRITE_ALLOWED_COLLECTIONS = {
 PAYROLL_WORKFLOW_MANAGED_COLLECTIONS = {
     "payroll_runs",
     "payslips",
+}
+
+# The previous generic Recruitment pages used these two collections directly.
+# They remain readable so old links and historical records do not suddenly break,
+# but every create, update, and delete must now use the dedicated Recruitment API.
+LEGACY_RECRUITMENT_COLLECTIONS = {
+    "job_openings",
+    "candidates",
 }
 
 
@@ -1613,6 +1619,45 @@ def payroll_workflow_write_denied(collection, operation):
             "POST /api/v1/payroll/calculate",
             "POST /api/v1/payroll/run/approve",
         ],
+    }), 405
+
+
+def recruitment_workflow_write_denied(collection, operation):
+    """Reject generic writes that would bypass the Recruitment workflow."""
+    if collection not in LEGACY_RECRUITMENT_COLLECTIONS:
+        return None
+
+    operation_label = {
+        "create": "create",
+        "update": "update",
+        "delete": "delete",
+    }.get(operation, "modify")
+
+    allowed_endpoints = {
+        "job_openings": [
+            "GET /api/v1/recruitment/job-openings",
+            "POST /api/v1/recruitment/job-openings",
+            "POST /api/v1/recruitment/job-openings/<job_id>/status",
+        ],
+        "candidates": [
+            "GET /api/v1/recruitment/candidates",
+            "POST /api/v1/recruitment/candidates",
+            "GET /api/v1/recruitment/candidates/<candidate_id>",
+        ],
+    }
+
+    return jsonify({
+        "message": (
+            f"Direct {operation_label} access to '{collection}' is disabled. "
+            "Recruitment records must be changed only through the dedicated "
+            "Recruitment workflow so approvals, tenant isolation, status history, "
+            "duplicate checks, and audit records cannot be bypassed."
+        ),
+        "code": "recruitment_workflow_managed_collection",
+        "collection": collection,
+        "operation": operation,
+        "legacy_read_only": True,
+        "allowed_endpoints": allowed_endpoints.get(collection, []),
     }), 405
 
 
@@ -3671,6 +3716,16 @@ def list_collection(collection):
             "can_add_collaborators": can_manage,
         })
 
+    if collection in LEGACY_RECRUITMENT_COLLECTIONS:
+        response.update({
+            "legacy_read_only": True,
+            "replacement_api": f"/api/v1/recruitment/{collection.replace('_', '-')}",
+            "message": (
+                "This legacy collection is read-only. Use the Recruitment module "
+                "for all new records and workflow changes."
+            ),
+        })
+
     return jsonify(response)
 
 
@@ -3719,9 +3774,21 @@ def get_collection_item(collection, item_id):
     if collection == "performance_reviews":
         item = enrich_performance_review(item)
 
-    return jsonify({
+    response = {
         "item": serialize_item(item),
-    })
+    }
+
+    if collection in LEGACY_RECRUITMENT_COLLECTIONS:
+        response.update({
+            "legacy_read_only": True,
+            "replacement_api": f"/api/v1/recruitment/{collection.replace('_', '-')}",
+            "message": (
+                "This legacy record is read-only. Use the Recruitment module "
+                "for all workflow changes."
+            ),
+        })
+
+    return jsonify(response)
 
 
 @crud_bp.post("/<collection>")
@@ -3738,6 +3805,11 @@ def create_collection_item(collection):
 
     if payroll_write_denied:
         return payroll_write_denied
+
+    recruitment_write_denied = recruitment_workflow_write_denied(collection, "create")
+
+    if recruitment_write_denied:
+        return recruitment_write_denied
 
     if collection == "projects" and not can_create_assign_or_collaborate_projects():
         return jsonify({
@@ -3945,6 +4017,11 @@ def update_collection_item(collection, item_id):
 
     if payroll_write_denied:
         return payroll_write_denied
+
+    recruitment_write_denied = recruitment_workflow_write_denied(collection, "update")
+
+    if recruitment_write_denied:
+        return recruitment_write_denied
 
     data = request.get_json(silent=True) or {}
     db = get_db()
@@ -4376,6 +4453,11 @@ def delete_collection_item(collection, item_id):
 
     if payroll_write_denied:
         return payroll_write_denied
+
+    recruitment_write_denied = recruitment_workflow_write_denied(collection, "delete")
+
+    if recruitment_write_denied:
+        return recruitment_write_denied
 
     if collection == "leave_balances":
         return jsonify({

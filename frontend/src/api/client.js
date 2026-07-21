@@ -1838,6 +1838,548 @@ export function deleteCollectionItem(collection, itemId) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Recruitment APIs                                                           */
+/* -------------------------------------------------------------------------- */
+
+const RECRUITMENT_API_PREFIX = '/recruitment';
+
+function recruitmentId(value, fieldName = 'ID') {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return encodeURIComponent(normalized);
+}
+
+function recruitmentJson(path, method = 'GET', payload) {
+  const options = { method };
+
+  if (payload !== undefined) {
+    options.body = JSON.stringify(payload || {});
+  }
+
+  return api(`${RECRUITMENT_API_PREFIX}${path}`, options);
+}
+
+function recruitmentFormData(payload = {}, file = null, fileField = 'file') {
+  const formData = new FormData();
+
+  formData.append('payload', JSON.stringify(payload || {}));
+
+  if (file) {
+    formData.append(fileField, file, file.name || `${fileField}.bin`);
+  }
+
+  return formData;
+}
+
+async function downloadRecruitmentFile(path, fallbackFilename) {
+  const token = getToken();
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response;
+
+  try {
+    response = await fetch(buildUrl(`${RECRUITMENT_API_PREFIX}${path}`), {
+      method: 'GET',
+      headers,
+    });
+  } catch {
+    throw new Error(getConnectionErrorMessage());
+  }
+
+  if (response.status === 401) {
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (response.status === 403) {
+    throw new Error(
+      'You do not have permission to download this recruitment file.',
+    );
+  }
+
+  if (!response.ok) {
+    const data = normalizeApiPayload(await parseResponse(response));
+    throw buildApiError(
+      data,
+      response.status,
+      'Unable to download the recruitment file.',
+    );
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(
+    /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i,
+  );
+  const filename = decodeURIComponent(
+    filenameMatch?.[1] || filenameMatch?.[2] || fallbackFilename,
+  );
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return true;
+}
+
+export function getRecruitmentDashboard() {
+  return recruitmentJson('/dashboard');
+}
+
+export function getRecruitmentSettings() {
+  return recruitmentJson('/settings');
+}
+
+export function updateRecruitmentSettings(payload = {}) {
+  return recruitmentJson('/settings', 'PATCH', payload);
+}
+
+export function getRecruitmentHiringRequests(params = {}) {
+  return recruitmentJson(`/hiring-requests${buildQuery(params)}`);
+}
+
+export function createRecruitmentHiringRequest(payload = {}) {
+  return recruitmentJson('/hiring-requests', 'POST', payload);
+}
+
+export function getRecruitmentHiringRequest(requestId) {
+  return recruitmentJson(
+    `/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`,
+  );
+}
+
+export function submitRecruitmentHiringRequest(requestId) {
+  return recruitmentJson(
+    `/hiring-requests/${recruitmentId(
+      requestId,
+      'Hiring request ID',
+    )}/submit`,
+    'POST',
+    {},
+  );
+}
+
+export function decideRecruitmentHiringRequest(requestId, payload = {}) {
+  return recruitmentJson(
+    `/hiring-requests/${recruitmentId(
+      requestId,
+      'Hiring request ID',
+    )}/decision`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentJobOpenings(params = {}) {
+  return recruitmentJson(`/job-openings${buildQuery(params)}`);
+}
+
+export function createRecruitmentJobOpening(payload = {}) {
+  return recruitmentJson('/job-openings', 'POST', payload);
+}
+
+export function changeRecruitmentJobOpeningStatus(jobId, payload = {}) {
+  return recruitmentJson(
+    `/job-openings/${recruitmentId(jobId, 'Job opening ID')}/status`,
+    'POST',
+    payload,
+  );
+}
+
+export function parseRecruitmentResume(file) {
+  if (!file) {
+    throw new Error('Resume file is required.');
+  }
+
+  const formData = new FormData();
+  formData.append('resume', file, file.name || 'resume');
+
+  return api(`${RECRUITMENT_API_PREFIX}/resumes/parse`, {
+    method: 'POST',
+    body: formData,
+    timeoutMs: 60000,
+  });
+}
+
+export function getRecruitmentCandidates(params = {}) {
+  return recruitmentJson(`/candidates${buildQuery(params)}`);
+}
+
+export function createRecruitmentCandidate(payload = {}, resumeFile = null) {
+  if (!resumeFile) {
+    return recruitmentJson('/candidates', 'POST', payload);
+  }
+
+  return api(`${RECRUITMENT_API_PREFIX}/candidates`, {
+    method: 'POST',
+    body: recruitmentFormData(payload, resumeFile, 'resume'),
+    timeoutMs: 60000,
+  });
+}
+
+export function getRecruitmentCandidate(candidateId) {
+  return recruitmentJson(
+    `/candidates/${recruitmentId(candidateId, 'Candidate ID')}`,
+  );
+}
+
+export function downloadRecruitmentCandidateResume(
+  candidateId,
+  fallbackFilename = 'candidate-resume',
+) {
+  return downloadRecruitmentFile(
+    `/candidates/${recruitmentId(candidateId, 'Candidate ID')}/resume`,
+    fallbackFilename,
+  );
+}
+
+export function getRecruitmentApplications(params = {}) {
+  return recruitmentJson(`/applications${buildQuery(params)}`);
+}
+
+export function createRecruitmentApplication(payload = {}) {
+  return recruitmentJson('/applications', 'POST', payload);
+}
+
+export function getRecruitmentApplication(applicationId) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(applicationId, 'Application ID')}`,
+  );
+}
+
+export function updateRecruitmentScreening(applicationId, payload = {}) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/screening`,
+    'PATCH',
+    payload,
+  );
+}
+
+export function changeRecruitmentApplicationStatus(
+  applicationId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/status`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentInterviews(params = {}) {
+  return recruitmentJson(`/interviews${buildQuery(params)}`);
+}
+
+export function scheduleRecruitmentInterview(applicationId, payload = {}) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/interviews`,
+    'POST',
+    payload,
+  );
+}
+
+export function rescheduleRecruitmentInterview(interviewId, payload = {}) {
+  return recruitmentJson(
+    `/interviews/${recruitmentId(
+      interviewId,
+      'Interview ID',
+    )}/reschedule`,
+    'POST',
+    payload,
+  );
+}
+
+export function changeRecruitmentInterviewStatus(interviewId, payload = {}) {
+  return recruitmentJson(
+    `/interviews/${recruitmentId(interviewId, 'Interview ID')}/status`,
+    'POST',
+    payload,
+  );
+}
+
+export function submitRecruitmentInterviewFeedback(
+  interviewId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/interviews/${recruitmentId(interviewId, 'Interview ID')}/feedback`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentInterviewFeedback(interviewId) {
+  return recruitmentJson(
+    `/interviews/${recruitmentId(interviewId, 'Interview ID')}/feedback`,
+  );
+}
+
+export function getRecruitmentOffers(params = {}) {
+  return recruitmentJson(`/offers${buildQuery(params)}`);
+}
+
+export function createRecruitmentOffer(
+  applicationId,
+  payload = {},
+  offerFile = null,
+) {
+  const path = `/applications/${recruitmentId(
+    applicationId,
+    'Application ID',
+  )}/offers`;
+
+  if (!offerFile) {
+    return recruitmentJson(path, 'POST', payload);
+  }
+
+  return api(`${RECRUITMENT_API_PREFIX}${path}`, {
+    method: 'POST',
+    body: recruitmentFormData(payload, offerFile, 'offer_file'),
+    timeoutMs: 60000,
+  });
+}
+
+export function submitRecruitmentOfferForApproval(
+  offerId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/offers/${recruitmentId(offerId, 'Offer ID')}/submit-approval`,
+    'POST',
+    payload,
+  );
+}
+
+export function decideRecruitmentOffer(offerId, payload = {}) {
+  return recruitmentJson(
+    `/offers/${recruitmentId(offerId, 'Offer ID')}/decision`,
+    'POST',
+    payload,
+  );
+}
+
+export function sendRecruitmentOffer(offerId, payload = {}) {
+  return recruitmentJson(
+    `/offers/${recruitmentId(offerId, 'Offer ID')}/send`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentJoiningDocuments(applicationId) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/joining-documents`,
+  );
+}
+
+export function downloadRecruitmentJoiningDocument(
+  documentId,
+  fallbackFilename = 'joining-document',
+) {
+  return downloadRecruitmentFile(
+    `/joining-documents/${recruitmentId(
+      documentId,
+      'Joining document ID',
+    )}/download`,
+    fallbackFilename,
+  );
+}
+
+export function reviewRecruitmentJoiningDocument(
+  documentId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/joining-documents/${recruitmentId(
+      documentId,
+      'Joining document ID',
+    )}/review`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentBackgroundChecks(applicationId) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/background-checks`,
+  );
+}
+
+export function updateRecruitmentBackgroundCheck(
+  applicationId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/background-checks`,
+    'PUT',
+    payload,
+  );
+}
+
+export function changeRecruitmentJoiningStatus(
+  applicationId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/joining-status`,
+    'POST',
+    payload,
+  );
+}
+
+export function convertRecruitmentCandidateToEmployee(
+  applicationId,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/convert-to-employee`,
+    'POST',
+    payload,
+  );
+}
+
+export function getRecruitmentReports(params = {}) {
+  return recruitmentJson(`/reports${buildQuery(params)}`);
+}
+
+export function getRecruitmentActivity(params = {}) {
+  return recruitmentJson(`/activity${buildQuery(params)}`);
+}
+
+export function getPublicRecruitmentJobs(companyKey, params = {}) {
+  return recruitmentJson(
+    `/public/${recruitmentId(
+      companyKey,
+      'Company key',
+    )}/jobs${buildQuery(params)}`,
+  );
+}
+
+export function getPublicRecruitmentJob(companyKey, jobSlug) {
+  return recruitmentJson(
+    `/public/${recruitmentId(
+      companyKey,
+      'Company key',
+    )}/jobs/${recruitmentId(jobSlug, 'Job slug')}`,
+  );
+}
+
+export function applyToPublicRecruitmentJob(
+  companyKey,
+  jobSlug,
+  payload = {},
+  resumeFile,
+) {
+  if (!resumeFile) {
+    throw new Error('Resume file is required.');
+  }
+
+  return api(
+    `${RECRUITMENT_API_PREFIX}/public/${recruitmentId(
+      companyKey,
+      'Company key',
+    )}/jobs/${recruitmentId(jobSlug, 'Job slug')}/apply`,
+    {
+      method: 'POST',
+      body: recruitmentFormData(payload, resumeFile, 'resume'),
+      timeoutMs: 60000,
+    },
+  );
+}
+
+export function getPublicRecruitmentOffer(responseToken) {
+  return recruitmentJson(
+    `/public/offers/${recruitmentId(
+      responseToken,
+      'Offer response token',
+    )}`,
+  );
+}
+
+export function respondToPublicRecruitmentOffer(
+  responseToken,
+  payload = {},
+) {
+  return recruitmentJson(
+    `/public/offers/${recruitmentId(
+      responseToken,
+      'Offer response token',
+    )}/respond`,
+    'POST',
+    payload,
+  );
+}
+
+export function getPublicRecruitmentJoiningPortal(accessToken) {
+  return recruitmentJson(
+    `/public/joining/${recruitmentId(
+      accessToken,
+      'Joining access token',
+    )}`,
+  );
+}
+
+export function uploadPublicRecruitmentJoiningDocument(
+  accessToken,
+  documentKey,
+  file,
+  payload = {},
+) {
+  if (!file) {
+    throw new Error('Joining document file is required.');
+  }
+
+  return api(
+    `${RECRUITMENT_API_PREFIX}/public/joining/${recruitmentId(
+      accessToken,
+      'Joining access token',
+    )}/documents/${recruitmentId(documentKey, 'Document key')}`,
+    {
+      method: 'POST',
+      body: recruitmentFormData(payload, file, 'document'),
+      timeoutMs: 60000,
+    },
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Master Dropdown APIs                                                       */
 /* -------------------------------------------------------------------------- */
 

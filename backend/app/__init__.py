@@ -23,6 +23,8 @@ from .routes.profile_photos import profile_photos_bp
 from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
 from app.routes.ai_assistant import ai_assistant_bp
+from .routes.recruitment import recruitment_bp
+from .services.recruitment_service import ensure_recruitment_indexes
 
 
 def _get_allowed_origins():
@@ -110,7 +112,8 @@ def create_app():
         max_age=86400,
     )
 
-    init_db(app)
+    database = init_db(app)
+    ensure_recruitment_indexes(database)
 
     # Auth/session APIs:
     # login, current user, employee profile snapshot, capability sync.
@@ -191,6 +194,15 @@ def create_app():
     # HRMS workflow help chatbot for logged-in users.
     # Provides text chat and AI knowledge seeding.
     app.register_blueprint(ai_assistant_bp, url_prefix="/api/v1/ai-assistant")
+
+    # Recruitment module APIs:
+    # hiring requests, approved job openings, candidate applications, resume parsing,
+    # interviews, structured feedback, offers, joining documents, employee conversion,
+    # tenant-wise career pages, dashboards, reports, and recruitment settings.
+    #
+    # Keep this before generic CRUD so legacy job_openings/candidates routes cannot
+    # capture dedicated recruitment workflow endpoints.
+    app.register_blueprint(recruitment_bp, url_prefix="/api/v1/recruitment")
     
     # Dedicated Policies APIs:
     # HR uploads tenant-wise policy documents.
@@ -272,6 +284,7 @@ def create_app():
                 "leave_balance": "Casual Leave and Earned Leave balances are managed together by HR/Admin/Super Admin.",
                 "comp_off": "Approved holiday work attendance creates comp-off credit after checkout. Credit is claimable from next working day within 7 working days.",
                 "notifications": "Leave, holiday work, attendance and comp-off workflow notifications are available through the notification bell APIs.",
+                "recruitment": "Hiring request -> approval -> job opening -> candidate -> interview -> offer -> joining documents -> employee conversion.",
             },
             "modules": [
                 "Authentication",
@@ -295,6 +308,7 @@ def create_app():
                 "IT Support",
                 "Reports",
                 "Notifications",
+                "Recruitment",
                 "Super Admin",
             ],
         })
@@ -321,6 +335,18 @@ def create_app():
             "leave_balance_module": True,
             "payroll_module": True,
             "notification_module": True,
+            "recruitment_module": True,
+            "resume_parser": ["pdf", "docx", "txt"],
+            "recruitment_workflow": [
+                "Hiring Request",
+                "Approval",
+                "Job Opening",
+                "Candidate Application",
+                "Interview",
+                "Offer",
+                "Joining Documents",
+                "Employee Conversion",
+            ],
             "project_module": True,
             "project_progress_module": True,
             "grievance_module": True,
@@ -360,6 +386,7 @@ def create_app():
                 "management_groups",
                 "assets",
                 "ai_assistant",
+                "recruitment",
                 "policies",
                 "profile_photos",
                 "celebrations",
