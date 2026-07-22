@@ -196,6 +196,14 @@ export const FINANCE_ROLES = [
   'accounts_finance',
 ];
 
+
+export const RECRUITMENT_ROLES = [
+  ...HR_ROLES,
+  'finance',
+  'accounts_finance',
+  ...CAPABILITY_ROLES,
+];
+
 export const PAYROLL_CONFIG_ROLES = ADMIN_HR_FINANCE_ROLES;
 
 export const PAYROLL_LOAN_ROLES = ALL_COMMON_ROLES;
@@ -729,20 +737,15 @@ export const coreModules = [
     'Generated employee payslips.',
     [...FINANCE_ROLES, BASE_EMPLOYEE_ROLE],
   ],
+ 
   [
-    'job_openings',
-    'Recruitment Jobs',
+    'recruitment',
+    'Recruitment',
     Briefcase,
-    'Job openings and pipeline.',
-    HR_ROLES,
+    'Manage hiring requests, job openings, candidates, interviews, offers, joining documents and employee conversion.',
+    RECRUITMENT_ROLES,
   ],
-  [
-    'candidates',
-    'Candidates',
-    Users,
-    'Candidate screening and status.',
-    HR_ROLES,
-  ],
+
   [
     'trainings',
     'Training',

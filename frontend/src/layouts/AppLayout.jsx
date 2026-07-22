@@ -315,8 +315,7 @@ function moduleGroup(key) {
 
   if (
     [
-      'job_openings',
-      'candidates',
+      'recruitment',
       'trainings',
       'performance_reviews',
     ].includes(key)
@@ -646,6 +645,30 @@ function normalizeNotificationMeta(notification = {}) {
 
 function notificationTarget(meta = {}) {
   const target = String(meta.target || meta.page || '').trim();
+
+    if (
+    [
+      'recruitment',
+      'recruitment_hiring_requests',
+      'recruitment_candidates',
+      'recruitment_interviews',
+      'recruitment_offers',
+      'hiring_requests',
+      'hiring-requests',
+      'job_openings',
+      'job-openings',
+      'candidates',
+      'interviews',
+      'offers',
+      'joining_documents',
+      'joining-documents',
+    ].includes(target) ||
+    String(meta.notification_type || meta.type || '')
+      .trim()
+      .toLowerCase() === 'recruitment'
+  ) {
+    return 'recruitment';
+  }
 
   if (
     [

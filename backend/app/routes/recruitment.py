@@ -1278,6 +1278,36 @@ def public_job_opening(company_key: str, job_slug: str):
     )
 
 
+@recruitment_bp.post("/public/<company_key>/jobs/<job_slug>/resume-preview")
+def public_resume_preview(company_key: str, job_slug: str):
+    """Parse a resume without saving it and return reviewable job-match data."""
+
+    service, _tenant, settings = _public_service_for_company(company_key)
+    uploaded = request.files.get("resume") or request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        raise RecruitmentServiceError(
+            "Select a resume before asking YourComate to extract the details.",
+            code="resume_file_required",
+        )
+
+    max_mb = _int_value(settings.get("resume_max_size_mb"), 8, 1, 25)
+    parsed = parse_resume_upload(
+        uploaded,
+        max_bytes=max_mb * 1024 * 1024,
+    )
+    preview = service.preview_public_resume_match(job_slug, parsed)
+
+    return _json_response(
+        {
+            **preview,
+            "message": (
+                "Resume details were extracted. Review every field before "
+                "submitting the application."
+            ),
+        }
+    )
+
+
 @recruitment_bp.post("/public/<company_key>/jobs/<job_slug>/apply")
 def public_apply_to_job(company_key: str, job_slug: str):
     service, _tenant, settings = _public_service_for_company(company_key)
@@ -1388,7 +1418,13 @@ def public_apply_to_job(company_key: str, job_slug: str):
                 "job_title": application.get("job_title"),
                 "status": application.get("status"),
                 "applied_at": application.get("applied_at"),
+                "resume_match_score": application.get("resume_match_score"),
+                "resume_match_band": application.get("resume_match_band"),
+                "resume_match": application.get("resume_match"),
             },
+            "candidate_message": safe_str(
+                (application.get("resume_match") or {}).get("candidate_message")
+            ),
         },
         201,
     )

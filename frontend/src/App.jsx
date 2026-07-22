@@ -11,6 +11,7 @@ import AppLayout from './layouts/AppLayout';
 import Login from './pages/Login';
 // Page file name remains ApplyDemoRegistration for compatibility, but UI copy now says Trial Registration.
 import ApplyDemoRegistration from './pages/ApplyDemoRegistration.jsx';
+import CareerPortal from './pages/CareerPortal.jsx';
 import Billing from './pages/Billing.jsx';
 import SubscriptionExpired from './pages/SubscriptionExpired.jsx';
 import DemoRequests from './pages/DemoRequests.jsx';
@@ -51,6 +52,7 @@ import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
 import TeamApprovals from './pages/TeamApprovals';
 import Performance from './pages/Performance';
+import Recruitment from './pages/Recruitment.jsx';
 import Grievance from './pages/Grievance';
 import ITSupport from './pages/ITSupport';
 import ManagementGroup from './pages/ManagementGroup';
@@ -502,6 +504,41 @@ const PAGE_ALIASES = {
   team_leader_performance: 'performance_reviews',
   reporting_officer_performance: 'performance_reviews',
 
+    recruitment: 'recruitment',
+  recruitment_module: 'recruitment',
+  talent_acquisition: 'recruitment',
+  hiring: 'recruitment',
+
+  hiring_request: 'recruitment',
+  hiring_requests: 'recruitment',
+  recruitment_hiring_request: 'recruitment',
+  recruitment_hiring_requests: 'recruitment',
+
+  job_opening: 'recruitment',
+  job_openings: 'recruitment',
+  recruitment_job: 'recruitment',
+  recruitment_jobs: 'recruitment',
+
+  candidate: 'recruitment',
+  candidates: 'recruitment',
+  recruitment_candidate: 'recruitment',
+  recruitment_candidates: 'recruitment',
+
+  interview: 'recruitment',
+  interviews: 'recruitment',
+  recruitment_interview: 'recruitment',
+  recruitment_interviews: 'recruitment',
+
+  offer: 'recruitment',
+  offers: 'recruitment',
+  recruitment_offer: 'recruitment',
+  recruitment_offers: 'recruitment',
+
+  joining_document: 'recruitment',
+  joining_documents: 'recruitment',
+  recruitment_joining: 'recruitment',
+  recruitment_joining_documents: 'recruitment',
+
   report: 'reports',
   reports: 'reports',
 
@@ -721,6 +758,15 @@ function getBrowserPathname() {
   }
 
   return window.location.pathname || '/';
+}
+
+function isCareerPortalPath(pathname) {
+  const path = String(pathname || '/')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
+
+  return path === '/careers' || path.startsWith('/careers/');
 }
 
 function isApplyDemoRegistrationPath(pathname) {
@@ -1103,6 +1149,10 @@ if (normalizedPage === 'companies') {
     return <TeamApprovals setPage={setPage} user={safeUser} />;
   }
 
+    if (normalizedPage === 'recruitment') {
+    return <Recruitment setPage={setPage} user={safeUser} />;
+  }
+
   if (normalizedPage === 'performance_reviews') {
     return <Performance setPage={setPage} user={safeUser} />;
   }
@@ -1224,6 +1274,12 @@ export default function App() {
     [currentPath],
   );
 
+
+  const isCareerPortalRoute = useMemo(
+    () => isCareerPortalPath(currentPath),
+    [currentPath],
+  );
+
   useEffect(() => {
     function syncPath() {
       setCurrentPath(getBrowserPathname());
@@ -1318,8 +1374,8 @@ export default function App() {
     setPage('subscription_expired');
   }, [currentPath, normalizedUser]);
 
-    useEffect(() => {
-    if (!normalizedUser) {
+  useEffect(() => {
+    if (!normalizedUser || isCareerPortalRoute) {
       return;
     }
 
@@ -1327,7 +1383,10 @@ export default function App() {
       return;
     }
 
-    if (normalizedPage === 'billing' || normalizedPage === 'subscription_expired') {
+    if (
+      normalizedPage === 'billing' ||
+      normalizedPage === 'subscription_expired'
+    ) {
       return;
     }
 
@@ -1339,7 +1398,7 @@ export default function App() {
     } catch {
       // Ignore browser history errors.
     }
-  }, [normalizedUser, normalizedPage]);
+  }, [isCareerPortalRoute, normalizedUser, normalizedPage]);
 
   useEffect(() => {
     if (!normalizedUser) {
@@ -1568,6 +1627,11 @@ export default function App() {
       cancelled = true;
     };
   }, [normalizedUser]);
+
+
+if (isCareerPortalRoute) {
+  return <CareerPortal key={currentPath} />;
+}
 
 if (!normalizedUser) {
   if (isTrialRegistrationRoute) {

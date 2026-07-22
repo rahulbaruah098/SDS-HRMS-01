@@ -9,7 +9,7 @@ Backend route guards remain authoritative for permissions.
 
 from __future__ import annotations
 
-KNOWLEDGE_VERSION = "2026-07-21-v3-recruitment"
+KNOWLEDGE_VERSION = "2026-07-22-v5-recruitment-workflow-upgrade"
 
 HRMS_WORKFLOWS = [
     {
@@ -1477,123 +1477,224 @@ HRMS_WORKFLOWS = [
         "keywords": ['company logo', 'tenant branding', 'company name', 'dashboard logo', 'how a tenant admin updates company branding'],
         "requires_live_data": False,
     },
-    {
-        "module": 'Recruitment',
-        "title": 'Complete recruitment journey from hiring request to onboarding',
-        "content": """
-            YourComate Recruitment follows one controlled journey:
-            1. An authorized user creates a Hiring Request with the business reason, department, vacancy count, employment type, location, required date, skills, experience, and salary range or budget where permitted.
-            2. The request is submitted to the configured approver and cannot become a job opening until approved.
-            3. HR creates a Job Opening from the approved request, adds the job description and interview plan, and publishes it only after review.
-            4. Applications enter the correct tenant and job opening through HR entry, resume upload, referral, or the company's public career page when enabled.
-            5. HR reviews or parses the resume, checks for duplicates, screens the applicant, and moves the application through the permitted candidate stages.
-            6. HR schedules interview rounds and assigned interviewers submit their own structured feedback.
-            7. HR and the hiring manager record the final selection decision using the completed interview evidence.
-            8. The proposed salary and employment terms follow the configured approval process before an offer is sent.
-            9. The candidate accepts or declines through the secure response flow before the offer expiry date.
-            10. After acceptance, HR collects and verifies joining documents and completes any required background or reference checks.
-            11. A candidate becomes Ready to Join only when the required joining conditions are complete.
-            12. After the person actually reports for duty, HR converts the candidate to an employee and starts the connected employee profile, salary, attendance, leave, login, asset, and onboarding setup.
-            13. The recruitment history remains available after conversion for authorized future review.
-        """,
-        "keywords": ['recruitment workflow', 'hiring process', 'vacancy to employee', 'recruitment journey', 'candidate onboarding', 'complete recruitment journey from hiring request to onboarding'],
-        "requires_live_data": False,
-    },
-    {
-        "module": 'Recruitment',
-        "title": 'Who can use Recruitment and what each role can do',
-        "content": """
-            Recruitment responsibility and access guidance:
-            1. HR Manager or authorized HR owns the process, reviews progress, controls candidate communication, and performs permitted final HR actions.
-            2. HR/Recruiter creates requests and openings, reviews applications, screens candidates, schedules interviews, prepares offers, and follows joining work.
-            3. Department Manager, Reporting Officer, or Team Leader acts only within the assigned hiring or interview scope, such as raising a need, reviewing candidates, or giving a departmental recommendation.
-            4. An assigned Interviewer sees the information required for the assigned interview and submits their own feedback; they do not automatically receive confidential salary or verification notes.
-            5. Finance/Accounts reviews salary or hiring budget only when the tenant's workflow requires it.
-            6. Company Leadership approves senior, high-cost, or special positions according to configured policy.
-            7. Tenant Admin controls company Recruitment access and settings but must still follow candidate privacy rules.
-            8. A Candidate can access only the public application, secure offer-response, and joining-document actions intended for that candidate.
-            9. Platform Super Admin supports service operation and tenant configuration but does not routinely make a tenant's hiring decisions or browse private candidate records without an authorized support reason.
-            10. Backend permission and tenant checks are authoritative; a visible button alone does not grant permission.
-        """,
-        "keywords": ['recruitment roles', 'who can recruit', 'interviewer access', 'finance offer approval', 'recruitment permission', 'who can use recruitment and what each role can do'],
-        "requires_live_data": False,
-    },
-    {
-        "module": 'Recruitment - Hiring Requests',
-        "title": 'How to create and approve a hiring request',
-        "content": """
-            Hiring Request workflow:
-            1. Open Recruitment and choose Hiring Requests.
-            2. Create a request with the job title, department, number of vacancies, work location, employment type, business reason, expected joining date, required experience, key skills, and permitted salary range or budget.
-            3. Select the correct approver or approval route and save as Draft while information is incomplete.
-            4. Submit the completed request; its status becomes Submitted.
-            5. The authorized approver reviews the need, headcount, budget, department, and joining expectation.
-            6. The approver can Approve, Reject, place On Hold, or return it for correction according to available controls.
-            7. Rejection, hold, or correction should include a clear reason.
-            8. Only an Approved request can be used to create a job opening.
-            9. Material changes to approved headcount, department, or salary range must follow the permitted revision or approval process instead of being changed informally.
-            10. Hiring Request statuses are Draft, Submitted, Approved, Rejected, On Hold, and Closed.
-        """,
-        "keywords": ['hiring request', 'raise vacancy request', 'approve hiring', 'headcount approval', 'recruitment approval', 'how to create and approve a hiring request'],
-        "requires_live_data": False,
-    },
-    {
-        "module": 'Recruitment - Job Openings',
-        "title": 'How to create, publish, pause and close a job opening',
-        "content": """
-            Job Opening workflow:
-            1. Open an Approved Hiring Request and choose Create Job Opening.
-            2. Add the job description, responsibilities, qualification, skills, experience, location, employment type, recruiter/HR owner, hiring manager, planned interview rounds, opening date, closing date, and permitted public details.
-            3. Review the wording for accuracy, fairness, and relevance to the actual job.
-            4. Save the opening as Draft while it is under review.
-            5. Mark it Open or publish it only after the required approval is complete.
-            6. Publish through the enabled channels, such as the company career page, referrals, social media, portals, agencies, or internal circulation.
-            7. Confidential budget, internal approval notes, and salary-review comments must not appear on the public vacancy.
-            8. Pause the opening when applications should temporarily stop, Close it after recruitment is completed, or Cancel it when the requirement is withdrawn.
-            9. Job Opening statuses are Draft, Open, Paused, Closed, and Cancelled.
-            10. A public application must always be linked to the correct company and opening.
-        """,
-        "keywords": ['job opening', 'publish vacancy', 'career page job', 'pause recruitment', 'close vacancy', 'how to create, publish, pause and close a job opening'],
-        "requires_live_data": False,
-    },
-    {
-        "module": 'Recruitment - Resume Parser',
-        "title": 'How the resume parser should be used',
-        "content": """
-            Resume Parser workflow:
-            1. Open Recruitment, choose Candidates, and start Add Candidate or Parse Resume.
-            2. Upload a supported PDF, DOCX, or TXT resume within the configured file-size limit.
-            3. The parser extracts available text and proposes details such as name, email, phone, location, links, summary, designation, employer, experience, skills, education, employment history, certifications, and languages.
-            4. Text-based PDF and DOCX files are supported; image-only scanned resumes may require manual entry unless OCR is added later.
-            5. The parser result is a suggestion, not an automatic hiring decision and not guaranteed to be perfectly accurate.
-            6. HR must review and correct every important extracted value before saving.
-            7. The system checks likely duplicates by tenant using identifiers such as email, phone, file hash, and existing applications where supported.
-            8. The original resume remains protected in the candidate's tenant-scoped record.
-            9. Resume information must not be sent to an external AI provider unless the company has explicitly enabled and approved that processing.
-            10. Parsing alone does not create an employee, approve a candidate, schedule an interview, or send an offer.
-        """,
-        "keywords": ['resume parser', 'parse cv', 'upload resume', 'extract resume', 'pdf resume', 'docx resume', 'how the resume parser should be used'],
-        "requires_live_data": False,
-    },
-    {
-        "module": 'Recruitment - Candidates',
-        "title": 'How candidate profiles and applications are managed',
-        "content": """
-            Candidate and application workflow:
-            1. A Candidate profile stores the person's core contact and professional information inside one tenant.
-            2. Each job applied for creates a separate Application linked to that candidate and job opening.
-            3. One candidate can therefore apply for more than one job without losing the separate status and history of each application.
-            4. HR reviews the resume, checks the candidate's interest and suitability, and records professional factual screening notes.
-            5. HR can move the application through Applied, Under Review, Shortlisted, Interview Scheduled, Interviewed, Selected, Rejected, or Withdrawn only through valid transitions.
-            6. A rejected or withdrawn application should retain its reason and activity history where policy requires it.
-            7. Duplicate application checks prevent the same candidate from being added repeatedly to the same opening.
-            8. Candidate statements and uploaded documents must not be silently changed by HR; corrections should be explicit and auditable.
-            9. Candidate selection must be based on job-related criteria and recorded evidence, not unrelated personal characteristics.
-            10. Candidate data remains tenant-scoped and accessible only to permitted users.
-        """,
-        "keywords": ['candidate profile', 'candidate application', 'shortlist candidate', 'screening', 'candidate status', 'duplicate candidate', 'how candidate profiles and applications are managed'],
-        "requires_live_data": False,
-    },
+{
+    "module": 'Recruitment',
+    "title": 'Complete recruitment journey from hiring request to onboarding',
+    "content": """
+        YourComate Recruitment follows one controlled journey:
+        1. An authorized HR user or a Team Leader creates a Hiring Request. A Team Leader can create it only for the department assigned to their employee profile, and that department remains locked.
+        2. The request is saved as Draft until complete and is then submitted for final hiring-requirement approval.
+        3. Final approval belongs to an authorized Admin, Managing Director, or a user with an explicit final-hiring-approval capability. The requester cannot approve their own request.
+        4. Approval of the requirement does not itself publish a vacancy. After final approval, authorized HR creates the Job Opening, reviews the public wording, and publishes it.
+        5. Candidates can apply through the tenant's public Career Page or through authorized internal entry. The application is always linked to the correct tenant and job opening.
+        6. On the public Career Page, the candidate can upload a supported resume for temporary preview. The parser proposes available details and an indicative job-match score before the final application is submitted.
+        7. The candidate reviews and corrects extracted fields before submission. Resume preview alone does not create a candidate or application.
+        8. HR reviews the submitted application, checks duplicates, verifies resume information, and records factual job-related screening notes.
+        9. A Team Leader sees candidate information only for jobs where they are the hiring manager, panel member, or assigned interviewer. Unrelated candidates remain hidden.
+        10. HR schedules interview rounds, and each assigned interviewer submits their own structured feedback.
+        11. HR and authorized hiring participants record the selection decision using completed interview evidence. The resume-match score is decision support only and cannot automatically shortlist, reject, select, or hire a candidate.
+        12. Salary and employment terms follow the configured approval process before the offer is sent.
+        13. The candidate accepts or declines through the secure offer-response flow before the offer expiry date.
+        14. After acceptance, HR collects and verifies required joining documents and completes approved background or reference checks.
+        15. The application becomes Ready to Join only when configured joining requirements are complete.
+        16. After the person actually reports for duty, HR converts the candidate to an employee and starts the connected employee, login, salary, attendance, leave, asset, and onboarding setup.
+        17. The tenant-scoped recruitment history remains available after conversion for authorized future review.
+    """,
+    "keywords": ['recruitment workflow', 'hiring process', 'final hiring approval', 'admin approval', 'managing director approval', 'hr publish job', 'career page resume preview', 'resume match score', 'team leader candidate access', 'vacancy to employee', 'complete recruitment journey from hiring request to onboarding'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment',
+    "title": 'Who can use Recruitment and what each role can do',
+    "content": """
+        Recruitment responsibility and access guidance:
+        1. Authorized HR owns day-to-day recruitment operations, candidate communication, screening, interviews, offers, joining work, and employee conversion within the current tenant.
+        2. HR/Recruiter can create cross-department hiring requests according to permission, but a job opening can be created and published only after final hiring-requirement approval.
+        3. A Team Leader can create, save, and submit a hiring request only for the department assigned to their employee profile. The department is auto-selected and locked.
+        4. A Team Leader can track their request and participate in candidate review or interviews only for jobs where they are the hiring manager, panel member, or assigned interviewer.
+        5. A Team Leader cannot approve, reject, place On Hold, or return their own hiring request. They also cannot browse unrelated jobs or candidates.
+        6. Final hiring-requirement approval belongs to an authorized Admin, Managing Director, or a user with an explicit capability such as recruitment_final_approval, approve_hiring_request, or approve_hiring_requirements.
+        7. An Admin or Managing Director who provides final requirement approval does not automatically become an HR publisher. Job creation and publication remain restricted to authorized HR roles unless the same account separately has that HR authority.
+        8. An assigned Interviewer sees only information needed for the assigned interview and submits their own feedback.
+        9. Finance/Accounts reviews salary or hiring budget only when the tenant's configured workflow requires it.
+        10. Tenant Admin controls Recruitment access and settings but must still follow candidate privacy and tenant-isolation rules.
+        11. A Candidate can access only the public job, application, secure offer-response, and secure joining-document actions intended for that candidate.
+        12. Platform Super Admin supports service operation and tenant configuration but does not routinely make a tenant's hiring decisions or browse private candidate records without an authorized support reason.
+        13. Backend role, capability, employee assignment, job assignment, department, ownership, approver, and tenant checks are authoritative; a visible button alone does not grant permission.
+    """,
+    "keywords": ['recruitment roles', 'team leader candidate access', 'assigned hiring manager', 'final hiring approver', 'admin recruitment approval', 'managing director recruitment approval', 'hr publisher', 'interviewer access', 'recruitment permission', 'who can use recruitment and what each role can do'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment - Hiring Requests',
+    "title": 'How to create and approve a hiring request',
+    "content": """
+        Hiring Request workflow:
+        1. Open Recruitment and choose Hiring Requests.
+        2. Authorized HR users can create requests across departments according to tenant permission.
+        3. A Team Leader can create a request only for the department assigned to their employee profile. The system auto-selects and locks that department and records the Team Leader as requester and hiring manager.
+        4. If the Team Leader has no assigned department, HR or Admin must correct the employee profile before the Team Leader creates a request.
+        5. Enter the job title, vacancy count, work location, employment type, business reason, expected joining date, required experience, skills, qualification, and permitted salary range or budget.
+        6. Save as Draft while information is incomplete. A Team Leader can edit and submit only their own departmental request.
+        7. Submit the completed request. Its status becomes Submitted and it is routed for final approval.
+        8. Final approval is performed by an authorized Admin, Managing Director, or user with an explicit final-hiring-approval capability.
+        9. The final approver reviews the business need, headcount, budget, department, required date, and role details.
+        10. The final approver can Approve, Reject, place On Hold, or return it for correction according to available controls. The requester cannot decide their own request.
+        11. Rejection, hold, or correction should include a clear reason visible to the requester.
+        12. After approval, authorized HR is notified and can create the Job Opening. Approval alone does not publish the vacancy.
+        13. Only authorized HR roles create and publish the job after final approval.
+        14. Material changes to approved headcount, department, role, or salary range must follow the permitted revision or approval process.
+        15. Saya must use live context before stating whether a specific request is Draft, Submitted, Approved, Rejected, On Hold, Returned, or Closed.
+    """,
+    "keywords": ['hiring request', 'final hiring approval', 'admin approve hiring request', 'managing director approve hiring request', 'team leader hiring request', 'department locked', 'self approval blocked', 'hr creates job after approval', 'how to create and approve a hiring request'],
+    "requires_live_data": True,
+},
+{
+    "module": 'Recruitment - Hiring Requests',
+    "title": 'How a Team Leader raises a departmental hiring request',
+    "content": """
+        Team Leader departmental hiring-request workflow:
+        1. Log in with an employee account that has the Team Leader capability and open Recruitment, then Hiring Requests.
+        2. Choose New Hiring Request. The department comes from the Team Leader's employee profile and remains read-only.
+        3. The Team Leader cannot replace the department name or identifier with another department.
+        4. Enter the required role, vacancy count, reason, skills, experience, qualification, work arrangement, budget information, and expected joining date.
+        5. Save the request as Draft when more information is required, or submit it when complete.
+        6. The Team Leader can edit and submit only a request created by themselves for their assigned department.
+        7. On submission, the request goes to an authorized Admin, Managing Director, or explicitly configured final hiring approver.
+        8. The Team Leader can monitor the request status and decision reason but cannot approve, reject, hold, or return their own request.
+        9. After final approval, authorized HR creates and publishes the job opening.
+        10. For the resulting job, the Team Leader can see candidate applications only when assigned as hiring manager, panel member, or interviewer.
+        11. The Team Leader must not receive unrestricted salary, home-address, consent-IP, raw-parser, offer-approval, identity-document, or background-check information.
+        12. Backend department, ownership, approver, capability, job-assignment, and tenant checks remain authoritative.
+    """,
+    "keywords": ['team leader hiring request', 'team leader vacancy', 'departmental manpower request', 'own department recruitment', 'team leader cannot approve own request', 'admin final approval', 'managing director final approval', 'team leader assigned candidates'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment - Job Openings',
+    "title": 'How to create, publish, pause and close a job opening',
+    "content": """
+        Job Opening workflow:
+        1. Confirm that the linked Hiring Request has completed final approval.
+        2. An authorized HR user opens the Approved request and chooses Create Job Opening.
+        3. Add the public job title, description, responsibilities, qualification, required skills, experience, location, employment type, HR owner, hiring manager, planned interview rounds, opening date, closing date, and permitted public details.
+        4. Review the wording for accuracy, fairness, and relevance to the actual job.
+        5. Save the opening as Draft while HR reviews it.
+        6. Only authorized HR roles publish or change the public vacancy status. Final requirement approvers do not automatically receive HR publishing authority.
+        7. Publish through enabled channels such as the company Career Page, referrals, social media, portals, agencies, or internal circulation.
+        8. Confidential budget, internal approval notes, salary-review comments, and private candidate data must not appear on the public vacancy.
+        9. Pause the opening when applications should temporarily stop, reopen it when approved, close it after recruitment is completed, or cancel it when the requirement is withdrawn.
+        10. Job Opening statuses are Draft, Open, Paused, Closed, and Cancelled.
+        11. A public application and resume preview must always resolve to the correct tenant and published job opening.
+        12. Saya must use live context before stating whether a particular vacancy is Draft, Open, Paused, Closed, or Cancelled.
+    """,
+    "keywords": ['job opening', 'hr create job after approval', 'hr publish vacancy', 'admin approval then hr publish', 'career page job', 'pause recruitment', 'close vacancy', 'how to create, publish, pause and close a job opening'],
+    "requires_live_data": True,
+},
+{
+    "module": 'Recruitment - Resume Parser',
+    "title": 'How the resume parser should be used',
+    "content": """
+        Resume Parser workflow:
+        1. Internally, authorized HR can open Recruitment, choose Candidates, and start Add Candidate or Parse Resume.
+        2. Publicly, a candidate can select a supported resume while applying on the company's Career Page.
+        3. Supported PDF, DOCX, or TXT files must remain within the tenant's configured file-size limit.
+        4. The parser extracts available text and proposes fields such as name, email, phone, location, links, summary, designation, employer, experience, skills, education, employment history, certifications, and languages.
+        5. Text-based PDF and DOCX files are supported; image-only scanned resumes may require manual entry unless OCR support is added separately.
+        6. On the public Career Page, the temporary preview does not save the resume, create a candidate, or create an application.
+        7. The candidate reviews and corrects the extracted fields before submitting the final application.
+        8. Existing values already entered by the candidate should not be silently overwritten when a resume preview is returned.
+        9. Internally, HR must review and correct every important extracted value before relying on it.
+        10. The system checks likely tenant-scoped duplicates using identifiers such as email, phone, file hash, and existing applications where supported.
+        11. The parser result is a suggestion, not a verified fact and not an automatic hiring decision.
+        12. Resume information must not be sent to an external AI provider unless the company has explicitly enabled and approved that processing.
+        13. Parsing alone does not approve, reject, shortlist, select, schedule, offer, join, or convert anyone.
+    """,
+    "keywords": ['resume parser', 'public resume preview', 'career page auto fill', 'parse cv before applying', 'upload resume', 'extract resume fields', 'pdf resume', 'docx resume', 'how the resume parser should be used'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment - Candidates',
+    "title": 'How candidate profiles and applications are managed',
+    "content": """
+        Candidate and application workflow:
+        1. A Candidate profile stores the person's core contact and professional information inside one tenant.
+        2. Each job applied for creates a separate Application linked to that candidate and job opening.
+        3. One candidate can apply for more than one job while each application keeps its own status, match result, interviews, offer, joining work, and history.
+        4. HR reviews the resume, verifies candidate interest, checks duplicates, and records factual job-related screening notes.
+        5. HR can move the application through Applied, Under Review, Shortlisted, Interview Scheduled, Interviewed, Selected, Rejected, or Withdrawn only through valid transitions.
+        6. The indicative resume-match result belongs to the application, not the candidate profile, because suitability can differ by job.
+        7. A Team Leader can view candidate applications only for jobs where they are the assigned hiring manager, panel member, or interviewer.
+        8. A Team Leader must not see unrelated candidates and should receive redacted information that excludes unrestricted salary, home address, consent IP, raw parser text, sensitive joining documents, and verification results.
+        9. A rejected or withdrawn application should retain its reason and activity history where policy requires it.
+        10. Duplicate application checks prevent the same candidate from being added repeatedly to the same opening.
+        11. Candidate statements and uploaded documents must not be silently changed; corrections should be explicit and auditable.
+        12. Candidate selection must use job-related criteria and recorded human evidence, not unrelated personal characteristics or an automated score alone.
+        13. Candidate data remains tenant-scoped and accessible only to permitted users.
+    """,
+    "keywords": ['candidate profile', 'candidate application', 'team leader assigned candidates', 'hiring manager candidate access', 'candidate redaction', 'application resume match', 'shortlist candidate', 'screening', 'candidate status', 'how candidate profiles and applications are managed'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment - Public Career Page',
+    "title": 'How public resume preview and application submission work',
+    "content": """
+        Public Career Page application workflow:
+        1. Open the company's Career Page and select a published job.
+        2. Review the public job description, responsibilities, qualification, required skills, experience, employment type, location, and closing information.
+        3. Choose Apply and select a supported resume.
+        4. The Career Page temporarily uploads the resume for parsing and returns proposed application fields and an indicative job-match result.
+        5. Resume preview does not save the resume, create a candidate, or create an application.
+        6. The candidate reviews and corrects the extracted name, email, phone, location, designation, employer, experience, notice period, salary expectation, LinkedIn, portfolio, and other visible fields.
+        7. Candidate-entered values should not be silently replaced by empty or lower-confidence parser values.
+        8. The candidate reviews the match explanation and the mandatory human-review notice.
+        9. The candidate accepts the required consent statement and submits the final application.
+        10. Only final submission saves the resume and creates or links the tenant-scoped candidate and application.
+        11. The success screen shows the application reference and may show the indicative match result, but it must not promise selection, interview, or employment.
+        12. Public offer response and joining-document links remain separate secure token-based actions.
+    """,
+    "keywords": ['public career page', 'resume auto fill', 'resume preview before apply', 'career application', 'application reference', 'public job application', 'how public resume preview and application submission work'],
+    "requires_live_data": False,
+},
+{
+    "module": 'Recruitment - Resume Match',
+    "title": 'How the indicative resume-match score should be interpreted',
+    "content": """
+        Resume-match guidance:
+        1. The match result compares available job-related evidence with the requirements of one specific job opening.
+        2. The current explainable components are required skills, required experience, required qualification, and role-related resume evidence where those requirements are available.
+        3. The result can show an overall percentage, component scores, matched skills, missing or unverified skills, profile completeness, strengths, and manual-review notes.
+        4. The result is stored on the Application because the same candidate may receive different results for different jobs.
+        5. The score excludes protected or unrelated personal attributes such as age, gender, religion, caste, marital status, disability, photograph, and home address.
+        6. A zero-year fresher profile must remain a valid experience value when the job accepts freshers.
+        7. Experience above a configured maximum is not automatically treated as a negative match.
+        8. Missing resume evidence may reduce confidence, but it does not prove the candidate lacks the skill or qualification.
+        9. The score is decision support only. It cannot automatically shortlist, reject, select, approve, offer, or hire a candidate.
+        10. HR and assigned hiring participants must review the resume, corrected application fields, interview evidence, and job requirements before deciding.
+        11. Saya must not describe the score as an AI hiring decision, ranking guarantee, verified credential, or prediction of job performance.
+        12. Saya must fetch live application data before quoting a specific candidate's current score, band, matched skills, or component values.
+    """,
+    "keywords": ['resume match score', 'job match percentage', 'skills score', 'experience score', 'qualification score', 'role evidence score', 'human review required', 'automatic hiring decision prohibited', 'how the indicative resume-match score should be interpreted'],
+    "requires_live_data": True,
+},
+{
+    "module": 'Recruitment - Interface Guidance',
+    "title": 'How Recruitment alerts and page transitions should be understood',
+    "content": """
+        Recruitment interface guidance:
+        1. The internal Recruitment module and public Career Page use visual transitions when changing sections or opening another public page.
+        2. A progress line, brief page-change message, fade, or movement animation is interface feedback only; it does not confirm that a backend action succeeded.
+        3. Success alerts can confirm completed actions such as request creation, request submission, final approval, job publication, screening updates, interview scheduling, offer actions, joining-document review, resume extraction, or public application submission.
+        4. Warning alerts explain incomplete data, manual review, restricted access, or a non-blocking parser concern.
+        5. Error alerts explain failed API actions, parsing failures, validation problems, upload failures, or insufficient permission.
+        6. The user should read the alert message and verify the resulting status or record before continuing.
+        7. Dismissing a toast removes only the message; it does not undo the completed action.
+        8. Reduced-motion device preferences should minimize non-essential animation without removing status information.
+        9. Saya must not treat a visual animation, button state, or toast alone as proof of a live record status when live backend confirmation is required.
+    """,
+    "keywords": ['recruitment alert message', 'recruitment toast', 'career page alert', 'page transition', 'progress line', 'resume extraction alert', 'recruitment interface guidance', 'how recruitment alerts and page transitions should be understood'],
+    "requires_live_data": False,
+},
     {
         "module": 'Recruitment - Interviews',
         "title": 'How to schedule interviews and collect feedback',
@@ -1670,25 +1771,27 @@ HRMS_WORKFLOWS = [
         "keywords": ['convert candidate', 'create employee from candidate', 'candidate joined', 'employee onboarding', 'recruitment conversion', 'how to convert a joined candidate into an employee'],
         "requires_live_data": True,
     },
-    {
-        "module": 'Recruitment - Privacy',
-        "title": 'How multi-company separation and candidate privacy work',
-        "content": """
-            Recruitment privacy rules:
-            1. Every hiring request, opening, candidate, application, interview, feedback record, offer, document, check, setting, report, and activity entry belongs to one tenant/company.
-            2. Company A must never see Company B's recruitment records through screens, direct links, searches, reports, exports, downloads, public tokens, or API requests.
-            3. Tenant separation is enforced by backend queries and permission checks, not only by hiding UI controls.
-            4. The same person may apply to different companies, but each tenant sees only the application and communication made to that tenant.
-            5. Interviewers receive only the candidate and interview information required for their assigned work.
-            6. Salary approval notes, identity documents, bank information, and verification results require narrower access than ordinary interview details.
-            7. Collect only information needed for recruitment and joining, record consent where required, and follow the tenant's retention and deletion policy.
-            8. Rejection and screening notes must remain factual, respectful, and related to the job.
-            9. Public and candidate-access tokens must be treated as secrets and must not be exposed in logs, Saya responses, or unauthorized screens.
-            10. Platform-level summaries should not expose private candidate details unless an explicit authorized support or compliance workflow permits it.
-        """,
-        "keywords": ['recruitment privacy', 'tenant isolation candidates', 'candidate data protection', 'multi company recruitment', 'resume access', 'how multi-company separation and candidate privacy work'],
-        "requires_live_data": False,
-    },
+{
+    "module": 'Recruitment - Privacy',
+    "title": 'How multi-company separation and candidate privacy work',
+    "content": """
+        Recruitment privacy rules:
+        1. Every hiring request, opening, candidate, application, resume match, interview, feedback record, offer, document, check, setting, report, and activity entry belongs to one tenant/company.
+        2. Company A must never see Company B's recruitment records through screens, direct links, searches, reports, exports, downloads, public tokens, or API requests.
+        3. Tenant separation is enforced by backend queries and permission checks, not only by hiding UI controls.
+        4. The same person may apply to different companies, but each tenant sees only the application and communication made to that tenant.
+        5. A Team Leader sees candidate records only for assigned jobs and receives only the information necessary for hiring participation.
+        6. Interviewers receive only the candidate and interview information required for their assigned work.
+        7. Current or expected salary, home address, consent IP, raw parser text, identity documents, bank information, offer approval notes, and verification results require narrower access than ordinary screening information.
+        8. Resume matching must exclude protected or unrelated personal attributes such as age, gender, religion, caste, marital status, disability, photograph, and home address.
+        9. Collect only information needed for recruitment and joining, record consent where required, and follow the tenant's retention and deletion policy.
+        10. Rejection and screening notes must remain factual, respectful, and related to the job.
+        11. Public and candidate-access tokens must be treated as secrets and must not be exposed in logs, Saya responses, or unauthorized screens.
+        12. Platform-level summaries should not expose private candidate details unless an explicit authorized support or compliance workflow permits it.
+    """,
+    "keywords": ['recruitment privacy', 'tenant isolation candidates', 'team leader candidate redaction', 'protected attributes resume score', 'candidate data protection', 'resume access', 'how multi-company separation and candidate privacy work'],
+    "requires_live_data": False,
+},
     {
         "module": 'Recruitment - Dashboard and Reports',
         "title": 'How Recruitment dashboard and reports should be used',
@@ -1708,22 +1811,24 @@ HRMS_WORKFLOWS = [
         "keywords": ['recruitment dashboard', 'recruitment report', 'open vacancies report', 'candidate stage report', 'hiring time', 'recruitment metrics', 'how recruitment dashboard and reports should be used'],
         "requires_live_data": True,
     },
-    {
-        "module": 'Recruitment - Settings',
-        "title": 'How company Recruitment settings and templates should be managed',
-        "content": """
-            Recruitment Settings guidance:
-            1. Only an authorized tenant Admin or HR configuration user can change company Recruitment settings.
-            2. Configure the tenant's hiring approvers, salary/offer approvers, interview rounds, feedback areas, offer templates, communication templates, required joining documents, background checks, rejection reasons, retention rules, and other controls actually supported by the live page.
-            3. Apply changes only to the current tenant and preserve existing historical recruitment records.
-            4. Template and workflow changes should not silently rewrite an offer, feedback record, or decision that was already completed.
-            5. Verify permissions before enabling sensitive salary, identity, document, or verification access.
-            6. Use a pilot vacancy to test the configured workflow from request through employee conversion before broad tenant rollout.
-            7. Saya may explain configured options from live context but must not invent a setting key or claim that a setting was saved without API confirmation.
-        """,
-        "keywords": ['recruitment settings', 'offer template', 'interview rounds settings', 'joining checklist', 'rejection reasons', 'recruitment configuration', 'how company recruitment settings and templates should be managed'],
-        "requires_live_data": True,
-    },
+{
+    "module": 'Recruitment - Settings',
+    "title": 'How company Recruitment settings and templates should be managed',
+    "content": """
+        Recruitment Settings guidance:
+        1. Only an authorized tenant Admin or HR configuration user can change company Recruitment settings.
+        2. Configure the tenant's final hiring approvers, salary or offer approvers, HR publishing access, interview rounds, feedback areas, offer templates, communication templates, required joining documents, background checks, rejection reasons, retention rules, and other controls actually supported by the live page.
+        3. Final hiring authority should be granted through an approved role or explicit capability, not inferred only from designation text.
+        4. Job publishing authority should remain separate from final requirement approval unless the same user is also an authorized HR publisher.
+        5. Apply changes only to the current tenant and preserve existing historical recruitment records.
+        6. Template and workflow changes should not silently rewrite an offer, feedback record, match result, or decision that was already completed.
+        7. Verify permissions before enabling sensitive salary, address, identity, document, raw-parser, or verification access.
+        8. Use a pilot vacancy to test the configured workflow from request approval through public resume preview, application, interviews, offer, joining, and employee conversion.
+        9. Saya may explain configured options from live context but must not invent a setting key or claim that a setting was saved without API confirmation.
+    """,
+    "keywords": ['recruitment settings', 'final hiring approver', 'hr publisher permission', 'offer template', 'interview rounds settings', 'joining checklist', 'candidate privacy settings', 'how company recruitment settings and templates should be managed'],
+    "requires_live_data": True,
+},
     {
         "module": 'Training',
         "title": 'How training records and feedback are handled',

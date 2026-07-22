@@ -19,6 +19,8 @@ from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from werkzeug.security import generate_password_hash
 
+from app.services.resume_match_service import MATCH_VERSION, score_resume_match
+
 HIRING_REQUESTS = "recruitment_hiring_requests"
 JOB_OPENINGS = "recruitment_job_openings"
 CANDIDATES = "recruitment_candidates"
@@ -35,9 +37,23 @@ ONBOARDING_TASKS = "recruitment_onboarding_tasks"
 
 HR_ROLES = {"super_admin", "admin", "hr_admin", "hr_manager", "hr"}
 ADMIN_ROLES = {"super_admin", "admin", "hr_admin", "hr_manager"}
+HR_PUBLISH_ROLES = {"hr_admin", "hr_manager", "hr"}
+FINAL_APPROVAL_ROLES = {
+    "super_admin",
+    "admin",
+    "managing_director",
+    "managing_director_admin",
+    "md",
+}
+FINAL_APPROVAL_CAPABILITIES = {
+    "recruitment_final_approval",
+    "approve_hiring_request",
+    "approve_hiring_requirements",
+}
 MANAGER_ROLES = {"manager", "team_leader", "reporting_officer", "ro"}
+TEAM_LEADER_HIRING_REQUEST_ROLES = {"team_leader"}
 FINANCE_ROLES = {"finance", "accounts_finance"}
-READER_ROLES = HR_ROLES | MANAGER_ROLES | FINANCE_ROLES
+READER_ROLES = HR_ROLES | MANAGER_ROLES | FINANCE_ROLES | FINAL_APPROVAL_ROLES
 
 HIRING_REQUEST_TRANSITIONS = {
     "draft": {"submitted", "closed"},
@@ -160,6 +176,43 @@ def normalize_roles(value):
         return roles
     if isinstance(value, str): value = value.split(",")
     return {normalize_key(v) for v in (value or []) if normalize_key(v)}
+def normalize_capabilities(value):
+    if not isinstance(value, Mapping):
+        return set()
+    output = set()
+    for key in (
+        "capabilities",
+        "permissions",
+        "permission_keys",
+        "access_capabilities",
+        "module_permissions",
+    ):
+        raw = value.get(key)
+        if isinstance(raw, Mapping):
+            for item_key, enabled in raw.items():
+                if enabled and normalize_key(item_key):
+                    output.add(normalize_key(item_key))
+        elif isinstance(raw, str):
+            output.update(
+                normalize_key(item)
+                for item in raw.split(",")
+                if normalize_key(item)
+            )
+        elif isinstance(raw, Sequence) and not isinstance(
+            raw, (str, bytes, bytearray)
+        ):
+            for item in raw:
+                if isinstance(item, Mapping):
+                    item_key = normalize_key(
+                        item.get("key")
+                        or item.get("name")
+                        or item.get("permission")
+                    )
+                    if item_key and item.get("enabled", True):
+                        output.add(item_key)
+                elif normalize_key(item):
+                    output.add(normalize_key(item))
+    return output
 def as_object_id(value, field="id"):
     if isinstance(value, ObjectId): return value
     try: return ObjectId(safe_str(value))
@@ -241,24 +294,226 @@ class RecruitmentService:
         self.actor_name = safe_str(self.actor.get("name") or self.actor.get("full_name") or self.actor.get("email") or "System")
         self.actor_email = normalize_email(self.actor.get("email"))
         self.actor_roles = normalize_roles(self.actor)
+        self.actor_capabilities = normalize_capabilities(self.actor)
 
     def _c(self, name): return self.db[name]
     def _q(self, extra=None):
         q = {"tenant_id": self.tenant_id, "is_deleted": {"$ne": True}}
         if extra: q.update(dict(extra))
         return q
-    def _has(self, roles): return bool(self.actor_roles & {normalize_key(r) for r in roles})
+    def _has(self, roles):
+        return bool(self.actor_roles & {normalize_key(r) for r in roles})
+
+    def _has_capability(self, capabilities):
+        required = {normalize_key(value) for value in capabilities}
+        return bool(self.actor_capabilities & required)
+
     def _auth(self):
-        if not self.actor_id: raise RecruitmentServiceError("Authentication is required.", code="authentication_required", status_code=401)
+        if not self.actor_id:
+            raise RecruitmentServiceError(
+                "Authentication is required.",
+                code="authentication_required",
+                status_code=401,
+            )
+
     def _require_hr(self):
         self._auth()
-        if not self._has(HR_ROLES): raise RecruitmentServiceError("Only authorised HR or company administrators can perform this action.", code="recruitment_hr_permission_required", status_code=403)
+        if not self._has(HR_ROLES):
+            raise RecruitmentServiceError(
+                "Only authorised HR or company administrators can perform this action.",
+                code="recruitment_hr_permission_required",
+                status_code=403,
+            )
+
+    def _require_hr_publisher(self):
+        self._auth()
+        if not self._has(HR_PUBLISH_ROLES):
+            raise RecruitmentServiceError(
+                "Only authorised HR users can create or publish a job opening after final approval.",
+                code="recruitment_hr_publisher_required",
+                status_code=403,
+            )
+
     def _require_admin(self):
         self._auth()
-        if not self._has(ADMIN_ROLES): raise RecruitmentServiceError("Only an HR Manager or company administrator can perform this action.", code="recruitment_admin_permission_required", status_code=403)
+        if not self._has(ADMIN_ROLES):
+            raise RecruitmentServiceError(
+                "Only an HR Manager or company administrator can perform this action.",
+                code="recruitment_admin_permission_required",
+                status_code=403,
+            )
+
+    def _is_final_hiring_approver(self):
+        return self._has(FINAL_APPROVAL_ROLES) or self._has_capability(
+            FINAL_APPROVAL_CAPABILITIES
+        )
+
+    def _require_final_hiring_approver(self):
+        self._auth()
+        if not self._is_final_hiring_approver():
+            raise RecruitmentServiceError(
+                "Final hiring approval must be completed by an authorised Admin or Managing Director.",
+                code="hiring_request_final_approver_required",
+                status_code=403,
+            )
+
     def _require_reader(self):
         self._auth()
-        if not self._has(READER_ROLES): raise RecruitmentServiceError("You do not have access to recruitment records.", code="recruitment_access_denied", status_code=403)
+        if not self._has(READER_ROLES):
+            raise RecruitmentServiceError(
+                "You do not have access to recruitment records.",
+                code="recruitment_access_denied",
+                status_code=403,
+            )
+
+    def _is_department_team_leader(self):
+        return self._has(TEAM_LEADER_HIRING_REQUEST_ROLES) and not self._has(
+            HR_ROLES
+        )
+
+    def _require_hiring_request_creator(self):
+        self._auth()
+        if not (
+            self._has(HR_ROLES)
+            or self._has(TEAM_LEADER_HIRING_REQUEST_ROLES)
+        ):
+            raise RecruitmentServiceError(
+                "Only authorised HR, company administrators, or Team Leaders can create and submit hiring requests.",
+                code="recruitment_hr_permission_required",
+                status_code=403,
+            )
+
+    def _actor_employee_record(self):
+        employee_id = safe_str(self.actor.get("employee_id") or self.actor.get("employee_ref_id"))
+        queries = [
+            self._q({"user_id": self.actor_id}),
+            self._q({"user_id": safe_str(self.actor.get("_id") or self.actor.get("id"))}),
+        ]
+        try:
+            actor_object_id = ObjectId(self.actor_id)
+            queries.append(self._q({"user_id": actor_object_id}))
+        except Exception:
+            pass
+        if employee_id:
+            try:
+                queries.append(self._q({"_id": ObjectId(employee_id)}))
+            except Exception:
+                queries.append(self._q({"employee_id": employee_id}))
+                queries.append(self._q({"emp_code": employee_id}))
+        for query in queries:
+            employee = self.db.employees.find_one(query)
+            if employee:
+                return employee
+        return {}
+    def _actor_department_scope(self, required=False):
+        employee = self._actor_employee_record()
+        department = safe_str(
+            self.actor.get("department")
+            or self.actor.get("department_name")
+            or employee.get("department")
+            or employee.get("department_name")
+        )
+        department_id = safe_str(
+            self.actor.get("department_id")
+            or employee.get("department_id")
+            or employee.get("department_ref_id")
+        )
+        if department and not department_id:
+            department_doc = self.db.departments.find_one(
+                {
+                    "tenant_id": self.tenant_id,
+                    "is_deleted": {"$ne": True},
+                    "$or": [
+                        {"name": {"$regex": f"^{re.escape(department)}$", "$options": "i"}},
+                        {"department_name": {"$regex": f"^{re.escape(department)}$", "$options": "i"}},
+                        {"title": {"$regex": f"^{re.escape(department)}$", "$options": "i"}},
+                    ],
+                }
+            )
+            if department_doc:
+                department_id = safe_str(department_doc.get("_id"))
+                department = safe_str(
+                    department_doc.get("name")
+                    or department_doc.get("department_name")
+                    or department_doc.get("title")
+                    or department
+                )
+        if required and not department:
+            raise RecruitmentServiceError(
+                "Your employee profile does not have a department. Ask HR or Admin to assign your department before creating a hiring request.",
+                code="team_leader_department_required",
+                status_code=409,
+            )
+        return {"department": department, "department_id": department_id}
+    def _users_for_final_hiring_approval(self):
+        users = list(
+            self.db.users.find(
+                {
+                    "tenant_id": self.tenant_id,
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                }
+            )
+        )
+        return [
+            user
+            for user in users
+            if (normalize_roles(user) & FINAL_APPROVAL_ROLES)
+            or (normalize_capabilities(user) & FINAL_APPROVAL_CAPABILITIES)
+        ]
+
+    def _users_for_hr_publishing(self):
+        return self._users_for_roles(HR_PUBLISH_ROLES)
+
+    def _hiring_request_approvers(self, requested_approver_ids):
+        approver_ids = unique_strings(requested_approver_ids or [])
+        if self.actor_id in approver_ids:
+            raise RecruitmentServiceError(
+                "A requester cannot select themselves as the final approver of their own hiring request.",
+                code="hiring_request_self_approver_denied",
+                status_code=403,
+            )
+
+        if not approver_ids:
+            approver_ids = unique_strings(
+                str(user.get("_id"))
+                for user in self._users_for_final_hiring_approval()
+                if safe_str(user.get("_id")) != self.actor_id
+            )
+
+        active_users = {
+            str(user.get("_id")): user
+            for user in self._active_users(approver_ids)
+        }
+        if set(approver_ids) - set(active_users):
+            raise RecruitmentServiceError(
+                "One or more selected final approvers are not active users of this company.",
+                code="invalid_hiring_request_approver",
+            )
+
+        invalid_role_ids = [
+            user_id
+            for user_id, user in active_users.items()
+            if not (
+                (normalize_roles(user) & FINAL_APPROVAL_ROLES)
+                or (
+                    normalize_capabilities(user)
+                    & FINAL_APPROVAL_CAPABILITIES
+                )
+            )
+        ]
+        if invalid_role_ids:
+            raise RecruitmentServiceError(
+                "Hiring requests require final approval from an authorised Admin or Managing Director.",
+                code="hiring_request_final_approver_required",
+                status_code=403,
+                details={"invalid_approver_user_ids": invalid_role_ids},
+            )
+        return approver_ids
+
+    def _team_leader_hiring_approvers(self, requested_approver_ids):
+        return self._hiring_request_approvers(requested_approver_ids)
+
     def _get(self, collection, item_id, label):
         doc = self._c(collection).find_one(self._q({"_id": as_object_id(item_id, f"{label} id")}))
         if not doc: raise RecruitmentServiceError(f"{label} was not found in this company.", code=f"{normalize_key(label)}_not_found", status_code=404)
@@ -327,47 +582,460 @@ class RecruitmentService:
         return self._settings()
 
     def create_hiring_request(self, payload):
-        self._require_hr(); data=dict(payload or {}); title=safe_str(data.get("job_title") or data.get("title")); dept=safe_str(data.get("department") or data.get("department_name")); reason=safe_str(data.get("business_reason") or data.get("reason"))
-        if not title: raise RecruitmentServiceError("Job title is required.", code="job_title_required")
-        if not dept: raise RecruitmentServiceError("Department is required.", code="department_required")
-        if not reason: raise RecruitmentServiceError("Business reason is required.", code="business_reason_required")
-        salary_min=as_float(data.get("salary_min"),"salary_min",0); salary_max=as_float(data.get("salary_max"),"salary_max",0)
-        if salary_min is not None and salary_max is not None and salary_max < salary_min: raise RecruitmentServiceError("Maximum salary cannot be lower than minimum salary.", code="invalid_salary_range")
-        approvers=unique_strings(data.get("approver_user_ids") or ([data.get("approver_user_id")] if data.get("approver_user_id") else []))
-        valid={str(u["_id"]) for u in self._active_users(approvers)}
-        if set(approvers)-valid: raise RecruitmentServiceError("One or more selected approvers are not active users of this company.", code="invalid_hiring_request_approver")
-        now=utcnow(); doc={"tenant_id":self.tenant_id,"reference_no":self._next("hiring_request","HR-REQ"),"job_title":title,"department":dept,"department_id":safe_str(data.get("department_id")),"vacancies":int(as_float(data.get("vacancies",1),"vacancies",1) or 1),"work_location":safe_str(data.get("work_location") or data.get("location")),"employment_type":normalize_key(data.get("employment_type") or "permanent"),"business_reason":reason,"replacement_for":safe_str(data.get("replacement_for")),"expected_joining_date":parse_date(data.get("expected_joining_date"),"expected_joining_date"),"required_experience":safe_str(data.get("required_experience")),"required_skills":unique_strings(data.get("required_skills") or data.get("skills") or []),"qualification":safe_str(data.get("qualification")),"salary_min":salary_min,"salary_max":salary_max,"currency":safe_str(data.get("currency") or self._settings().get("default_currency") or "INR").upper(),"budget_notes":safe_str(data.get("budget_notes")),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name")),"approver_user_ids":approvers,"finance_approval_required":bool(data.get("finance_approval_required")),"leadership_approval_required":bool(data.get("leadership_approval_required")),"status":"draft","status_history":[],"requested_by":self.actor_id,"requested_by_name":self.actor_name,"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False}
-        result=self._c(HIRING_REQUESTS).insert_one(doc); doc["_id"]=result.inserted_id; self._activity("created","hiring_request",doc["_id"],message=f"Hiring request {doc['reference_no']} was created.",new="draft"); return doc
-    def get_hiring_request(self, request_id):
-        self._require_reader(); doc=self._get(HIRING_REQUESTS,request_id,"Hiring request")
-        if not self._has(HR_ROLES) and self.actor_id not in {safe_str(doc.get("requested_by")),safe_str(doc.get("hiring_manager_user_id")),*unique_strings(doc.get("approver_user_ids") or [])}: raise RecruitmentServiceError("You do not have access to this hiring request.",code="hiring_request_access_denied",status_code=403)
-        return doc
-    def list_hiring_requests(self,status="",search="",page=1,page_size=25):
-        self._require_reader(); q=self._q()
-        if status:q["status"]=normalize_key(status)
-        if search:
-            x=re.escape(safe_str(search)); q["$or"]=[{"reference_no":{"$regex":x,"$options":"i"}},{"job_title":{"$regex":x,"$options":"i"}},{"department":{"$regex":x,"$options":"i"}}]
-        if not self._has(HR_ROLES):q["$and"]=[{"$or":[{"requested_by":self.actor_id},{"hiring_manager_user_id":self.actor_id},{"approver_user_ids":self.actor_id}]}]
-        return self._paged(HIRING_REQUESTS,q,page,page_size)
-    def submit_hiring_request(self,request_id):
-        self._require_hr(); doc=self._get(HIRING_REQUESTS,request_id,"Hiring request"); old,new=self._transition(doc.get("status"),"submitted",HIRING_REQUEST_TRANSITIONS,"Hiring request"); approvers=unique_strings(doc.get("approver_user_ids") or [])
-        if self._settings().get("require_hiring_request_approval") and not approvers: raise RecruitmentServiceError("Select at least one approver before submitting the hiring request.",code="hiring_request_approver_required")
-        now=utcnow(); self._c(HIRING_REQUESTS).update_one({"_id":doc["_id"],"tenant_id":self.tenant_id},{"$set":{"status":new,"submitted_at":now,"submitted_by":self.actor_id,"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name}}); self._history(HIRING_REQUESTS,doc["_id"],old,new); self._activity("submitted","hiring_request",doc["_id"],message=f"Hiring request {doc.get('reference_no')} was submitted.",old=old,new=new); self._notify(approvers,title="Hiring request approval required",body=f"{doc.get('job_title')} requires your approval.",target="recruitment_hiring_requests",entity_type="hiring_request",entity_id=doc["_id"],priority="high",popup=True); return self._get(HIRING_REQUESTS,doc["_id"],"Hiring request")
-    def decide_hiring_request(self,request_id,decision,reason=""):
-        self._auth(); doc=self._get(HIRING_REQUESTS,request_id,"Hiring request"); decision=normalize_key(decision)
-        if decision not in {"approved","rejected","on_hold","returned"}: raise RecruitmentServiceError("Invalid hiring-request decision.",code="invalid_hiring_request_decision")
-        if not self._has(ADMIN_ROLES) and self.actor_id not in unique_strings(doc.get("approver_user_ids") or []): raise RecruitmentServiceError("You are not an approver for this hiring request.",code="hiring_request_decision_access_denied",status_code=403)
-        reason=safe_str(reason)
-        if decision in {"rejected","on_hold","returned"} and not reason: raise RecruitmentServiceError("A written reason is required.",code="hiring_request_decision_reason_required")
-        old,new=self._transition(doc.get("status"),decision,HIRING_REQUEST_TRANSITIONS,"Hiring request"); now=utcnow(); self._c(HIRING_REQUESTS).update_one({"_id":doc["_id"],"tenant_id":self.tenant_id},{"$set":{"status":new,"decision_reason":reason,"decided_at":now,"decided_by":self.actor_id,"decided_by_name":self.actor_name,"updated_at":now},"$push":{"approvals":{"decision":new,"reason":reason,**self._actor_snapshot(),"decided_at":now}}}); self._history(HIRING_REQUESTS,doc["_id"],old,new,reason); self._activity(new,"hiring_request",doc["_id"],message=f"Hiring request was {new.replace('_',' ')}.",old=old,new=new,details={"reason":reason}); self._notify([doc.get("requested_by")],title=f"Hiring request {new.replace('_',' ')}",body=f"{doc.get('job_title')} was {new.replace('_',' ')}.",target="recruitment_hiring_requests",entity_type="hiring_request",entity_id=doc["_id"],priority="high",popup=True); return self._get(HIRING_REQUESTS,doc["_id"],"Hiring request")
+        self._require_hiring_request_creator()
+        data = dict(payload or {})
+        title = safe_str(data.get("job_title") or data.get("title"))
+        requested_department = safe_str(
+            data.get("department") or data.get("department_name")
+        )
+        requested_department_id = safe_str(data.get("department_id"))
+        reason = safe_str(data.get("business_reason") or data.get("reason"))
+        team_leader_request = self._is_department_team_leader()
 
+        if not title:
+            raise RecruitmentServiceError(
+                "Job title is required.", code="job_title_required"
+            )
+        if not reason:
+            raise RecruitmentServiceError(
+                "Business reason is required.", code="business_reason_required"
+            )
+
+        if team_leader_request:
+            scope = self._actor_department_scope(required=True)
+            department = scope["department"]
+            department_id = scope["department_id"]
+            if (
+                requested_department
+                and normalize_key(requested_department)
+                != normalize_key(department)
+            ):
+                raise RecruitmentServiceError(
+                    "Team Leaders can create hiring requests only for their own department.",
+                    code="team_leader_department_scope_denied",
+                    status_code=403,
+                    details={"allowed_department": department},
+                )
+            if (
+                requested_department_id
+                and department_id
+                and requested_department_id != department_id
+            ):
+                raise RecruitmentServiceError(
+                    "Team Leaders cannot change the department assigned to their hiring request.",
+                    code="team_leader_department_scope_denied",
+                    status_code=403,
+                    details={
+                        "allowed_department": department,
+                        "allowed_department_id": department_id,
+                    },
+                )
+        else:
+            department = requested_department
+            department_id = requested_department_id
+            if not department:
+                raise RecruitmentServiceError(
+                    "Department is required.", code="department_required"
+                )
+
+        salary_min = as_float(data.get("salary_min"), "salary_min", 0)
+        salary_max = as_float(data.get("salary_max"), "salary_max", 0)
+        if (
+            salary_min is not None
+            and salary_max is not None
+            and salary_max < salary_min
+        ):
+            raise RecruitmentServiceError(
+                "Maximum salary cannot be lower than minimum salary.",
+                code="invalid_salary_range",
+            )
+
+        approvers = unique_strings(
+            data.get("approver_user_ids")
+            or (
+                [data.get("approver_user_id")]
+                if data.get("approver_user_id")
+                else []
+            )
+        )
+        approvers = self._hiring_request_approvers(approvers)
+
+        hiring_manager_user_id = safe_str(
+            data.get("hiring_manager_user_id")
+        )
+        hiring_manager_name = safe_str(data.get("hiring_manager_name"))
+        if team_leader_request:
+            hiring_manager_user_id = self.actor_id
+            hiring_manager_name = self.actor_name
+
+        now = utcnow()
+        doc = {
+            "tenant_id": self.tenant_id,
+            "reference_no": self._next("hiring_request", "HR-REQ"),
+            "job_title": title,
+            "department": department,
+            "department_id": department_id,
+            "department_locked": team_leader_request,
+            "requester_scope": (
+                "department_team_leader"
+                if team_leader_request
+                else "hr_authorised"
+            ),
+            "requested_by_department": (
+                department if team_leader_request else ""
+            ),
+            "requested_by_department_id": (
+                department_id if team_leader_request else ""
+            ),
+            "vacancies": int(
+                as_float(data.get("vacancies", 1), "vacancies", 1) or 1
+            ),
+            "work_location": safe_str(
+                data.get("work_location") or data.get("location")
+            ),
+            "employment_type": normalize_key(
+                data.get("employment_type") or "permanent"
+            ),
+            "business_reason": reason,
+            "replacement_for": safe_str(data.get("replacement_for")),
+            "expected_joining_date": parse_date(
+                data.get("expected_joining_date"),
+                "expected_joining_date",
+            ),
+            "required_experience": safe_str(
+                data.get("required_experience")
+            ),
+            "required_skills": unique_strings(
+                data.get("required_skills") or data.get("skills") or []
+            ),
+            "qualification": safe_str(data.get("qualification")),
+            "salary_min": salary_min,
+            "salary_max": salary_max,
+            "currency": safe_str(
+                data.get("currency")
+                or self._settings().get("default_currency")
+                or "INR"
+            ).upper(),
+            "budget_notes": safe_str(data.get("budget_notes")),
+            "hiring_manager_user_id": hiring_manager_user_id,
+            "hiring_manager_name": hiring_manager_name,
+            "approver_user_ids": approvers,
+            "final_approval_required": True,
+            "final_approval_completed": False,
+            "final_approval_status": "draft",
+            "final_approved_at": None,
+            "final_approved_by": "",
+            "final_approved_by_name": "",
+            "finance_approval_required": bool(
+                data.get("finance_approval_required")
+            ),
+            "leadership_approval_required": True,
+            "status": "draft",
+            "status_history": [],
+            "requested_by": self.actor_id,
+            "requested_by_name": self.actor_name,
+            "created_at": now,
+            "updated_at": now,
+            "created_by": self.actor_id,
+            "created_by_name": self.actor_name,
+            "updated_by": self.actor_id,
+            "updated_by_name": self.actor_name,
+            "is_deleted": False,
+        }
+        result = self._c(HIRING_REQUESTS).insert_one(doc)
+        doc["_id"] = result.inserted_id
+        self._activity(
+            "created",
+            "hiring_request",
+            doc["_id"],
+            message=(
+                f"Hiring request {doc['reference_no']} was created."
+            ),
+            new="draft",
+            details={
+                "requester_scope": doc["requester_scope"],
+                "department": department,
+                "final_approval_required": True,
+            },
+        )
+        return doc
+    def get_hiring_request(self, request_id):
+        self._require_reader()
+        doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        if not self._has(HR_ROLES) and self.actor_id not in {
+            safe_str(doc.get("requested_by")),
+            safe_str(doc.get("hiring_manager_user_id")),
+            *unique_strings(doc.get("approver_user_ids") or []),
+        }:
+            raise RecruitmentServiceError(
+                "You do not have access to this hiring request.",
+                code="hiring_request_access_denied",
+                status_code=403,
+            )
+        return doc
+
+    def list_hiring_requests(self, status="", search="", page=1, page_size=25):
+        self._require_reader()
+        q = self._q()
+        if status:
+            q["status"] = normalize_key(status)
+        if search:
+            expression = re.escape(safe_str(search))
+            q["$or"] = [
+                {"reference_no": {"$regex": expression, "$options": "i"}},
+                {"job_title": {"$regex": expression, "$options": "i"}},
+                {"department": {"$regex": expression, "$options": "i"}},
+            ]
+        if not self._has(HR_ROLES):
+            q["$and"] = [
+                {
+                    "$or": [
+                        {"requested_by": self.actor_id},
+                        {"hiring_manager_user_id": self.actor_id},
+                        {"approver_user_ids": self.actor_id},
+                    ]
+                }
+            ]
+        return self._paged(HIRING_REQUESTS, q, page, page_size)
+
+    def submit_hiring_request(self, request_id):
+        self._require_hiring_request_creator()
+        doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        team_leader_submission = self._is_department_team_leader()
+
+        if team_leader_submission:
+            if (
+                safe_str(doc.get("requested_by")) != self.actor_id
+                or normalize_key(doc.get("requester_scope"))
+                != "department_team_leader"
+            ):
+                raise RecruitmentServiceError(
+                    "Team Leaders can submit only hiring requests they created for their own department.",
+                    code="team_leader_hiring_request_submit_denied",
+                    status_code=403,
+                )
+            scope = self._actor_department_scope(required=True)
+            if normalize_key(doc.get("department")) != normalize_key(
+                scope["department"]
+            ):
+                raise RecruitmentServiceError(
+                    "This hiring request is not assigned to your current department.",
+                    code="team_leader_department_scope_denied",
+                    status_code=403,
+                    details={"allowed_department": scope["department"]},
+                )
+        elif (
+            not self._has(HR_ROLES)
+            or safe_str(doc.get("requested_by")) != self.actor_id
+        ):
+            raise RecruitmentServiceError(
+                "You can submit only a hiring request you created.",
+                code="hiring_request_submit_denied",
+                status_code=403,
+            )
+
+        old, new = self._transition(
+            doc.get("status"),
+            "submitted",
+            HIRING_REQUEST_TRANSITIONS,
+            "Hiring request",
+        )
+        approvers = self._hiring_request_approvers(
+            doc.get("approver_user_ids") or []
+        )
+        if not approvers:
+            raise RecruitmentServiceError(
+                "No authorised Admin or Managing Director is available to give final approval.",
+                code="hiring_request_final_approver_required",
+                status_code=409,
+            )
+
+        now = utcnow()
+        self._c(HIRING_REQUESTS).update_one(
+            {"_id": doc["_id"], "tenant_id": self.tenant_id},
+            {
+                "$set": {
+                    "approver_user_ids": approvers,
+                    "status": new,
+                    "final_approval_status": "pending",
+                    "final_approval_completed": False,
+                    "submitted_at": now,
+                    "submitted_by": self.actor_id,
+                    "updated_at": now,
+                    "updated_by": self.actor_id,
+                    "updated_by_name": self.actor_name,
+                }
+            },
+        )
+        self._history(HIRING_REQUESTS, doc["_id"], old, new)
+        self._activity(
+            "submitted",
+            "hiring_request",
+            doc["_id"],
+            message=(
+                f"Hiring request {doc.get('reference_no')} was submitted "
+                "for final approval."
+            ),
+            old=old,
+            new=new,
+            details={
+                "requester_scope": doc.get("requester_scope"),
+                "department": doc.get("department"),
+                "final_approval_status": "pending",
+            },
+        )
+        self._notify(
+            approvers,
+            title="Final hiring approval required",
+            body=(
+                f"{doc.get('job_title')} for {doc.get('department')} "
+                "requires final approval."
+            ),
+            target="recruitment_hiring_requests",
+            entity_type="hiring_request",
+            entity_id=doc["_id"],
+            priority="high",
+            popup=True,
+        )
+        return self._get(HIRING_REQUESTS, doc["_id"], "Hiring request")
+    def decide_hiring_request(self, request_id, decision, reason=""):
+        self._require_final_hiring_approver()
+        doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        decision = normalize_key(decision)
+        if decision not in {"approved", "rejected", "on_hold", "returned"}:
+            raise RecruitmentServiceError(
+                "Invalid hiring-request decision.",
+                code="invalid_hiring_request_decision",
+            )
+
+        if safe_str(doc.get("requested_by")) == self.actor_id:
+            raise RecruitmentServiceError(
+                "A requester cannot give final approval to their own hiring request.",
+                code="hiring_request_self_approval_denied",
+                status_code=403,
+            )
+
+        approver_ids = unique_strings(doc.get("approver_user_ids") or [])
+        if (
+            approver_ids
+            and self.actor_id not in approver_ids
+            and not self._has({"super_admin"})
+        ):
+            raise RecruitmentServiceError(
+                "You are not an assigned final approver for this hiring request.",
+                code="hiring_request_decision_access_denied",
+                status_code=403,
+            )
+
+        reason = safe_str(reason)
+        if decision in {"rejected", "on_hold", "returned"} and not reason:
+            raise RecruitmentServiceError(
+                "A written reason is required.",
+                code="hiring_request_decision_reason_required",
+            )
+        old, new = self._transition(
+            doc.get("status"),
+            decision,
+            HIRING_REQUEST_TRANSITIONS,
+            "Hiring request",
+        )
+        now = utcnow()
+        approved = new == "approved"
+        update = {
+            "status": new,
+            "decision_reason": reason,
+            "decided_at": now,
+            "decided_by": self.actor_id,
+            "decided_by_name": self.actor_name,
+            "final_approval_status": new,
+            "final_approval_completed": approved,
+            "updated_at": now,
+            "updated_by": self.actor_id,
+            "updated_by_name": self.actor_name,
+        }
+        if approved:
+            update.update(
+                {
+                    "final_approved_at": now,
+                    "final_approved_by": self.actor_id,
+                    "final_approved_by_name": self.actor_name,
+                }
+            )
+        else:
+            update.update(
+                {
+                    "final_approved_at": None,
+                    "final_approved_by": "",
+                    "final_approved_by_name": "",
+                }
+            )
+
+        self._c(HIRING_REQUESTS).update_one(
+            {"_id": doc["_id"], "tenant_id": self.tenant_id},
+            {
+                "$set": update,
+                "$push": {
+                    "approvals": {
+                        "decision": new,
+                        "reason": reason,
+                        "approval_level": "final_requirement_approval",
+                        **self._actor_snapshot(),
+                        "decided_at": now,
+                    }
+                },
+            },
+        )
+        self._history(HIRING_REQUESTS, doc["_id"], old, new, reason)
+        self._activity(
+            new,
+            "hiring_request",
+            doc["_id"],
+            message=(
+                f"Final hiring requirement was {new.replace('_', ' ')}."
+            ),
+            old=old,
+            new=new,
+            details={
+                "reason": reason,
+                "approval_level": "final_requirement_approval",
+            },
+        )
+
+        recipients = [doc.get("requested_by")]
+        if approved:
+            recipients.extend(
+                str(user.get("_id"))
+                for user in self._users_for_hr_publishing()
+            )
+        self._notify(
+            unique_strings(recipients),
+            title=(
+                "Hiring requirement approved — HR action required"
+                if approved
+                else f"Hiring request {new.replace('_', ' ')}"
+            ),
+            body=(
+                f"{doc.get('job_title')} for {doc.get('department')} is "
+                "finally approved. HR can now create and publish the job opening."
+                if approved
+                else (
+                    f"{doc.get('job_title')} was {new.replace('_', ' ')}."
+                )
+            ),
+            target="recruitment_hiring_requests",
+            entity_type="hiring_request",
+            entity_id=doc["_id"],
+            priority="high",
+            popup=True,
+        )
+        return self._get(HIRING_REQUESTS, doc["_id"], "Hiring request")
     def _unique_slug(self,base):
         value,counter=base,2
         while self._c(JOB_OPENINGS).find_one(self._q({"public_slug":value})): value=f"{base[:80]}-{counter}"; counter+=1
         return value
     def create_job_opening(self,payload):
-        self._require_hr(); data=dict(payload or {}); req=self._get(HIRING_REQUESTS,data.get("hiring_request_id"),"Hiring request")
-        if normalize_key(req.get("status"))!="approved": raise RecruitmentServiceError("A job opening can only be created from an approved hiring request.",code="hiring_request_not_approved",status_code=409)
+        self._require_hr_publisher(); data=dict(payload or {}); req=self._get(HIRING_REQUESTS,data.get("hiring_request_id"),"Hiring request")
+        if normalize_key(req.get("status"))!="approved" or req.get("final_approval_completed") is not True or normalize_key(req.get("final_approval_status"))!="approved": raise RecruitmentServiceError("A job opening can only be created after final approval by an authorised Admin or Managing Director.",code="hiring_request_final_approval_required",status_code=409)
         if self._c(JOB_OPENINGS).find_one(self._q({"hiring_request_id":str(req["_id"]),"status":{"$in":["draft","open","paused"]}})): raise RecruitmentServiceError("An active job opening already exists for this hiring request.",code="job_opening_already_exists",status_code=409)
         description=safe_str(data.get("description") or data.get("job_description"))
         if not description: raise RecruitmentServiceError("Job description is required.",code="job_description_required")
@@ -400,10 +1068,174 @@ class RecruitmentService:
         if not doc: raise RecruitmentServiceError("This job opening is not available.",code="job_opening_not_found",status_code=404)
         return self._public_job(doc)
     def change_job_status(self,job_id,status,channels=None,reason=""):
-        self._require_hr(); doc=self._get(JOB_OPENINGS,job_id,"Job opening"); old,new=self._transition(doc.get("status"),status,JOB_OPENING_TRANSITIONS,"Job opening"); now=utcnow(); update={"status":new,"status_reason":safe_str(reason),"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name}
+        self._require_hr_publisher(); doc=self._get(JOB_OPENINGS,job_id,"Job opening"); old,new=self._transition(doc.get("status"),status,JOB_OPENING_TRANSITIONS,"Job opening"); now=utcnow(); update={"status":new,"status_reason":safe_str(reason),"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name}
         if new=="open": update.update({"opening_date":doc.get("opening_date") or date.today().isoformat(),"published_at":now,"published_by":self.actor_id,"published_channels":unique_strings(channels or doc.get("published_channels") or ["career_page"])})
         if new in {"closed","cancelled"}: update.update({"closed_at":now,"closed_by":self.actor_id})
         self._c(JOB_OPENINGS).update_one({"_id":doc["_id"],"tenant_id":self.tenant_id},{"$set":update}); self._history(JOB_OPENINGS,doc["_id"],old,new,reason); self._activity("status_changed","job_opening",doc["_id"],message=f"Job opening moved to {new.replace('_',' ')}.",old=old,new=new); return self._get(JOB_OPENINGS,doc["_id"],"Job opening")
+
+    def _assigned_job_ids(self):
+        if self._has(HR_ROLES):
+            return []
+        return [
+            str(item["_id"])
+            for item in self._c(JOB_OPENINGS).find(
+                self._q(
+                    {
+                        "$or": [
+                            {"recruiter_user_id": self.actor_id},
+                            {"hiring_manager_user_id": self.actor_id},
+                            {"panel_user_ids": self.actor_id},
+                        ]
+                    }
+                ),
+                {"_id": 1},
+            )
+        ]
+
+    def _assigned_interview_application_ids(self):
+        return unique_strings(
+            item.get("application_id")
+            for item in self._c(INTERVIEWS).find(
+                self._q({"interviewer_user_ids": self.actor_id}),
+                {"application_id": 1},
+            )
+            if item.get("application_id")
+        )
+
+    def _candidate_access_application_query(self, candidate_id=""):
+        clauses = []
+        job_ids = self._assigned_job_ids()
+        interview_application_ids = self._assigned_interview_application_ids()
+        if job_ids:
+            clauses.append({"job_opening_id": {"$in": job_ids}})
+        if interview_application_ids:
+            object_ids = []
+            for value in interview_application_ids:
+                try:
+                    object_ids.append(as_object_id(value, "application id"))
+                except RecruitmentServiceError:
+                    continue
+            if object_ids:
+                clauses.append({"_id": {"$in": object_ids}})
+        query = self._q()
+        if candidate_id:
+            query["candidate_id"] = safe_str(candidate_id)
+        query["$or"] = clauses or [{"_id": {"$exists": False}}]
+        return query
+
+    def _redact_candidate_for_hiring_team(self, candidate):
+        result = deepcopy(dict(candidate or {}))
+        for key in (
+            "address",
+            "current_salary",
+            "expected_salary",
+        ):
+            result.pop(key, None)
+        consent = clean_mapping(result.get("consent"))
+        consent.pop("ip_address", None)
+        result["consent"] = consent
+        parser = clean_mapping(result.get("resume_parser"))
+        parser.pop("raw_text", None)
+        result["resume_parser"] = parser
+        result["restricted_view"] = True
+        return result
+
+    def _parser_result_from_candidate(self, candidate):
+        candidate = dict(candidate or {})
+        parser = clean_mapping(candidate.get("resume_parser"))
+        fields = {
+            "full_name": candidate.get("full_name"),
+            "email": candidate.get("email"),
+            "phone": candidate.get("phone"),
+            "location": candidate.get("location"),
+            "current_designation": candidate.get("current_designation"),
+            "current_employer": candidate.get("current_employer"),
+            "total_experience_years": candidate.get("total_experience_years"),
+            "skills": candidate.get("skills") or [],
+            "education": candidate.get("education") or [],
+            "employment_history": candidate.get("employment_history") or [],
+            "certifications": candidate.get("certifications") or [],
+            "summary": candidate.get("summary"),
+        }
+        return {
+            "parser_version": parser.get("parser_version"),
+            "parsed_at": parser.get("parsed_at"),
+            "fields": fields,
+            "sections": clean_mapping(parser.get("sections")),
+            "warnings": unique_strings(parser.get("warnings") or []),
+            "requires_manual_review": True,
+        }
+
+    def _resume_match_for_application(self, candidate, job):
+        parser_result = self._parser_result_from_candidate(candidate)
+        result = score_resume_match(parser_result, job)
+        result["calculated_at"] = utcnow()
+        result["match_version"] = result.get("match_version") or MATCH_VERSION
+        return result
+
+    def _public_resume_preview_fields(self, parser_result):
+        fields = clean_mapping(clean_mapping(parser_result).get("fields"))
+        allowed = {
+            "full_name",
+            "name",
+            "first_name",
+            "last_name",
+            "email",
+            "primary_email",
+            "phone",
+            "primary_phone",
+            "location",
+            "current_designation",
+            "current_employer",
+            "total_experience_years",
+            "total_experience",
+            "notice_period",
+            "expected_salary",
+            "linkedin_url",
+            "github_url",
+            "portfolio_url",
+            "summary",
+            "professional_summary",
+            "skills",
+            "education",
+            "employment_history",
+            "certifications",
+            "languages",
+        }
+        return {
+            key: deepcopy(value)
+            for key, value in fields.items()
+            if key in allowed
+        }
+
+    def preview_public_resume_match(self, job_slug, parser_result):
+        if not self.allow_public_actions:
+            raise RecruitmentServiceError(
+                "Public recruitment access is disabled.",
+                code="public_recruitment_access_denied",
+                status_code=403,
+            )
+        job = self._c(JOB_OPENINGS).find_one(
+            self._q({"public_slug": safe_str(job_slug), "status": "open"})
+        )
+        if not job:
+            raise RecruitmentServiceError(
+                "This job opening is not available.",
+                code="job_opening_not_found",
+                status_code=404,
+            )
+        parser_result = clean_mapping(parser_result)
+        match = score_resume_match(parser_result, job)
+        return {
+            "ok": True,
+            "job": self._public_job(job),
+            "fields": self._public_resume_preview_fields(parser_result),
+            "confidence": clean_mapping(parser_result.get("confidence")),
+            "warnings": unique_strings(parser_result.get("warnings") or []),
+            "requires_manual_review": True,
+            "resume_match": match,
+            "candidate_message": match.get("candidate_message"),
+        }
 
     def find_duplicate_candidates(self,email="",phone="",resume_sha256="",exclude_candidate_id=""):
         conditions=[]
@@ -430,13 +1262,71 @@ class RecruitmentService:
         if public and consent.get("accepted") is not True: raise RecruitmentServiceError("Candidate consent is required before storing the application.",code="candidate_consent_required")
         doc={"tenant_id":self.tenant_id,"reference_no":self._next("candidate","CAND"),"full_name":name,"first_name":safe_str(merged.get("first_name")),"last_name":safe_str(merged.get("last_name")),"email":email,"normalized_email":email,"alternate_emails":unique_strings(merged.get("alternate_emails") or []),"phone":phone,"normalized_phone":phone,"alternate_phones":unique_strings(merged.get("alternate_phones") or []),"location":safe_str(merged.get("location")),"address":safe_str(merged.get("address")),"linkedin_url":safe_str(merged.get("linkedin_url")),"github_url":safe_str(merged.get("github_url")),"portfolio_url":safe_str(merged.get("portfolio_url")),"summary":safe_str(merged.get("summary") or merged.get("professional_summary")),"current_designation":safe_str(merged.get("current_designation")),"current_employer":safe_str(merged.get("current_employer")),"total_experience_years":merged.get("total_experience_years"),"notice_period":safe_str(merged.get("notice_period")),"current_salary":safe_str(merged.get("current_salary")),"expected_salary":safe_str(merged.get("expected_salary")),"skills":unique_strings(merged.get("skills") or []),"education":clean_list(merged.get("education")),"employment_history":clean_list(merged.get("employment_history")),"certifications":unique_strings(merged.get("certifications") or []),"languages":unique_strings(merged.get("languages") or []),"resume":resume,"resume_parser":{"parser_version":parsed.get("parser_version"),"parsed_at":parsed.get("parsed_at"),"confidence":clean_mapping(parsed.get("confidence")),"warnings":unique_strings(parsed.get("warnings") or []),"requires_manual_review":bool(parsed.get("requires_manual_review",True)),"reviewed":bool(data.get("parser_reviewed")),"reviewed_by":self.actor_id if data.get("parser_reviewed") else "","reviewed_at":now if data.get("parser_reviewed") else None,"raw_text":safe_str(parsed.get("raw_text"))[:100000],"sections":clean_mapping(parsed.get("sections"))},"source":normalize_key(data.get("source") or self._settings().get("default_application_source") or "manual"),"source_detail":safe_str(data.get("source_detail")),"consent":{"accepted":bool(consent.get("accepted")),"text_version":safe_str(consent.get("text_version")),"accepted_at":now if consent.get("accepted") else None,"ip_address":safe_str(consent.get("ip_address"))},"retention_until":(now+timedelta(days=int(self._settings().get("candidate_retention_days") or 730))).date().isoformat(),"application_count":0,"latest_application_status":"","created_at":now,"updated_at":now,"created_by":self.actor_id or "public_candidate","created_by_name":self.actor_name if self.actor_id else name,"updated_by":self.actor_id or "public_candidate","updated_by_name":self.actor_name if self.actor_id else name,"is_deleted":False}
         result=self._c(CANDIDATES).insert_one(doc); doc["_id"]=result.inserted_id; self._activity("created","candidate",doc["_id"],message=f"Candidate {doc['reference_no']} was created.",details={"source":doc["source"],"public":public}); return doc
-    def get_candidate(self,candidate_id): self._require_hr(); return self._get(CANDIDATES,candidate_id,"Candidate")
-    def list_candidates(self,search="",skill="",page=1,page_size=25):
-        self._require_hr(); q=self._q()
+    def get_candidate(self, candidate_id):
+        self._require_reader()
+        candidate = self._get(CANDIDATES, candidate_id, "Candidate")
+        if self._has(HR_ROLES):
+            return candidate
+        accessible = self._c(APPLICATIONS).find_one(
+            self._candidate_access_application_query(str(candidate["_id"])),
+            {"_id": 1},
+        )
+        if not accessible:
+            raise RecruitmentServiceError(
+                "You are not assigned to a job or interview for this candidate.",
+                code="candidate_access_denied",
+                status_code=403,
+            )
+        return self._redact_candidate_for_hiring_team(candidate)
+
+    def list_candidates(self, search="", skill="", page=1, page_size=25):
+        self._require_reader()
+        q = self._q()
+        if not self._has(HR_ROLES):
+            applications = list(
+                self._c(APPLICATIONS).find(
+                    self._candidate_access_application_query(),
+                    {"candidate_id": 1},
+                )
+            )
+            candidate_ids = []
+            for application in applications:
+                try:
+                    candidate_ids.append(
+                        as_object_id(
+                            application.get("candidate_id"),
+                            "candidate id",
+                        )
+                    )
+                except RecruitmentServiceError:
+                    continue
+            q["_id"] = {"$in": candidate_ids}
         if search:
-            x=re.escape(safe_str(search)); q["$or"]=[{"reference_no":{"$regex":x,"$options":"i"}},{"full_name":{"$regex":x,"$options":"i"}},{"email":{"$regex":x,"$options":"i"}},{"phone":{"$regex":x,"$options":"i"}},{"current_designation":{"$regex":x,"$options":"i"}}]
-        if skill:q["skills"]={"$regex":re.escape(safe_str(skill)),"$options":"i"}
-        return self._paged(CANDIDATES,q,page,page_size)
+            x = re.escape(safe_str(search))
+            q["$or"] = [
+                {"reference_no": {"$regex": x, "$options": "i"}},
+                {"full_name": {"$regex": x, "$options": "i"}},
+                {"email": {"$regex": x, "$options": "i"}},
+                {"phone": {"$regex": x, "$options": "i"}},
+                {
+                    "current_designation": {
+                        "$regex": x,
+                        "$options": "i",
+                    }
+                },
+            ]
+        if skill:
+            q["skills"] = {
+                "$regex": re.escape(safe_str(skill)),
+                "$options": "i",
+            }
+        result = self._paged(CANDIDATES, q, page, page_size)
+        if not self._has(HR_ROLES):
+            result["items"] = [
+                self._redact_candidate_for_hiring_team(item)
+                for item in result["items"]
+            ]
+        return result
 
     # ------------------------------------------------------------------
     # Applications
@@ -484,6 +1374,7 @@ class RecruitmentService:
             or self._settings().get("default_application_source")
             or "manual"
         )
+        resume_match = self._resume_match_for_application(candidate, job)
         doc = {
             "tenant_id": self.tenant_id,
             "reference_no": reference_no,
@@ -508,6 +1399,14 @@ class RecruitmentService:
             "screening_answers": clean_list(data.get("screening_answers"), limit=50),
             "screening_notes": "",
             "screening_outcome": "",
+            "resume_match": resume_match,
+            "resume_match_score": int(resume_match.get("score") or 0),
+            "resume_match_band": safe_str(resume_match.get("band")),
+            "resume_match_version": safe_str(
+                resume_match.get("match_version") or MATCH_VERSION
+            ),
+            "resume_match_calculated_at": resume_match.get("calculated_at"),
+            "resume_match_human_review_required": True,
             "screened_at": None,
             "screened_by": "",
             "status": "applied",
@@ -596,20 +1495,14 @@ class RecruitmentService:
         self._require_reader()
         application = self._get(APPLICATIONS, application_id, "Application")
         if not self._has(HR_ROLES):
-            job = self._get(JOB_OPENINGS, application.get("job_opening_id"), "Job opening")
-            assigned = {
-                safe_str(job.get("recruiter_user_id")),
-                safe_str(job.get("hiring_manager_user_id")),
-                *unique_strings(job.get("panel_user_ids") or []),
-            }
-            assigned.discard("")
-            interview = self._c(INTERVIEWS).find_one(
-                self._q({
-                    "application_id": str(application["_id"]),
-                    "interviewer_user_ids": self.actor_id,
-                })
+            accessible = self._c(APPLICATIONS).find_one(
+                {
+                    **self._candidate_access_application_query(),
+                    "_id": application["_id"],
+                },
+                {"_id": 1},
             )
-            if self.actor_id not in assigned and not interview and not self._has(FINANCE_ROLES):
+            if not accessible and not self._has(FINANCE_ROLES):
                 raise RecruitmentServiceError(
                     "You are not assigned to this recruitment application.",
                     code="application_access_denied",
@@ -646,34 +1539,9 @@ class RecruitmentService:
             ]
 
         if not self._has(HR_ROLES):
-            job_ids = [
-                str(item["_id"])
-                for item in self._c(JOB_OPENINGS).find(
-                    self._q({
-                        "$or": [
-                            {"recruiter_user_id": self.actor_id},
-                            {"hiring_manager_user_id": self.actor_id},
-                            {"panel_user_ids": self.actor_id},
-                        ]
-                    }),
-                    {"_id": 1},
-                )
-            ]
-            interview_application_ids = [
-                item.get("application_id")
-                for item in self._c(INTERVIEWS).find(
-                    self._q({"interviewer_user_ids": self.actor_id}),
-                    {"application_id": 1},
-                )
-                if item.get("application_id")
-            ]
-            access_clause = {
-                "$or": [
-                    {"job_opening_id": {"$in": job_ids}},
-                    {"_id": {"$in": [as_object_id(v, "application id") for v in interview_application_ids]}},
-                ]
-            }
-            query.setdefault("$and", []).append(access_clause)
+            access_query = self._candidate_access_application_query()
+            access_clause = access_query.pop("$or")
+            query.setdefault("$and", []).append({"$or": access_clause})
         return self._paged(APPLICATIONS, query, page, page_size)
 
     def update_screening(self, application_id, payload):

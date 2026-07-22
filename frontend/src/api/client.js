@@ -2292,6 +2292,29 @@ export function getPublicRecruitmentJobs(companyKey, params = {}) {
   );
 }
 
+export function previewPublicRecruitmentResume(
+  companyKey,
+  jobSlug,
+  resumeFile,
+  payload = {},
+) {
+  if (!resumeFile) {
+    throw new Error('Resume file is required.');
+  }
+
+  return api(
+    `${RECRUITMENT_API_PREFIX}/public/${recruitmentId(
+      companyKey,
+      'Company key',
+    )}/jobs/${recruitmentId(jobSlug, 'Job slug')}/resume-preview`,
+    {
+      method: 'POST',
+      body: recruitmentFormData(payload, resumeFile, 'resume'),
+      timeoutMs: 60000,
+    },
+  );
+}
+
 export function getPublicRecruitmentJob(companyKey, jobSlug) {
   return recruitmentJson(
     `/public/${recruitmentId(
