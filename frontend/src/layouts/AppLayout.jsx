@@ -309,19 +309,19 @@ function moduleGroup(key) {
     return 'Reports';
   }
 
-  if (['payroll_runs', 'payslips', 'expenses'].includes(key)) {
-    return 'Payroll & Finance';
-  }
+if (['payroll_runs', 'payslips'].includes(key)) {
+  return 'Payroll & Finance';
+}
 
-  if (
-    [
-      'recruitment',
-      'trainings',
-      'performance_reviews',
-    ].includes(key)
-  ) {
-    return 'Talent & Performance';
-  }
+if (
+  [
+    'job_openings',
+    'candidates',
+    'performance_reviews',
+  ].includes(key)
+) {
+  return 'Talent & Performance';
+}
 
   if (
     [

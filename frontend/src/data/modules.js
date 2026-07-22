@@ -4,7 +4,6 @@ import {
   CalendarDays,
   Wallet,
   Briefcase,
-  GraduationCap,
   BarChart3,
   Receipt,
   Laptop,
@@ -747,32 +746,11 @@ export const coreModules = [
   ],
 
   [
-    'trainings',
-    'Training',
-    GraduationCap,
-    'Training plan and feedback.',
-    TEAM_ROLES,
-  ],
-  [
     'performance_reviews',
     'Performance',
     BarChart3,
     'Weekly performance rating page for Team Leaders and Reporting Officers with auto monthly/yearly analytics.',
     PERFORMANCE_REVIEW_ROLES,
-  ],
-  [
-    'expenses',
-    'Expenses',
-    Receipt,
-    'Claims and approvals.',
-    [
-      'super_admin',
-      'admin',
-      'finance',
-      'accounts_finance',
-      ...CAPABILITY_ROLES,
-      BASE_EMPLOYEE_ROLE,
-    ],
   ],
   [
     'assets',
