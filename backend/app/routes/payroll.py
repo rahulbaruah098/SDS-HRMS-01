@@ -7085,6 +7085,58 @@ def _payslip_pdf_context(
     current_employee: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     employee = dict(payslip.get("employee_info") or {})
+
+    # Bank details are verified and frozen only when the payroll is prepared
+    # for locking. The original employee_info snapshot is created during Draft
+    # calculation and may therefore contain blank or outdated bank fields.
+    # Prefer the immutable payroll bank snapshot for the generated payslip.
+    bank_snapshot = dict(
+        payslip.get("bank_details_snapshot")
+        or payslip.get("bank_snapshot")
+        or {}
+    )
+
+    account_number = safe_str(
+        bank_snapshot.get("account_number")
+        or bank_snapshot.get("accountNumber")
+        or bank_snapshot.get("masked_account_number")
+        or employee.get("account_number")
+        or employee.get("bank_account_number")
+        or employee.get("account_no")
+    )
+    ifsc_code = safe_str(
+        bank_snapshot.get("ifsc_code")
+        or bank_snapshot.get("ifscCode")
+        or employee.get("ifsc_code")
+        or employee.get("ifsc")
+    )
+    bank_name = safe_str(
+        bank_snapshot.get("bank_name")
+        or bank_snapshot.get("bankName")
+        or employee.get("bank_name")
+    )
+    account_holder_name = safe_str(
+        bank_snapshot.get("account_holder_name")
+        or bank_snapshot.get("accountHolderName")
+        or employee.get("account_holder_name")
+    )
+    branch_name = safe_str(
+        bank_snapshot.get("branch_name")
+        or bank_snapshot.get("branchName")
+        or employee.get("branch_name")
+    )
+
+    if account_number:
+        employee["account_number"] = account_number
+    if ifsc_code:
+        employee["ifsc_code"] = ifsc_code
+    if bank_name:
+        employee["bank_name"] = bank_name
+    if account_holder_name:
+        employee["account_holder_name"] = account_holder_name
+    if branch_name:
+        employee["branch_name"] = branch_name
+
     attendance = dict(payslip.get("attendance") or {})
     totals = dict(payslip.get("totals") or {})
     earnings = list(payslip.get("earnings") or [])
