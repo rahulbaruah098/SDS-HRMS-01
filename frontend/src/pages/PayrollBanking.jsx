@@ -287,6 +287,10 @@ function exportTone(value) {
   return 'warning';
 }
 
+function exportStatusRequiresReference(value) {
+  return ['accepted', 'processed'].includes(normalizeKey(value));
+}
+
 function emptyBankForm() {
   return {
     employee_id: '',
@@ -1469,6 +1473,20 @@ export default function PayrollBanking({ user = {} }) {
       return;
     }
 
+    const normalizedStatus = normalizeKey(exportStatusForm.status);
+    const normalizedReference = exportStatusForm.reference.trim();
+
+    if (
+      exportStatusRequiresReference(normalizedStatus) &&
+      !normalizedReference
+    ) {
+      alerts.error(
+        'Enter a UTR, transaction reference, or bank batch reference before marking this export as accepted or processed.',
+        'Bank Reference Required',
+      );
+      return;
+    }
+
     try {
       setActionLoading(`export-status-${id}`);
 
@@ -1479,7 +1497,7 @@ export default function PayrollBanking({ user = {} }) {
           body: JSON.stringify({
             ...tenantParams(),
             status: exportStatusForm.status,
-            reference: exportStatusForm.reference.trim(),
+            reference: normalizedReference,
             note: exportStatusForm.note.trim(),
           }),
         },
@@ -3955,6 +3973,9 @@ export default function PayrollBanking({ user = {} }) {
                   <div className="paybank-field">
                     <label htmlFor="paybank-bank-reference">
                       Bank reference
+                      {exportStatusRequiresReference(exportStatusForm.status)
+                        ? ' *'
+                        : ''}
                     </label>
                     <input
                       id="paybank-bank-reference"
@@ -3966,8 +3987,17 @@ export default function PayrollBanking({ user = {} }) {
                           reference: event.target.value,
                         }))
                       }
-                      placeholder="Upload ID, batch ID or bank reference"
+                      placeholder="UTR, transaction reference or bank batch reference"
+                      required={exportStatusRequiresReference(
+                        exportStatusForm.status,
+                      )}
                     />
+                    {exportStatusRequiresReference(exportStatusForm.status) ? (
+                      <small>
+                        Required before the export can be marked accepted or
+                        processed.
+                      </small>
+                    ) : null}
                   </div>
 
                   <div className="paybank-field paybank-field-full">
@@ -4001,7 +4031,11 @@ export default function PayrollBanking({ user = {} }) {
                 <button
                   type="submit"
                   className="paybank-btn paybank-btn-primary"
-                  disabled={Boolean(actionLoading)}
+                  disabled={
+                    Boolean(actionLoading) ||
+                    (exportStatusRequiresReference(exportStatusForm.status) &&
+                      !exportStatusForm.reference.trim())
+                  }
                 >
                   {actionLoading ? (
                     <Loader2 size={16} className="spin" />

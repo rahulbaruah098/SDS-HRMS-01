@@ -16,11 +16,24 @@ ATTENDANCE_SUMMARY_COLLECTION = "attendance_summaries"
 
 FINALIZED_PAYROLL_STATUSES = {
     "hr_reviewed",
-    "reviewed",
     "finance_approved",
-    "approved",
     "locked",
     "disbursed",
+}
+
+# Keep attendance synchronization aligned with the canonical payroll workflow.
+# Legacy values are normalized at read time; new payroll records are written by
+# payroll.py using the canonical values above.
+PAYROLL_STATUS_ALIASES = {
+    "pending_hr_review": "draft",
+    "hr_review_pending": "draft",
+    "reviewed": "hr_reviewed",
+    "pending_finance_approval": "hr_reviewed",
+    "finance_approval_pending": "hr_reviewed",
+    "approved": "finance_approved",
+    "finance_approved": "finance_approved",
+    "locked": "locked",
+    "disbursed": "disbursed",
 }
 
 ACTIVE_EMPLOYEE_STATUSES = {
@@ -219,8 +232,10 @@ def is_second_or_fourth_saturday(check_date: date) -> bool:
 def normalize_employee_state(value: Any) -> str:
     state = safe_str(value)
 
+    # Missing state must remain missing. Defaulting it to Assam can apply the
+    # wrong holiday calendar and, later, the wrong Professional Tax rules.
     if not state:
-        return "Assam(HO)"
+        return ""
 
     lowered = state.lower()
 
@@ -241,7 +256,6 @@ def employee_state(employee: dict[str, Any]) -> str:
         employee.get("state")
         or employee.get("branch")
         or employee.get("work_state")
-        or "Assam(HO)"
     )
 
 
@@ -415,10 +429,23 @@ def working_dates_for_employee(
     employee: dict[str, Any],
     period: PayrollPeriod,
 ) -> tuple[list[str], dict[str, list[str]]]:
+    state = employee_state(employee)
+
+    if not state:
+        raise PayrollAttendanceError(
+            "Payroll state is missing for this employee.",
+            code="employee_payroll_state_missing",
+            details={
+                "employee_id": canonical_employee_id(employee),
+                "employee_code": employee_code(employee),
+                "employee_name": employee_name(employee),
+            },
+        )
+
     manual_holidays = _manual_holiday_dates(
         db,
         tenant_id,
-        employee_state(employee),
+        state,
         period,
     )
 
@@ -756,34 +783,221 @@ def _employment_period_warnings(
     return warnings
 
 
+def canonical_payroll_status(value: Any) -> str:
+    status = normalize_key(value or "draft") or "draft"
+    return PAYROLL_STATUS_ALIASES.get(status, status)
+
+
+def _collection(db: Any, name: str) -> Any:
+    try:
+        return db[name]
+    except (KeyError, TypeError, AttributeError):
+        return getattr(db, name)
+
+
+def _run_identifier(run: dict[str, Any] | None) -> str:
+    if not run:
+        return ""
+    return safe_str(run.get("_id") or run.get("id") or run.get("run_id"))
+
+
+def _employee_id_values(values: Iterable[Any]) -> set[str]:
+    return {safe_str(value) for value in values if safe_str(value)}
+
+
+def _employee_query_values(employee_ids: Iterable[str]) -> list[Any]:
+    values: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+
+    for employee_id in employee_ids:
+        text = safe_str(employee_id)
+        if not text:
+            continue
+
+        key = ("str", text)
+        if key not in seen:
+            seen.add(key)
+            values.append(text)
+
+        parsed = object_id(text)
+        if parsed is not None:
+            object_key = ("object_id", str(parsed))
+            if object_key not in seen:
+                seen.add(object_key)
+                values.append(parsed)
+
+    return values
+
+
+def _blocked_employee_detail(
+    employee_id: str,
+    *,
+    run: dict[str, Any] | None,
+    status: str,
+    source: str,
+    payslip_id: str = "",
+) -> dict[str, Any]:
+    normalized_status = canonical_payroll_status(status)
+    return {
+        "employee_id": employee_id,
+        "status": normalized_status,
+        "run_id": _run_identifier(run),
+        "run_code": safe_str((run or {}).get("run_code")),
+        "payslip_id": payslip_id,
+        "source": source,
+        "eligibility": "already_processed",
+        "reason": (
+            "Attendance synchronization is blocked because this employee's "
+            "payroll has already entered review, approval, lock, or disbursement."
+        ),
+    }
+
+
 def assert_payroll_period_is_editable(
     db: Any,
     tenant_id: str,
     period_key: str,
-) -> None:
-    run = db.payroll_runs.find_one({
+    employee_ids: Iterable[Any] | None = None,
+) -> dict[str, Any] | None:
+    """Validate payroll attendance editability.
+
+    With no employee IDs this preserves the legacy period-level guard used by
+    older callers. With employee IDs it evaluates each employee separately and
+    returns eligible and blocked groups, allowing another employee to be synced
+    in the same month even when a colleague is already finalized.
+    """
+    tenant_id = safe_str(tenant_id)
+    period_key = safe_str(period_key)
+    selected_ids = _employee_id_values(employee_ids or [])
+    payroll_runs = _collection(db, "payroll_runs")
+
+    if not selected_ids:
+        run = payroll_runs.find_one({
+            "tenant_id": tenant_id,
+            "period_key": period_key,
+            "is_deleted": {"$ne": True},
+        })
+
+        if not run:
+            return None
+
+        status = canonical_payroll_status(
+            run.get("status") or run.get("workflow_stage")
+        )
+
+        if truthy(run.get("is_locked")) or status in FINALIZED_PAYROLL_STATUSES:
+            raise PayrollAttendanceError(
+                "Attendance cannot be synchronized because this payroll run has "
+                "already entered review, approval, lock, or disbursement.",
+                status_code=409,
+                code="payroll_period_not_editable",
+                details={
+                    "run_id": _run_identifier(run),
+                    "status": status,
+                    "period_key": period_key,
+                },
+            )
+
+        return None
+
+    runs = list(payroll_runs.find({
         "tenant_id": tenant_id,
         "period_key": period_key,
         "is_deleted": {"$ne": True},
-    })
+    }))
+    runs_by_id = {
+        _run_identifier(run): run
+        for run in runs
+        if _run_identifier(run)
+    }
+    blocked_by_employee: dict[str, dict[str, Any]] = {}
 
-    if not run:
-        return
-
-    status = normalize_key(run.get("status"))
-
-    if truthy(run.get("is_locked")) or status in FINALIZED_PAYROLL_STATUSES:
-        raise PayrollAttendanceError(
-            "Attendance cannot be synchronized because this payroll run has "
-            "already entered review, approval, lock, or disbursement.",
-            status_code=409,
-            code="payroll_period_not_editable",
-            details={
-                "run_id": safe_str(run.get("_id")),
-                "status": status,
-                "period_key": period_key,
-            },
+    # First inspect employee IDs stored directly on payroll runs. This also
+    # supports older data where a payslip may not have been persisted correctly.
+    for run in runs:
+        status = canonical_payroll_status(
+            run.get("status") or run.get("workflow_stage")
         )
+        finalized = truthy(run.get("is_locked")) or status in FINALIZED_PAYROLL_STATUSES
+        if not finalized:
+            continue
+
+        run_employee_ids = _employee_id_values(run.get("employee_ids") or [])
+        for employee_id in selected_ids.intersection(run_employee_ids):
+            blocked_by_employee[employee_id] = _blocked_employee_detail(
+                employee_id,
+                run=run,
+                status=status,
+                source="payroll_run",
+            )
+
+    # Payslips are authoritative for employee membership when run.employee_ids
+    # is missing or incomplete. Tenant and period remain mandatory filters.
+    payslips_collection = _collection(db, "payslips")
+    payslips = list(payslips_collection.find({
+        "tenant_id": tenant_id,
+        "period_key": period_key,
+        "employee_id": {"$in": _employee_query_values(selected_ids)},
+        "is_deleted": {"$ne": True},
+    }))
+
+    status_priority = {
+        "draft": 10,
+        "hr_reviewed": 20,
+        "finance_approved": 30,
+        "locked": 40,
+        "disbursed": 50,
+    }
+
+    for payslip in payslips:
+        employee_id = safe_str(payslip.get("employee_id"))
+        if employee_id not in selected_ids:
+            continue
+
+        run_id = safe_str(payslip.get("run_id") or payslip.get("payroll_run_id"))
+        run = runs_by_id.get(run_id)
+        status = canonical_payroll_status(
+            payslip.get("status")
+            or payslip.get("workflow_stage")
+            or (run or {}).get("status")
+            or (run or {}).get("workflow_stage")
+        )
+        finalized = (
+            truthy(payslip.get("is_locked"))
+            or truthy((run or {}).get("is_locked"))
+            or status in FINALIZED_PAYROLL_STATUSES
+        )
+        if not finalized:
+            continue
+
+        existing = blocked_by_employee.get(employee_id)
+        existing_priority = status_priority.get(
+            canonical_payroll_status((existing or {}).get("status")),
+            0,
+        )
+        if existing and existing_priority >= status_priority.get(status, 0):
+            continue
+
+        blocked_by_employee[employee_id] = _blocked_employee_detail(
+            employee_id,
+            run=run,
+            status=status,
+            source="payslip",
+            payslip_id=safe_str(payslip.get("_id")),
+        )
+
+    blocked = [
+        blocked_by_employee[employee_id]
+        for employee_id in sorted(blocked_by_employee)
+    ]
+    eligible_employee_ids = sorted(selected_ids.difference(blocked_by_employee))
+
+    return {
+        "period_key": period_key,
+        "eligible_employee_ids": eligible_employee_ids,
+        "blocked_employee_ids": [item["employee_id"] for item in blocked],
+        "blocked": blocked,
+    }
 
 
 def build_attendance_summary(
@@ -991,12 +1205,6 @@ def sync_attendance_summaries(
         year=year,
     )
 
-    assert_payroll_period_is_editable(
-        db,
-        tenant_id,
-        payroll_period.period_key,
-    )
-
     employees = list_payroll_employees(
         db,
         tenant_id,
@@ -1010,11 +1218,83 @@ def sync_attendance_summaries(
             code="no_payroll_employees",
         )
 
+    employees_by_id = {
+        canonical_employee_id(employee): employee
+        for employee in employees
+        if canonical_employee_id(employee)
+    }
+    editability = assert_payroll_period_is_editable(
+        db,
+        tenant_id,
+        payroll_period.period_key,
+        employees_by_id.keys(),
+    )
+
+    # A mocked or legacy caller may not return the new classification payload.
+    # In that case all resolved employees remain eligible, preserving backwards
+    # compatibility while the application routes adopt employee-level checks.
+    if isinstance(editability, dict):
+        eligible_ids = {
+            safe_str(value)
+            for value in editability.get("eligible_employee_ids") or []
+            if safe_str(value)
+        }
+        blocked_rows = list(editability.get("blocked") or [])
+    else:
+        eligible_ids = set(employees_by_id)
+        blocked_rows = []
+
+    blocked_by_id = {
+        safe_str(row.get("employee_id")): row
+        for row in blocked_rows
+        if safe_str(row.get("employee_id"))
+    }
+    eligible_employees = [
+        employee
+        for employee in employees
+        if canonical_employee_id(employee) in eligible_ids
+        and canonical_employee_id(employee) not in blocked_by_id
+    ]
+
+    blocked: list[dict[str, Any]] = []
+    for employee_id, row in blocked_by_id.items():
+        employee = employees_by_id.get(employee_id) or {}
+        blocked.append({
+            **row,
+            "employee_id": employee_id,
+            "employee_code": employee_code(employee),
+            "employee_name": employee_name(employee),
+            "message": row.get("reason") or (
+                "Attendance synchronization is not allowed for this employee."
+            ),
+            "code": "payroll_employee_not_editable",
+            "details": {
+                "period_key": payroll_period.period_key,
+                "run_id": safe_str(row.get("run_id")),
+                "run_code": safe_str(row.get("run_code")),
+                "status": canonical_payroll_status(row.get("status")),
+            },
+        })
+
+    if not eligible_employees:
+        raise PayrollAttendanceError(
+            "Attendance cannot be synchronized because all selected employees "
+            "have already entered payroll review, approval, lock, or disbursement.",
+            status_code=409,
+            code="payroll_employees_not_editable",
+            details={
+                "period_key": payroll_period.period_key,
+                "blocked_employee_ids": sorted(blocked_by_id),
+                "blocked": blocked,
+            },
+        )
+
     synced_at = datetime.now(UTC)
     items: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = list(blocked)
+    processing_failures = 0
 
-    for employee in employees:
+    for employee in eligible_employees:
         try:
             summary = build_attendance_summary(
                 db,
@@ -1031,6 +1311,7 @@ def sync_attendance_summaries(
 
             items.append(summary)
         except PayrollAttendanceError as exc:
+            processing_failures += 1
             failures.append({
                 "employee_id": canonical_employee_id(employee),
                 "employee_code": employee_code(employee),
@@ -1040,6 +1321,7 @@ def sync_attendance_summaries(
                 "details": exc.details,
             })
         except Exception as exc:  # Preserve batch progress but report exact employee.
+            processing_failures += 1
             failures.append({
                 "employee_id": canonical_employee_id(employee),
                 "employee_code": employee_code(employee),
@@ -1050,8 +1332,11 @@ def sync_attendance_summaries(
 
     totals = {
         "employees_requested": len(employees),
+        "employees_eligible": len(eligible_employees),
+        "employees_blocked": len(blocked),
         "employees_synced": len(items),
-        "employees_failed": len(failures),
+        "employees_failed": processing_failures,
+        "employees_skipped": len(blocked) + processing_failures,
         "total_calendar_days": sum(
             int(item.get("total_days", 0) or 0)
             for item in items
@@ -1091,6 +1376,12 @@ def sync_attendance_summaries(
         "period_end": payroll_period.end_date.isoformat(),
         "persisted": bool(persist),
         "items": items,
+        "eligible_employee_ids": [
+            canonical_employee_id(employee) for employee in eligible_employees
+        ],
+        "blocked_employee_ids": sorted(blocked_by_id),
+        "blocked": blocked,
+        "skipped": failures,
         "failures": failures,
         "totals": totals,
         "synced_at": synced_at,

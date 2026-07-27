@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import calendar
-import os
-from uuid import uuid4
+import re
 from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
@@ -10,9 +9,8 @@ from typing import Any, Iterable, Mapping
 
 from bson import ObjectId
 from pymongo import ReturnDocument
-from flask import Blueprint, Response, current_app, g, jsonify, request, send_from_directory
+from flask import Blueprint, Response, g, jsonify, request
 from jinja2 import Environment
-from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
@@ -305,20 +303,27 @@ def _prepare_salary_structure_payload(
     prepared["employee_code"] = _employee_code(employee)
     prepared["employee_name"] = _employee_name(employee)
 
-    # Use an explicitly stored two-letter employee state code only when the
-    # request did not provide one. State names such as "Assam(HO)" are not
-    # silently converted because payroll statutory rules must not be guessed.
+    # Payroll state must be explicit. State names such as "Assam(HO)" are not
+    # silently converted and a missing value is never defaulted to Assam/ALL.
     if not safe_str(prepared.get("state_code")):
         employee_state_code = safe_str(
-            employee.get("state_code")
+            employee.get("payroll_state_code")
             or employee.get("work_state_code")
-            or employee.get("payroll_state_code")
+            or employee.get("state_code")
         ).upper()
 
         if employee_state_code == "ALL" or len(employee_state_code) == 2:
             prepared["state_code"] = employee_state_code
+        elif employee_state_code:
+            raise PayrollConfigError(
+                "Payroll state must be stored as a two-letter state code for this employee.",
+                code="invalid_employee_payroll_state",
+            )
         else:
-            prepared["state_code"] = "ALL"
+            raise PayrollConfigError(
+                "Payroll state is missing for this employee.",
+                code="employee_payroll_state_missing",
+            )
 
     return prepared
 
@@ -724,6 +729,35 @@ FINAL_PAYROLL_STATUSES = {
     "disbursed",
 }
 
+# Legacy and transitional values are normalized at read time. New payroll
+# records are always written with the canonical workflow values above.
+PAYROLL_STATUS_ALIASES = {
+    "pending_hr_review": "draft",
+    "hr_review_pending": "draft",
+    "reviewed": "hr_reviewed",
+    "pending_finance_approval": "hr_reviewed",
+    "finance_approval_pending": "hr_reviewed",
+    "approved": "finance_approved",
+    "finance_approved": "finance_approved",
+    "locked": "locked",
+    "disbursed": "disbursed",
+}
+
+
+def _canonical_payroll_status(value: Any) -> str:
+    normalized = _normalize_key(value or "draft") or "draft"
+    return PAYROLL_STATUS_ALIASES.get(normalized, normalized)
+
+
+def _payroll_run_is_editable(run: Mapping[str, Any] | None) -> bool:
+    if not run:
+        return False
+    return (
+        _canonical_payroll_status(run.get("status") or run.get("workflow_stage"))
+        == "draft"
+        and not _truthy(run.get("is_locked"))
+    )
+
 PAYROLL_LOAN_ACCESS_ROLES = (
     "super_admin",
     "admin",
@@ -1034,20 +1068,28 @@ def _sum_numbers(items: Iterable[Mapping[str, Any]], key: str) -> int | float:
 
 
 def _employee_state_code(employee: Mapping[str, Any], structure: Mapping[str, Any]) -> str:
-    candidate = safe_str(
-        structure.get("state_code")
-        or employee.get("payroll_state_code")
-        or employee.get("work_state_code")
-        or employee.get("state_code")
-        or "ALL"
-    ).upper()
+    candidates = (
+        structure.get("state_code"),
+        employee.get("payroll_state_code"),
+        employee.get("work_state_code"),
+        employee.get("state_code"),
+    )
 
-    if candidate == "ALL" or len(candidate) == 2:
-        return candidate
+    for value in candidates:
+        candidate = safe_str(value).upper()
+        if not candidate:
+            continue
+        if candidate == "ALL" or len(candidate) == 2:
+            return candidate
+        raise PayrollConfigError(
+            "Payroll state must be stored as a two-letter state code for this employee.",
+            code="invalid_employee_payroll_state",
+        )
 
-    # Statutory state names are deliberately not guessed. The national/default
-    # configuration is used until HR stores a valid two-letter state code.
-    return "ALL"
+    raise PayrollConfigError(
+        "Payroll state is missing for this employee.",
+        code="employee_payroll_state_missing",
+    )
 
 
 def _assert_no_mid_month_revision(
@@ -1138,6 +1180,214 @@ def _selected_employees(
             ("employee_code", 1),
         ])
     )
+
+
+def _payroll_run_identifier(run: Mapping[str, Any] | None) -> str:
+    if not run:
+        return ""
+    return safe_str(run.get("_id") or run.get("id") or run.get("run_id"))
+
+
+def _find_calculation_run(
+    db: Any,
+    *,
+    tenant_id: str,
+    period_key: str,
+    run_reference: Any,
+) -> dict[str, Any] | None:
+    reference = safe_str(run_reference)
+    if not reference:
+        return None
+
+    identity_filters: list[dict[str, Any]] = [
+        {"run_id": reference},
+        {"id": reference},
+    ]
+    object_id = _object_id(reference)
+    if object_id:
+        identity_filters.insert(0, {"_id": object_id})
+
+    run = db.payroll_runs.find_one({
+        "tenant_id": tenant_id,
+        "period_key": period_key,
+        "is_deleted": {"$ne": True},
+        "$or": identity_filters,
+    })
+
+    if not run:
+        raise PayrollConfigError(
+            "The selected Draft payroll run was not found for this company and month.",
+            status_code=404,
+            code="payroll_run_not_found",
+        )
+
+    if not _payroll_run_is_editable(run):
+        raise PayrollConfigError(
+            "The selected payroll run has already entered review, approval, lock, or "
+            "disbursement and cannot be recalculated.",
+            status_code=409,
+            code="payroll_run_not_recalculable",
+        )
+
+    return run
+
+
+def _period_payroll_records(
+    db: Any,
+    *,
+    tenant_id: str,
+    period_key: str,
+    employee_ids: Iterable[str],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    selected_ids = {safe_str(value) for value in employee_ids if safe_str(value)}
+    records: dict[str, list[dict[str, Any]]] = {
+        employee_id: [] for employee_id in selected_ids
+    }
+
+    runs = list(db.payroll_runs.find({
+        "tenant_id": tenant_id,
+        "period_key": period_key,
+        "is_deleted": {"$ne": True},
+    }))
+    runs_by_id = {
+        _payroll_run_identifier(run): run
+        for run in runs
+        if _payroll_run_identifier(run)
+    }
+
+    payslips = list(db.payslips.find({
+        "tenant_id": tenant_id,
+        "period_key": period_key,
+        "employee_id": {"$in": list(selected_ids)},
+        "is_deleted": {"$ne": True},
+    })) if selected_ids else []
+
+    for payslip in payslips:
+        employee_id = safe_str(payslip.get("employee_id"))
+        if employee_id not in records:
+            continue
+
+        run_id = safe_str(payslip.get("run_id") or payslip.get("payroll_run_id"))
+        run = runs_by_id.get(run_id) or {}
+        status = _canonical_payroll_status(
+            payslip.get("status")
+            or payslip.get("workflow_stage")
+            or run.get("status")
+            or run.get("workflow_stage")
+        )
+        records[employee_id].append({
+            "source": "payslip",
+            "run_id": run_id,
+            "run_code": safe_str(run.get("run_code")),
+            "status": status,
+            "is_editable": (
+                status == "draft"
+                and not _truthy(payslip.get("is_locked"))
+                and _payroll_run_is_editable(run)
+            ),
+            "payslip_id": safe_str(payslip.get("_id")),
+        })
+
+    # Legacy or partially migrated runs may contain employee_ids without an
+    # active payslip. They still count for duplicate employee-month protection.
+    for run_id, run in runs_by_id.items():
+        run_status = _canonical_payroll_status(
+            run.get("status") or run.get("workflow_stage")
+        )
+        run_editable = _payroll_run_is_editable(run)
+        for value in run.get("employee_ids") or []:
+            employee_id = safe_str(value)
+            if employee_id not in records:
+                continue
+            if any(item.get("run_id") == run_id for item in records[employee_id]):
+                continue
+            records[employee_id].append({
+                "source": "payroll_run",
+                "run_id": run_id,
+                "run_code": safe_str(run.get("run_code")),
+                "status": run_status,
+                "is_editable": run_editable,
+                "payslip_id": "",
+            })
+
+    return records, runs_by_id
+
+
+def _infer_editable_calculation_run(
+    records: Mapping[str, list[Mapping[str, Any]]],
+    runs_by_id: Mapping[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    editable_run_ids = {
+        safe_str(record.get("run_id"))
+        for employee_records in records.values()
+        for record in employee_records
+        if record.get("is_editable") and safe_str(record.get("run_id"))
+    }
+
+    if len(editable_run_ids) != 1:
+        return None
+
+    return runs_by_id.get(next(iter(editable_run_ids)))
+
+
+def _classify_payroll_employees(
+    employees: Iterable[dict[str, Any]],
+    *,
+    records: Mapping[str, list[Mapping[str, Any]]],
+    editable_run: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    editable_run_id = _payroll_run_identifier(editable_run)
+    eligible: list[dict[str, Any]] = []
+    already_processed: list[dict[str, Any]] = []
+    status_priority = {
+        "draft": 10,
+        "hr_reviewed": 20,
+        "finance_approved": 30,
+        "locked": 40,
+        "disbursed": 50,
+    }
+
+    for employee in employees:
+        employee_id = _canonical_employee_id(employee)
+        employee_records = list(records.get(employee_id) or [])
+
+        if not employee_records:
+            eligible.append(employee)
+            continue
+
+        belongs_only_to_editable_run = bool(editable_run_id) and all(
+            safe_str(record.get("run_id")) == editable_run_id
+            and bool(record.get("is_editable"))
+            for record in employee_records
+        )
+        if belongs_only_to_editable_run:
+            eligible.append(employee)
+            continue
+
+        representative = max(
+            employee_records,
+            key=lambda record: status_priority.get(
+                _canonical_payroll_status(record.get("status")),
+                0,
+            ),
+        )
+        status = _canonical_payroll_status(representative.get("status"))
+        already_processed.append({
+            "employee_id": employee_id,
+            "employee_code": _employee_code(employee),
+            "employee_name": _employee_name(employee),
+            "status": status,
+            "run_id": safe_str(representative.get("run_id")),
+            "run_code": safe_str(representative.get("run_code")),
+            "eligibility": "already_processed",
+            "reason": (
+                "Employee is already present in another Draft payroll run for this month."
+                if status == "draft"
+                else "Employee payroll has already been processed for this month."
+            ),
+        })
+
+    return eligible, already_processed
 
 
 def _rows_by_employee(rows: Any) -> list[dict[str, Any]]:
@@ -1352,6 +1602,152 @@ def _apply_reimbursements_to_calculation(
     return result
 
 
+def _branding_logo_source(record: Mapping[str, Any] | None) -> str:
+    record = record or {}
+    branding = record.get("branding") or {}
+    if not isinstance(branding, Mapping):
+        branding = {}
+
+    candidates = (
+        record.get("logo_data_uri"),
+        record.get("company_logo_data_uri"),
+        record.get("organisation_logo_data_uri"),
+        record.get("organization_logo_data_uri"),
+        record.get("company_logo"),
+        record.get("company_logo_url"),
+        record.get("organisation_logo"),
+        record.get("organisation_logo_url"),
+        record.get("organization_logo"),
+        record.get("organization_logo_url"),
+        record.get("logo"),
+        record.get("logo_url"),
+        branding.get("company_logo"),
+        branding.get("company_logo_url"),
+        branding.get("organisation_logo"),
+        branding.get("organisation_logo_url"),
+        branding.get("organization_logo"),
+        branding.get("organization_logo_url"),
+        branding.get("logo"),
+        branding.get("logo_url"),
+    )
+
+    for value in candidates:
+        logo = safe_str(value)
+        if logo and (
+            logo.startswith("data:image/")
+            or logo.startswith("http://")
+            or logo.startswith("https://")
+            or logo.startswith("/")
+        ):
+            return logo
+
+    return ""
+
+
+def _employee_organisation_snapshot(
+    db: Any,
+    tenant_id: str,
+    employee: Mapping[str, Any],
+) -> dict[str, Any]:
+    organisation_id = safe_str(
+        employee.get("organisation_id")
+        or employee.get("organization_id")
+        or employee.get("entity_id")
+    )
+    organisation_code = safe_str(
+        employee.get("organisation_code")
+        or employee.get("organization_code")
+        or employee.get("entity_code")
+    ).upper()
+    organisation_name = safe_str(
+        employee.get("organisation")
+        or employee.get("organization")
+        or employee.get("organisation_name")
+        or employee.get("organization_name")
+        or employee.get("entity_name")
+    )
+
+    identity_filters: list[dict[str, Any]] = []
+    object_id = _object_id(organisation_id)
+    if object_id:
+        identity_filters.append({"_id": object_id})
+    if organisation_id:
+        identity_filters.extend([
+            {"_id": organisation_id},
+            {"id": organisation_id},
+            {"organisation_id": organisation_id},
+            {"organization_id": organisation_id},
+        ])
+    if organisation_code:
+        code_pattern = f"^{re.escape(organisation_code)}$"
+        identity_filters.extend([
+            {"code": {"$regex": code_pattern, "$options": "i"}},
+            {"organisation_code": {"$regex": code_pattern, "$options": "i"}},
+            {"organization_code": {"$regex": code_pattern, "$options": "i"}},
+        ])
+    if organisation_name:
+        name_pattern = f"^{re.escape(organisation_name)}$"
+        identity_filters.extend([
+            {"name": {"$regex": name_pattern, "$options": "i"}},
+            {"organisation_name": {"$regex": name_pattern, "$options": "i"}},
+            {"organization_name": {"$regex": name_pattern, "$options": "i"}},
+        ])
+
+    record: dict[str, Any] = {}
+    if identity_filters:
+        record = db.organisations.find_one({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": identity_filters,
+        }) or {}
+
+    resolved_name = safe_str(
+        record.get("name")
+        or record.get("organisation_name")
+        or record.get("organization_name")
+        or organisation_name
+    )
+    resolved_code = safe_str(
+        record.get("code")
+        or record.get("organisation_code")
+        or record.get("organization_code")
+        or organisation_code
+    ).upper()
+    resolved_id = safe_str(
+        record.get("_id")
+        or record.get("id")
+        or record.get("organisation_id")
+        or record.get("organization_id")
+        or organisation_id
+    )
+
+    if not (resolved_id or resolved_code or resolved_name):
+        return {}
+
+    return {
+        "organisation_id": resolved_id,
+        "organization_id": resolved_id,
+        "organisation_code": resolved_code,
+        "organization_code": resolved_code,
+        "name": resolved_name,
+        "organisation_name": resolved_name,
+        "organization_name": resolved_name,
+        "address": _format_address(
+            record.get("address")
+            or record.get("registered_address")
+            or record.get("office_address")
+        ),
+        "email": safe_str(record.get("email") or record.get("official_email")),
+        "phone": safe_str(record.get("phone") or record.get("contact_number")),
+        "website": safe_str(record.get("website") or record.get("website_url")),
+        "cin": safe_str(record.get("cin") or record.get("company_identification_number")),
+        "gstin": safe_str(record.get("gstin") or record.get("gst_number")),
+        "pan": safe_str(record.get("pan") or record.get("pan_number")),
+        "logo_src": _branding_logo_source(record),
+        "record_found": bool(record),
+    }
+
+
 def _bank_details(db: Any, tenant_id: str, employee: Mapping[str, Any]) -> dict[str, Any]:
     employee_id = _canonical_employee_id(employee)
     record = db.bank_details.find_one({
@@ -1382,8 +1778,30 @@ def _bank_details(db: Any, tenant_id: str, employee: Mapping[str, Any]) -> dict[
     }
 
 
-def _employee_snapshot(db: Any, tenant_id: str, employee: Mapping[str, Any]) -> dict[str, Any]:
+def _employee_snapshot(
+    db: Any,
+    tenant_id: str,
+    employee: Mapping[str, Any],
+    organisation: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     bank = _bank_details(db, tenant_id, employee)
+    organisation = dict(
+        organisation or _employee_organisation_snapshot(db, tenant_id, employee)
+    )
+    organisation_id = safe_str(
+        organisation.get("organisation_id")
+        or organisation.get("organization_id")
+    )
+    organisation_name = safe_str(
+        organisation.get("name")
+        or organisation.get("organisation_name")
+        or organisation.get("organization_name")
+    )
+    organisation_code = safe_str(
+        organisation.get("organisation_code")
+        or organisation.get("organization_code")
+    )
+
     return {
         "employee_id": _canonical_employee_id(employee),
         "user_id": safe_str(employee.get("user_id")),
@@ -1393,6 +1811,14 @@ def _employee_snapshot(db: Any, tenant_id: str, employee: Mapping[str, Any]) -> 
         "department": safe_str(employee.get("department") or employee.get("function")),
         "function": safe_str(employee.get("function") or employee.get("department")),
         "designation": safe_str(employee.get("designation")),
+        "organisation_id": organisation_id,
+        "organization_id": organisation_id,
+        "organisation": organisation_name,
+        "organization": organisation_name,
+        "organisation_name": organisation_name,
+        "organization_name": organisation_name,
+        "organisation_code": organisation_code,
+        "organization_code": organisation_code,
         "location": safe_str(
             employee.get("location")
             or employee.get("branch")
@@ -1447,9 +1873,39 @@ def _run_totals(calculations: list[Mapping[str, Any]]) -> dict[str, Any]:
     return {key: _sum_numbers(totals, key) for key in sorted(keys)}
 
 
-def _payroll_run_code(tenant_id: str, period_key: str) -> str:
-    tenant_code = "".join(character for character in tenant_id.upper() if character.isalnum())
-    return f"PAY-{tenant_code[:12] or 'TENANT'}-{period_key.replace('-', '')}"
+def _payroll_run_code(db: Any, tenant_id: str, period_key: str) -> str:
+    tenant_code = "".join(
+        character for character in tenant_id.upper() if character.isalnum()
+    )[:12] or "TENANT"
+    prefix = f"PAY-{tenant_code}-{period_key.replace('-', '')}"
+
+    # The counter gives each payroll run in the same tenant/month its own code.
+    # The collision loop also protects projects upgraded from older versions.
+    for _ in range(100):
+        counter = db.payroll_run_counters.find_one_and_update(
+            {"tenant_id": tenant_id, "period_key": period_key},
+            {
+                "$inc": {"sequence": 1},
+                "$set": {"updated_at": _now()},
+                "$setOnInsert": {"created_at": _now()},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        ) or {}
+        sequence = int(counter.get("sequence") or 1)
+        run_code = f"{prefix}-{sequence:03d}"
+        if not db.payroll_runs.find_one({
+            "tenant_id": tenant_id,
+            "run_code": run_code,
+            "is_deleted": {"$ne": True},
+        }):
+            return run_code
+
+    raise PayrollConfigError(
+        "Unable to generate a unique payroll run code.",
+        status_code=409,
+        code="payroll_run_code_generation_failed",
+    )
 
 
 def _notification_users_for_roles(
@@ -2193,192 +2649,6 @@ def retry_payroll_loan_recoveries(run_id: str):
 
 
 # ------------------------------ Reimbursements -----------------------------
-
-
-PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS = {
-    "pdf",
-    "jpg",
-    "jpeg",
-    "png",
-    "webp",
-}
-PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES = 8 * 1024 * 1024
-
-
-def _reimbursement_receipt_upload_root() -> str:
-    configured = current_app.config.get("UPLOAD_FOLDER")
-
-    if configured:
-        base_folder = os.path.abspath(str(configured))
-    else:
-        base_folder = os.path.abspath(
-            os.path.join(current_app.root_path, "..", "uploads")
-        )
-
-    return os.path.join(base_folder, "payroll_reimbursements")
-
-
-def _reimbursement_receipt_tenant_folder(tenant_id: str) -> str:
-    return secure_filename(safe_str(tenant_id)) or "tenant"
-
-
-def _reimbursement_receipt_extension(filename: str) -> str:
-    safe_name = secure_filename(filename)
-    if "." not in safe_name:
-        return ""
-    return safe_name.rsplit(".", 1)[1].lower()
-
-
-def _save_reimbursement_receipt_upload(
-    *,
-    tenant_id: str,
-) -> dict[str, Any]:
-    uploaded_file = (
-        request.files.get("file")
-        or request.files.get("receipt")
-        or request.files.get("attachment")
-    )
-
-    if not uploaded_file or not safe_str(uploaded_file.filename):
-        raise PayrollReimbursementError(
-            "Select a receipt file to upload.",
-            code="reimbursement_receipt_file_required",
-        )
-
-    original_filename = secure_filename(uploaded_file.filename)
-
-    if not original_filename:
-        raise PayrollReimbursementError(
-            "The selected receipt filename is invalid.",
-            code="invalid_reimbursement_receipt_filename",
-        )
-
-    extension = _reimbursement_receipt_extension(original_filename)
-
-    if extension not in PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS:
-        raise PayrollReimbursementError(
-            "Receipt must be a PDF, JPG, JPEG, PNG, or WEBP file.",
-            code="invalid_reimbursement_receipt_type",
-            details={
-                "allowed_extensions": sorted(
-                    PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS
-                ),
-            },
-        )
-
-    file_bytes = uploaded_file.read(
-        PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES + 1
-    )
-
-    if not file_bytes:
-        raise PayrollReimbursementError(
-            "The selected receipt file is empty.",
-            code="empty_reimbursement_receipt",
-        )
-
-    if len(file_bytes) > PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES:
-        raise PayrollReimbursementError(
-            "Receipt file must be 8 MB or smaller.",
-            code="reimbursement_receipt_too_large",
-            details={
-                "maximum_bytes": PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES,
-            },
-        )
-
-    tenant_folder = _reimbursement_receipt_tenant_folder(tenant_id)
-    upload_directory = os.path.join(
-        _reimbursement_receipt_upload_root(),
-        tenant_folder,
-    )
-    os.makedirs(upload_directory, exist_ok=True)
-
-    stored_filename = secure_filename(
-        f"receipt_{uuid4().hex}_{original_filename}"
-    )
-    stored_path = os.path.join(upload_directory, stored_filename)
-
-    with open(stored_path, "wb") as destination:
-        destination.write(file_bytes)
-
-    reference = (
-        "/api/v1/payroll/reimbursements/receipts/"
-        f"{tenant_folder}/{stored_filename}"
-    )
-
-    return {
-        "reference": reference,
-        "filename": original_filename,
-        "mime_type": safe_str(uploaded_file.mimetype)
-        or "application/octet-stream",
-        "size_bytes": len(file_bytes),
-        "uploaded_at": _now().isoformat(),
-    }
-
-
-@payroll_bp.post("/reimbursements/receipts/upload")
-@tenant_module_required("payroll")
-@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
-def upload_payroll_reimbursement_receipt():
-    tenant_id = _requested_tenant_id(dict(request.form))
-    receipt = _save_reimbursement_receipt_upload(
-        tenant_id=tenant_id,
-    )
-
-    audit(
-        "payroll_reimbursement_receipt_uploaded",
-        "payroll_reimbursement_receipts",
-        receipt.get("reference"),
-        {
-            "tenant_id": tenant_id,
-            "filename": receipt.get("filename"),
-            "mime_type": receipt.get("mime_type"),
-            "size_bytes": receipt.get("size_bytes"),
-        },
-    )
-
-    return _success(
-        "Receipt uploaded successfully.",
-        receipt=receipt,
-    )
-
-
-@payroll_bp.get(
-    "/reimbursements/receipts/<tenant_folder>/<filename>"
-)
-@tenant_module_required("payroll")
-@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
-def serve_payroll_reimbursement_receipt(
-    tenant_folder: str,
-    filename: str,
-):
-    safe_tenant_folder = secure_filename(tenant_folder)
-    safe_filename = secure_filename(filename)
-    current_tenant_folder = _reimbursement_receipt_tenant_folder(
-        _current_tenant_id()
-    )
-
-    if (
-        safe_tenant_folder != current_tenant_folder
-        and "super_admin" not in _current_roles()
-    ):
-        raise PayrollReimbursementError(
-            "You cannot access a receipt from another company.",
-            status_code=403,
-            code="reimbursement_receipt_tenant_forbidden",
-        )
-
-    directory = os.path.join(
-        _reimbursement_receipt_upload_root(),
-        safe_tenant_folder,
-    )
-
-    return send_from_directory(
-        directory,
-        safe_filename,
-        as_attachment=False,
-    )
-
-
 
 
 def _has_reimbursement_management_access() -> bool:
@@ -3813,178 +4083,6 @@ def _payroll_tax_limit(
             "limit must be a valid integer.",
             code="invalid_payroll_tax_limit",
         ) from exc
-
-
-
-PAYROLL_TAX_PROOF_EXTENSIONS = {
-    "pdf",
-    "jpg",
-    "jpeg",
-    "png",
-    "webp",
-}
-PAYROLL_TAX_PROOF_MAX_BYTES = 8 * 1024 * 1024
-
-
-def _tax_proof_upload_root() -> str:
-    configured = current_app.config.get("UPLOAD_FOLDER")
-
-    if configured:
-        base_folder = os.path.abspath(str(configured))
-    else:
-        base_folder = os.path.abspath(
-            os.path.join(current_app.root_path, "..", "uploads")
-        )
-
-    return os.path.join(base_folder, "payroll_tax_proofs")
-
-
-def _tax_proof_tenant_folder(tenant_id: str) -> str:
-    return secure_filename(safe_str(tenant_id)) or "tenant"
-
-
-def _tax_proof_extension(filename: str) -> str:
-    safe_name = secure_filename(filename)
-    if "." not in safe_name:
-        return ""
-    return safe_name.rsplit(".", 1)[1].lower()
-
-
-def _save_tax_proof_upload(*, tenant_id: str) -> dict[str, Any]:
-    uploaded_file = (
-        request.files.get("file")
-        or request.files.get("proof")
-        or request.files.get("attachment")
-    )
-
-    if not uploaded_file or not safe_str(uploaded_file.filename):
-        raise PayrollTaxError(
-            "Select a supporting document to upload.",
-            code="tax_proof_file_required",
-        )
-
-    original_filename = secure_filename(uploaded_file.filename)
-
-    if not original_filename:
-        raise PayrollTaxError(
-            "The selected supporting document filename is invalid.",
-            code="invalid_tax_proof_filename",
-        )
-
-    extension = _tax_proof_extension(original_filename)
-
-    if extension not in PAYROLL_TAX_PROOF_EXTENSIONS:
-        raise PayrollTaxError(
-            "Supporting document must be a PDF, JPG, JPEG, PNG, or WEBP file.",
-            code="invalid_tax_proof_type",
-            details={
-                "allowed_extensions": sorted(PAYROLL_TAX_PROOF_EXTENSIONS),
-            },
-        )
-
-    file_bytes = uploaded_file.read(PAYROLL_TAX_PROOF_MAX_BYTES + 1)
-
-    if not file_bytes:
-        raise PayrollTaxError(
-            "The selected supporting document is empty.",
-            code="empty_tax_proof",
-        )
-
-    if len(file_bytes) > PAYROLL_TAX_PROOF_MAX_BYTES:
-        raise PayrollTaxError(
-            "Supporting document must be 8 MB or smaller.",
-            code="tax_proof_too_large",
-            details={"maximum_bytes": PAYROLL_TAX_PROOF_MAX_BYTES},
-        )
-
-    tenant_folder = _tax_proof_tenant_folder(tenant_id)
-    upload_directory = os.path.join(
-        _tax_proof_upload_root(),
-        tenant_folder,
-    )
-    os.makedirs(upload_directory, exist_ok=True)
-
-    stored_filename = secure_filename(
-        f"proof_{uuid4().hex}_{original_filename}"
-    )
-    stored_path = os.path.join(upload_directory, stored_filename)
-
-    with open(stored_path, "wb") as destination:
-        destination.write(file_bytes)
-
-    reference = (
-        "/api/v1/payroll/tax-proofs/"
-        f"{tenant_folder}/{stored_filename}"
-    )
-
-    return {
-        "reference": reference,
-        "filename": original_filename,
-        "document_type": "supporting_document",
-        "status": "pending",
-        "mime_type": safe_str(uploaded_file.mimetype)
-        or "application/octet-stream",
-        "size_bytes": len(file_bytes),
-        "uploaded_at": _now().isoformat(),
-        "uploaded_by": _current_user_id(),
-    }
-
-
-@payroll_bp.post("/tax-proofs/upload")
-@tenant_module_required("payroll")
-@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
-def upload_payroll_tax_proof():
-    tenant_id = _requested_tenant_id(dict(request.form))
-    proof = _save_tax_proof_upload(tenant_id=tenant_id)
-
-    audit(
-        "payroll_tax_proof_uploaded",
-        "payroll_tax_proofs",
-        proof.get("reference"),
-        {
-            "tenant_id": tenant_id,
-            "filename": proof.get("filename"),
-            "mime_type": proof.get("mime_type"),
-            "size_bytes": proof.get("size_bytes"),
-        },
-    )
-
-    return _success(
-        "Supporting document uploaded successfully.",
-        proof=proof,
-    )
-
-
-@payroll_bp.get("/tax-proofs/<tenant_folder>/<filename>")
-@tenant_module_required("payroll")
-@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
-def serve_payroll_tax_proof(tenant_folder: str, filename: str):
-    safe_tenant_folder = secure_filename(tenant_folder)
-    safe_filename = secure_filename(filename)
-    current_tenant_folder = _tax_proof_tenant_folder(
-        _current_tenant_id()
-    )
-
-    if (
-        safe_tenant_folder != current_tenant_folder
-        and "super_admin" not in _current_roles()
-    ):
-        raise PayrollTaxError(
-            "You cannot access a tax proof from another company.",
-            status_code=403,
-            code="tax_proof_tenant_forbidden",
-        )
-
-    directory = os.path.join(
-        _tax_proof_upload_root(),
-        safe_tenant_folder,
-    )
-
-    return send_from_directory(
-        directory,
-        safe_filename,
-        as_attachment=False,
-    )
 
 
 @payroll_bp.get("/tax-declarations")
@@ -5528,22 +5626,6 @@ def calculate_monthly_payroll():
     tenant_id = _requested_tenant_id(payload)
     period_key, month, year, period_start, period_end = _parse_period(payload)
 
-    existing_run = db.payroll_runs.find_one({
-        "tenant_id": tenant_id,
-        "period_key": period_key,
-        "is_deleted": {"$ne": True},
-    })
-
-    if existing_run:
-        existing_status = _normalize_key(existing_run.get("status") or "draft")
-        if existing_status != "draft" or _truthy(existing_run.get("is_locked")):
-            raise PayrollConfigError(
-                "This payroll run has already entered review, approval, lock, or "
-                "disbursement and cannot be recalculated.",
-                status_code=409,
-                code="payroll_run_not_recalculable",
-            )
-
     employees = _selected_employees(
         db,
         tenant_id,
@@ -5556,6 +5638,47 @@ def calculate_monthly_payroll():
             status_code=404,
             code="no_payroll_employees",
         )
+
+    selected_employee_ids = [
+        _canonical_employee_id(employee) for employee in employees
+    ]
+    period_records, runs_by_id = _period_payroll_records(
+        db,
+        tenant_id=tenant_id,
+        period_key=period_key,
+        employee_ids=selected_employee_ids,
+    )
+
+    requested_run_reference = payload.get("run_id") or payload.get("runId")
+    existing_run = _find_calculation_run(
+        db,
+        tenant_id=tenant_id,
+        period_key=period_key,
+        run_reference=requested_run_reference,
+    ) if safe_str(requested_run_reference) else _infer_editable_calculation_run(
+        period_records,
+        runs_by_id,
+    )
+
+    employees, already_processed = _classify_payroll_employees(
+        employees,
+        records=period_records,
+        editable_run=existing_run,
+    )
+
+    if not employees:
+        return jsonify({
+            "ok": False,
+            "message": "Every selected employee already has payroll for this month.",
+            "code": "payroll_employees_already_processed",
+            "period_key": period_key,
+            "already_processed": already_processed,
+            "eligible": [],
+            "configuration_missing": [],
+        }), 409
+
+    run_id = existing_run.get("_id") if existing_run else ObjectId()
+    run_id_string = safe_str(run_id)
 
     attendance_rows = _rows_by_employee(payload.get("attendance"))
     raw_employee_inputs = payload.get("employee_inputs") or {}
@@ -5704,7 +5827,7 @@ def calculate_monthly_payroll():
                 tenant_id,
                 employee,
                 period_key,
-                run_id=(safe_str(existing_run.get("_id")) if existing_run else ""),
+                run_id=run_id_string,
             )
 
             calculation = calculate_payroll(
@@ -5718,7 +5841,29 @@ def calculate_monthly_payroll():
                 reimbursements,
             )
 
-            employee_info = _employee_snapshot(db, tenant_id, employee)
+            organisation_snapshot = _employee_organisation_snapshot(
+                db,
+                tenant_id,
+                employee,
+            )
+            employee_info = _employee_snapshot(
+                db,
+                tenant_id,
+                employee,
+                organisation_snapshot,
+            )
+            calculation_warnings = list(calculation.get("warnings") or [])
+            if not safe_str(organisation_snapshot.get("name")):
+                calculation_warnings.append(
+                    "Organisation is not assigned to this employee. Payslip branding "
+                    "will use the tenant fallback."
+                )
+            elif not safe_str(organisation_snapshot.get("logo_src")):
+                calculation_warnings.append(
+                    "The employee organisation does not have a logo configured. "
+                    "Payslip branding will use the tenant fallback logo or initials."
+                )
+
             attendance_snapshot = {
                 **_snapshot(dict(attendance)),
                 **_snapshot(calculation.get("attendance") or {}),
@@ -5737,6 +5882,20 @@ def calculate_monthly_payroll():
                 "employee_code": employee_code,
                 "employee_name": employee_name,
                 "employee_info": employee_info,
+                "organisation_id": safe_str(
+                    organisation_snapshot.get("organisation_id")
+                ),
+                "organization_id": safe_str(
+                    organisation_snapshot.get("organization_id")
+                ),
+                "organisation_name": safe_str(
+                    organisation_snapshot.get("name")
+                ),
+                "organization_name": safe_str(
+                    organisation_snapshot.get("name")
+                ),
+                "organisation_snapshot": _snapshot(organisation_snapshot),
+                "organization_snapshot": _snapshot(organisation_snapshot),
                 "state_code": state_code,
                 "status": "draft",
                 "workflow_stage": "draft",
@@ -5759,7 +5918,13 @@ def calculate_monthly_payroll():
                 "reimbursement_summary": _snapshot(
                     calculation.get("reimbursement_summary") or {}
                 ),
-                "warnings": _snapshot(calculation.get("warnings") or []),
+                "warnings": _snapshot(
+                    list(dict.fromkeys(
+                        safe_str(item)
+                        for item in calculation_warnings
+                        if safe_str(item)
+                    ))
+                ),
                 "salary_structure_id": safe_str(salary_structure.get("_id")),
                 "salary_structure_version": salary_structure.get("version"),
                 "salary_structure_snapshot": _snapshot(salary_structure),
@@ -5824,23 +5989,106 @@ def calculate_monthly_payroll():
                 "details": _snapshot(exc.details),
             })
 
-    if validation_errors:
+    if not prepared_payslips:
+        status_code = 422 if validation_errors else 409
         return jsonify({
             "ok": False,
             "message": (
-                "Payroll validation failed. Nothing was saved because one or more "
-                "employees could not be calculated."
+                "No employee could be calculated for this payroll month. "
+                "Review the skipped employee details."
             ),
-            "code": "payroll_batch_validation_failed",
+            "code": (
+                "payroll_batch_validation_failed"
+                if validation_errors
+                else "payroll_employees_already_processed"
+            ),
+            "period_key": period_key,
+            "already_processed": already_processed,
+            "configuration_missing": validation_errors,
             "errors": validation_errors,
-        }), 422
+        }), status_code
+
+    # Repeat the employee-month check immediately before persistence. This
+    # narrows the race window when two payroll calculations are submitted at
+    # nearly the same time and protects against cross-run duplicates.
+    prepared_employee_ids = [
+        safe_str(payslip.get("employee_id")) for payslip in prepared_payslips
+    ]
+    fresh_records, _ = _period_payroll_records(
+        db,
+        tenant_id=tenant_id,
+        period_key=period_key,
+        employee_ids=prepared_employee_ids,
+    )
+    employee_by_id = {
+        _canonical_employee_id(employee): employee for employee in employees
+    }
+    _, save_conflicts = _classify_payroll_employees(
+        [
+            employee_by_id[employee_id]
+            for employee_id in prepared_employee_ids
+            if employee_id in employee_by_id
+        ],
+        records=fresh_records,
+        editable_run=existing_run,
+    )
+
+    if save_conflicts:
+        conflict_ids = {
+            safe_str(item.get("employee_id")) for item in save_conflicts
+        }
+        known_conflicts = {
+            safe_str(item.get("employee_id")) for item in already_processed
+        }
+        already_processed.extend(
+            item
+            for item in save_conflicts
+            if safe_str(item.get("employee_id")) not in known_conflicts
+        )
+        prepared_payslips = [
+            payslip
+            for payslip in prepared_payslips
+            if safe_str(payslip.get("employee_id")) not in conflict_ids
+        ]
+
+    if not prepared_payslips:
+        return jsonify({
+            "ok": False,
+            "message": (
+                "The selected employees were added to another payroll run before "
+                "this calculation could be saved."
+            ),
+            "code": "duplicate_employee_payroll_period",
+            "period_key": period_key,
+            "already_processed": already_processed,
+            "configuration_missing": validation_errors,
+            "errors": validation_errors,
+        }), 409
 
     now = _now()
-    run_id = existing_run.get("_id") if existing_run else ObjectId()
     run_code = safe_str(existing_run.get("run_code")) if existing_run else ""
-    run_code = run_code or _payroll_run_code(tenant_id, period_key)
-    run_totals = _run_totals(calculations)
-    employee_ids = [payslip["employee_id"] for payslip in prepared_payslips]
+    run_code = run_code or _payroll_run_code(db, tenant_id, period_key)
+    calculated_employee_ids = [
+        safe_str(payslip.get("employee_id")) for payslip in prepared_payslips
+    ]
+    preliminary_totals = _run_totals(prepared_payslips)
+
+    history_entry = {
+        "action": "calculate",
+        "from_status": "draft" if existing_run else "not_created",
+        "to_status": "draft",
+        "note": safe_str(payload.get("note") or "Draft payroll calculated."),
+        "actor_id": _current_user_id(),
+        "actor_name": _current_user_name(),
+        "actor_roles": sorted(_current_roles()),
+        "at": now,
+    }
+    workflow_history = [history_entry]
+    if existing_run and isinstance(existing_run.get("workflow_history"), list):
+        workflow_history = [
+            *_snapshot(existing_run.get("workflow_history") or []),
+            history_entry,
+        ]
 
     run_document = {
         "tenant_id": tenant_id,
@@ -5855,9 +6103,9 @@ def calculate_monthly_payroll():
         "workflow_version": 1,
         "source": "dedicated_payroll_service",
         "is_locked": False,
-        "employee_count": len(prepared_payslips),
-        "employee_ids": employee_ids,
-        "totals": run_totals,
+        "employee_count": len(calculated_employee_ids),
+        "employee_ids": calculated_employee_ids,
+        "totals": preliminary_totals,
         "processed_by": _current_user_id(),
         "processed_by_name": _current_user_name(),
         "processed_at": now,
@@ -5866,23 +6114,8 @@ def calculate_monthly_payroll():
         "calculated_at": now,
         "updated_at": now,
         "is_deleted": False,
-        "workflow_history": [{
-            "action": "calculate",
-            "from_status": "draft" if existing_run else "not_created",
-            "to_status": "draft",
-            "note": safe_str(payload.get("note") or "Draft payroll calculated."),
-            "actor_id": _current_user_id(),
-            "actor_name": _current_user_name(),
-            "actor_roles": sorted(_current_roles()),
-            "at": now,
-        }],
+        "workflow_history": workflow_history,
     }
-
-    if existing_run and isinstance(existing_run.get("workflow_history"), list):
-        run_document["workflow_history"] = [
-            *_snapshot(existing_run.get("workflow_history") or []),
-            *run_document["workflow_history"],
-        ]
 
     db.payroll_runs.update_one(
         {"_id": run_id},
@@ -5893,14 +6126,13 @@ def calculate_monthly_payroll():
         upsert=True,
     )
 
-    saved_payslips: list[dict[str, Any]] = []
-
     for payslip in prepared_payslips:
-        payslip["run_id"] = safe_str(run_id)
-        result = db.payslips.find_one_and_update(
+        payslip["run_id"] = run_id_string
+        db.payslips.find_one_and_update(
             {
                 "tenant_id": tenant_id,
-                "run_id": safe_str(run_id),
+                "period_key": period_key,
+                "run_id": run_id_string,
                 "employee_id": payslip["employee_id"],
             },
             {
@@ -5910,29 +6142,37 @@ def calculate_monthly_payroll():
             upsert=True,
             return_document=ReturnDocument.AFTER,
         )
-        if result:
-            saved_payslips.append(result)
 
-    # A recalculated Draft represents the complete selected scope. Older Draft
-    # payslips outside that scope are soft-deleted rather than left in the run.
-    db.payslips.update_many(
-        {
-            "tenant_id": tenant_id,
-            "run_id": safe_str(run_id),
-            "employee_id": {"$nin": employee_ids},
-            "is_deleted": {"$ne": True},
-        },
+    # Recalculation now merges into the selected Draft run. Unselected Draft
+    # employees are preserved, preventing a one-employee recalculation from
+    # deleting other employees already present in that run.
+    saved_payslips = list(db.payslips.find({
+        "tenant_id": tenant_id,
+        "run_id": run_id_string,
+        "is_deleted": {"$ne": True},
+    }).sort([("employee_name", 1), ("employee_code", 1)]))
+    run_totals = _run_totals(saved_payslips)
+    run_employee_ids = [
+        safe_str(payslip.get("employee_id"))
+        for payslip in saved_payslips
+        if safe_str(payslip.get("employee_id"))
+    ]
+
+    db.payroll_runs.update_one(
+        {"_id": run_id, "tenant_id": tenant_id},
         {
             "$set": {
-                "is_deleted": True,
-                "deleted_at": now,
-                "deleted_by": _current_user_id(),
-                "updated_at": now,
+                "employee_count": len(run_employee_ids),
+                "employee_ids": run_employee_ids,
+                "totals": run_totals,
+                "updated_at": _now(),
             }
         },
     )
-
-    saved_run = db.payroll_runs.find_one({"_id": run_id})
+    saved_run = db.payroll_runs.find_one({
+        "_id": run_id,
+        "tenant_id": tenant_id,
+    })
 
     audit(
         "payroll_draft_calculated",
@@ -5942,17 +6182,33 @@ def calculate_monthly_payroll():
             "tenant_id": tenant_id,
             "period_key": period_key,
             "employee_count": len(saved_payslips),
+            "calculated_employee_count": len(calculated_employee_ids),
+            "already_processed_count": len(already_processed),
+            "configuration_missing_count": len(validation_errors),
             "totals": run_totals,
         },
     )
 
+    skipped_count = len(already_processed) + len(validation_errors)
+    message = "Draft payroll calculated successfully."
+    if skipped_count:
+        message = (
+            "Draft payroll calculated for eligible employees. "
+            f"{skipped_count} employee(s) were skipped; review the returned details."
+        )
+
     return _success(
-        "Draft payroll calculated successfully.",
+        message,
         run=saved_run,
         payslips=saved_payslips,
         employee_count=len(saved_payslips),
+        calculated_employee_count=len(calculated_employee_ids),
+        calculated_employee_ids=calculated_employee_ids,
         totals=run_totals,
-        errors=[],
+        already_processed=already_processed,
+        configuration_missing=validation_errors,
+        skipped=[*already_processed, *validation_errors],
+        errors=validation_errors,
     )
 
 
@@ -6103,7 +6359,7 @@ def advance_payroll_run():
         )
 
     expected_status, next_status = PAYROLL_WORKFLOW_SEQUENCE[action]
-    current_status = _normalize_key(run.get("status") or "draft")
+    current_status = _canonical_payroll_status(run.get("status") or run.get("workflow_stage"))
 
     if current_status != expected_status:
         raise PayrollConfigError(
@@ -6132,7 +6388,7 @@ def advance_payroll_run():
     mismatched = [
         safe_str(payslip.get("_id"))
         for payslip in payslips
-        if _normalize_key(payslip.get("status") or "draft") != expected_status
+        if _canonical_payroll_status(payslip.get("status") or payslip.get("workflow_stage")) != expected_status
     ]
     if mismatched:
         raise PayrollConfigError(
@@ -6221,17 +6477,41 @@ def advance_payroll_run():
                 code="transfer_mode_required",
             )
 
+        transaction_reference = safe_str(
+            disbursement.get("transaction_reference")
+            or disbursement.get("transactionReference")
+            or disbursement.get("utr")
+            or disbursement.get("utr_number")
+            or disbursement.get("utrNumber")
+        )
+        bank_file_reference = safe_str(
+            disbursement.get("bank_file_reference")
+            or disbursement.get("bankFileReference")
+        )
+        bank_batch_reference = safe_str(
+            disbursement.get("bank_batch_reference")
+            or disbursement.get("bankBatchReference")
+            or disbursement.get("bank_reference")
+            or disbursement.get("bankReference")
+        )
+
+        if not (
+            transaction_reference
+            or bank_file_reference
+            or bank_batch_reference
+        ):
+            raise PayrollConfigError(
+                "A UTR, transaction reference, bank file reference, or bank batch "
+                "reference is required before payroll can be marked disbursed.",
+                code="disbursement_reference_required",
+            )
+
         disbursement = {
             "transfer_date": transfer_date,
             "transfer_mode": transfer_mode,
-            "transaction_reference": safe_str(
-                disbursement.get("transaction_reference")
-                or disbursement.get("transactionReference")
-            ),
-            "bank_file_reference": safe_str(
-                disbursement.get("bank_file_reference")
-                or disbursement.get("bankFileReference")
-            ),
+            "transaction_reference": transaction_reference,
+            "bank_file_reference": bank_file_reference,
+            "bank_batch_reference": bank_batch_reference,
             "disbursed_at": now,
             "disbursed_by": _current_user_id(),
             "disbursed_by_name": _current_user_name(),
@@ -6688,27 +6968,122 @@ def _tenant_company(db: Any, tenant_id: str) -> dict[str, Any]:
         or tenant.get("name")
         or ("SESTA DEVELOPMENT SERVICES (SDS)" if tenant_id == "sds" else tenant_id.upper())
     )
-    address = _format_address(tenant.get("address"))
+    address = _format_address(
+        tenant.get("address")
+        or tenant.get("registered_address")
+        or tenant.get("office_address")
+    )
 
     if not address and tenant_id == "sds":
         address = "Guwahati, Dist.: Kamrup, Assam"
 
-    logo_data_uri = safe_str(
-        tenant.get("logo_data_uri")
-        or tenant.get("company_logo_data_uri")
-    )
-    if not logo_data_uri.startswith("data:image/"):
-        logo_data_uri = ""
-
+    logo_src = _branding_logo_source(tenant)
     return {
         "name": name,
         "address": address,
         "initials": safe_str(tenant.get("tenant_code")) or _company_initials(name),
-        "logo_data_uri": logo_data_uri,
+        "logo_src": logo_src,
+        # Retained for compatibility with the existing payslip template. The
+        # value may be a data URI, absolute URL, or public upload route.
+        "logo_data_uri": logo_src,
+        "branding_source": "tenant",
     }
 
 
-def _payslip_pdf_context(db: Any, payslip: Mapping[str, Any]) -> dict[str, Any]:
+def _payslip_company(
+    db: Any,
+    payslip: Mapping[str, Any],
+    current_employee: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    tenant_id = safe_str(payslip.get("tenant_id"))
+    tenant_company = _tenant_company(db, tenant_id)
+    employee = {
+        **dict(payslip.get("employee_info") or {}),
+        **dict(current_employee or {}),
+    }
+    organisation_snapshot = dict(
+        payslip.get("organisation_snapshot")
+        or payslip.get("organization_snapshot")
+        or {}
+    )
+
+    lookup_employee = {
+        **employee,
+        "organisation_id": (
+            payslip.get("organisation_id")
+            or payslip.get("organization_id")
+            or organisation_snapshot.get("organisation_id")
+            or organisation_snapshot.get("organization_id")
+            or employee.get("organisation_id")
+            or employee.get("organization_id")
+        ),
+        "organisation_code": (
+            organisation_snapshot.get("organisation_code")
+            or organisation_snapshot.get("organization_code")
+            or employee.get("organisation_code")
+            or employee.get("organization_code")
+        ),
+        "organisation_name": (
+            payslip.get("organisation_name")
+            or payslip.get("organization_name")
+            or organisation_snapshot.get("name")
+            or organisation_snapshot.get("organisation_name")
+            or organisation_snapshot.get("organization_name")
+            or employee.get("organisation_name")
+            or employee.get("organization_name")
+            or employee.get("organisation")
+            or employee.get("organization")
+        ),
+    }
+    current_organisation = _employee_organisation_snapshot(
+        db,
+        tenant_id,
+        lookup_employee,
+    )
+    organisation = current_organisation or organisation_snapshot
+    organisation_name = safe_str(
+        organisation.get("name")
+        or organisation.get("organisation_name")
+        or organisation.get("organization_name")
+    )
+
+    if not organisation_name:
+        return tenant_company
+
+    organisation_code = safe_str(
+        organisation.get("organisation_code")
+        or organisation.get("organization_code")
+    )
+    organisation_logo = safe_str(
+        organisation.get("logo_src")
+        or _branding_logo_source(organisation)
+    )
+    logo_src = organisation_logo or safe_str(tenant_company.get("logo_src"))
+    address = _format_address(organisation.get("address"))
+
+    return {
+        "name": organisation_name,
+        "address": address or safe_str(tenant_company.get("address")),
+        "initials": organisation_code or _company_initials(organisation_name),
+        "logo_src": logo_src,
+        "logo_data_uri": logo_src,
+        "branding_source": (
+            "employee_organisation"
+            if organisation_logo
+            else "tenant_logo_fallback"
+        ),
+        "organisation_id": safe_str(
+            organisation.get("organisation_id")
+            or organisation.get("organization_id")
+        ),
+    }
+
+
+def _payslip_pdf_context(
+    db: Any,
+    payslip: Mapping[str, Any],
+    current_employee: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     employee = dict(payslip.get("employee_info") or {})
     attendance = dict(payslip.get("attendance") or {})
     totals = dict(payslip.get("totals") or {})
@@ -6717,7 +7092,7 @@ def _payslip_pdf_context(db: Any, payslip: Mapping[str, Any]) -> dict[str, Any]:
     advances = list(payslip.get("advance_details") or [])
     transfer = dict(payslip.get("transfer_details") or {})
     tenant_id = safe_str(payslip.get("tenant_id"))
-    company = _tenant_company(db, tenant_id)
+    company = _payslip_company(db, payslip, current_employee)
 
     month_number = int(payslip.get("month") or 0)
     year_number = int(payslip.get("year") or 0)
@@ -6725,30 +7100,6 @@ def _payslip_pdf_context(db: Any, payslip: Mapping[str, Any]) -> dict[str, Any]:
 
     net_amount = totals.get("net_amount", 0)
     pf_employer = totals.get("pf_employer", _line_amount(earnings, "pf_employer"))
-
-    bank = dict(
-        payslip.get("bank_details_snapshot")
-        or payslip.get("bank_snapshot")
-        or payslip.get("bank_account_snapshot")
-        or {}
-    )
-
-    employee["account_number"] = safe_str(
-        bank.get("masked_account_number")
-        or bank.get("account_number_masked")
-        or employee.get("masked_account_number")
-        or employee.get("account_number")
-    )
-
-    employee["ifsc_code"] = safe_str(
-        bank.get("ifsc_code")
-        or employee.get("ifsc_code")
-    )
-
-    employee["bank_name"] = safe_str(
-        bank.get("bank_name")
-        or employee.get("bank_name")
-    )
 
     earning_rows = [
         ("Basic", _line_amount(earnings, "basic")),
@@ -6871,7 +7222,7 @@ PAYSLIP_HTML_TEMPLATE = r"""
     <tr><td class="label">Employee Code</td><td>{{ employee.employee_code or '—' }}</td><td class="label">Universal Account Number (UAN)</td><td>{{ employee.uan or 'NA' }}</td></tr>
     <tr><td class="label">Function</td><td>{{ employee.function or employee.department or '—' }}</td><td class="label">ESI Number</td><td>{{ employee.esi_number or 'NA' }}</td></tr>
     <tr><td class="label">Designation</td><td>{{ employee.designation or '—' }}</td><td class="label">PR Account Number (PRAN)</td><td>{{ employee.pran or 'NA' }}</td></tr>
-    <tr><td class="label">Location</td><td>{{ employee.location or '—' }}</td><td class="label">IFSC Code</td><td>{{ employee.ifsc_code or '—' }}</td></tr>
+    <tr><td class="label">Location</td><td>{{ employee.location or '—' }}</td><td class="label">IFS Code</td><td>{{ employee.ifsc_code or '—' }}</td></tr>
     <tr><td class="label">Account No.</td><td>{{ employee.account_number or '—' }}</td><td class="label">Total Sanctioned Leave</td><td>{{ attendance.paid_leave_days or 0 }} Days</td></tr>
     <tr><td class="label">Date of joining</td><td>{{ employee.date_of_joining or '—' }}</td><td class="label">LWP (Leave Without Pay)</td><td>{{ attendance.lwp_days or 0 }} Days</td></tr>
     <tr><td class="label">Leave availed during this Month</td><td>{{ attendance.leave_availed or attendance.paid_leave_days or 0 }} Days</td><td class="label">No. of Days Salary Paid for</td><td>{{ attendance.payable_days or attendance.salary_paid_days or 0 }} Days</td></tr>
@@ -7007,7 +7358,7 @@ def generate_or_fetch_payslip_pdf(employee_reference: str, month: int, year: int
             code="payslip_not_found",
         )
 
-    status = _normalize_key(payslip.get("status"))
+    status = _canonical_payroll_status(payslip.get("status") or payslip.get("workflow_stage"))
     if not privileged and status not in {"locked", "disbursed"}:
         raise PayrollConfigError(
             "This payslip is not available to the employee until payroll is locked.",
@@ -7030,7 +7381,7 @@ def generate_or_fetch_payslip_pdf(employee_reference: str, month: int, year: int
             code="legacy_payslip_snapshot_missing",
         )
 
-    context = _payslip_pdf_context(db, payslip)
+    context = _payslip_pdf_context(db, payslip, employee)
     html = _render_payslip_html(context)
 
     try:

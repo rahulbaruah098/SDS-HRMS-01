@@ -31,6 +31,37 @@ def create_index_safe(collection, keys, **kwargs):
         pass
 
 
+def drop_legacy_payroll_period_unique_index(collection):
+    """Remove the old organisation-month payroll-run uniqueness constraint.
+
+    Earlier versions allowed only one payroll run for a tenant and period by
+    creating a unique ``tenant_id + period_key`` index. Payroll is now split by
+    employee, so multiple runs can legitimately exist for the same month.
+
+    Only the exact legacy unique index is removed. Other payroll indexes are
+    left untouched.
+    """
+    try:
+        index_information = collection.index_information()
+    except Exception:
+        return
+
+    expected_keys = [("tenant_id", ASCENDING), ("period_key", ASCENDING)]
+
+    for index_name, definition in index_information.items():
+        keys = [tuple(item) for item in definition.get("key", [])]
+        if keys != expected_keys or not definition.get("unique"):
+            continue
+
+        try:
+            collection.drop_index(index_name)
+        except Exception:
+            # Preserve startup resilience. If removal fails, the application-
+            # level employee-period duplicate guard still prevents bad data,
+            # but the database administrator should remove the legacy index.
+            pass
+
+
 def ensure_indexes(database):
     # Tenants
     create_index_safe(
@@ -437,17 +468,37 @@ def ensure_indexes(database):
     )
 
     # Monthly payroll runs:
-    # one authoritative payroll run per tenant and payroll period
+    # Multiple runs are allowed for a tenant and payroll period because each
+    # run may contain a different employee subset. Remove the legacy unique
+    # tenant-period index before creating the replacement lookup index.
+    drop_legacy_payroll_period_unique_index(database.payroll_runs)
+
     create_index_safe(
         database.payroll_runs,
         [
             ("tenant_id", ASCENDING),
             ("period_key", ASCENDING),
+            ("created_at", ASCENDING),
         ],
-        unique=True,
+        name="payroll_runs_tenant_period_created_idx",
         partialFilterExpression={
             "tenant_id": {"$exists": True},
             "period_key": {"$exists": True},
+        },
+    )
+
+    # Run codes must remain unique even when several runs exist in one month.
+    create_index_safe(
+        database.payroll_runs,
+        [
+            ("tenant_id", ASCENDING),
+            ("run_code", ASCENDING),
+        ],
+        name="payroll_runs_tenant_run_code_unique_idx",
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "run_code": {"$exists": True, "$type": "string", "$gt": ""},
         },
     )
 
@@ -474,6 +525,24 @@ def ensure_indexes(database):
             "tenant_id": {"$exists": True},
             "run_id": {"$exists": True},
             "employee_id": {"$exists": True},
+        },
+    )
+
+    # An employee may appear only once for a tenant and payroll period,
+    # regardless of which monthly run contains the employee.
+    create_index_safe(
+        database.payslips,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("period_key", ASCENDING),
+        ],
+        name="payslips_tenant_employee_period_unique_idx",
+        unique=True,
+        partialFilterExpression={
+            "tenant_id": {"$exists": True},
+            "employee_id": {"$exists": True},
+            "period_key": {"$exists": True},
         },
     )
 

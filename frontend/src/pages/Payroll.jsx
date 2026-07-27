@@ -92,8 +92,38 @@ function emptyPayrollDisbursement() {
   };
 }
 
+function canonicalPayrollStatus(value) {
+  const status = normalizeKey(value || 'draft');
+  const aliases = {
+    calculated: 'draft',
+    pending_hr_review: 'draft',
+    hr_review_pending: 'draft',
+    hr_review: 'hr_reviewed',
+    reviewed: 'hr_reviewed',
+    pending_finance_approval: 'hr_reviewed',
+    finance_approval: 'hr_reviewed',
+    finance_pending: 'hr_reviewed',
+    approved: 'finance_approved',
+    pending_lock: 'finance_approved',
+    completed: 'disbursed',
+    paid: 'disbursed',
+  };
+
+  return aliases[status] || status;
+}
+
+function isFinalizedPayrollStatus(value, isLocked = false) {
+  if (isLocked) {
+    return true;
+  }
+
+  return ['hr_reviewed', 'finance_approved', 'locked', 'disbursed'].includes(
+    canonicalPayrollStatus(value),
+  );
+}
+
 function workflowActionForStatus(value) {
-  const status = normalizeKey(value);
+  const status = canonicalPayrollStatus(value);
 
   if (status === 'draft') {
     return 'hr_review';
@@ -228,28 +258,30 @@ function formatDate(value) {
 }
 
 function statusLabel(value) {
-  return safeText(value, 'draft')
+  const status = canonicalPayrollStatus(value);
+  const labels = {
+    draft: 'Draft',
+    hr_reviewed: 'HR Reviewed',
+    finance_approved: 'Finance Approved',
+    locked: 'Locked',
+    disbursed: 'Disbursed',
+    not_processed: 'Not Processed',
+  };
+
+  return labels[status] || safeText(status, 'draft')
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function statusClass(value) {
-  const status = normalizeKey(value);
+  const status = canonicalPayrollStatus(value);
 
-  if (
-    ['approved', 'finance_approved', 'locked', 'disbursed', 'completed'].includes(
-      status,
-    )
-  ) {
+  if (['finance_approved', 'locked', 'disbursed'].includes(status)) {
     return 'payroll-status payroll-status-success';
   }
 
-  if (
-    ['reviewed', 'hr_review', 'hr_reviewed', 'finance_approval', 'processing'].includes(
-      status,
-    )
-  ) {
+  if (['hr_reviewed', 'processing'].includes(status)) {
     return 'payroll-status payroll-status-info';
   }
 
@@ -258,6 +290,36 @@ function statusClass(value) {
   }
 
   return 'payroll-status payroll-status-warning';
+}
+
+function payrollIssueKey(item = {}, fallback = '') {
+  return [
+    safeText(item.employee_id, ''),
+    safeText(item.code, ''),
+    safeText(item.run_id, ''),
+    safeText(item.message || item.reason, fallback),
+  ].join('|');
+}
+
+function uniquePayrollIssues(...groups) {
+  const rows = [];
+  const seen = new Set();
+
+  groups.flat().forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return;
+    }
+
+    const key = payrollIssueKey(item, String(index));
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    rows.push(item);
+  });
+
+  return rows;
 }
 
 function emptyManualInput(totalDays) {
@@ -269,8 +331,9 @@ function emptyManualInput(totalDays) {
   };
 }
 
-function resolveRunId(run = {}) {
-  return safeText(run._id || run.id || run.run_id, '');
+function resolveRunId(run) {
+  const source = run && typeof run === 'object' ? run : {};
+  return safeText(source._id || source.id || source.run_id, '');
 }
 
 function resolvePayslipRunId(payslip = {}) {
@@ -484,7 +547,9 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
   const [runs, setRuns] = useState([]);
   const [activeRun, setActiveRun] = useState(null);
   const [payslips, setPayslips] = useState([]);
+  const [allPayslips, setAllPayslips] = useState([]);
   const [calculationErrors, setCalculationErrors] = useState([]);
+  const [calculationSkipped, setCalculationSkipped] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingPayslips, setLoadingPayslips] = useState(false);
@@ -492,6 +557,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
   const [syncingAttendance, setSyncingAttendance] = useState(false);
   const [attendanceSyncResult, setAttendanceSyncResult] = useState(null);
   const [attendanceSyncFailures, setAttendanceSyncFailures] = useState([]);
+  const [attendanceSyncSkipped, setAttendanceSyncSkipped] = useState([]);
   const [showEmployeePicker, setShowEmployeePicker] = useState(false);
   const [pdfActionKey, setPdfActionKey] = useState('');
   const [workflowModal, setWorkflowModal] = useState(null);
@@ -551,53 +617,208 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     [period, runs],
   );
 
-  const finalizedEmployeeRunMap = useMemo(() => {
+  const periodRunMap = useMemo(() => {
     const map = new Map();
-
     periodRuns.forEach((run) => {
-      const status = normalizeKey(run.status || run.workflow_stage || 'draft');
-      const finalized =
-        Boolean(run.is_locked) ||
-        ['hr_reviewed', 'reviewed', 'finance_approved', 'approved', 'locked', 'disbursed']
-          .includes(status);
-
-      if (!finalized) {
-        return;
+      const runId = resolveRunId(run);
+      if (runId) {
+        map.set(runId, run);
       }
-
-      const ids = Array.isArray(run.employee_ids) ? run.employee_ids : [];
-      ids.forEach((id) => {
-        const normalizedId = safeText(id, '');
-        if (normalizedId) {
-          map.set(normalizedId, run);
-        }
-      });
     });
-
     return map;
   }, [periodRuns]);
 
+  const editablePeriodRuns = useMemo(
+    () => periodRuns.filter(
+      (run) =>
+        !run.is_locked &&
+        canonicalPayrollStatus(run.status || run.workflow_stage) === 'draft',
+    ),
+    [periodRuns],
+  );
+
+  const calculationRun = useMemo(() => {
+    const activeRunPeriod = safeText(activeRun?.period_key || activeRun?.month, '');
+    const activeRunIsEditable =
+      activeRun &&
+      activeRunPeriod === period &&
+      !activeRun.is_locked &&
+      canonicalPayrollStatus(activeRun.status || activeRun.workflow_stage) === 'draft';
+
+    if (activeRunIsEditable) {
+      return activeRun;
+    }
+
+    return editablePeriodRuns.length === 1 ? editablePeriodRuns[0] : null;
+  }, [activeRun, editablePeriodRuns, period]);
+
+  const periodEmployeePayrollMap = useMemo(() => {
+    const map = new Map();
+    const priority = {
+      draft: 10,
+      hr_reviewed: 20,
+      finance_approved: 30,
+      locked: 40,
+      disbursed: 50,
+    };
+
+    function register(employeeIdValue, run = {}, payslip = {}) {
+      const id = safeText(employeeIdValue, '');
+      if (!id) {
+        return;
+      }
+
+      const status = canonicalPayrollStatus(
+        payslip.status ||
+          payslip.workflow_stage ||
+          run.status ||
+          run.workflow_stage ||
+          'draft',
+      );
+      const candidate = {
+        employee_id: id,
+        status,
+        run_id: resolveRunId(run) || resolvePayslipRunId(payslip),
+        run_code: safeText(run.run_code || payslip.run_code, ''),
+        is_finalized: isFinalizedPayrollStatus(
+          status,
+          Boolean(run.is_locked || payslip.is_locked),
+        ),
+      };
+      const existing = map.get(id);
+
+      if (!existing || (priority[candidate.status] || 0) > (priority[existing.status] || 0)) {
+        map.set(id, candidate);
+      }
+    }
+
+    periodRuns.forEach((run) => {
+      (Array.isArray(run.employee_ids) ? run.employee_ids : []).forEach((id) => {
+        register(id, run);
+      });
+    });
+
+    allPayslips.forEach((payslip) => {
+      const run = periodRunMap.get(resolvePayslipRunId(payslip)) || {};
+      const payslipPeriod = safeText(
+        payslip.period_key || payslip.payroll_period || run.period_key || run.month,
+        '',
+      );
+
+      if (payslipPeriod !== period) {
+        return;
+      }
+
+      register(resolvePayslipEmployeeId(payslip), run, payslip);
+    });
+
+    return map;
+  }, [allPayslips, period, periodRunMap, periodRuns]);
+
+  const employeeEligibilityRows = useMemo(() => {
+    const calculationRunId = resolveRunId(calculationRun);
+
+    return employees.map((employee) => {
+      const id = employeeId(employee);
+      const payroll = periodEmployeePayrollMap.get(id);
+
+      if (!payroll) {
+        return {
+          employee,
+          employee_id: id,
+          payroll_status: 'not_processed',
+          run_id: '',
+          run_code: '',
+          attendance_eligible: true,
+          calculation_eligible: true,
+          calculation_reason: 'Not processed for this month.',
+        };
+      }
+
+      if (payroll.is_finalized) {
+        return {
+          employee,
+          employee_id: id,
+          payroll_status: payroll.status,
+          run_id: payroll.run_id,
+          run_code: payroll.run_code,
+          attendance_eligible: false,
+          calculation_eligible: false,
+          calculation_reason: 'Payroll is already finalized for this month.',
+        };
+      }
+
+      const belongsToCalculationRun =
+        payroll.status === 'draft' &&
+        Boolean(calculationRunId) &&
+        payroll.run_id === calculationRunId;
+
+      return {
+        employee,
+        employee_id: id,
+        payroll_status: payroll.status,
+        run_id: payroll.run_id,
+        run_code: payroll.run_code,
+        attendance_eligible: true,
+        calculation_eligible: belongsToCalculationRun,
+        calculation_reason: belongsToCalculationRun
+          ? 'Eligible for Draft recalculation.'
+          : 'Already belongs to another Draft run. Select that run before recalculating.',
+      };
+    });
+  }, [calculationRun, employees, periodEmployeePayrollMap]);
+
+  const employeeEligibilityMap = useMemo(
+    () => new Map(
+      employeeEligibilityRows.map((item) => [item.employee_id, item]),
+    ),
+    [employeeEligibilityRows],
+  );
+
+  const targetEmployeeEligibility = useMemo(
+    () => targetEmployees
+      .map((employee) => employeeEligibilityMap.get(employeeId(employee)))
+      .filter(Boolean),
+    [employeeEligibilityMap, targetEmployees],
+  );
+
   const targetEmployeeIds = useMemo(
-    () => targetEmployees.map(employeeId).filter(Boolean),
-    [targetEmployees],
+    () => targetEmployeeEligibility
+      .map((item) => item.employee_id)
+      .filter(Boolean),
+    [targetEmployeeEligibility],
   );
 
-  const blockedEmployeeIds = useMemo(
-    () => targetEmployeeIds.filter((id) => finalizedEmployeeRunMap.has(id)),
-    [finalizedEmployeeRunMap, targetEmployeeIds],
+  const attendanceEligibleEmployeeIds = useMemo(
+    () => targetEmployeeEligibility
+      .filter((item) => item.attendance_eligible)
+      .map((item) => item.employee_id)
+      .filter(Boolean),
+    [targetEmployeeEligibility],
   );
 
-  const eligibleEmployeeIds = useMemo(
-    () => targetEmployeeIds.filter((id) => !finalizedEmployeeRunMap.has(id)),
-    [finalizedEmployeeRunMap, targetEmployeeIds],
+  const calculationEligibleEmployeeIds = useMemo(
+    () => targetEmployeeEligibility
+      .filter((item) => item.calculation_eligible)
+      .map((item) => item.employee_id)
+      .filter(Boolean),
+    [targetEmployeeEligibility],
   );
 
-  const blockedEmployeeNames = useMemo(() => {
-    const blockedSet = new Set(blockedEmployeeIds);
-    return targetEmployees
-      .filter((employee) => blockedSet.has(employeeId(employee)))
-      .map(employeeName);
-  }, [blockedEmployeeIds, targetEmployees]);
+  const calculationEligibleEmployees = useMemo(() => {
+    const eligibleSet = new Set(calculationEligibleEmployeeIds);
+    return targetEmployees.filter((employee) => eligibleSet.has(employeeId(employee)));
+  }, [calculationEligibleEmployeeIds, targetEmployees]);
+
+  const attendanceBlockedEmployees = useMemo(
+    () => targetEmployeeEligibility.filter((item) => !item.attendance_eligible),
+    [targetEmployeeEligibility],
+  );
+
+  const calculationBlockedEmployees = useMemo(
+    () => targetEmployeeEligibility.filter((item) => !item.calculation_eligible),
+    [targetEmployeeEligibility],
+  );
 
   function tenantParams() {
     if (!superAdmin || !tenantId.trim()) {
@@ -680,6 +901,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       setRuns([]);
       setActiveRun(null);
       setPayslips([]);
+      setAllPayslips([]);
       return [];
     }
 
@@ -699,15 +921,19 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       setRuns(items);
 
       const nextActiveRun =
-        items.find((run) => resolveRunId(run) === preferredRunId) ||
+        items.find(
+          (run) =>
+            resolveRunId(run) === preferredRunId &&
+            safeText(run.period_key || run.month, '') === period,
+        ) ||
         items.find((run) => safeText(run.period_key || run.month, '') === period) ||
-        items[0] ||
         null;
 
       setActiveRun(nextActiveRun);
 
       if (!nextActiveRun) {
         setPayslips([]);
+        setAllPayslips([]);
       }
 
       return items;
@@ -715,6 +941,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       setRuns([]);
       setActiveRun(null);
       setPayslips([]);
+      setAllPayslips([]);
 
       if (!silent) {
         alerts.error(error.message || 'Unable to load payroll runs.', 'Payroll Load Failed');
@@ -731,6 +958,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
     if (!runId) {
       setPayslips([]);
+      setAllPayslips([]);
       return [];
     }
 
@@ -745,13 +973,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           sort_dir: 'asc',
         })}`,
       );
-      const items = (data.items || []).filter(
+      const allItems = data.items || [];
+      const items = allItems.filter(
         (payslip) => resolvePayslipRunId(payslip) === runId,
       );
 
+      setAllPayslips(allItems);
       setPayslips(items);
       return items;
     } catch (error) {
+      setAllPayslips([]);
       setPayslips([]);
 
       if (!silent) {
@@ -779,17 +1010,29 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     ensureManualInputRows(employees, period);
     setAttendanceSyncResult(null);
     setAttendanceSyncFailures([]);
+    setAttendanceSyncSkipped([]);
+    setCalculationErrors([]);
+    setCalculationSkipped([]);
+
+    const nextPeriodRun = runs.find(
+      (run) => safeText(run.period_key || run.month, '') === period,
+    );
+    setActiveRun(nextPeriodRun || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period]);
 
   useEffect(() => {
     setAttendanceSyncResult(null);
     setAttendanceSyncFailures([]);
+    setAttendanceSyncSkipped([]);
+    setCalculationErrors([]);
+    setCalculationSkipped([]);
   }, [tenantId]);
 
   useEffect(() => {
     if (!activeRun) {
       setPayslips([]);
+      setAllPayslips([]);
       return;
     }
 
@@ -841,8 +1084,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return 'Select at least one employee before synchronizing attendance.';
     }
 
-    if (!eligibleEmployeeIds.length) {
-      return 'Every selected employee is already included in a finalized payroll run for this month.';
+    if (!attendanceEligibleEmployeeIds.length) {
+      return 'Every selected employee is already in HR Review, Finance Approval, Locked or Disbursed status for this month.';
     }
 
     return '';
@@ -858,9 +1101,9 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       payload.tenant_id = tenantId.trim();
     }
 
-    // Always send the exact eligible employee scope. This prevents employees
-    // already finalized in another run for the same month from being included.
-    payload.employee_ids = eligibleEmployeeIds;
+    // Send the full requested employee scope. The backend performs the final
+    // employee-level editability check and returns the exact skipped list.
+    payload.employee_ids = targetEmployeeIds;
 
     return payload;
   }
@@ -873,7 +1116,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return;
     }
 
-    const targetCount = eligibleEmployeeIds.length;
+    const targetCount = attendanceEligibleEmployeeIds.length;
     const confirmed = await alerts.confirm(
       `Synchronize approved leave, LWP, leave balances, attendance logs and holidays for ${period}${
         targetCount
@@ -894,6 +1137,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     try {
       setSyncingAttendance(true);
       setAttendanceSyncFailures([]);
+      setAttendanceSyncSkipped([]);
 
       const data = await api('/payroll/attendance-sync', {
         method: 'POST',
@@ -902,14 +1146,21 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       });
 
       const result = data.attendance_sync || data;
-      const failures = Array.isArray(result.failures)
-        ? result.failures
-        : Array.isArray(data.failures)
-          ? data.failures
-          : [];
+      const blocked = uniquePayrollIssues(
+        result.blocked || [],
+        data.blocked || [],
+      );
+      const allFailures = uniquePayrollIssues(
+        result.failures || [],
+        data.failures || [],
+      );
+      const failures = allFailures.filter(
+        (item) => item.code !== 'payroll_employee_not_editable',
+      );
 
       setAttendanceSource('saved');
       setAttendanceSyncResult(result);
+      setAttendanceSyncSkipped(blocked);
       setAttendanceSyncFailures(failures);
 
       const syncedCount = toNumber(
@@ -917,13 +1168,15 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         0,
       );
 
-      if (failures.length) {
+      if (blocked.length || failures.length) {
         alerts.warning(
           `${syncedCount} employee attendance summar${
             syncedCount === 1 ? 'y was' : 'ies were'
-          } saved, but ${failures.length} employee${
+          } saved. ${blocked.length} already processed employee${
+            blocked.length === 1 ? ' was' : 's were'
+          } skipped and ${failures.length} employee${
             failures.length === 1 ? '' : 's'
-          } failed validation. Review the details before calculating payroll.`,
+          } failed validation.`,
           'Attendance Partially Synchronized',
         );
       } else {
@@ -933,10 +1186,17 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         );
       }
     } catch (error) {
-      const failures = Array.isArray(error?.payload?.failures)
-        ? error.payload.failures
-        : [];
+      const payload = error?.payload || {};
+      const blocked = uniquePayrollIssues(
+        payload.blocked || [],
+        payload.details?.blocked || [],
+      );
+      const failures = uniquePayrollIssues(
+        payload.failures || [],
+        payload.skipped || [],
+      ).filter((item) => item.code !== 'payroll_employee_not_editable');
 
+      setAttendanceSyncSkipped(blocked);
       setAttendanceSyncFailures(failures);
 
       alerts.error(
@@ -961,16 +1221,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return 'Select at least one employee.';
     }
 
-    if (!eligibleEmployeeIds.length) {
-      return 'Every selected employee is already included in a finalized payroll run for this month.';
+    if (!calculationEligibleEmployeeIds.length) {
+      return 'No selected employee is eligible for calculation. Finalized employees and employees in another Draft run are excluded.';
     }
 
     if (attendanceSource === 'manual') {
-      if (!targetEmployees.length) {
+      if (!calculationEligibleEmployees.length) {
         return 'Load the employee list before entering manual payroll inputs.';
       }
 
-      for (const employee of targetEmployees) {
+      for (const employee of calculationEligibleEmployees) {
         const id = employeeId(employee);
         const input = manualInputs[id] || {};
 
@@ -1007,30 +1267,36 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       payload.tenant_id = tenantId.trim();
     }
 
-    // The backend receives only employees who are not already finalized for
-    // this month. Draft employees remain eligible for recalculation.
-    payload.employee_ids = eligibleEmployeeIds;
+    // Send the full requested scope so the backend can enforce duplicate
+    // employee-month protection and return already-processed employees.
+    payload.employee_ids = targetEmployeeIds;
+
+    const calculationRunId = resolveRunId(calculationRun);
+    if (calculationRunId) {
+      payload.run_id = calculationRunId;
+    }
 
     if (attendanceSource === 'manual') {
-      const eligibleSet = new Set(eligibleEmployeeIds);
+      const eligibleSet = new Set(calculationEligibleEmployeeIds);
       payload.attendance = targetEmployees
         .filter((employee) => eligibleSet.has(employeeId(employee)))
         .map((employee) => {
-        const id = employeeId(employee);
-        const input = manualInputs[id] || emptyManualInput(totalDays);
-        const row = {
-          employee_id: id,
-          total_days: totalDays,
-          paid_leave_days: input.paid_leave_days === '' ? 0 : Number(input.paid_leave_days),
-          lwp_days: Number(input.lwp_days),
-        };
+          const id = employeeId(employee);
+          const input = manualInputs[id] || emptyManualInput(totalDays);
+          const row = {
+            employee_id: id,
+            total_days: totalDays,
+            paid_leave_days:
+              input.paid_leave_days === '' ? 0 : Number(input.paid_leave_days),
+            lwp_days: Number(input.lwp_days),
+          };
 
-        if (input.working_days !== '') {
-          row.working_days = Number(input.working_days);
-        }
+          if (input.working_days !== '') {
+            row.working_days = Number(input.working_days);
+          }
 
-        return row;
-      });
+          return row;
+        });
     }
 
     return payload;
@@ -1044,7 +1310,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return;
     }
 
-    const targetCount = eligibleEmployeeIds.length;
+    const targetCount = calculationEligibleEmployeeIds.length;
     const confirmed = await alerts.confirm(
       `Create or recalculate the Draft payroll for ${period}${
         targetCount ? ` for ${targetCount} employee${targetCount === 1 ? '' : 's'}` : ''
@@ -1063,6 +1329,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     try {
       setCalculating(true);
       setCalculationErrors([]);
+      setCalculationSkipped([]);
 
       const data = await api('/payroll/calculate', {
         method: 'POST',
@@ -1073,21 +1340,45 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       const run = data.run || null;
       const calculatedPayslips = data.payslips || [];
 
+      const alreadyProcessed = uniquePayrollIssues(
+        data.already_processed || [],
+      );
+      const configurationMissing = uniquePayrollIssues(
+        data.configuration_missing || [],
+        data.errors || [],
+      );
+
       setActiveRun(run);
       setPayslips(calculatedPayslips);
-      setCalculationErrors([]);
+      setCalculationSkipped(alreadyProcessed);
+      setCalculationErrors(configurationMissing);
 
       await loadRuns({
         silent: true,
         preferredRunId: resolveRunId(run),
       });
 
-      alerts.success(
-        data.message || 'Draft payroll calculated successfully.',
-        'Payroll Calculated',
-      );
+      if (alreadyProcessed.length || configurationMissing.length) {
+        alerts.warning(
+          data.message || 'Payroll was calculated for eligible employees and skipped employees are listed below.',
+          'Payroll Partially Calculated',
+        );
+      } else {
+        alerts.success(
+          data.message || 'Draft payroll calculated successfully.',
+          'Payroll Calculated',
+        );
+      }
     } catch (error) {
-      const rows = Array.isArray(error?.payload?.errors) ? error.payload.errors : [];
+      const payload = error?.payload || {};
+      const alreadyProcessed = uniquePayrollIssues(
+        payload.already_processed || [],
+      );
+      const rows = uniquePayrollIssues(
+        payload.configuration_missing || [],
+        payload.errors || [],
+      );
+      setCalculationSkipped(alreadyProcessed);
       setCalculationErrors(rows);
 
       alerts.error(
@@ -1210,6 +1501,17 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         alerts.warning(
           'Select the salary transfer mode.',
           'Transfer Mode Required',
+        );
+        return;
+      }
+
+      if (
+        !disbursementForm.transaction_reference.trim() &&
+        !disbursementForm.bank_file_reference.trim()
+      ) {
+        alerts.warning(
+          'Enter either the UTR/transaction reference or the bank batch/file reference.',
+          'Disbursement Reference Required',
         );
         return;
       }
@@ -1702,6 +2004,10 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           width: 18px;
           height: 18px;
           accent-color: var(--primary);
+        }
+
+        .payroll-selector-table table {
+          min-width: 1120px;
         }
 
         .payroll-input-table input {
@@ -2356,17 +2662,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
             <ShieldCheck size={19} />
             <div>
               <strong>
-                {periodRuns.length} payroll run{periodRuns.length === 1 ? '' : 's'} already exist for {period}.
+                Employee-level payroll eligibility for {period}.
               </strong>{' '}
-              {blockedEmployeeIds.length ? (
-                <>
-                  {blockedEmployeeIds.length} selected employee{blockedEmployeeIds.length === 1 ? '' : 's'}
-                  {' '}already have finalized payroll and will be excluded: {blockedEmployeeNames.join(', ')}.
-                </>
-              ) : (
-                <>None of the currently selected employees has finalized payroll for this month.</>
-              )}
-              {' '}Eligible employees: {eligibleEmployeeIds.length}.
+              {periodRuns.length} payroll run{periodRuns.length === 1 ? '' : 's'} exist for this month.
+              {' '}Attendance eligible: {attendanceEligibleEmployeeIds.length}; attendance blocked: {attendanceBlockedEmployees.length}.
+              {' '}Calculation eligible: {calculationEligibleEmployeeIds.length}; calculation skipped: {calculationBlockedEmployees.length}.
+              {calculationRun ? (
+                <> Draft recalculation target: {safeText(calculationRun.run_code, resolveRunId(calculationRun).slice(-8))}.</>
+              ) : editablePeriodRuns.length > 1 ? (
+                <> Select the required Draft run before recalculating employees already present in Draft payroll.</>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -2396,7 +2701,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                 calculating ||
                 loadingEmployees ||
                 (scope === 'selected' && selectedIds.length === 0) ||
-                eligibleEmployeeIds.length === 0
+                attendanceEligibleEmployeeIds.length === 0
               }
             >
               {syncingAttendance ? (
@@ -2418,7 +2723,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
               calculating ||
               syncingAttendance ||
               loadingEmployees ||
-              eligibleEmployeeIds.length === 0
+              calculationEligibleEmployeeIds.length === 0
             }
           >
             {calculating ? <Loader2 size={18} className="spin" /> : <Calculator size={18} />}
@@ -2437,6 +2742,60 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           </div>
         </div>
       </section>
+
+      {scope === 'all' && calculationBlockedEmployees.length ? (
+        <section className="panel">
+          <div className="payroll-table-head">
+            <div>
+              <h3>Employees that will be skipped</h3>
+              <p>
+                All active employees is selected. These employees already have payroll for
+                this month; eligible employees will continue without them.
+              </p>
+            </div>
+            <span className="payroll-status payroll-status-warning">
+              {calculationBlockedEmployees.length} skipped
+            </span>
+          </div>
+
+          <div className="table-wrap payroll-selector-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Code</th>
+                  <th>Payroll status</th>
+                  <th>Existing run</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calculationBlockedEmployees.slice(0, 50).map((item) => (
+                  <tr key={`${item.employee_id}-${item.run_id || item.payroll_status}`}>
+                    <td className="payroll-employee-name">
+                      {employeeName(item.employee)}
+                    </td>
+                    <td>{employeeCode(item.employee)}</td>
+                    <td>
+                      <span className={statusClass(item.payroll_status)}>
+                        {statusLabel(item.payroll_status)}
+                      </span>
+                    </td>
+                    <td>{safeText(item.run_code)}</td>
+                    <td>{item.calculation_reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {calculationBlockedEmployees.length > 50 ? (
+            <div className="payroll-muted">
+              Showing the first 50 of {calculationBlockedEmployees.length} skipped employees.
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {scope === 'selected' && showEmployeePicker ? (
         <section className="panel">
@@ -2476,11 +2835,21 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                   <th>Code</th>
                   <th>Department</th>
                   <th>Designation</th>
+                  <th>Payroll status</th>
+                  <th>Eligibility</th>
+                  <th>Existing run</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEmployees.map((employee) => {
                   const id = employeeId(employee);
+                  const eligibility = employeeEligibilityMap.get(id) || {
+                    payroll_status: 'not_processed',
+                    attendance_eligible: true,
+                    calculation_eligible: true,
+                    calculation_reason: 'Not processed for this month.',
+                    run_code: '',
+                  };
 
                   return (
                     <tr key={id}>
@@ -2496,6 +2865,28 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                       <td>{employeeCode(employee)}</td>
                       <td>{employeeDepartment(employee)}</td>
                       <td>{employeeDesignation(employee)}</td>
+                      <td>
+                        <span className={statusClass(eligibility.payroll_status)}>
+                          {statusLabel(eligibility.payroll_status)}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            eligibility.calculation_eligible
+                              ? 'payroll-status payroll-status-success'
+                              : 'payroll-status payroll-status-danger'
+                          }
+                          title={eligibility.calculation_reason}
+                        >
+                          {eligibility.calculation_eligible
+                            ? eligibility.payroll_status === 'draft'
+                              ? 'Recalculation eligible'
+                              : 'Eligible'
+                            : 'Not eligible'}
+                        </span>
+                      </td>
+                      <td>{safeText(eligibility.run_code)}</td>
                     </tr>
                   );
                 })}
@@ -2536,6 +2927,14 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
             <article className="payroll-sync-metric">
               <span>Employees synced</span>
               <strong>{toNumber(attendanceSyncResult.totals?.employees_synced, 0)}</strong>
+            </article>
+            <article className="payroll-sync-metric">
+              <span>Eligible</span>
+              <strong>{toNumber(attendanceSyncResult.totals?.employees_eligible, 0)}</strong>
+            </article>
+            <article className="payroll-sync-metric">
+              <span>Already processed</span>
+              <strong>{toNumber(attendanceSyncResult.totals?.employees_blocked, 0)}</strong>
             </article>
             <article className="payroll-sync-metric">
               <span>Failed</span>
@@ -2618,6 +3017,35 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         </section>
       ) : null}
 
+      {attendanceSyncSkipped.length ? (
+        <section className="panel payroll-error-box">
+          <h3>Employees skipped from attendance synchronization</h3>
+          <p>
+            These employees already have payroll in HR Review, Finance Approval,
+            Locked or Disbursed status. Other eligible employees were still synchronized.
+          </p>
+
+          <div className="payroll-error-list">
+            {attendanceSyncSkipped.map((item, index) => (
+              <article
+                className="payroll-error-item"
+                key={`${safeText(item.employee_id, 'employee')}-${safeText(item.run_id, index)}`}
+              >
+                <strong>
+                  {safeText(item.employee_name, 'Employee')}
+                  {item.employee_code ? ` (${item.employee_code})` : ''}
+                </strong>
+                <p>
+                  {statusLabel(item.status)}
+                  {item.run_code ? ` — ${item.run_code}` : ''}.{' '}
+                  {safeText(item.message || item.reason, 'Already processed for this month.')}
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {attendanceSyncFailures.length ? (
         <section className="panel payroll-error-box">
           <h3>Attendance synchronization failures</h3>
@@ -2665,6 +3093,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
               <thead>
                 <tr>
                   <th>Employee</th>
+                  <th>Eligibility</th>
                   <th>Total days</th>
                   <th>Working days</th>
                   <th>Paid leave</th>
@@ -2675,12 +3104,33 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                 {targetEmployees.map((employee) => {
                   const id = employeeId(employee);
                   const input = manualInputs[id] || emptyManualInput(totalDays);
+                  const eligibility = employeeEligibilityMap.get(id) || {
+                    payroll_status: 'not_processed',
+                    calculation_eligible: true,
+                    calculation_reason: 'Not processed for this month.',
+                  };
 
                   return (
                     <tr key={id}>
                       <td>
                         <span className="payroll-employee-name">{employeeName(employee)}</span>
                         <span className="payroll-employee-meta">{employeeCode(employee)}</span>
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            eligibility.calculation_eligible
+                              ? 'payroll-status payroll-status-success'
+                              : 'payroll-status payroll-status-danger'
+                          }
+                          title={eligibility.calculation_reason}
+                        >
+                          {eligibility.calculation_eligible
+                            ? eligibility.payroll_status === 'draft'
+                              ? 'Recalculation eligible'
+                              : 'Eligible'
+                            : statusLabel(eligibility.payroll_status)}
+                        </span>
                       </td>
                       <td>
                         <input value={totalDays} readOnly aria-label="Total calendar days" />
@@ -2693,6 +3143,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                           value={input.working_days}
                           onChange={(event) => updateManualInput(id, 'working_days', event.target.value)}
                           placeholder="If required"
+                          disabled={!eligibility.calculation_eligible}
                         />
                       </td>
                       <td>
@@ -2702,6 +3153,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                           step="0.5"
                           value={input.paid_leave_days}
                           onChange={(event) => updateManualInput(id, 'paid_leave_days', event.target.value)}
+                          disabled={!eligibility.calculation_eligible}
                         />
                       </td>
                       <td>
@@ -2713,7 +3165,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                           value={input.lwp_days}
                           onChange={(event) => updateManualInput(id, 'lwp_days', event.target.value)}
                           placeholder="Required"
-                          required
+                          required={eligibility.calculation_eligible}
+                          disabled={!eligibility.calculation_eligible}
                         />
                       </td>
                     </tr>
@@ -2745,11 +3198,41 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         </div>
       </section>
 
+      {calculationSkipped.length ? (
+        <section className="panel payroll-error-box">
+          <h3>Employees skipped as already processed</h3>
+          <p>
+            Eligible employees were processed. These employees were excluded to prevent
+            duplicate payroll for the same tenant, month and employee.
+          </p>
+
+          <div className="payroll-error-list">
+            {calculationSkipped.map((item, index) => (
+              <article
+                className="payroll-error-item"
+                key={`${safeText(item.employee_id, 'employee')}-${safeText(item.run_id, index)}`}
+              >
+                <strong>
+                  {safeText(item.employee_name, 'Employee')}
+                  {item.employee_code ? ` (${item.employee_code})` : ''}
+                </strong>
+                <p>
+                  {statusLabel(item.status)}
+                  {item.run_code ? ` — ${item.run_code}` : ''}.{' '}
+                  {safeText(item.reason || item.message, 'Already processed for this month.')}
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {calculationErrors.length ? (
         <section className="panel payroll-error-box">
-          <h3>Payroll validation failed</h3>
+          <h3>Payroll configuration missing</h3>
           <p>
-            Nothing was saved because one or more employees failed validation.
+            These employees could not be calculated. Other eligible employees may still
+            have been saved in the Draft run.
           </p>
 
           <div className="payroll-error-list">
@@ -3149,7 +3632,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                   </label>
 
                   <label className="payroll-modal-field">
-                    <span>Transaction / UTR reference</span>
+                    <span>Transaction / UTR reference (one reference required)</span>
                     <input
                       value={disbursementForm.transaction_reference}
                       onChange={(event) =>
@@ -3163,7 +3646,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                   </label>
 
                   <label className="payroll-modal-field">
-                    <span>Bank-file reference</span>
+                    <span>Bank batch/file reference (one reference required)</span>
                     <input
                       value={disbursementForm.bank_file_reference}
                       onChange={(event) =>
@@ -3172,7 +3655,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                           event.target.value,
                         )
                       }
-                      placeholder="Optional bank batch/file reference"
+                      placeholder="Example: BANK-BATCH-202609-001"
                     />
                   </label>
                 </div>

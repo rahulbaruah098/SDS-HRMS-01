@@ -79,6 +79,8 @@ class PayrollPeriodTests(unittest.TestCase):
         self.assertEqual(normalize_employee_state("Assam"), "Assam(HO)")
         self.assertEqual(normalize_employee_state("Assam/Guwahati (HO)"), "Assam(HO)")
         self.assertEqual(normalize_employee_state("Tripura"), "Tripura")
+        self.assertEqual(normalize_employee_state(""), "")
+        self.assertEqual(normalize_employee_state(None), "")
 
 
 class WorkingCalendarTests(unittest.TestCase):
@@ -101,6 +103,25 @@ class WorkingCalendarTests(unittest.TestCase):
         self.assertNotIn("2025-08-23", working_dates)  # Fourth Saturday
         self.assertIn("2025-08-02", working_dates)  # First Saturday
         self.assertEqual(holidays["configured_holidays"], ["2025-08-15"])
+
+    def test_missing_employee_state_is_rejected_instead_of_defaulting_to_assam(self):
+        holiday_calendar = MagicMock()
+        db = SimpleNamespace(holiday_calendar=holiday_calendar)
+
+        with self.assertRaises(PayrollAttendanceError) as context:
+            working_dates_for_employee(
+                db,
+                TENANT_ID,
+                employee_record(state=""),
+                period(),
+            )
+
+        self.assertEqual(context.exception.code, "employee_payroll_state_missing")
+        self.assertEqual(
+            context.exception.message,
+            "Payroll state is missing for this employee.",
+        )
+        holiday_calendar.find.assert_not_called()
 
 
 class LeaveSummaryTests(unittest.TestCase):
@@ -286,6 +307,167 @@ class PayrollRunProtectionTests(unittest.TestCase):
 
         with self.assertRaises(PayrollAttendanceError):
             assert_payroll_period_is_editable(db, TENANT_ID, "2025-08")
+
+    def test_completed_employee_does_not_block_unprocessed_employee_same_month(self):
+        employee_two_id = ObjectId("64b64c5d8f4b2a0012345679")
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = [{
+            "_id": ObjectId(),
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "run_code": "PAY-SDS-202508-001",
+            "status": "disbursed",
+            "employee_ids": [EMPLOYEE_ID],
+            "is_locked": True,
+        }]
+        payslips = MagicMock()
+        payslips.find.return_value = []
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            TENANT_ID,
+            "2025-08",
+            [EMPLOYEE_ID, employee_two_id],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [str(employee_two_id)])
+        self.assertEqual(result["blocked_employee_ids"], [str(EMPLOYEE_ID)])
+        self.assertEqual(result["blocked"][0]["status"], "disbursed")
+        self.assertEqual(result["blocked"][0]["source"], "payroll_run")
+
+    def test_same_employee_is_blocked_for_duplicate_month(self):
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = [{
+            "_id": ObjectId(),
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "status": "finance_approved",
+            "employee_ids": [str(EMPLOYEE_ID)],
+        }]
+        payslips = MagicMock()
+        payslips.find.return_value = []
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            TENANT_ID,
+            "2025-08",
+            [EMPLOYEE_ID],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [])
+        self.assertEqual(result["blocked_employee_ids"], [str(EMPLOYEE_ID)])
+        self.assertEqual(result["blocked"][0]["status"], "finance_approved")
+
+    def test_draft_employee_remains_editable_for_resynchronization(self):
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = [{
+            "_id": ObjectId(),
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "status": "draft",
+            "employee_ids": [EMPLOYEE_ID],
+            "is_locked": False,
+        }]
+        payslips = MagicMock()
+        payslips.find.return_value = [{
+            "_id": ObjectId(),
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "employee_id": str(EMPLOYEE_ID),
+            "status": "pending_hr_review",
+        }]
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            TENANT_ID,
+            "2025-08",
+            [EMPLOYEE_ID],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [str(EMPLOYEE_ID)])
+        self.assertEqual(result["blocked_employee_ids"], [])
+
+    def test_payslip_blocks_employee_when_run_employee_ids_are_missing(self):
+        run_id = ObjectId()
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = [{
+            "_id": run_id,
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "status": "hr_reviewed",
+            "employee_ids": [],
+        }]
+        payslips = MagicMock()
+        payslips.find.return_value = [{
+            "_id": ObjectId(),
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-08",
+            "employee_id": EMPLOYEE_ID,
+            "run_id": run_id,
+            "status": "hr_reviewed",
+        }]
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            TENANT_ID,
+            "2025-08",
+            [EMPLOYEE_ID],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [])
+        self.assertEqual(result["blocked_employee_ids"], [str(EMPLOYEE_ID)])
+        self.assertEqual(result["blocked"][0]["source"], "payslip")
+
+    def test_same_employee_is_allowed_in_another_month(self):
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = []
+        payslips = MagicMock()
+        payslips.find.return_value = []
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            TENANT_ID,
+            "2025-09",
+            [EMPLOYEE_ID],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [str(EMPLOYEE_ID)])
+        payroll_runs.find.assert_called_once_with({
+            "tenant_id": TENANT_ID,
+            "period_key": "2025-09",
+            "is_deleted": {"$ne": True},
+        })
+        payslip_query = payslips.find.call_args.args[0]
+        self.assertEqual(payslip_query["tenant_id"], TENANT_ID)
+        self.assertEqual(payslip_query["period_key"], "2025-09")
+
+    def test_different_tenant_payroll_does_not_block_employee(self):
+        payroll_runs = MagicMock()
+        payroll_runs.find.return_value = []
+        payslips = MagicMock()
+        payslips.find.return_value = []
+        db = SimpleNamespace(payroll_runs=payroll_runs, payslips=payslips)
+
+        result = assert_payroll_period_is_editable(
+            db,
+            "tenant-other",
+            "2025-08",
+            [EMPLOYEE_ID],
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [str(EMPLOYEE_ID)])
+        payroll_runs.find.assert_called_once_with({
+            "tenant_id": "tenant-other",
+            "period_key": "2025-08",
+            "is_deleted": {"$ne": True},
+        })
+        payslip_query = payslips.find.call_args.args[0]
+        self.assertEqual(payslip_query["tenant_id"], "tenant-other")
 
 
 class AttendanceSummaryTests(unittest.TestCase):
@@ -585,6 +767,133 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(result["totals"]["total_lwp_days"], 1)
         self.assertEqual(mock_save.call_count, 2)
         mock_editable.assert_called_once()
+
+    @patch(
+        "app.services.payroll_attendance_service.assert_payroll_period_is_editable"
+    )
+    @patch(
+        "app.services.payroll_attendance_service.list_payroll_employees"
+    )
+    @patch(
+        "app.services.payroll_attendance_service.build_attendance_summary"
+    )
+    @patch(
+        "app.services.payroll_attendance_service.save_attendance_summary"
+    )
+    def test_batch_sync_skips_completed_employee_and_processes_eligible_employee(
+        self,
+        mock_save,
+        mock_build,
+        mock_list,
+        mock_editable,
+    ):
+        completed_employee = employee_record(
+            employee_name="Ajanur",
+            employee_code="SDS-001",
+        )
+        eligible_employee = employee_record(
+            _id=ObjectId("64b64c5d8f4b2a0012345679"),
+            employee_code="SDS-002",
+            employee_name="Atlanta",
+        )
+        mock_list.return_value = [completed_employee, eligible_employee]
+        mock_editable.return_value = {
+            "period_key": "2025-08",
+            "eligible_employee_ids": [str(eligible_employee["_id"])],
+            "blocked_employee_ids": [str(completed_employee["_id"])],
+            "blocked": [{
+                "employee_id": str(completed_employee["_id"]),
+                "status": "disbursed",
+                "run_id": "run-1",
+                "run_code": "PAY-SDS-202508-001",
+                "payslip_id": "payslip-1",
+                "source": "payslip",
+                "eligibility": "already_processed",
+                "reason": "Employee payroll is already disbursed.",
+            }],
+        }
+        summary = {
+            "tenant_id": TENANT_ID,
+            "employee_id": str(eligible_employee["_id"]),
+            "period_key": "2025-08",
+            "total_days": 31,
+            "working_days": 23,
+            "present_days": 22,
+            "paid_leave_days": 1,
+            "lwp_days": 0,
+            "absent_days": 0,
+        }
+        mock_build.return_value = summary
+        mock_save.return_value = summary
+
+        result = sync_attendance_summaries(
+            SimpleNamespace(),
+            tenant_id=TENANT_ID,
+            period="2025-08",
+            employee_references=[
+                str(completed_employee["_id"]),
+                str(eligible_employee["_id"]),
+            ],
+            actor_id="user-1",
+            actor_name="Finance User",
+            persist=True,
+        )
+
+        self.assertEqual(result["eligible_employee_ids"], [str(eligible_employee["_id"])])
+        self.assertEqual(result["blocked_employee_ids"], [str(completed_employee["_id"])])
+        self.assertEqual(result["totals"]["employees_requested"], 2)
+        self.assertEqual(result["totals"]["employees_eligible"], 1)
+        self.assertEqual(result["totals"]["employees_blocked"], 1)
+        self.assertEqual(result["totals"]["employees_synced"], 1)
+        self.assertEqual(result["totals"]["employees_failed"], 0)
+        self.assertEqual(result["totals"]["employees_skipped"], 1)
+        self.assertEqual(result["blocked"][0]["employee_name"], "Ajanur")
+        mock_build.assert_called_once()
+        self.assertEqual(mock_build.call_args.args[2]["employee_name"], "Atlanta")
+        mock_save.assert_called_once_with(SimpleNamespace(), summary)
+
+    @patch(
+        "app.services.payroll_attendance_service.assert_payroll_period_is_editable"
+    )
+    @patch(
+        "app.services.payroll_attendance_service.list_payroll_employees"
+    )
+    def test_batch_sync_rejects_request_when_every_employee_is_completed(
+        self,
+        mock_list,
+        mock_editable,
+    ):
+        completed_employee = employee_record(employee_name="Ajanur")
+        mock_list.return_value = [completed_employee]
+        mock_editable.return_value = {
+            "period_key": "2025-08",
+            "eligible_employee_ids": [],
+            "blocked_employee_ids": [str(completed_employee["_id"])],
+            "blocked": [{
+                "employee_id": str(completed_employee["_id"]),
+                "status": "disbursed",
+                "run_id": "run-1",
+                "run_code": "PAY-SDS-202508-001",
+                "source": "payroll_run",
+                "reason": "Employee payroll is already disbursed.",
+            }],
+        }
+
+        with self.assertRaises(PayrollAttendanceError) as context:
+            sync_attendance_summaries(
+                SimpleNamespace(),
+                tenant_id=TENANT_ID,
+                period="2025-08",
+                employee_references=[str(completed_employee["_id"])],
+                persist=True,
+            )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.code, "payroll_employees_not_editable")
+        self.assertEqual(
+            context.exception.details["blocked_employee_ids"],
+            [str(completed_employee["_id"])],
+        )
 
     @patch(
         "app.services.payroll_attendance_service.find_employee"

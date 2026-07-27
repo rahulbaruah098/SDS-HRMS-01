@@ -12,6 +12,7 @@ from pymongo import ReturnDocument
 
 from app.services.payroll_reporting_service import (
     PayrollReportingError,
+    canonical_payroll_status,
     department_summary,
     employee_statement,
     generate_payroll_report_csv,
@@ -21,6 +22,7 @@ from app.services.payroll_reporting_service import (
     parse_period,
     payroll_register,
     payroll_register_row,
+    payroll_status_query_values,
     payroll_summary,
     payroll_trend,
     period_range,
@@ -261,6 +263,74 @@ class PeriodAndStatusValidationTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "invalid_payroll_report_status")
 
+    def test_legacy_statuses_are_normalized_to_canonical_workflow(self):
+        expected = {
+            "pending_hr_review": "draft",
+            "hr_review": "hr_reviewed",
+            "reviewed": "hr_reviewed",
+            "pending_finance_approval": "hr_reviewed",
+            "finance_approval_pending": "hr_reviewed",
+            "approved": "finance_approved",
+        }
+
+        for legacy_status, canonical_status in expected.items():
+            with self.subTest(legacy_status=legacy_status):
+                self.assertEqual(
+                    canonical_payroll_status(legacy_status),
+                    canonical_status,
+                )
+
+    def test_canonical_statuses_remain_unchanged(self):
+        canonical_statuses = [
+            "draft",
+            "hr_reviewed",
+            "finance_approved",
+            "locked",
+            "disbursed",
+        ]
+
+        self.assertEqual(
+            [canonical_payroll_status(item) for item in canonical_statuses],
+            canonical_statuses,
+        )
+
+    def test_normalize_statuses_accepts_legacy_values_and_deduplicates(self):
+        self.assertEqual(
+            normalize_statuses(
+                [
+                    "pending_hr_review",
+                    "draft",
+                    "pending_finance_approval",
+                    "reviewed",
+                    "approved",
+                ],
+                official_only=False,
+            ),
+            ["draft", "finance_approved", "hr_reviewed"],
+        )
+
+    def test_status_query_expansion_includes_historical_database_values(self):
+        values = set(
+            payroll_status_query_values(
+                ["draft", "hr_reviewed", "finance_approved"]
+            )
+        )
+
+        self.assertEqual(
+            values,
+            {
+                "draft",
+                "pending_hr_review",
+                "hr_reviewed",
+                "hr_review",
+                "reviewed",
+                "pending_finance_approval",
+                "finance_approval_pending",
+                "finance_approved",
+                "approved",
+            },
+        )
+
     def test_report_type_alias_and_invalid_value(self):
         self.assertEqual(normalize_report_type("variance"), "period_variance")
 
@@ -282,6 +352,17 @@ class RegisterRowTests(unittest.TestCase):
         self.assertEqual(row["reimbursements"], 2000)
         self.assertEqual(row["masked_account_number"], "********9012")
         self.assertTrue(row["bank_snapshot_available"])
+
+    def test_register_row_exposes_only_canonical_statuses(self):
+        source = payslip_record(
+            status="pending_finance_approval",
+            workflow_stage="approved",
+        )
+
+        row = payroll_register_row(source)
+
+        self.assertEqual(row["status"], "hr_reviewed")
+        self.assertEqual(row["workflow_stage"], "finance_approved")
 
     def test_register_row_uses_line_item_fallbacks(self):
         source = payslip_record()
@@ -333,6 +414,36 @@ class ReportGenerationTests(unittest.TestCase):
         self.assertEqual(query["tenant_id"], TENANT_ID)
         self.assertEqual(query["period_key"], {"$in": ["2026-07"]})
         self.assertEqual(set(query["status"]["$in"]), {"locked", "disbursed"})
+
+    def test_payroll_register_expands_legacy_status_query_and_response(self):
+        legacy = payslip_record(
+            status="pending_finance_approval",
+            workflow_stage="reviewed",
+        )
+        db = FakeDB([legacy])
+
+        report = payroll_register(
+            db,
+            tenant_id=TENANT_ID,
+            period_key="2026-07",
+            statuses=["hr_reviewed"],
+            official_only=False,
+        )
+
+        query_statuses = set(db.payslips.find_calls[-1]["status"]["$in"])
+        self.assertEqual(
+            query_statuses,
+            {
+                "hr_reviewed",
+                "hr_review",
+                "reviewed",
+                "pending_finance_approval",
+                "finance_approval_pending",
+            },
+        )
+        self.assertEqual(report["statuses"], ["hr_reviewed"])
+        self.assertEqual(report["rows"][0]["status"], "hr_reviewed")
+        self.assertEqual(report["rows"][0]["workflow_stage"], "hr_reviewed")
 
     def test_payroll_register_applies_department_and_search_filters(self):
         report = payroll_register(

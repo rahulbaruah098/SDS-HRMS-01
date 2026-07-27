@@ -908,7 +908,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       ...current,
       state_code: 'AS',
       state_name: current.state_name || 'Assam',
-      effective_from: '2025-04-01',
+      // Preserve the date already selected by the user. Use the preset
+      // commencement date only when the field is currently empty.
+      effective_from: safeText(current.effective_from, '2025-04-01'),
       source_reference:
         current.source_reference ||
         'Assam Professional Tax rates effective April 2025',
@@ -921,7 +923,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     }));
 
     alerts.success(
-      'Assam Professional Tax slabs effective April 2025 were loaded into the current draft. Review and save the draft before activation.',
+      'Assam Professional Tax slabs were loaded into the current draft without changing your selected effective date. Review and save the draft before activation.',
       'Assam PT Preset Loaded',
     );
   }
@@ -1757,8 +1759,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                 <span>
                   Assam preset boundaries: gross salary up to ₹15,000 = ₹0;
                   above ₹15,000 and below ₹25,000 = ₹180; ₹25,000 and above = ₹208.
-                  The preset uses an effective date of 01 April 2025 and remains
-                  editable before activation.
+                  The preset loads the Assam Professional Tax slab values introduced
+                  for April 2025. It preserves the Effective from date already selected
+                  for this revision.
                 </span>
               </div>
             ) : null}

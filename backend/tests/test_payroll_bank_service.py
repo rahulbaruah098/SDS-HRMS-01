@@ -897,5 +897,153 @@ class BankDisbursementExportTests(unittest.TestCase):
         )
 
 
+class BankExportReferenceValidationTests(unittest.TestCase):
+    def test_accepted_status_requires_bank_reference(self):
+        db = FakeDB()
+
+        with self.assertRaises(PayrollBankError) as context:
+            mark_bank_export_status(
+                db,
+                tenant_id=TENANT_ID,
+                export_id=str(EXPORT_ID),
+                status="accepted",
+                actor_id="finance-1",
+                actor_name="Finance User",
+                reference="",
+            )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.code,
+            "bank_export_reference_required",
+        )
+        self.assertEqual(context.exception.details["status"], "accepted")
+        self.assertEqual(len(db.payroll_bank_exports.update_calls), 0)
+
+    def test_processed_status_requires_bank_reference(self):
+        db = FakeDB()
+
+        with self.assertRaises(PayrollBankError) as context:
+            mark_bank_export_status(
+                db,
+                tenant_id=TENANT_ID,
+                export_id=str(EXPORT_ID),
+                status="processed",
+                actor_id="finance-1",
+                actor_name="Finance User",
+            )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.code,
+            "bank_export_reference_required",
+        )
+        self.assertEqual(context.exception.details["status"], "processed")
+        self.assertEqual(len(db.payroll_bank_exports.update_calls), 0)
+
+    def test_whitespace_only_reference_is_rejected(self):
+        db = FakeDB()
+
+        with self.assertRaises(PayrollBankError) as context:
+            mark_bank_export_status(
+                db,
+                tenant_id=TENANT_ID,
+                export_id=str(EXPORT_ID),
+                status="processed",
+                reference="   ",
+                note="   ",
+            )
+
+        self.assertEqual(
+            context.exception.code,
+            "bank_export_reference_required",
+        )
+        self.assertEqual(len(db.payroll_bank_exports.update_calls), 0)
+
+    def test_non_final_bank_export_statuses_allow_empty_reference(self):
+        for status in ("generated", "uploaded", "rejected"):
+            with self.subTest(status=status):
+                db = FakeDB()
+                db.payroll_bank_exports.find_one_and_update_result = {
+                    "_id": EXPORT_ID,
+                    "tenant_id": TENANT_ID,
+                    "status": status,
+                    "status_reference": "",
+                }
+
+                result = mark_bank_export_status(
+                    db,
+                    tenant_id=TENANT_ID,
+                    export_id=str(EXPORT_ID),
+                    status=status,
+                    actor_id="finance-1",
+                    actor_name="Finance User",
+                    reference="",
+                )
+
+                self.assertEqual(result["status"], status)
+                update = db.payroll_bank_exports.update_calls[0][1]
+                self.assertEqual(update["$set"]["status"], status)
+                self.assertEqual(update["$set"]["status_reference"], "")
+
+    def test_reference_and_note_are_trimmed_before_storage(self):
+        db = FakeDB()
+        db.payroll_bank_exports.find_one_and_update_result = {
+            "_id": EXPORT_ID,
+            "tenant_id": TENANT_ID,
+            "status": "processed",
+            "status_reference": "UTR-7788",
+            "status_note": "Bank confirmed processing.",
+        }
+
+        mark_bank_export_status(
+            db,
+            tenant_id=TENANT_ID,
+            export_id=str(EXPORT_ID),
+            status="processed",
+            actor_id="finance-1",
+            actor_name="Finance User",
+            reference="  UTR-7788  ",
+            note="  Bank confirmed processing.  ",
+        )
+
+        query, update, _ = db.payroll_bank_exports.update_calls[0]
+        self.assertEqual(query["tenant_id"], TENANT_ID)
+        self.assertEqual(update["$set"]["status_reference"], "UTR-7788")
+        self.assertEqual(
+            update["$set"]["status_note"],
+            "Bank confirmed processing.",
+        )
+        self.assertEqual(
+            update["$push"]["status_history"]["reference"],
+            "UTR-7788",
+        )
+        self.assertEqual(
+            update["$push"]["status_history"]["note"],
+            "Bank confirmed processing.",
+        )
+
+    def test_reference_validation_remains_tenant_scoped(self):
+        db = FakeDB()
+        db.payroll_bank_exports.find_one_and_update_result = {
+            "_id": EXPORT_ID,
+            "tenant_id": TENANT_ID,
+            "status": "accepted",
+            "status_reference": "BANK-BATCH-002",
+        }
+
+        mark_bank_export_status(
+            db,
+            tenant_id=TENANT_ID,
+            export_id=str(EXPORT_ID),
+            status="accepted",
+            reference="BANK-BATCH-002",
+        )
+
+        query = db.payroll_bank_exports.update_calls[0][0]
+        self.assertEqual(query["tenant_id"], TENANT_ID)
+        self.assertNotEqual(query["tenant_id"], OTHER_TENANT_ID)
+
+
 if __name__ == "__main__":
     unittest.main()

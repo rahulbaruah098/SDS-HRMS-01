@@ -49,6 +49,14 @@ BANK_EXPORTABLE_PAYROLL_STATUSES = {
     "disbursed",
 }
 
+# A bank acknowledgement is mandatory before an export can be treated as
+# accepted or processed. This reference may be a UTR, bank batch number,
+# transaction reference, or another acknowledgement supplied by the bank.
+BANK_EXPORT_STATUSES_REQUIRING_REFERENCE = {
+    "accepted",
+    "processed",
+}
+
 BANK_SNAPSHOT_PREPARATION_STATUSES = {
     "finance_approved",
     "locked",
@@ -1090,16 +1098,24 @@ def validate_bank_details_for_disbursement(
         })
 
     verification_status = normalize_key(record.get("verification_status"))
-    is_locked_snapshot = bool(
-        safe_str(record.get("bank_details_id"))
-        or record.get("snapshot_at")
-    )
-    is_verified = (
-        verification_status == "verified"
-        and (is_locked_snapshot or bool(record.get("is_verified")))
+    explicit_verification_flag = record.get("is_verified")
+
+    # Older immutable payroll snapshots stored verification_status=verified
+    # but did not persist is_verified. Accept that legacy snapshot shape while
+    # continuing to require the explicit flag for normal editable bank records.
+    verification_confirmed = (
+        explicit_verification_flag is True
+        or (
+            explicit_verification_flag is None
+            and verification_status == "verified"
+            and bool(record.get("snapshot_at"))
+        )
     )
 
-    if require_verified and not is_verified:
+    if require_verified and (
+        not verification_confirmed
+        or verification_status != "verified"
+    ):
         errors.append({
             "field": "verification_status",
             "message": "Bank details have not been verified.",
@@ -1127,10 +1143,13 @@ def validate_bank_details_for_disbursement(
         "account_type": account_type,
         "payment_method": payment_method,
         "beneficiary_code": beneficiary_code,
-        "verification_status": "verified" if is_verified else verification_status,
-        "is_verified": is_verified,
-        "status": safe_str(record.get("status") or "active"),
-        "is_active": record.get("is_active") is not False,
+        # Preserve the explicit verification flag in the immutable snapshot.
+        # Disbursement revalidates the snapshot after payroll lock, and the
+        # validation requires both this flag and verification_status=verified.
+        "is_verified": verification_confirmed,
+        "verification_status": "verified"
+        if verification_confirmed
+        else safe_str(record.get("verification_status")),
         "verified_at": record.get("verified_at"),
         "revision_number": int(record.get("revision_number") or 1),
     }
@@ -1393,19 +1412,8 @@ def prepare_payroll_bank_snapshots(
     }
 
     if strict and failures:
-        if run_status == "locked":
-            message = (
-                "One or more locked payslips do not contain a valid verified "
-                "bank snapshot. Payroll cannot be disbursed."
-            )
-        else:
-            message = (
-                "One or more employees do not have valid verified bank details. "
-                "Payroll cannot be locked."
-            )
-
         raise PayrollBankError(
-            message,
+            "One or more employees do not have valid verified bank details for payroll processing.",
             status_code=409,
             code="payroll_bank_snapshot_validation_failed",
             details=result_payload,
@@ -1914,11 +1922,35 @@ def mark_bank_export_status(
             details={"allowed_statuses": sorted(allowed_statuses)},
         )
 
+    normalized_reference = safe_str(reference)
+    normalized_note = safe_str(note)
+
+    if (
+        normalized_status in BANK_EXPORT_STATUSES_REQUIRING_REFERENCE
+        and not normalized_reference
+    ):
+        raise PayrollBankError(
+            (
+                "A UTR, transaction reference, or bank batch reference is "
+                f"required before the bank export can be marked {normalized_status}."
+            ),
+            status_code=409,
+            code="bank_export_reference_required",
+            details={
+                "status": normalized_status,
+                "accepted_reference_types": [
+                    "utr",
+                    "transaction_reference",
+                    "bank_batch_reference",
+                ],
+            },
+        )
+
     now = now_utc()
     history_entry = {
         "status": normalized_status,
-        "reference": safe_str(reference),
-        "note": safe_str(note),
+        "reference": normalized_reference,
+        "note": normalized_note,
         "actor_id": safe_str(actor_id),
         "actor_name": safe_str(actor_name),
         "at": now,
@@ -1933,8 +1965,8 @@ def mark_bank_export_status(
         {
             "$set": {
                 "status": normalized_status,
-                "status_reference": safe_str(reference),
-                "status_note": safe_str(note),
+                "status_reference": normalized_reference,
+                "status_note": normalized_note,
                 "updated_at": now,
                 "updated_by": safe_str(actor_id),
                 "updated_by_name": safe_str(actor_name),

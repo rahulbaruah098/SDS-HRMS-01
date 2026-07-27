@@ -32,13 +32,44 @@ OFFICIAL_PAYROLL_STATUSES = {
     "disbursed",
 }
 
+# Canonical statuses used by the current payroll workflow and by all report
+# responses. Legacy values are accepted through PAYROLL_STATUS_ALIASES so
+# historical payslips remain visible without exposing inconsistent names.
 REPORTABLE_PAYROLL_STATUSES = {
     "draft",
-    "pending_hr_review",
-    "pending_finance_approval",
+    "hr_reviewed",
     "finance_approved",
     "locked",
     "disbursed",
+}
+
+PAYROLL_STATUS_ALIASES = {
+    "pending_hr_review": "draft",
+    "hr_review": "hr_reviewed",
+    "reviewed": "hr_reviewed",
+    "pending_finance_approval": "hr_reviewed",
+    "finance_approval_pending": "hr_reviewed",
+    "approved": "finance_approved",
+}
+
+PAYROLL_STATUS_QUERY_VALUES = {
+    "draft": {
+        "draft",
+        "pending_hr_review",
+    },
+    "hr_reviewed": {
+        "hr_reviewed",
+        "hr_review",
+        "reviewed",
+        "pending_finance_approval",
+        "finance_approval_pending",
+    },
+    "finance_approved": {
+        "finance_approved",
+        "approved",
+    },
+    "locked": {"locked"},
+    "disbursed": {"disbursed"},
 }
 
 PAYROLL_REPORT_EXPORT_STATUSES = {
@@ -307,13 +338,36 @@ def parse_date(
         ) from exc
 
 
+def canonical_payroll_status(value: Any, *, default: str = "draft") -> str:
+    """Return the canonical payroll workflow status for a stored value."""
+    normalized = normalize_key(value)
+
+    if not normalized:
+        return default
+
+    return PAYROLL_STATUS_ALIASES.get(normalized, normalized)
+
+
+def payroll_status_query_values(statuses: Iterable[Any]) -> list[str]:
+    """Expand canonical statuses to include historical database aliases."""
+    values: set[str] = set()
+
+    for item in statuses:
+        canonical = canonical_payroll_status(item)
+        values.update(
+            PAYROLL_STATUS_QUERY_VALUES.get(canonical, {canonical})
+        )
+
+    return sorted(values)
+
+
 def normalize_statuses(
     statuses: Iterable[Any] | None,
     *,
     official_only: bool = True,
 ) -> list[str]:
     normalized = {
-        normalize_key(item)
+        canonical_payroll_status(item)
         for item in (statuses or [])
         if safe_str(item)
     }
@@ -643,11 +697,12 @@ def payroll_register_row(
         "year": int(payslip.get("year") or 0),
         **employee,
         "state_code": safe_str(payslip.get("state_code")),
-        "status": normalize_key(payslip.get("status") or "draft"),
-        "workflow_stage": normalize_key(
+        "status": canonical_payroll_status(
+            payslip.get("status"),
+        ),
+        "workflow_stage": canonical_payroll_status(
             payslip.get("workflow_stage")
-            or payslip.get("status")
-            or "draft"
+            or payslip.get("status"),
         ),
         "is_locked": bool(payslip.get("is_locked")),
         "currency": safe_str(payslip.get("currency") or "INR"),
@@ -707,7 +762,9 @@ def _report_query(
     query: dict[str, Any] = {
         "tenant_id": tenant_id,
         "period_key": {"$in": list(periods)},
-        "status": {"$in": list(statuses)},
+        "status": {
+            "$in": payroll_status_query_values(statuses),
+        },
         "is_deleted": {"$ne": True},
     }
     normalized_employee_ids = _normalize_filter_values(employee_ids)
@@ -2029,6 +2086,8 @@ __all__ = [
     "DEFAULT_STATUTORY_COLUMNS",
     "DEFAULT_VARIANCE_COLUMNS",
     "OFFICIAL_PAYROLL_STATUSES",
+    "PAYROLL_STATUS_ALIASES",
+    "REPORTABLE_PAYROLL_STATUSES",
     "PAYROLL_REPORT_EXPORT_STATUSES",
     "PAYROLL_REPORT_TYPES",
     "PAYROLL_REPORT_EXPORTS_COLLECTION",
@@ -2038,9 +2097,11 @@ __all__ = [
     "generate_payroll_report_csv",
     "label_from_key",
     "list_payroll_report_exports",
+    "canonical_payroll_status",
     "money_decimal",
     "normalize_report_type",
     "normalize_statuses",
+    "payroll_status_query_values",
     "parse_period",
     "payroll_register",
     "payroll_register_row",

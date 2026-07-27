@@ -96,6 +96,22 @@ const EXPORT_STATUSES = [
   ['archived', 'Archived'],
 ];
 
+const PAYROLL_STATUS_OPTIONS = [
+  ['draft', 'Draft'],
+  ['hr_reviewed', 'HR Reviewed'],
+  ['finance_approved', 'Finance Approved'],
+  ['locked', 'Locked'],
+  ['disbursed', 'Disbursed'],
+];
+
+const PAYROLL_STATUS_ALIASES = {
+  pending_hr_review: 'draft',
+  pending_finance_approval: 'hr_reviewed',
+  finance_approval_pending: 'hr_reviewed',
+  reviewed: 'hr_reviewed',
+  approved: 'finance_approved',
+};
+
 const MANAGEMENT_ROLES = new Set([
   'super_admin',
   'admin',
@@ -309,6 +325,33 @@ function normalizeKey(value) {
     .toLowerCase()
     .replaceAll('-', '_')
     .replace(/\s+/g, '_');
+}
+
+function normalizePayrollStatus(value) {
+  const normalized = normalizeKey(value);
+  return PAYROLL_STATUS_ALIASES[normalized] || normalized;
+}
+
+function payrollStatusLabel(value) {
+  const normalized = normalizePayrollStatus(value);
+  const configured = PAYROLL_STATUS_OPTIONS.find(
+    ([status]) => status === normalized,
+  );
+  return configured?.[1] || labelFromKey(normalized);
+}
+
+function payrollStatusTone(value) {
+  const normalized = normalizePayrollStatus(value);
+
+  if (normalized === 'disbursed') {
+    return 'success';
+  }
+
+  if (normalized === 'locked' || normalized === 'finance_approved') {
+    return 'neutral';
+  }
+
+  return 'warning';
 }
 
 function normalizeRoles(user = {}) {
@@ -585,11 +628,11 @@ function formatCell(key, value) {
     return formatNumber(value);
   }
 
-  if (
-    key === 'status' ||
-    key === 'employee_status' ||
-    key === 'state_code'
-  ) {
+  if (key === 'status') {
+    return payrollStatusLabel(value);
+  }
+
+  if (key === 'employee_status' || key === 'state_code') {
     return labelFromKey(value);
   }
 
@@ -944,7 +987,7 @@ export default function PayrollReports({ user = {} }) {
       official_only: canManage ? filters.official_only : true,
       statuses:
         canManage && !filters.official_only
-          ? filters.statuses
+          ? [...new Set(filters.statuses.map(normalizePayrollStatus))]
           : [],
       department: filters.department,
       designation: filters.designation,
@@ -2158,14 +2201,11 @@ export default function PayrollReports({ user = {} }) {
                   )
                 }
               >
-                <option value="draft">Draft</option>
-                <option value="pending_hr_review">Pending HR Review</option>
-                <option value="pending_finance_approval">
-                  Pending Finance Approval
-                </option>
-                <option value="finance_approved">Finance Approved</option>
-                <option value="locked">Locked</option>
-                <option value="disbursed">Disbursed</option>
+                {PAYROLL_STATUS_OPTIONS.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </select>
             </div>
           ) : null}
@@ -2454,11 +2494,13 @@ export default function PayrollReports({ user = {} }) {
                               column === 'employee_status' ? (
                               <span
                                 className={`payrep-status payrep-status-${
-                                  normalizeKey(row[column]) === 'removed'
-                                    ? 'neutral'
-                                    : normalizeKey(row[column]) === 'added'
-                                      ? 'success'
-                                      : 'warning'
+                                  column === 'status'
+                                    ? payrollStatusTone(row[column])
+                                    : normalizeKey(row[column]) === 'removed'
+                                      ? 'neutral'
+                                      : normalizeKey(row[column]) === 'added'
+                                        ? 'success'
+                                        : 'warning'
                                 }`}
                               >
                                 {formatCell(column, row[column])}
