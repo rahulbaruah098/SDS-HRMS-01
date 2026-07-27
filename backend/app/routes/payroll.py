@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import calendar
+import os
+from uuid import uuid4
 from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
@@ -8,8 +10,9 @@ from typing import Any, Iterable, Mapping
 
 from bson import ObjectId
 from pymongo import ReturnDocument
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request, send_from_directory
 from jinja2 import Environment
+from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
@@ -2192,6 +2195,192 @@ def retry_payroll_loan_recoveries(run_id: str):
 # ------------------------------ Reimbursements -----------------------------
 
 
+PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS = {
+    "pdf",
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+}
+PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _reimbursement_receipt_upload_root() -> str:
+    configured = current_app.config.get("UPLOAD_FOLDER")
+
+    if configured:
+        base_folder = os.path.abspath(str(configured))
+    else:
+        base_folder = os.path.abspath(
+            os.path.join(current_app.root_path, "..", "uploads")
+        )
+
+    return os.path.join(base_folder, "payroll_reimbursements")
+
+
+def _reimbursement_receipt_tenant_folder(tenant_id: str) -> str:
+    return secure_filename(safe_str(tenant_id)) or "tenant"
+
+
+def _reimbursement_receipt_extension(filename: str) -> str:
+    safe_name = secure_filename(filename)
+    if "." not in safe_name:
+        return ""
+    return safe_name.rsplit(".", 1)[1].lower()
+
+
+def _save_reimbursement_receipt_upload(
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    uploaded_file = (
+        request.files.get("file")
+        or request.files.get("receipt")
+        or request.files.get("attachment")
+    )
+
+    if not uploaded_file or not safe_str(uploaded_file.filename):
+        raise PayrollReimbursementError(
+            "Select a receipt file to upload.",
+            code="reimbursement_receipt_file_required",
+        )
+
+    original_filename = secure_filename(uploaded_file.filename)
+
+    if not original_filename:
+        raise PayrollReimbursementError(
+            "The selected receipt filename is invalid.",
+            code="invalid_reimbursement_receipt_filename",
+        )
+
+    extension = _reimbursement_receipt_extension(original_filename)
+
+    if extension not in PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS:
+        raise PayrollReimbursementError(
+            "Receipt must be a PDF, JPG, JPEG, PNG, or WEBP file.",
+            code="invalid_reimbursement_receipt_type",
+            details={
+                "allowed_extensions": sorted(
+                    PAYROLL_REIMBURSEMENT_RECEIPT_EXTENSIONS
+                ),
+            },
+        )
+
+    file_bytes = uploaded_file.read(
+        PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES + 1
+    )
+
+    if not file_bytes:
+        raise PayrollReimbursementError(
+            "The selected receipt file is empty.",
+            code="empty_reimbursement_receipt",
+        )
+
+    if len(file_bytes) > PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES:
+        raise PayrollReimbursementError(
+            "Receipt file must be 8 MB or smaller.",
+            code="reimbursement_receipt_too_large",
+            details={
+                "maximum_bytes": PAYROLL_REIMBURSEMENT_RECEIPT_MAX_BYTES,
+            },
+        )
+
+    tenant_folder = _reimbursement_receipt_tenant_folder(tenant_id)
+    upload_directory = os.path.join(
+        _reimbursement_receipt_upload_root(),
+        tenant_folder,
+    )
+    os.makedirs(upload_directory, exist_ok=True)
+
+    stored_filename = secure_filename(
+        f"receipt_{uuid4().hex}_{original_filename}"
+    )
+    stored_path = os.path.join(upload_directory, stored_filename)
+
+    with open(stored_path, "wb") as destination:
+        destination.write(file_bytes)
+
+    reference = (
+        "/api/v1/payroll/reimbursements/receipts/"
+        f"{tenant_folder}/{stored_filename}"
+    )
+
+    return {
+        "reference": reference,
+        "filename": original_filename,
+        "mime_type": safe_str(uploaded_file.mimetype)
+        or "application/octet-stream",
+        "size_bytes": len(file_bytes),
+        "uploaded_at": _now().isoformat(),
+    }
+
+
+@payroll_bp.post("/reimbursements/receipts/upload")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
+def upload_payroll_reimbursement_receipt():
+    tenant_id = _requested_tenant_id(dict(request.form))
+    receipt = _save_reimbursement_receipt_upload(
+        tenant_id=tenant_id,
+    )
+
+    audit(
+        "payroll_reimbursement_receipt_uploaded",
+        "payroll_reimbursement_receipts",
+        receipt.get("reference"),
+        {
+            "tenant_id": tenant_id,
+            "filename": receipt.get("filename"),
+            "mime_type": receipt.get("mime_type"),
+            "size_bytes": receipt.get("size_bytes"),
+        },
+    )
+
+    return _success(
+        "Receipt uploaded successfully.",
+        receipt=receipt,
+    )
+
+
+@payroll_bp.get(
+    "/reimbursements/receipts/<tenant_folder>/<filename>"
+)
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
+def serve_payroll_reimbursement_receipt(
+    tenant_folder: str,
+    filename: str,
+):
+    safe_tenant_folder = secure_filename(tenant_folder)
+    safe_filename = secure_filename(filename)
+    current_tenant_folder = _reimbursement_receipt_tenant_folder(
+        _current_tenant_id()
+    )
+
+    if (
+        safe_tenant_folder != current_tenant_folder
+        and "super_admin" not in _current_roles()
+    ):
+        raise PayrollReimbursementError(
+            "You cannot access a receipt from another company.",
+            status_code=403,
+            code="reimbursement_receipt_tenant_forbidden",
+        )
+
+    directory = os.path.join(
+        _reimbursement_receipt_upload_root(),
+        safe_tenant_folder,
+    )
+
+    return send_from_directory(
+        directory,
+        safe_filename,
+        as_attachment=False,
+    )
+
+
+
+
 def _has_reimbursement_management_access() -> bool:
     return bool(
         _current_roles().intersection(PAYROLL_REIMBURSEMENT_MANAGEMENT_ROLES)
@@ -3624,6 +3813,178 @@ def _payroll_tax_limit(
             "limit must be a valid integer.",
             code="invalid_payroll_tax_limit",
         ) from exc
+
+
+
+PAYROLL_TAX_PROOF_EXTENSIONS = {
+    "pdf",
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+}
+PAYROLL_TAX_PROOF_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _tax_proof_upload_root() -> str:
+    configured = current_app.config.get("UPLOAD_FOLDER")
+
+    if configured:
+        base_folder = os.path.abspath(str(configured))
+    else:
+        base_folder = os.path.abspath(
+            os.path.join(current_app.root_path, "..", "uploads")
+        )
+
+    return os.path.join(base_folder, "payroll_tax_proofs")
+
+
+def _tax_proof_tenant_folder(tenant_id: str) -> str:
+    return secure_filename(safe_str(tenant_id)) or "tenant"
+
+
+def _tax_proof_extension(filename: str) -> str:
+    safe_name = secure_filename(filename)
+    if "." not in safe_name:
+        return ""
+    return safe_name.rsplit(".", 1)[1].lower()
+
+
+def _save_tax_proof_upload(*, tenant_id: str) -> dict[str, Any]:
+    uploaded_file = (
+        request.files.get("file")
+        or request.files.get("proof")
+        or request.files.get("attachment")
+    )
+
+    if not uploaded_file or not safe_str(uploaded_file.filename):
+        raise PayrollTaxError(
+            "Select a supporting document to upload.",
+            code="tax_proof_file_required",
+        )
+
+    original_filename = secure_filename(uploaded_file.filename)
+
+    if not original_filename:
+        raise PayrollTaxError(
+            "The selected supporting document filename is invalid.",
+            code="invalid_tax_proof_filename",
+        )
+
+    extension = _tax_proof_extension(original_filename)
+
+    if extension not in PAYROLL_TAX_PROOF_EXTENSIONS:
+        raise PayrollTaxError(
+            "Supporting document must be a PDF, JPG, JPEG, PNG, or WEBP file.",
+            code="invalid_tax_proof_type",
+            details={
+                "allowed_extensions": sorted(PAYROLL_TAX_PROOF_EXTENSIONS),
+            },
+        )
+
+    file_bytes = uploaded_file.read(PAYROLL_TAX_PROOF_MAX_BYTES + 1)
+
+    if not file_bytes:
+        raise PayrollTaxError(
+            "The selected supporting document is empty.",
+            code="empty_tax_proof",
+        )
+
+    if len(file_bytes) > PAYROLL_TAX_PROOF_MAX_BYTES:
+        raise PayrollTaxError(
+            "Supporting document must be 8 MB or smaller.",
+            code="tax_proof_too_large",
+            details={"maximum_bytes": PAYROLL_TAX_PROOF_MAX_BYTES},
+        )
+
+    tenant_folder = _tax_proof_tenant_folder(tenant_id)
+    upload_directory = os.path.join(
+        _tax_proof_upload_root(),
+        tenant_folder,
+    )
+    os.makedirs(upload_directory, exist_ok=True)
+
+    stored_filename = secure_filename(
+        f"proof_{uuid4().hex}_{original_filename}"
+    )
+    stored_path = os.path.join(upload_directory, stored_filename)
+
+    with open(stored_path, "wb") as destination:
+        destination.write(file_bytes)
+
+    reference = (
+        "/api/v1/payroll/tax-proofs/"
+        f"{tenant_folder}/{stored_filename}"
+    )
+
+    return {
+        "reference": reference,
+        "filename": original_filename,
+        "document_type": "supporting_document",
+        "status": "pending",
+        "mime_type": safe_str(uploaded_file.mimetype)
+        or "application/octet-stream",
+        "size_bytes": len(file_bytes),
+        "uploaded_at": _now().isoformat(),
+        "uploaded_by": _current_user_id(),
+    }
+
+
+@payroll_bp.post("/tax-proofs/upload")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def upload_payroll_tax_proof():
+    tenant_id = _requested_tenant_id(dict(request.form))
+    proof = _save_tax_proof_upload(tenant_id=tenant_id)
+
+    audit(
+        "payroll_tax_proof_uploaded",
+        "payroll_tax_proofs",
+        proof.get("reference"),
+        {
+            "tenant_id": tenant_id,
+            "filename": proof.get("filename"),
+            "mime_type": proof.get("mime_type"),
+            "size_bytes": proof.get("size_bytes"),
+        },
+    )
+
+    return _success(
+        "Supporting document uploaded successfully.",
+        proof=proof,
+    )
+
+
+@payroll_bp.get("/tax-proofs/<tenant_folder>/<filename>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_TAX_ACCESS_ROLES)
+def serve_payroll_tax_proof(tenant_folder: str, filename: str):
+    safe_tenant_folder = secure_filename(tenant_folder)
+    safe_filename = secure_filename(filename)
+    current_tenant_folder = _tax_proof_tenant_folder(
+        _current_tenant_id()
+    )
+
+    if (
+        safe_tenant_folder != current_tenant_folder
+        and "super_admin" not in _current_roles()
+    ):
+        raise PayrollTaxError(
+            "You cannot access a tax proof from another company.",
+            status_code=403,
+            code="tax_proof_tenant_forbidden",
+        )
+
+    directory = os.path.join(
+        _tax_proof_upload_root(),
+        safe_tenant_folder,
+    )
+
+    return send_from_directory(
+        directory,
+        safe_filename,
+        as_attachment=False,
+    )
 
 
 @payroll_bp.get("/tax-declarations")
@@ -6365,6 +6726,30 @@ def _payslip_pdf_context(db: Any, payslip: Mapping[str, Any]) -> dict[str, Any]:
     net_amount = totals.get("net_amount", 0)
     pf_employer = totals.get("pf_employer", _line_amount(earnings, "pf_employer"))
 
+    bank = dict(
+        payslip.get("bank_details_snapshot")
+        or payslip.get("bank_snapshot")
+        or payslip.get("bank_account_snapshot")
+        or {}
+    )
+
+    employee["account_number"] = safe_str(
+        bank.get("masked_account_number")
+        or bank.get("account_number_masked")
+        or employee.get("masked_account_number")
+        or employee.get("account_number")
+    )
+
+    employee["ifsc_code"] = safe_str(
+        bank.get("ifsc_code")
+        or employee.get("ifsc_code")
+    )
+
+    employee["bank_name"] = safe_str(
+        bank.get("bank_name")
+        or employee.get("bank_name")
+    )
+
     earning_rows = [
         ("Basic", _line_amount(earnings, "basic")),
         ("HRA", _line_amount(earnings, "hra")),
@@ -6486,7 +6871,7 @@ PAYSLIP_HTML_TEMPLATE = r"""
     <tr><td class="label">Employee Code</td><td>{{ employee.employee_code or '—' }}</td><td class="label">Universal Account Number (UAN)</td><td>{{ employee.uan or 'NA' }}</td></tr>
     <tr><td class="label">Function</td><td>{{ employee.function or employee.department or '—' }}</td><td class="label">ESI Number</td><td>{{ employee.esi_number or 'NA' }}</td></tr>
     <tr><td class="label">Designation</td><td>{{ employee.designation or '—' }}</td><td class="label">PR Account Number (PRAN)</td><td>{{ employee.pran or 'NA' }}</td></tr>
-    <tr><td class="label">Location</td><td>{{ employee.location or '—' }}</td><td class="label">IFS Code</td><td>{{ employee.ifsc_code or '—' }}</td></tr>
+    <tr><td class="label">Location</td><td>{{ employee.location or '—' }}</td><td class="label">IFSC Code</td><td>{{ employee.ifsc_code or '—' }}</td></tr>
     <tr><td class="label">Account No.</td><td>{{ employee.account_number or '—' }}</td><td class="label">Total Sanctioned Leave</td><td>{{ attendance.paid_leave_days or 0 }} Days</td></tr>
     <tr><td class="label">Date of joining</td><td>{{ employee.date_of_joining or '—' }}</td><td class="label">LWP (Leave Without Pay)</td><td>{{ attendance.lwp_days or 0 }} Days</td></tr>
     <tr><td class="label">Leave availed during this Month</td><td>{{ attendance.leave_availed or attendance.paid_leave_days or 0 }} Days</td><td class="label">No. of Days Salary Paid for</td><td>{{ attendance.payable_days or attendance.salary_paid_days or 0 }} Days</td></tr>

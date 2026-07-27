@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Banknote,
   Calculator,
   CheckCircle2,
   ChevronDown,
@@ -10,10 +11,13 @@ import {
   FileText,
   IndianRupee,
   Loader2,
+  LockKeyhole,
   RefreshCw,
   Search,
+  ShieldCheck,
   Users,
   WalletCards,
+  X,
 } from 'lucide-react';
 
 import { api, getApiUrl, getToken } from '../api/client';
@@ -57,6 +61,83 @@ function normalizeRoles(user = {}) {
 
 function isSuperAdmin(user = {}) {
   return normalizeRoles(user).includes('super_admin');
+}
+
+const HR_PAYROLL_REVIEW_ROLES = new Set([
+  'hr',
+  'hr_admin',
+  'hr_manager',
+]);
+
+const FINANCE_PAYROLL_WORKFLOW_ROLES = new Set([
+  'finance',
+  'accounts_finance',
+]);
+
+function todayInputValue() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function emptyPayrollDisbursement() {
+  return {
+    transfer_date: todayInputValue(),
+    transfer_mode: 'NEFT',
+    transaction_reference: '',
+    bank_file_reference: '',
+  };
+}
+
+function workflowActionForStatus(value) {
+  const status = normalizeKey(value);
+
+  if (status === 'draft') {
+    return 'hr_review';
+  }
+
+  if (status === 'hr_reviewed') {
+    return 'finance_approve';
+  }
+
+  if (status === 'finance_approved') {
+    return 'lock';
+  }
+
+  if (status === 'locked') {
+    return 'disburse';
+  }
+
+  return '';
+}
+
+function workflowActionLabel(action) {
+  const labels = {
+    hr_review: 'Complete HR Review',
+    finance_approve: 'Approve as Finance',
+    lock: 'Lock Payroll',
+    disburse: 'Record Disbursement',
+  };
+
+  return labels[action] || statusLabel(action);
+}
+
+function workflowActionDescription(action) {
+  const descriptions = {
+    hr_review:
+      'Confirm the payroll calculation, attendance, LWP, reimbursements and employee-level results before sending the run to Finance.',
+    finance_approve:
+      'Confirm the payroll values and statutory deductions before allowing the run to be locked.',
+    lock:
+      'Lock the payroll after verified bank details are available. Locked payroll values can no longer be recalculated.',
+    disburse:
+      'Record the actual salary transfer details after the bank transfer has been completed.',
+  };
+
+  return descriptions[action] || '';
 }
 
 function buildQuery(params = {}) {
@@ -156,11 +237,19 @@ function statusLabel(value) {
 function statusClass(value) {
   const status = normalizeKey(value);
 
-  if (['approved', 'locked', 'disbursed', 'completed'].includes(status)) {
+  if (
+    ['approved', 'finance_approved', 'locked', 'disbursed', 'completed'].includes(
+      status,
+    )
+  ) {
     return 'payroll-status payroll-status-success';
   }
 
-  if (['reviewed', 'hr_review', 'finance_approval', 'processing'].includes(status)) {
+  if (
+    ['reviewed', 'hr_review', 'hr_reviewed', 'finance_approval', 'processing'].includes(
+      status,
+    )
+  ) {
     return 'payroll-status payroll-status-info';
   }
 
@@ -374,7 +463,13 @@ function sortEmployees(items = []) {
 
 export default function Payroll({ user = {}, setPage = () => {} }) {
   const alerts = useCustomAlert();
-  const superAdmin = isSuperAdmin(user);
+  const userRoles = useMemo(() => normalizeRoles(user), [user]);
+  const superAdmin = userRoles.includes('super_admin');
+  const canHrReview =
+    superAdmin || userRoles.some((role) => HR_PAYROLL_REVIEW_ROLES.has(role));
+  const canFinanceAct =
+    superAdmin ||
+    userRoles.some((role) => FINANCE_PAYROLL_WORKFLOW_ROLES.has(role));
 
   const [period, setPeriod] = useState(getDefaultPeriod());
   const [tenantId, setTenantId] = useState(
@@ -399,6 +494,12 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
   const [attendanceSyncFailures, setAttendanceSyncFailures] = useState([]);
   const [showEmployeePicker, setShowEmployeePicker] = useState(false);
   const [pdfActionKey, setPdfActionKey] = useState('');
+  const [workflowModal, setWorkflowModal] = useState(null);
+  const [workflowNote, setWorkflowNote] = useState('');
+  const [workflowSubmitting, setWorkflowSubmitting] = useState(false);
+  const [disbursementForm, setDisbursementForm] = useState(
+    emptyPayrollDisbursement,
+  );
 
   const totalDays = useMemo(() => getDaysInPeriod(period), [period]);
 
@@ -440,6 +541,63 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
     return {};
   }, [activeRun]);
+
+  const periodRuns = useMemo(
+    () => runs.filter(
+      (run) =>
+        safeText(run.period_key || run.month, '') === period &&
+        run.is_deleted !== true,
+    ),
+    [period, runs],
+  );
+
+  const finalizedEmployeeRunMap = useMemo(() => {
+    const map = new Map();
+
+    periodRuns.forEach((run) => {
+      const status = normalizeKey(run.status || run.workflow_stage || 'draft');
+      const finalized =
+        Boolean(run.is_locked) ||
+        ['hr_reviewed', 'reviewed', 'finance_approved', 'approved', 'locked', 'disbursed']
+          .includes(status);
+
+      if (!finalized) {
+        return;
+      }
+
+      const ids = Array.isArray(run.employee_ids) ? run.employee_ids : [];
+      ids.forEach((id) => {
+        const normalizedId = safeText(id, '');
+        if (normalizedId) {
+          map.set(normalizedId, run);
+        }
+      });
+    });
+
+    return map;
+  }, [periodRuns]);
+
+  const targetEmployeeIds = useMemo(
+    () => targetEmployees.map(employeeId).filter(Boolean),
+    [targetEmployees],
+  );
+
+  const blockedEmployeeIds = useMemo(
+    () => targetEmployeeIds.filter((id) => finalizedEmployeeRunMap.has(id)),
+    [finalizedEmployeeRunMap, targetEmployeeIds],
+  );
+
+  const eligibleEmployeeIds = useMemo(
+    () => targetEmployeeIds.filter((id) => !finalizedEmployeeRunMap.has(id)),
+    [finalizedEmployeeRunMap, targetEmployeeIds],
+  );
+
+  const blockedEmployeeNames = useMemo(() => {
+    const blockedSet = new Set(blockedEmployeeIds);
+    return targetEmployees
+      .filter((employee) => blockedSet.has(employeeId(employee)))
+      .map(employeeName);
+  }, [blockedEmployeeIds, targetEmployees]);
 
   function tenantParams() {
     if (!superAdmin || !tenantId.trim()) {
@@ -683,6 +841,10 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return 'Select at least one employee before synchronizing attendance.';
     }
 
+    if (!eligibleEmployeeIds.length) {
+      return 'Every selected employee is already included in a finalized payroll run for this month.';
+    }
+
     return '';
   }
 
@@ -696,9 +858,9 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       payload.tenant_id = tenantId.trim();
     }
 
-    if (scope === 'selected') {
-      payload.employee_ids = selectedIds;
-    }
+    // Always send the exact eligible employee scope. This prevents employees
+    // already finalized in another run for the same month from being included.
+    payload.employee_ids = eligibleEmployeeIds;
 
     return payload;
   }
@@ -711,7 +873,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return;
     }
 
-    const targetCount = scope === 'selected' ? selectedIds.length : employees.length;
+    const targetCount = eligibleEmployeeIds.length;
     const confirmed = await alerts.confirm(
       `Synchronize approved leave, LWP, leave balances, attendance logs and holidays for ${period}${
         targetCount
@@ -799,6 +961,10 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return 'Select at least one employee.';
     }
 
+    if (!eligibleEmployeeIds.length) {
+      return 'Every selected employee is already included in a finalized payroll run for this month.';
+    }
+
     if (attendanceSource === 'manual') {
       if (!targetEmployees.length) {
         return 'Load the employee list before entering manual payroll inputs.';
@@ -841,12 +1007,15 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       payload.tenant_id = tenantId.trim();
     }
 
-    if (scope === 'selected') {
-      payload.employee_ids = selectedIds;
-    }
+    // The backend receives only employees who are not already finalized for
+    // this month. Draft employees remain eligible for recalculation.
+    payload.employee_ids = eligibleEmployeeIds;
 
     if (attendanceSource === 'manual') {
-      payload.attendance = targetEmployees.map((employee) => {
+      const eligibleSet = new Set(eligibleEmployeeIds);
+      payload.attendance = targetEmployees
+        .filter((employee) => eligibleSet.has(employeeId(employee)))
+        .map((employee) => {
         const id = employeeId(employee);
         const input = manualInputs[id] || emptyManualInput(totalDays);
         const row = {
@@ -875,7 +1044,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
       return;
     }
 
-    const targetCount = scope === 'selected' ? selectedIds.length : employees.length;
+    const targetCount = eligibleEmployeeIds.length;
     const confirmed = await alerts.confirm(
       `Create or recalculate the Draft payroll for ${period}${
         targetCount ? ` for ${targetCount} employee${targetCount === 1 ? '' : 's'}` : ''
@@ -930,10 +1099,244 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     }
   }
 
+  function canPerformWorkflowAction(action) {
+    if (action === 'hr_review') {
+      return canHrReview;
+    }
+
+    if (['finance_approve', 'lock', 'disburse'].includes(action)) {
+      return canFinanceAct;
+    }
+
+    return false;
+  }
+
+  function workflowInstruction(run) {
+    const status = normalizeKey(run?.status || run?.workflow_stage || 'draft');
+    const action = workflowActionForStatus(status);
+
+    if (!action) {
+      if (status === 'disbursed') {
+        return 'This payroll run has completed the full workflow and salary disbursement is recorded.';
+      }
+
+      return 'No workflow action is available for this payroll status.';
+    }
+
+    if (canPerformWorkflowAction(action)) {
+      return workflowActionDescription(action);
+    }
+
+    if (action === 'hr_review') {
+      return 'Waiting for an HR, HR Admin or HR Manager to complete the HR Review.';
+    }
+
+    return action === 'finance_approve'
+      ? 'Waiting for Finance or Accounts Finance to approve this payroll run.'
+      : action === 'lock'
+        ? 'Waiting for Finance or Accounts Finance to lock this payroll run.'
+        : 'Waiting for Finance or Accounts Finance to record salary disbursement.';
+  }
+
+  function openWorkflowAction(run, requestedAction = '') {
+    const action =
+      requestedAction ||
+      workflowActionForStatus(run?.status || run?.workflow_stage || 'draft');
+
+    if (!action || !canPerformWorkflowAction(action)) {
+      alerts.warning(
+        'Your current role is not permitted to perform the next payroll workflow action.',
+        'Payroll Action Not Allowed',
+      );
+      return;
+    }
+
+    setActiveRun(run);
+    setWorkflowNote('');
+    setDisbursementForm(emptyPayrollDisbursement());
+    setWorkflowModal({ run, action });
+  }
+
+  function closeWorkflowModal() {
+    if (workflowSubmitting) {
+      return;
+    }
+
+    setWorkflowModal(null);
+    setWorkflowNote('');
+    setDisbursementForm(emptyPayrollDisbursement());
+  }
+
+  function updateDisbursementField(field, value) {
+    setDisbursementForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function executeWorkflowAction(event) {
+    event.preventDefault();
+
+    const run = workflowModal?.run;
+    const action = workflowModal?.action;
+    const runId = resolveRunId(run);
+
+    if (!runId || !action) {
+      alerts.error(
+        'The selected payroll run or action is missing. Refresh and try again.',
+        'Payroll Action Failed',
+      );
+      return;
+    }
+
+    if (!canPerformWorkflowAction(action)) {
+      alerts.error(
+        'Your current role is not permitted to perform this payroll action.',
+        'Payroll Action Not Allowed',
+      );
+      return;
+    }
+
+    if (action === 'disburse') {
+      if (!disbursementForm.transfer_date) {
+        alerts.warning(
+          'Select the actual salary transfer date.',
+          'Transfer Date Required',
+        );
+        return;
+      }
+
+      if (!disbursementForm.transfer_mode) {
+        alerts.warning(
+          'Select the salary transfer mode.',
+          'Transfer Mode Required',
+        );
+        return;
+      }
+    }
+
+    try {
+      setWorkflowSubmitting(true);
+
+      const payload = {
+        ...tenantParams(),
+        run_id: runId,
+        action,
+        note: workflowNote.trim(),
+      };
+
+      if (action === 'disburse') {
+        payload.disbursement = {
+          transfer_date: disbursementForm.transfer_date,
+          transfer_mode: disbursementForm.transfer_mode,
+          transaction_reference:
+            disbursementForm.transaction_reference.trim(),
+          bank_file_reference:
+            disbursementForm.bank_file_reference.trim(),
+        };
+      }
+
+      const data = await api('/payroll/run/approve', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        timeoutMs: 120000,
+      });
+
+      const updatedRun = data.run || run;
+      const updatedPayslips = Array.isArray(data.payslips)
+        ? data.payslips
+        : [];
+
+      setActiveRun(updatedRun);
+
+      if (updatedPayslips.length) {
+        setPayslips(updatedPayslips);
+      }
+
+      setWorkflowModal(null);
+      setWorkflowNote('');
+      setDisbursementForm(emptyPayrollDisbursement());
+
+      await loadRuns({
+        silent: true,
+        preferredRunId: resolveRunId(updatedRun) || runId,
+      });
+
+      if (!updatedPayslips.length) {
+        await loadPayslipsForRun(updatedRun, { silent: true });
+      }
+
+      alerts.success(
+        data.message || `${workflowActionLabel(action)} completed successfully.`,
+        'Payroll Workflow Updated',
+      );
+
+      if (data.loan_recovery_requires_retry) {
+        alerts.warning(
+          'Salary disbursement was recorded, but one or more loan recoveries require a Finance retry.',
+          'Loan Recovery Follow-up Required',
+        );
+      }
+
+      if (data.reimbursement_payment_requires_retry) {
+        alerts.warning(
+          'Salary disbursement was recorded, but one or more reimbursement payments require a Finance retry.',
+          'Reimbursement Follow-up Required',
+        );
+      }
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to update the payroll workflow.',
+        'Payroll Workflow Failed',
+      );
+    } finally {
+      setWorkflowSubmitting(false);
+    }
+  }
+
+  function renderWorkflowActionButton(run, compact = false) {
+    const action = workflowActionForStatus(
+      run?.status || run?.workflow_stage || 'draft',
+    );
+
+    if (!action || !canPerformWorkflowAction(action)) {
+      return null;
+    }
+
+    const Icon =
+      action === 'hr_review'
+        ? ShieldCheck
+        : action === 'lock'
+          ? LockKeyhole
+          : action === 'disburse'
+            ? Banknote
+            : CheckCircle2;
+
+    return (
+      <button
+        type="button"
+        className="primary"
+        onClick={() => openWorkflowAction(run, action)}
+        disabled={workflowSubmitting}
+        title={workflowActionDescription(action)}
+      >
+        {workflowSubmitting &&
+        resolveRunId(workflowModal?.run) === resolveRunId(run) ? (
+          <Loader2 size={compact ? 14 : 17} className="spin" />
+        ) : (
+          <Icon size={compact ? 14 : 17} />
+        )}
+        {workflowActionLabel(action)}
+      </button>
+    );
+  }
+
   async function refreshAll() {
     await Promise.all([
       loadEmployees(),
-      loadRuns(),
+      loadRuns({
+        preferredRunId: resolveRunId(activeRun),
+      }),
     ]);
   }
 
@@ -1515,6 +1918,190 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           font-weight: 800;
         }
 
+        .payroll-run-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          min-width: 210px;
+        }
+
+        .payroll-run-actions button {
+          min-height: 36px;
+          padding: 8px 11px;
+          white-space: nowrap;
+        }
+
+        .payroll-workflow-panel {
+          display: grid;
+          gap: 14px;
+          border-left: 4px solid var(--primary);
+        }
+
+        .payroll-workflow-main {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .payroll-workflow-copy {
+          display: grid;
+          gap: 7px;
+          min-width: 0;
+        }
+
+        .payroll-workflow-copy h3 {
+          margin: 0;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .payroll-workflow-copy p {
+          margin: 0;
+          max-width: 820px;
+          line-height: 1.55;
+        }
+
+        .payroll-workflow-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .payroll-workflow-meta span {
+          border: 1px solid var(--line);
+          background: var(--surface2);
+          border-radius: 999px;
+          padding: 7px 10px;
+          color: var(--muted);
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .payroll-workflow-waiting {
+          border: 1px solid #BAE6FD;
+          background: var(--infoSoft);
+          color: #075985;
+          border-radius: 14px;
+          padding: 11px 13px;
+          font-weight: 800;
+          line-height: 1.45;
+        }
+
+        .payroll-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 1200;
+          display: grid;
+          place-items: center;
+          padding: 20px;
+          background: rgba(15, 23, 42, .58);
+          backdrop-filter: blur(4px);
+        }
+
+        .payroll-modal {
+          width: min(620px, 100%);
+          max-height: calc(100vh - 40px);
+          overflow: auto;
+          border: 1px solid var(--line);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 28px 80px rgba(15, 23, 42, .28);
+        }
+
+        .payroll-modal-head {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: flex-start;
+          padding: 20px 22px 14px;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .payroll-modal-head h3 {
+          margin: 0 0 5px;
+        }
+
+        .payroll-modal-head p {
+          margin: 0;
+          color: var(--muted);
+        }
+
+        .payroll-modal-close {
+          width: 40px;
+          height: 40px;
+          flex: 0 0 40px;
+          display: grid;
+          place-items: center;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          background: #fff;
+          color: var(--muted);
+          cursor: pointer;
+        }
+
+        .payroll-modal-body {
+          display: grid;
+          gap: 14px;
+          padding: 20px 22px;
+        }
+
+        .payroll-modal-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 13px;
+        }
+
+        .payroll-modal-field {
+          display: grid;
+          gap: 7px;
+        }
+
+        .payroll-modal-field.is-full {
+          grid-column: 1 / -1;
+        }
+
+        .payroll-modal-field > span {
+          color: var(--muted);
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .payroll-modal-field input,
+        .payroll-modal-field select,
+        .payroll-modal-field textarea {
+          width: 100%;
+          border: 1px solid var(--line);
+          border-radius: 13px;
+          padding: 11px 12px;
+          background: #fff;
+          color: var(--text);
+          outline: none;
+          font: inherit;
+        }
+
+        .payroll-modal-field textarea {
+          min-height: 100px;
+          resize: vertical;
+        }
+
+        .payroll-modal-field input:focus,
+        .payroll-modal-field select:focus,
+        .payroll-modal-field textarea:focus {
+          border-color: var(--primaryRing);
+          box-shadow: 0 0 0 4px rgba(79, 70, 229, .10);
+        }
+
+        .payroll-modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 10px;
+          padding: 0 22px 22px;
+        }
+
         @media (max-width: 1180px) {
           .payroll-module-links {
             grid-template-columns: repeat(3, minmax(150px, 1fr));
@@ -1537,13 +2124,24 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           .payroll-module-links,
           .payroll-metric-grid,
           .payroll-form-grid,
-          .payroll-sync-metrics {
+          .payroll-sync-metrics,
+          .payroll-modal-grid {
             grid-template-columns: 1fr;
           }
 
           .payroll-hero-badge,
-          .payroll-action-row button {
+          .payroll-action-row button,
+          .payroll-workflow-main > button,
+          .payroll-modal-actions button {
             width: 100%;
+          }
+
+          .payroll-run-actions {
+            min-width: 170px;
+          }
+
+          .payroll-modal-actions {
+            flex-direction: column-reverse;
           }
         }
       `}</style>
@@ -1753,6 +2351,26 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           </label>
         </div>
 
+        {periodRuns.length ? (
+          <div className="payroll-note">
+            <ShieldCheck size={19} />
+            <div>
+              <strong>
+                {periodRuns.length} payroll run{periodRuns.length === 1 ? '' : 's'} already exist for {period}.
+              </strong>{' '}
+              {blockedEmployeeIds.length ? (
+                <>
+                  {blockedEmployeeIds.length} selected employee{blockedEmployeeIds.length === 1 ? '' : 's'}
+                  {' '}already have finalized payroll and will be excluded: {blockedEmployeeNames.join(', ')}.
+                </>
+              ) : (
+                <>None of the currently selected employees has finalized payroll for this month.</>
+              )}
+              {' '}Eligible employees: {eligibleEmployeeIds.length}.
+            </div>
+          </div>
+        ) : null}
+
         <div className="payroll-action-row">
           {scope === 'selected' ? (
             <button
@@ -1777,7 +2395,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                 syncingAttendance ||
                 calculating ||
                 loadingEmployees ||
-                (scope === 'selected' && selectedIds.length === 0)
+                (scope === 'selected' && selectedIds.length === 0) ||
+                eligibleEmployeeIds.length === 0
               }
             >
               {syncingAttendance ? (
@@ -1795,7 +2414,12 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
             type="button"
             className="primary"
             onClick={calculatePayroll}
-            disabled={calculating || syncingAttendance || loadingEmployees}
+            disabled={
+              calculating ||
+              syncingAttendance ||
+              loadingEmployees ||
+              eligibleEmployeeIds.length === 0
+            }
           >
             {calculating ? <Loader2 size={18} className="spin" /> : <Calculator size={18} />}
             {calculating ? 'Calculating payroll…' : 'Calculate Draft Payroll'}
@@ -2198,13 +2822,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                     <td>{formatCurrency(totals.net_amount)}</td>
                     <td>{formatDate(run.updated_at || run.calculated_at || run.created_at)}</td>
                     <td>
-                      <button
-                        type="button"
-                        className={isActive ? 'primary' : 'secondary'}
-                        onClick={() => setActiveRun(run)}
-                      >
-                        {isActive ? 'Selected' : 'View results'}
-                      </button>
+                      <div className="payroll-run-actions">
+                        <button
+                          type="button"
+                          className={isActive ? 'primary' : 'secondary'}
+                          onClick={() => setActiveRun(run)}
+                        >
+                          {isActive ? 'Selected' : 'View results'}
+                        </button>
+                        {renderWorkflowActionButton(run, true)}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -2217,6 +2844,48 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           <div className="empty">No payroll run has been created yet.</div>
         ) : null}
       </section>
+
+      {activeRun ? (
+        <section className="panel payroll-workflow-panel">
+          <div className="payroll-workflow-main">
+            <div className="payroll-workflow-copy">
+              <h3>
+                <ShieldCheck size={20} />
+                Payroll approval workflow
+              </h3>
+              <div className="payroll-workflow-meta">
+                <span>
+                  Run: {safeText(activeRun.run_code, resolveRunId(activeRun).slice(-8))}
+                </span>
+                <span>
+                  Period: {safeText(activeRun.period_key || activeRun.month)}
+                </span>
+                <span>
+                  Current stage: {statusLabel(
+                    activeRun.status || activeRun.workflow_stage,
+                  )}
+                </span>
+              </div>
+              <p>{workflowInstruction(activeRun)}</p>
+            </div>
+
+            {renderWorkflowActionButton(activeRun)}
+          </div>
+
+          {!workflowActionForStatus(
+            activeRun.status || activeRun.workflow_stage,
+          ) ? null : !canPerformWorkflowAction(
+              workflowActionForStatus(
+                activeRun.status || activeRun.workflow_stage,
+              ),
+            ) ? (
+            <div className="payroll-workflow-waiting">
+              Your login can view this payroll run, but the next workflow action
+              must be completed by the role shown above.
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="panel">
         <div className="payroll-table-head">
@@ -2400,6 +3069,167 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           <div className="empty">Select a payroll run to view its results.</div>
         ) : null}
       </section>
+
+      {workflowModal ? (
+        <div
+          className="payroll-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeWorkflowModal();
+            }
+          }}
+        >
+          <form className="payroll-modal" onSubmit={executeWorkflowAction}>
+            <div className="payroll-modal-head">
+              <div>
+                <h3>{workflowActionLabel(workflowModal.action)}</h3>
+                <p>
+                  {safeText(
+                    workflowModal.run?.run_code,
+                    resolveRunId(workflowModal.run).slice(-8),
+                  )}{' '}
+                  · {safeText(
+                    workflowModal.run?.period_key || workflowModal.run?.month,
+                  )}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="payroll-modal-close"
+                onClick={closeWorkflowModal}
+                disabled={workflowSubmitting}
+                aria-label="Close payroll action"
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="payroll-modal-body">
+              <div className="payroll-note" style={{ marginTop: 0 }}>
+                <AlertTriangle size={18} />
+                <div>{workflowActionDescription(workflowModal.action)}</div>
+              </div>
+
+              {workflowModal.action === 'disburse' ? (
+                <div className="payroll-modal-grid">
+                  <label className="payroll-modal-field">
+                    <span>Actual transfer date *</span>
+                    <input
+                      type="date"
+                      value={disbursementForm.transfer_date}
+                      onChange={(event) =>
+                        updateDisbursementField(
+                          'transfer_date',
+                          event.target.value,
+                        )
+                      }
+                      required
+                    />
+                  </label>
+
+                  <label className="payroll-modal-field">
+                    <span>Transfer mode *</span>
+                    <select
+                      value={disbursementForm.transfer_mode}
+                      onChange={(event) =>
+                        updateDisbursementField(
+                          'transfer_mode',
+                          event.target.value,
+                        )
+                      }
+                      required
+                    >
+                      <option value="NEFT">NEFT</option>
+                      <option value="RTGS">RTGS</option>
+                      <option value="IMPS">IMPS</option>
+                      <option value="BANK_TRANSFER">Bank Transfer</option>
+                    </select>
+                  </label>
+
+                  <label className="payroll-modal-field">
+                    <span>Transaction / UTR reference</span>
+                    <input
+                      value={disbursementForm.transaction_reference}
+                      onChange={(event) =>
+                        updateDisbursementField(
+                          'transaction_reference',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Example: UTR123456789"
+                    />
+                  </label>
+
+                  <label className="payroll-modal-field">
+                    <span>Bank-file reference</span>
+                    <input
+                      value={disbursementForm.bank_file_reference}
+                      onChange={(event) =>
+                        updateDisbursementField(
+                          'bank_file_reference',
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Optional bank batch/file reference"
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              <label className="payroll-modal-field">
+                <span>
+                  {workflowModal.action === 'hr_review'
+                    ? 'HR review note'
+                    : workflowModal.action === 'finance_approve'
+                      ? 'Finance approval note'
+                      : workflowModal.action === 'lock'
+                        ? 'Locking note'
+                        : 'Disbursement note'}
+                </span>
+                <textarea
+                  value={workflowNote}
+                  onChange={(event) => setWorkflowNote(event.target.value)}
+                  placeholder="Add an optional note for the workflow history."
+                />
+              </label>
+            </div>
+
+            <div className="payroll-modal-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={closeWorkflowModal}
+                disabled={workflowSubmitting}
+              >
+                Go Back
+              </button>
+
+              <button
+                type="submit"
+                className="primary"
+                disabled={workflowSubmitting}
+              >
+                {workflowSubmitting ? (
+                  <Loader2 size={17} className="spin" />
+                ) : workflowModal.action === 'hr_review' ? (
+                  <ShieldCheck size={17} />
+                ) : workflowModal.action === 'lock' ? (
+                  <LockKeyhole size={17} />
+                ) : workflowModal.action === 'disburse' ? (
+                  <Banknote size={17} />
+                ) : (
+                  <CheckCircle2 size={17} />
+                )}
+                {workflowSubmitting
+                  ? 'Saving workflow…'
+                  : workflowActionLabel(workflowModal.action)}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

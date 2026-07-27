@@ -205,6 +205,8 @@ export const RECRUITMENT_ROLES = [
 
 export const PAYROLL_CONFIG_ROLES = ADMIN_HR_FINANCE_ROLES;
 
+export const PAYROLL_RUN_ROLES = ADMIN_HR_FINANCE_ROLES;
+
 export const PAYROLL_LOAN_ROLES = ALL_COMMON_ROLES;
 
 export const PAYROLL_REIMBURSEMENT_ROLES = ALL_COMMON_ROLES;
@@ -726,8 +728,8 @@ export const coreModules = [
     'payroll_runs',
     'Payroll Runs',
     Wallet,
-    'Payroll processing and control.',
-    FINANCE_ROLES,
+    'Prepare Draft payroll, complete HR Review, perform Finance approval, lock payroll and record disbursement according to the logged-in role.',
+    PAYROLL_RUN_ROLES,
   ],
   [
     'payslips',

@@ -1089,10 +1089,17 @@ def validate_bank_details_for_disbursement(
             "message": "Bank details are inactive.",
         })
 
-    if require_verified and (
-        not bool(record.get("is_verified"))
-        or normalize_key(record.get("verification_status")) != "verified"
-    ):
+    verification_status = normalize_key(record.get("verification_status"))
+    is_locked_snapshot = bool(
+        safe_str(record.get("bank_details_id"))
+        or record.get("snapshot_at")
+    )
+    is_verified = (
+        verification_status == "verified"
+        and (is_locked_snapshot or bool(record.get("is_verified")))
+    )
+
+    if require_verified and not is_verified:
         errors.append({
             "field": "verification_status",
             "message": "Bank details have not been verified.",
@@ -1120,9 +1127,10 @@ def validate_bank_details_for_disbursement(
         "account_type": account_type,
         "payment_method": payment_method,
         "beneficiary_code": beneficiary_code,
-        "verification_status": "verified"
-        if bool(record.get("is_verified"))
-        else safe_str(record.get("verification_status")),
+        "verification_status": "verified" if is_verified else verification_status,
+        "is_verified": is_verified,
+        "status": safe_str(record.get("status") or "active"),
+        "is_active": record.get("is_active") is not False,
         "verified_at": record.get("verified_at"),
         "revision_number": int(record.get("revision_number") or 1),
     }
@@ -1385,8 +1393,19 @@ def prepare_payroll_bank_snapshots(
     }
 
     if strict and failures:
+        if run_status == "locked":
+            message = (
+                "One or more locked payslips do not contain a valid verified "
+                "bank snapshot. Payroll cannot be disbursed."
+            )
+        else:
+            message = (
+                "One or more employees do not have valid verified bank details. "
+                "Payroll cannot be locked."
+            )
+
         raise PayrollBankError(
-            "One or more employees do not have verified bank details. Payroll cannot be locked.",
+            message,
             status_code=409,
             code="payroll_bank_snapshot_validation_failed",
             details=result_payload,

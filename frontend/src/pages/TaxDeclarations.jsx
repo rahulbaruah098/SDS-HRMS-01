@@ -128,20 +128,81 @@ function normalizeKey(value) {
 }
 
 function normalizeRoles(user = {}) {
-  const rawRoles = Array.isArray(user.roles)
-    ? user.roles
-    : typeof user.roles === 'string'
-      ? user.roles.split(',')
-      : [];
+  const normalized = new Set();
 
-  const roles = rawRoles.map(normalizeKey).filter(Boolean);
-  const role = normalizeKey(user.role);
+  const addRoleValue = (value) => {
+    if (value === undefined || value === null || value === '' || value === false) {
+      return;
+    }
 
-  if (role && !roles.includes(role)) {
-    roles.push(role);
-  }
+    if (Array.isArray(value)) {
+      value.forEach(addRoleValue);
+      return;
+    }
 
-  return roles;
+    if (typeof value === 'object') {
+      const descriptor =
+        value.name ||
+        value.role_name ||
+        value.roleName ||
+        value.label ||
+        value.key ||
+        value.slug ||
+        value.code ||
+        value.role ||
+        value.value;
+
+      if (descriptor) {
+        addRoleValue(descriptor);
+        return;
+      }
+
+      Object.entries(value).forEach(([key, nestedValue]) => {
+        if (nestedValue === true) {
+          addRoleValue(key);
+        } else if (nestedValue && nestedValue !== false) {
+          addRoleValue(nestedValue);
+        }
+      });
+      return;
+    }
+
+    String(value)
+      .split(/[,;|]/)
+      .map(normalizeKey)
+      .filter(Boolean)
+      .forEach((role) => normalized.add(role));
+  };
+
+  [
+    user.role,
+    user.roles,
+    user.role_names,
+    user.roleNames,
+    user.role_slugs,
+    user.roleSlugs,
+    user.effective_roles,
+    user.effectiveRoles,
+    user.resolved_roles,
+    user.resolvedRoles,
+    user.access,
+    user.access_roles,
+    user.accessRoles,
+    user.access_labels,
+    user.accessLabels,
+    user.capabilities,
+    user.capability_roles,
+    user.capabilityRoles,
+    user.permissions?.roles,
+    user.employee?.role,
+    user.employee?.roles,
+    user.profile?.role,
+    user.profile?.roles,
+    user.auth?.role,
+    user.auth?.roles,
+  ].forEach(addRoleValue);
+
+  return [...normalized];
 }
 
 function hasAnyRole(user, roleSet) {
@@ -254,7 +315,11 @@ function sortEmployees(items = []) {
   );
 }
 
-function recordId(record = {}) {
+function recordId(record = null) {
+  if (!record || typeof record !== 'object') {
+    return '';
+  }
+
   return safeText(record._id || record.id, '');
 }
 
@@ -666,13 +731,21 @@ export default function TaxDeclarations({ user = {} }) {
           : [];
 
       setDeclarations(rows);
+      setSelectedDeclaration((current) => {
+        if (!rows.length) {
+          return null;
+        }
 
-      if (selectedDeclaration) {
-        const updated = rows.find(
-          (record) => recordId(record) === recordId(selectedDeclaration),
+        if (!current) {
+          return rows[0];
+        }
+
+        return (
+          rows.find(
+            (record) => recordId(record) === recordId(current),
+          ) || rows[0]
         );
-        setSelectedDeclaration(updated || null);
-      }
+      });
 
       return rows;
     } catch (error) {

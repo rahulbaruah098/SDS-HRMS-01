@@ -489,7 +489,7 @@ def ensure_saas_collection_access(collection, action="read", db=None):
     if saas_is_platform_superadmin(user):
         return None
 
-    db = db or get_db()
+    db = db if db is not None else get_db()
     context = load_tenant_context(user=user)
     tenant = context.get("tenant")
     subscription = context.get("subscription") or {}
@@ -1589,6 +1589,12 @@ def can_write_collection(collection):
     if collection == "projects":
         return can_create_assign_or_collaborate_projects()
 
+    # Every authenticated employee may create and maintain only their own
+    # expense drafts. Tenant-wide access remains restricted by
+    # expense_scope_query() and prepare_expense_payload().
+    if collection == "expenses":
+        return True
+
     if roles.intersection(ADMIN_ROLES):
         return True
 
@@ -2220,6 +2226,118 @@ def payslip_scope_query(db, q):
     return q
 
 
+def expense_scope_query(db, q):
+    """Restrict non-privileged users to their own expense records."""
+    roles = current_user_roles()
+
+    if roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES):
+        return q
+
+    employee = get_current_employee(db)
+
+    if not employee:
+        q["_id"] = {"$exists": False}
+        return q
+
+    identifiers = employee_identifier_values(employee)
+    canonical_id = normalize_text(employee.get("_id"))
+
+    if canonical_id and canonical_id not in identifiers:
+        identifiers.append(canonical_id)
+
+    if not identifiers:
+        q["_id"] = {"$exists": False}
+        return q
+
+    q["employee_id"] = {"$in": identifiers}
+    return q
+
+
+def expense_employee_snapshot(db, employee_reference):
+    reference = normalize_text(employee_reference)
+
+    if not reference:
+        return None
+
+    query_or = [
+        {"employee_id": reference},
+        {"employee_code": reference},
+        {"emp_code": reference},
+        {"code": reference},
+        {"user_id": reference},
+    ]
+
+    object_id = safe_object_id(reference)
+
+    if object_id:
+        query_or.insert(0, {"_id": object_id})
+
+    return db.employees.find_one({
+        "tenant_id": current_tenant_id(),
+        "is_deleted": {"$ne": True},
+        "$or": query_or,
+    })
+
+
+def prepare_expense_payload(db, payload, existing=None):
+    """Apply authoritative employee ownership/snapshot data to an expense."""
+    payload = dict(payload or {})
+    existing = existing or {}
+    roles = current_user_roles()
+    privileged = bool(roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES))
+
+    if privileged:
+        reference = normalize_text(
+            payload.get("employee_id")
+            or existing.get("employee_id")
+        )
+        employee = expense_employee_snapshot(db, reference)
+
+        if reference and not employee:
+            return None, "Selected employee was not found in this company"
+    else:
+        employee = get_current_employee(db)
+
+        if not employee:
+            return None, "Employee profile was not found for the current user"
+
+    if employee:
+        payload["employee_id"] = str(employee.get("_id"))
+        payload["employee_name"] = employee_display_name(employee)
+        payload["employee_code"] = normalize_text(
+            employee.get("employee_code")
+            or employee.get("emp_code")
+            or employee.get("employee_id")
+            or employee.get("code")
+        )
+        payload["department"] = normalize_text(
+            employee.get("department")
+            or employee.get("department_name")
+        )
+        payload["designation"] = normalize_text(
+            employee.get("designation")
+            or employee.get("designation_name")
+        )
+
+    payload["type"] = normalize_text(payload.get("type") or "Other")
+    payload["description"] = normalize_text(payload.get("description"))
+
+    try:
+        amount = float(payload.get("amount") or 0)
+    except Exception:
+        return None, "Expense amount must be a valid number"
+
+    if amount <= 0:
+        return None, "Expense amount must be greater than zero"
+
+    payload["amount"] = amount
+
+    if not normalize_text(payload.get("status")):
+        payload["status"] = "pending"
+
+    return payload, ""
+
+
 def performance_rating_value(review):
     raw_value = (
         review.get("rating")
@@ -2394,6 +2512,9 @@ def scoped_query_for_collection(db, collection):
 
     if collection == "payslips":
         q = payslip_scope_query(db, q)
+
+    if collection == "expenses":
+        q = expense_scope_query(db, q)
 
     if collection == "employees":
         roles = current_user_roles()
@@ -3843,6 +3964,12 @@ def create_collection_item(collection):
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
 
+    if collection == "expenses":
+        payload, expense_error = prepare_expense_payload(db, payload)
+
+        if expense_error:
+            return jsonify({"message": expense_error}), 400
+
     if collection == "employees":
         photo_error = validate_employee_photo_payload(data)
 
@@ -4080,6 +4207,25 @@ def update_collection_item(collection, item_id):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+
+    if collection == "expenses":
+        roles = current_user_roles()
+        privileged = bool(roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES))
+        existing_status = normalize_role_key(existing.get("status"))
+
+        if not privileged and existing_status not in {"", "draft", "pending", "rejected"}:
+            return jsonify({
+                "message": "Only pending, draft, or rejected expenses can be edited"
+            }), 409
+
+        payload, expense_error = prepare_expense_payload(
+            db,
+            payload,
+            existing=existing,
+        )
+
+        if expense_error:
+            return jsonify({"message": expense_error}), 400
 
     if collection == "employees":
         photo_error = validate_employee_photo_payload(data)

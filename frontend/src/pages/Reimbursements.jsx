@@ -26,10 +26,19 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { api } from '../api/client';
+import { api, getApiUrl, getToken } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_LIMIT = 500;
+const RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
+const RECEIPT_ALLOWED_EXTENSIONS = new Set([
+  'pdf',
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+]);
+const RECEIPT_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp';
 
 const REIMBURSEMENT_TYPES = [
   ['travel', 'Travel'],
@@ -215,33 +224,77 @@ function statusTone(value) {
   return 'warning';
 }
 
-function recordId(record = {}) {
-  return safeText(record._id || record.id, '');
+function recordId(record) {
+  const value = record || {};
+  return safeText(value._id || value.id, '');
 }
 
-function employeeId(employee = {}) {
-  return safeText(employee._id || employee.id || employee.employee_id, '');
+function employeeId(employee) {
+  const value = employee || {};
+  return safeText(value._id || value.id || value.employee_id, '');
 }
 
-function employeeName(employee = {}) {
+function employeeName(employee) {
+  const value = employee || {};
   return safeText(
-    employee.employee_name ||
-      employee.name ||
-      employee.full_name ||
-      employee.display_name ||
-      employee.official_email,
+    value.employee_name ||
+      value.name ||
+      value.full_name ||
+      value.display_name ||
+      value.official_email,
     'Employee',
   );
 }
 
-function employeeCode(employee = {}) {
+function employeeCode(employee) {
+  const value = employee || {};
   return safeText(
-    employee.employee_code ||
-      employee.emp_code ||
-      employee.employee_id ||
-      employee.code,
+    value.employee_code ||
+      value.emp_code ||
+      value.employee_id ||
+      value.code,
     '—',
   );
+}
+
+function fileExtension(filename) {
+  const normalized = safeText(filename, '').toLowerCase();
+  const dotIndex = normalized.lastIndexOf('.');
+  return dotIndex >= 0 ? normalized.slice(dotIndex + 1) : '';
+}
+
+function formatFileSize(value) {
+  const bytes = toNumber(value, 0);
+
+  if (bytes <= 0) {
+    return '';
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function responseErrorMessage(response, fallback) {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      return data.message || data.error?.message || data.error || fallback;
+    }
+
+    const text = await response.text();
+    return text || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function sortEmployees(items = []) {
@@ -273,6 +326,9 @@ function emptyItem() {
     location: '',
     receipt_reference: '',
     receipt_filename: '',
+    receipt_mime_type: '',
+    receipt_size_bytes: 0,
+    receipt_uploaded_at: '',
   };
 }
 
@@ -304,10 +360,9 @@ function itemAmountTotal(items = []) {
   return items.reduce((total, item) => total + toNumber(item.amount, 0), 0);
 }
 
-function workflowHistory(record = {}) {
-  return Array.isArray(record.workflow_history)
-    ? [...record.workflow_history].reverse()
-    : [];
+function workflowHistory(record) {
+  const history = record?.workflow_history;
+  return Array.isArray(history) ? [...history].reverse() : [];
 }
 
 function actionTitle(action) {
@@ -348,6 +403,7 @@ export default function Reimbursements({ user = {} }) {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
+  const [uploadingReceiptIndex, setUploadingReceiptIndex] = useState(-1);
 
   const [showDraftForm, setShowDraftForm] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
@@ -623,6 +679,9 @@ export default function Reimbursements({ user = {} }) {
         location: safeText(item.location, ''),
         receipt_reference: safeText(firstReceipt.reference, ''),
         receipt_filename: safeText(firstReceipt.filename, ''),
+        receipt_mime_type: safeText(firstReceipt.mime_type, ''),
+        receipt_size_bytes: toNumber(firstReceipt.size_bytes, 0),
+        receipt_uploaded_at: safeText(firstReceipt.uploaded_at, ''),
       };
     });
   }
@@ -641,14 +700,18 @@ export default function Reimbursements({ user = {} }) {
     setShowDraftForm(true);
   }
 
-  function closeDraftForm() {
-    if (saving) {
-      return;
-    }
-
+  function resetDraftForm() {
     setShowDraftForm(false);
     setEditingRecord(null);
     setDraft(emptyDraft());
+  }
+
+  function closeDraftForm() {
+    if (saving || uploadingReceiptIndex >= 0) {
+      return;
+    }
+
+    resetDraftForm();
   }
 
   function updateDraftField(field, value) {
@@ -687,6 +750,116 @@ export default function Reimbursements({ user = {} }) {
           ? current.items
           : current.items.filter((_, itemIndex) => itemIndex !== index),
     }));
+  }
+
+  function updateExpenseItemFields(index, values) {
+    setDraft((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              ...values,
+            }
+          : item,
+      ),
+    }));
+  }
+
+  function removeReceipt(index) {
+    updateExpenseItemFields(index, {
+      receipt_reference: '',
+      receipt_filename: '',
+      receipt_mime_type: '',
+      receipt_size_bytes: 0,
+      receipt_uploaded_at: '',
+    });
+  }
+
+  async function uploadReceipt(index, file) {
+    if (!file || !assertTenant()) {
+      return;
+    }
+
+    const extension = fileExtension(file.name);
+
+    if (!RECEIPT_ALLOWED_EXTENSIONS.has(extension)) {
+      alerts.warning(
+        'Select a PDF, JPG, JPEG, PNG or WEBP receipt.',
+        'Unsupported Receipt Type',
+      );
+      return;
+    }
+
+    if (file.size <= 0) {
+      alerts.warning('The selected receipt is empty.', 'Empty Receipt');
+      return;
+    }
+
+    if (file.size > RECEIPT_MAX_BYTES) {
+      alerts.warning(
+        'Receipt files must be 8 MB or smaller.',
+        'Receipt Too Large',
+      );
+      return;
+    }
+
+    try {
+      setUploadingReceiptIndex(index);
+
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+
+      Object.entries(tenantParams()).forEach(([key, value]) => {
+        formData.append(key, String(value));
+      });
+
+      const token = getToken();
+      const response = await fetch(
+        getApiUrl('/payroll/reimbursements/receipts/upload'),
+        {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: formData,
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            'Unable to upload the reimbursement receipt.',
+          ),
+        );
+      }
+
+      const data = await response.json();
+      const receipt = data.receipt || data.data?.receipt || null;
+
+      if (!receipt?.reference) {
+        throw new Error('The server did not return a receipt reference.');
+      }
+
+      updateExpenseItemFields(index, {
+        receipt_reference: safeText(receipt.reference, ''),
+        receipt_filename: safeText(receipt.filename, file.name),
+        receipt_mime_type: safeText(receipt.mime_type, file.type),
+        receipt_size_bytes: toNumber(receipt.size_bytes, file.size),
+        receipt_uploaded_at: safeText(receipt.uploaded_at, ''),
+      });
+
+      alerts.success(
+        `${safeText(receipt.filename, file.name)} uploaded successfully.`,
+        'Receipt Uploaded',
+      );
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to upload the reimbursement receipt.',
+        'Receipt Upload Failed',
+      );
+    } finally {
+      setUploadingReceiptIndex(-1);
+    }
   }
 
   function validateDraft() {
@@ -741,6 +914,9 @@ export default function Reimbursements({ user = {} }) {
             {
               reference: item.receipt_reference.trim(),
               filename: item.receipt_filename.trim(),
+              mime_type: item.receipt_mime_type.trim(),
+              size_bytes: toNumber(item.receipt_size_bytes, 0),
+              uploaded_at: item.receipt_uploaded_at || undefined,
             },
           ]
         : [],
@@ -789,7 +965,8 @@ export default function Reimbursements({ user = {} }) {
         },
       );
 
-      const saved = data.reimbursement;
+      const saved = data.reimbursement || data.record || data.item || null;
+      const savedId = recordId(saved) || editingId;
 
       alerts.success(
         data.message ||
@@ -799,12 +976,15 @@ export default function Reimbursements({ user = {} }) {
         editingId ? 'Draft Updated' : 'Draft Created',
       );
 
-      closeDraftForm();
+      resetDraftForm();
       await refreshAll({
         silent: true,
-        preferredId: recordId(saved),
+        preferredId: savedId,
       });
-      await loadDetail(recordId(saved), { silent: true });
+
+      if (savedId) {
+        await loadDetail(savedId, { silent: true });
+      }
     } catch (error) {
       alerts.error(
         error.message || 'Unable to save the reimbursement draft.',
@@ -819,6 +999,20 @@ export default function Reimbursements({ user = {} }) {
     const id = recordId(record);
 
     if (!id || !assertTenant()) {
+      return;
+    }
+
+    const claimItems = Array.isArray(record?.items) ? record.items : [];
+    const missingReceiptIndex = claimItems.findIndex(
+      (item) => !Array.isArray(item?.receipts) || item.receipts.length === 0,
+    );
+
+    if (missingReceiptIndex >= 0) {
+      alerts.warning(
+        `Attach a receipt to reimbursement item ${missingReceiptIndex + 1} before submitting.`,
+        'Receipt Required',
+      );
+      openEdit(record);
       return;
     }
 
@@ -883,14 +1077,18 @@ export default function Reimbursements({ user = {} }) {
     setActionModal(action);
   }
 
+  function resetAction() {
+    setActionModal('');
+    setActionRecord(null);
+    setActionForm(emptyActionForm());
+  }
+
   function closeAction() {
     if (actionLoading) {
       return;
     }
 
-    setActionModal('');
-    setActionRecord(null);
-    setActionForm(emptyActionForm());
+    resetAction();
   }
 
   function updateActionField(field, value) {
@@ -1071,7 +1269,7 @@ export default function Reimbursements({ user = {} }) {
         data.message || 'Reimbursement updated successfully.',
         'Action Completed',
       );
-      closeAction();
+      resetAction();
       await refreshAll({
         silent: true,
         preferredId: id,
@@ -1471,6 +1669,90 @@ export default function Reimbursements({ user = {} }) {
         .reim-field textarea:focus {
           border-color: #566be0;
           box-shadow: 0 0 0 3px rgba(64, 86, 214, 0.11);
+        }
+
+        .reim-receipt-box {
+          display: grid;
+          gap: 10px;
+          padding: 13px;
+          border: 1px dashed #b9c6da;
+          border-radius: 13px;
+          background: #f8faff;
+        }
+
+        .reim-receipt-box.is-attached {
+          border-style: solid;
+          border-color: #a8dfcb;
+          background: #f1fbf7;
+        }
+
+        .reim-receipt-summary {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .reim-receipt-summary svg {
+          flex: 0 0 auto;
+          color: #4056d6;
+        }
+
+        .reim-receipt-summary div {
+          min-width: 0;
+        }
+
+        .reim-receipt-summary strong,
+        .reim-receipt-summary small {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .reim-receipt-summary small {
+          margin-top: 3px;
+          color: #64748b;
+          font-size: 11px;
+        }
+
+        .reim-receipt-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .reim-file-input {
+          position: absolute;
+          width: 1px !important;
+          height: 1px !important;
+          min-height: 0 !important;
+          padding: 0 !important;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          white-space: nowrap;
+          border: 0 !important;
+        }
+
+        .reim-file-label {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          min-height: 38px;
+          padding: 8px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 10px;
+          background: #fff;
+          color: #334155;
+          font-size: 12px;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .reim-file-label.is-disabled {
+          cursor: wait;
+          opacity: 0.65;
         }
 
         .reim-search-wrap {
@@ -2808,36 +3090,84 @@ export default function Reimbursements({ user = {} }) {
                           />
                         </div>
 
-                        <div className="reim-field">
-                          <label>Receipt reference</label>
-                          <input
-                            type="text"
-                            value={item.receipt_reference}
-                            onChange={(event) =>
-                              updateExpenseItem(
-                                index,
-                                'receipt_reference',
-                                event.target.value,
-                              )
-                            }
-                            placeholder="Attachment ID, URL or stored path"
-                          />
-                        </div>
+                        <div className="reim-field reim-field-full">
+                          <label>Receipt *</label>
+                          <div
+                            className={`reim-receipt-box ${
+                              item.receipt_reference ? 'is-attached' : ''
+                            }`}
+                          >
+                            <div className="reim-receipt-summary">
+                              {uploadingReceiptIndex === index ? (
+                                <Loader2 size={20} className="spin" />
+                              ) : (
+                                <Paperclip size={20} />
+                              )}
+                              <div>
+                                <strong>
+                                  {item.receipt_filename ||
+                                    (uploadingReceiptIndex === index
+                                      ? 'Uploading receipt…'
+                                      : 'No receipt attached')}
+                                </strong>
+                                <small>
+                                  {item.receipt_reference
+                                    ? [
+                                        item.receipt_mime_type,
+                                        formatFileSize(
+                                          item.receipt_size_bytes,
+                                        ),
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' · ') || 'Receipt uploaded'
+                                    : 'PDF, JPG, JPEG, PNG or WEBP · maximum 8 MB'}
+                                </small>
+                              </div>
+                            </div>
 
-                        <div className="reim-field">
-                          <label>Receipt filename</label>
-                          <input
-                            type="text"
-                            value={item.receipt_filename}
-                            onChange={(event) =>
-                              updateExpenseItem(
-                                index,
-                                'receipt_filename',
-                                event.target.value,
-                              )
-                            }
-                            placeholder="Example: invoice-123.pdf"
-                          />
+                            <div className="reim-receipt-actions">
+                              <label
+                                className={`reim-file-label ${
+                                  uploadingReceiptIndex >= 0
+                                    ? 'is-disabled'
+                                    : ''
+                                }`}
+                                htmlFor={`reimbursement-receipt-${index}`}
+                              >
+                                <Paperclip size={14} />
+                                {item.receipt_reference
+                                  ? 'Replace Receipt'
+                                  : 'Attach Receipt'}
+                              </label>
+                              <input
+                                id={`reimbursement-receipt-${index}`}
+                                className="reim-file-input"
+                                type="file"
+                                accept={RECEIPT_ACCEPT}
+                                disabled={uploadingReceiptIndex >= 0}
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  event.target.value = '';
+
+                                  if (file) {
+                                    uploadReceipt(index, file);
+                                  }
+                                }}
+                              />
+
+                              {item.receipt_reference ? (
+                                <button
+                                  type="button"
+                                  className="reim-btn reim-btn-danger"
+                                  onClick={() => removeReceipt(index)}
+                                  disabled={uploadingReceiptIndex >= 0}
+                                >
+                                  <XCircle size={14} />
+                                  Remove
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </section>
@@ -2855,16 +3185,16 @@ export default function Reimbursements({ user = {} }) {
                   type="button"
                   className="reim-btn reim-btn-secondary"
                   onClick={closeDraftForm}
-                  disabled={saving}
+                  disabled={saving || uploadingReceiptIndex >= 0}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="reim-btn reim-btn-primary"
-                  disabled={saving}
+                  disabled={saving || uploadingReceiptIndex >= 0}
                 >
-                  {saving ? (
+                  {saving || uploadingReceiptIndex >= 0 ? (
                     <Loader2 size={16} className="spin" />
                   ) : (
                     <FilePenLine size={16} />
