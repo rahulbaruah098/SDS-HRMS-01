@@ -613,18 +613,12 @@ def build_holiday_lookup(holidays):
 
 def code_for_employee_date(employee, target_date, attendance_lookup, leave_lookup, holiday_lookup):
     target_key = target_date.isoformat()
-
-    joining_date = employee_joining_date(employee)
-    last_working_date = employee_last_working_date(employee)
-
-    if joining_date and target_date < joining_date:
-        return ""
-
-    if last_working_date and target_date > last_working_date:
-        return ""
-
     identifiers = employee_identifier_values(employee)
 
+    # A real approved leave or attendance record must take precedence over
+    # employee-profile date metadata. This prevents a valid attendance entry
+    # from disappearing when joining_date or last_working_date is stale or
+    # entered incorrectly in the employee master.
     for identifier in identifiers:
         leave_code = leave_lookup.get((identifier, target_key))
 
@@ -636,6 +630,15 @@ def code_for_employee_date(employee, target_date, attendance_lookup, leave_looku
 
         if attendance_code:
             return attendance_code
+
+    joining_date = employee_joining_date(employee)
+    last_working_date = employee_last_working_date(employee)
+
+    if joining_date and target_date < joining_date:
+        return ""
+
+    if last_working_date and target_date > last_working_date:
+        return ""
 
     if target_key in holiday_lookup:
         return "H"
