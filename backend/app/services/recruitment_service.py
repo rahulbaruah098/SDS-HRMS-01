@@ -257,6 +257,23 @@ def deep_merge(base, updates):
 def slugify(value): return re.sub(r"[^a-z0-9]+", "-", safe_str(value).lower()).strip("-")[:90] or "job"
 def token_hash(value): return hashlib.sha256(safe_str(value).encode()).hexdigest()
 
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = dict(payload or {})
+    return sorted({
+        safe_str(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if safe_str(payload.get(field_name))
+    })
+
+
 def ensure_recruitment_indexes(db):
     indexes = [
         (HIRING_REQUESTS, [("tenant_id",1),("reference_no",1)], {"unique":True}),
@@ -3234,8 +3251,60 @@ class RecruitmentService:
 
         prefix = normalize_key(self._settings().get("employee_code_prefix") or "EMP").upper().replace("_", "-")
         emp_code = safe_str(data.get("emp_code") or self._next("employee", prefix))
-        if self.db.employees.find_one({"tenant_id": self.tenant_id, "$or": [{"emp_code": emp_code}, {"employee_id": emp_code}], "is_deleted": {"$ne": True}}):
-            raise RecruitmentServiceError("Employee code already exists.", code="employee_code_exists", status_code=409)
+        identity_aliases = employee_identity_alias_keys({
+            "employee_id": emp_code,
+            "employee_code": emp_code,
+            "emp_code": emp_code,
+        })
+        identity_conditions = [
+            {"identity_alias_keys": {"$in": identity_aliases}},
+        ]
+        for identity_alias in identity_aliases:
+            exact_alias = f"^{re.escape(identity_alias)}$"
+            identity_conditions.extend(
+                {
+                    field_name: {
+                        "$regex": exact_alias,
+                        "$options": "i",
+                    }
+                }
+                for field_name in EMPLOYEE_IDENTITY_FIELDS
+            )
+
+        if self.db.employees.find_one({
+            "tenant_id": self.tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": identity_conditions,
+        }):
+            raise RecruitmentServiceError(
+                "Employee ID/code is already assigned to another active employee in this company.",
+                code="employee_code_exists",
+                status_code=409,
+            )
+
+        if self.db.users.find_one({
+            "tenant_id": self.tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {
+                    "emp_code": {
+                        "$regex": f"^{re.escape(emp_code)}$",
+                        "$options": "i",
+                    }
+                },
+                {
+                    "employee_code": {
+                        "$regex": f"^{re.escape(emp_code)}$",
+                        "$options": "i",
+                    }
+                },
+            ],
+        }):
+            raise RecruitmentServiceError(
+                "Employee ID/code is already assigned to another active user in this company.",
+                code="employee_code_exists",
+                status_code=409,
+            )
 
         temporary_password = safe_str(data.get("temporary_password")) or secrets.token_urlsafe(9)
         if len(temporary_password) < 8:
@@ -3250,6 +3319,8 @@ class RecruitmentService:
             "password_hash": generate_password_hash(temporary_password),
             "role": "employee",
             "roles": ["employee"],
+            "emp_code": emp_code,
+            "employee_code": emp_code,
             "is_active": True,
             "status": "active",
             "must_change_password": True,
@@ -3259,7 +3330,14 @@ class RecruitmentService:
             "created_by": self.actor_id,
             "source": "recruitment_conversion",
         }
-        user_result = self.db.users.insert_one(user_doc)
+        try:
+            user_result = self.db.users.insert_one(user_doc)
+        except DuplicateKeyError as exc:
+            raise RecruitmentServiceError(
+                "A user already exists with this email address or employee code.",
+                code="employee_identity_exists",
+                status_code=409,
+            ) from exc
 
         employee_doc = {
             "tenant_id": self.tenant_id,
@@ -3269,6 +3347,7 @@ class RecruitmentService:
             "email": email,
             "phone": safe_str(data.get("phone") or candidate.get("phone")),
             "employee_id": emp_code,
+            "employee_code": emp_code,
             "emp_code": emp_code,
             "department": safe_str(data.get("department") or terms.get("department") or application.get("department")),
             "designation": safe_str(data.get("designation") or terms.get("designation") or application.get("job_title")),
@@ -3303,7 +3382,21 @@ class RecruitmentService:
             "created_by": self.actor_id,
             "is_deleted": False,
         }
-        employee_result = self.db.employees.insert_one(employee_doc)
+        employee_doc["identity_alias_keys"] = employee_identity_alias_keys(employee_doc)
+
+        try:
+            employee_result = self.db.employees.insert_one(employee_doc)
+        except DuplicateKeyError as exc:
+            self.db.users.delete_one({"_id": user_result.inserted_id})
+            raise RecruitmentServiceError(
+                "Employee ID/code is already assigned to another active employee in this company.",
+                code="employee_code_exists",
+                status_code=409,
+            ) from exc
+        except Exception:
+            self.db.users.delete_one({"_id": user_result.inserted_id})
+            raise
+
         employee_doc["_id"] = employee_result.inserted_id
         self.db.users.update_one(
             {"_id": user_result.inserted_id},
@@ -3311,6 +3404,7 @@ class RecruitmentService:
                 "employee_id": str(employee_result.inserted_id),
                 "employee_ref_id": str(employee_result.inserted_id),
                 "emp_code": emp_code,
+                "employee_code": emp_code,
                 "department": employee_doc.get("department"),
                 "designation": employee_doc.get("designation"),
                 "updated_at": now,

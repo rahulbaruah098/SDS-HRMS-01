@@ -1,4 +1,5 @@
 import os
+import re
 
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime, time, date, timedelta, timezone
@@ -104,6 +105,166 @@ def normalize_text(value):
 
 def normalize_email(value):
     return normalize_text(value).lower()
+
+
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = payload or {}
+    aliases = []
+
+    stored_aliases = payload.get("identity_alias_keys") or []
+
+    if isinstance(stored_aliases, (list, tuple, set)):
+        aliases.extend(
+            normalize_text(value).lower()
+            for value in stored_aliases
+            if normalize_text(value)
+        )
+
+    aliases.extend(
+        normalize_text(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if normalize_text(payload.get(field_name))
+    )
+
+    return sorted(set(aliases))
+
+
+def find_employee_by_identity(
+    db,
+    tenant_id,
+    *,
+    user_id="",
+    employee_ref_id="",
+    employee_id="",
+    employee_code="",
+    emp_code="",
+    code="",
+    email="",
+    official_email="",
+):
+    """Resolve one employee only inside the supplied tenant.
+
+    Resolution order deliberately prioritises immutable Mongo employee references
+    and the linked login user before legacy employee codes and email aliases.
+    No cross-tenant fallback is permitted.
+    """
+    tenant_id = normalize_text(tenant_id)
+
+    if not tenant_id:
+        return None
+
+    base_query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }
+
+    direct_reference_values = [
+        normalize_text(employee_ref_id),
+        normalize_text(employee_id),
+    ]
+    employee_object_ids = []
+
+    for value in direct_reference_values:
+        object_id = safe_object_id(value)
+
+        if object_id and object_id not in employee_object_ids:
+            employee_object_ids.append(object_id)
+
+    if employee_object_ids:
+        employee = db.employees.find_one({
+            **base_query,
+            "_id": {"$in": employee_object_ids},
+        })
+
+        if employee:
+            return employee
+
+    normalized_user_id = normalize_text(user_id)
+
+    if normalized_user_id:
+        user_reference_values = [normalized_user_id]
+        user_object_id = safe_object_id(normalized_user_id)
+
+        if user_object_id:
+            user_reference_values.append(user_object_id)
+
+        employee = db.employees.find_one({
+            **base_query,
+            "$or": [
+                {"user_id": {"$in": user_reference_values}},
+                # Retained only as a tenant-scoped legacy linkage fallback.
+                {"employee_ref_id": {"$in": user_reference_values}},
+            ],
+        })
+
+        if employee:
+            return employee
+
+    alias_payload = {
+        "employee_id": employee_id,
+        "employee_code": employee_code,
+        "emp_code": emp_code,
+        "code": code,
+    }
+    aliases = employee_identity_alias_keys(alias_payload)
+
+    if aliases:
+        alias_conditions = [
+            {"identity_alias_keys": {"$in": aliases}},
+        ]
+
+        for alias in aliases:
+            exact_alias = re.compile(
+                rf"^{re.escape(alias)}$",
+                re.IGNORECASE,
+            )
+
+            alias_conditions.extend(
+                {field_name: exact_alias}
+                for field_name in EMPLOYEE_IDENTITY_FIELDS
+            )
+
+        employee = db.employees.find_one({
+            **base_query,
+            "$or": alias_conditions,
+        })
+
+        if employee:
+            return employee
+
+    normalized_emails = {
+        normalize_email(email),
+        normalize_email(official_email),
+    }
+    normalized_emails.discard("")
+
+    if normalized_emails:
+        email_conditions = []
+
+        for email_value in sorted(normalized_emails):
+            exact_email = re.compile(
+                rf"^{re.escape(email_value)}$",
+                re.IGNORECASE,
+            )
+            email_conditions.extend([
+                {"email": exact_email},
+                {"official_email": exact_email},
+            ])
+
+        return db.employees.find_one({
+            **base_query,
+            "$or": email_conditions,
+        })
+
+    return None
 
 
 def normalize_role(value):
@@ -254,23 +415,7 @@ def current_user_roles():
 
 def current_employee_state(db):
     user = getattr(g, "current_user", {}) or {}
-    user_id = str(user.get("_id") or "")
-    tenant_id = current_tenant_id()
-
-    if not user_id:
-        return DEFAULT_STATE
-
-    employee = db.employees.find_one({
-        "tenant_id": tenant_id,
-        "user_id": user_id,
-        "is_deleted": {"$ne": True},
-    })
-
-    if not employee:
-        employee = db.employees.find_one({
-            "user_id": user_id,
-            "is_deleted": {"$ne": True},
-        })
+    employee = emp(db)
 
     if not employee:
         return normalize_state(user.get("state") or DEFAULT_STATE)
@@ -290,66 +435,29 @@ def has_role(*allowed_roles):
 
 
 def emp(db):
+    user = getattr(g, "current_user", {}) or {}
     tenant_id = current_tenant_id()
-    user_id = str(g.current_user.get("_id") or "")
+    user_id = normalize_text(user.get("_id") or user.get("id"))
 
     if not user_id:
         return None
 
-    user_email = normalize_email(
-        g.current_user.get("email")
-        or g.current_user.get("username")
-        or g.current_user.get("official_email")
+    return find_employee_by_identity(
+        db,
+        tenant_id,
+        user_id=user_id,
+        employee_ref_id=user.get("employee_ref_id"),
+        employee_id=user.get("employee_id"),
+        employee_code=user.get("employee_code"),
+        emp_code=user.get("emp_code"),
+        code=user.get("code"),
+        email=(
+            user.get("email")
+            or user.get("username")
+            or user.get("official_email")
+        ),
+        official_email=user.get("official_email"),
     )
-
-    user_employee_id = normalize_text(
-        g.current_user.get("employee_id")
-        or g.current_user.get("employee_ref_id")
-        or g.current_user.get("emp_code")
-    )
-
-    identifier_or = [
-        {"user_id": user_id},
-        {"employee_ref_id": user_id},
-    ]
-
-    user_obj_id = safe_object_id(user_id)
-
-    if user_obj_id:
-        identifier_or.append({"_id": user_obj_id})
-
-    if user_employee_id:
-        identifier_or.extend([
-            {"employee_id": user_employee_id},
-            {"employee_code": user_employee_id},
-            {"emp_code": user_employee_id},
-            {"code": user_employee_id},
-        ])
-
-        employee_obj_id = safe_object_id(user_employee_id)
-
-        if employee_obj_id:
-            identifier_or.append({"_id": employee_obj_id})
-
-    if user_email:
-        identifier_or.extend([
-            {"email": user_email},
-            {"official_email": user_email},
-        ])
-
-    employee = db.employees.find_one({
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "$or": identifier_or,
-    })
-
-    if employee:
-        return employee
-
-    return db.employees.find_one({
-        "is_deleted": {"$ne": True},
-        "$or": identifier_or,
-    })
 
 
 def employee_state(employee):
@@ -499,38 +607,30 @@ def apply_employee_id_filter(q, employee_ids):
 
 def enrich_attendance_log(db, row):
     row = dict(row or {})
-    tenant_id = row.get("tenant_id")
-    employee_id = normalize_text(row.get("employee_id"))
+    tenant_id = normalize_text(row.get("tenant_id"))
 
-    employee = None
+    if not tenant_id:
+        return row
 
-    if employee_id:
-        employee_obj_id = safe_object_id(employee_id)
-
-        employee_or = [
-            {"employee_id": employee_id},
-            {"employee_code": employee_id},
-            {"emp_code": employee_id},
-            {"code": employee_id},
-            {"user_id": employee_id},
-            {"employee_ref_id": employee_id},
-        ]
-
-        if employee_obj_id:
-            employee_or.insert(0, {"_id": employee_obj_id})
-
-        employee_q = {
-            "is_deleted": {"$ne": True},
-            "$or": employee_or,
-        }
-
-        if tenant_id:
-            employee_q["tenant_id"] = tenant_id
-
-        employee = db.employees.find_one(employee_q)
+    employee = find_employee_by_identity(
+        db,
+        tenant_id,
+        user_id=row.get("user_id"),
+        employee_ref_id=row.get("employee_ref_id"),
+        employee_id=row.get("employee_id"),
+        employee_code=row.get("employee_code"),
+        emp_code=row.get("emp_code"),
+        code=row.get("code"),
+        email=row.get("email"),
+        official_email=row.get("official_email"),
+    )
 
     if not employee:
         return row
+
+    row["employee_id"] = str(employee["_id"])
+    row["employee_ref_id"] = str(employee["_id"])
+    row["user_id"] = row.get("user_id") or normalize_text(employee.get("user_id"))
 
     row["employee_name"] = row.get("employee_name") or employee_display_name(employee)
     row["employee_code"] = row.get("employee_code") or employee_code(employee)
@@ -639,6 +739,11 @@ def employee_identifier_values(employee):
         employee.get("official_email"),
     ]
 
+    stored_aliases = employee.get("identity_alias_keys") or []
+
+    if isinstance(stored_aliases, (list, tuple, set)):
+        raw_values.extend(stored_aliases)
+
     for value in raw_values:
         text_value = normalize_text(value)
 
@@ -715,7 +820,11 @@ def employee_snapshot(employee):
 
     return {
         "_id": str(employee.get("_id")),
+        "employee_ref_id": str(employee.get("_id")),
+        "user_id": normalize_text(employee.get("user_id")),
         "employee_id": employee_code(employee),
+        "employee_code": employee_code(employee),
+        "identity_alias_keys": employee_identity_alias_keys(employee),
         "name": employee_display_name(employee),
         "email": employee.get("email", ""),
         "department": employee.get("department", ""),
@@ -1083,35 +1192,18 @@ def employee_user_id(db, employee_id, tenant_id=None):
     if not raw_id:
         return ""
 
-    q = {
-        "is_deleted": {"$ne": True},
-    }
-
-    if tenant_id:
-        q["tenant_id"] = tenant_id
-    else:
-        q["tenant_id"] = current_tenant_id()
-
-    identifier_or = [
-        {"user_id": raw_id},
-        {"employee_id": raw_id},
-        {"employee_ref_id": raw_id},
-        {"employee_code": raw_id},
-        {"emp_code": raw_id},
-        {"code": raw_id},
-        {"email": normalize_email(raw_id)},
-        {"official_email": normalize_email(raw_id)},
-    ]
-
-    employee_obj_id = safe_object_id(raw_id)
-
-    if employee_obj_id:
-        identifier_or.insert(0, {"_id": employee_obj_id})
-
-    row = db.employees.find_one({
-        **q,
-        "$or": identifier_or,
-    })
+    row = find_employee_by_identity(
+        db,
+        normalize_text(tenant_id) or current_tenant_id(),
+        user_id=raw_id,
+        employee_ref_id=raw_id,
+        employee_id=raw_id,
+        employee_code=raw_id,
+        emp_code=raw_id,
+        code=raw_id,
+        email=raw_id,
+        official_email=raw_id,
+    )
 
     return str(row.get("user_id", "")) if row else ""
 
@@ -1494,8 +1586,11 @@ def check_in():
     doc = {
         "tenant_id": tenant_id,
         "employee_id": str(e["_id"]),
+        "employee_ref_id": str(e["_id"]),
+        "user_id": normalize_text(e.get("user_id")),
         "employee_code": employee_code(e),
         "emp_code": e.get("emp_code", ""),
+        "identity_alias_keys": employee_identity_alias_keys(e),
         "employee_name": employee_display_name(e),
         "department": e.get("department", ""),
         "designation": e.get("designation", ""),

@@ -1,4 +1,9 @@
+import logging
+
 from pymongo import MongoClient, ASCENDING
+
+
+logger = logging.getLogger(__name__)
 
 client = None
 db = None
@@ -24,11 +29,39 @@ def get_db():
 
 def create_index_safe(collection, keys, **kwargs):
     try:
-        collection.create_index(keys, **kwargs)
-    except Exception:
-        # Keeps app startup from crashing if an old/conflicting index already exists.
-        # Existing data/index cleanup can be handled separately if needed.
-        pass
+        return collection.create_index(keys, **kwargs)
+    except Exception as exc:
+        # Keep application startup resilient, but never hide failed protection.
+        # The migration script can clean conflicting data/indexes and retry.
+        logger.warning(
+            "Could not create MongoDB index on %s with keys %s and options %s: %s",
+            collection.name,
+            keys,
+            kwargs,
+            exc,
+        )
+        return None
+
+
+def active_string_partial_filter(field_name):
+    return {
+        "is_deleted": False,
+        field_name: {
+            "$exists": True,
+            "$type": "string",
+            "$gt": "",
+        },
+    }
+
+
+def active_identity_alias_partial_filter():
+    return {
+        "is_deleted": False,
+        "identity_alias_keys": {
+            "$exists": True,
+            "$type": "array",
+        },
+    }
 
 
 def drop_legacy_payroll_period_unique_index(collection):
@@ -98,7 +131,34 @@ def ensure_indexes(database):
         [("tenant_id", ASCENDING), ("is_active", ASCENDING)],
     )
 
+    # Tenant-scoped user identity protection.
+    # These fields are synchronized from the authoritative employee record.
+    create_index_safe(
+        database.users,
+        [("tenant_id", ASCENDING), ("employee_id", ASCENDING)],
+        name="uniq_active_user_tenant_employee_id",
+        unique=True,
+        partialFilterExpression=active_string_partial_filter("employee_id"),
+    )
+
+    create_index_safe(
+        database.users,
+        [("tenant_id", ASCENDING), ("emp_code", ASCENDING)],
+        name="uniq_active_user_tenant_emp_code",
+        unique=True,
+        partialFilterExpression=active_string_partial_filter("emp_code"),
+    )
+
+    create_index_safe(
+        database.users,
+        [("tenant_id", ASCENDING), ("employee_code", ASCENDING)],
+        name="uniq_active_user_tenant_employee_code",
+        unique=True,
+        partialFilterExpression=active_string_partial_filter("employee_code"),
+    )
+
     # Employees
+    # Retain the existing employee-code index for backward compatibility.
     create_index_safe(
         database.employees,
         [("tenant_id", ASCENDING), ("emp_code", ASCENDING)],
@@ -106,9 +166,32 @@ def ensure_indexes(database):
         sparse=True,
     )
 
+    # Canonical employee identity protection.
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("employee_id", ASCENDING)],
+        name="uniq_active_employee_tenant_employee_id",
+        unique=True,
+        partialFilterExpression=active_string_partial_filter("employee_id"),
+    )
+
     create_index_safe(
         database.employees,
         [("tenant_id", ASCENDING), ("user_id", ASCENDING)],
+        name="uniq_active_employee_tenant_user_id",
+        unique=True,
+        partialFilterExpression=active_string_partial_filter("user_id"),
+    )
+
+    # Cross-field protection. Each active employee stores all code aliases in
+    # identity_alias_keys, so the same code cannot be reused in employee_id,
+    # employee_code, emp_code, or code for another employee in the same tenant.
+    create_index_safe(
+        database.employees,
+        [("tenant_id", ASCENDING), ("identity_alias_keys", ASCENDING)],
+        name="uniq_active_employee_tenant_identity_alias",
+        unique=True,
+        partialFilterExpression=active_identity_alias_partial_filter(),
     )
 
     create_index_safe(

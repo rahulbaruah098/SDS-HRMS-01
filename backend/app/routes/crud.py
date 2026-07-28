@@ -1079,6 +1079,39 @@ def remove_employee_auth_fields(payload):
     return payload
 
 
+def employee_user_error_status(message):
+    message = normalize_text(message).lower()
+
+    if any(
+        phrase in message
+        for phrase in (
+            "already exists",
+            "already assigned",
+            "duplicate",
+            "conflict",
+        )
+    ):
+        return 409
+
+    return 400
+
+
+def rollback_employee_login_user(db, previous_user=None, current_user=None):
+    previous_user = dict(previous_user or {})
+    current_user = dict(current_user or {})
+
+    if previous_user.get("_id"):
+        db.users.replace_one(
+            {"_id": previous_user["_id"]},
+            previous_user,
+            upsert=True,
+        )
+        return
+
+    if current_user.get("_id"):
+        db.users.delete_one({"_id": current_user["_id"]})
+
+
 def find_employee_user(db, employee_doc):
     user_id = employee_doc.get("user_id")
     user_obj_id = safe_object_id(user_id)
@@ -1192,7 +1225,11 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
                 return None, "Password must be at least 6 characters"
             update_doc["$set"]["password_hash"] = generate_password_hash(str(raw_password))
 
-        db.users.update_one({"_id": existing_user["_id"]}, update_doc)
+        try:
+            db.users.update_one({"_id": existing_user["_id"]}, update_doc)
+        except DuplicateKeyError:
+            return None, "A user with this email or employee ID/code already exists"
+
         return db.users.find_one({"_id": existing_user["_id"]}), ""
 
     duplicate = db.users.find_one({
@@ -1220,7 +1257,11 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
         "is_deleted": False,
     })
 
-    result = db.users.insert_one(user_payload)
+    try:
+        result = db.users.insert_one(user_payload)
+    except DuplicateKeyError:
+        return None, "A user with this email or employee ID/code already exists"
+
     user_payload["_id"] = result.inserted_id
     employee_doc["user_id"] = str(result.inserted_id)
 
@@ -1259,10 +1300,13 @@ def sync_employee_login_user(db, employee_doc, raw_password=None):
 
         update_data["password_hash"] = generate_password_hash(str(raw_password))
 
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": update_data},
-    )
+    try:
+        db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": update_data},
+        )
+    except DuplicateKeyError:
+        return None, "A user with this email or employee ID/code already exists"
 
     return db.users.find_one({"_id": user["_id"]}), ""
 
@@ -4037,6 +4081,8 @@ def create_collection_item(collection):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+    employee_login_user_before = None
+    employee_login_user = None
 
     if collection == "expenses":
         payload, expense_error = prepare_expense_payload(db, payload)
@@ -4128,12 +4174,18 @@ def create_collection_item(collection):
         remove_employee_auth_fields(payload)
 
         if not skip_login:
+            employee_login_user_before = find_employee_user(db, payload)
+
+            if employee_login_user_before:
+                employee_login_user_before = dict(employee_login_user_before)
+
             user, user_error = ensure_employee_login_user(db, payload, raw_password)
 
             if user_error:
-                return jsonify({"message": user_error}), 400
+                return jsonify({"message": user_error}), employee_user_error_status(user_error)
 
             if user:
+                employee_login_user = dict(user)
                 payload["user_id"] = str(user["_id"])
 
     payload.update({
@@ -4153,7 +4205,31 @@ def create_collection_item(collection):
             payload.setdefault("created_by_employee_id", str(employee["_id"]))
             payload.setdefault("created_by_employee_name", employee_display_name(employee))
 
-    result = mongo_collection.insert_one(payload)
+    try:
+        result = mongo_collection.insert_one(payload)
+    except DuplicateKeyError:
+        if collection == "employees":
+            rollback_employee_login_user(
+                db,
+                previous_user=employee_login_user_before,
+                current_user=employee_login_user,
+            )
+            return jsonify({
+                "message": "Employee ID/code is already assigned to another active employee in this company"
+            }), 409
+
+        return jsonify({
+            "message": "A record with the same unique value already exists"
+        }), 409
+    except Exception:
+        if collection == "employees":
+            rollback_employee_login_user(
+                db,
+                previous_user=employee_login_user_before,
+                current_user=employee_login_user,
+            )
+        raise
+
     payload["_id"] = result.inserted_id
 
     if collection == "employees":
@@ -4162,7 +4238,12 @@ def create_collection_item(collection):
 
             if user_error:
                 mongo_collection.delete_one({"_id": result.inserted_id})
-                return jsonify({"message": user_error}), 400
+                rollback_employee_login_user(
+                    db,
+                    previous_user=employee_login_user_before,
+                    current_user=employee_login_user,
+                )
+                return jsonify({"message": user_error}), employee_user_error_status(user_error)
 
             if user:
                 mongo_collection.update_one(
@@ -4289,6 +4370,13 @@ def update_collection_item(collection, item_id):
 
     payload = clean_payload(data)
     raw_password = data.get("password") or data.get("new_password")
+    employee_login_user_before = None
+
+    if collection == "employees":
+        employee_login_user_before = find_employee_user(db, existing)
+
+        if employee_login_user_before:
+            employee_login_user_before = dict(employee_login_user_before)
 
     if collection == "expenses":
         roles = current_user_roles()
@@ -4618,18 +4706,6 @@ def update_collection_item(collection, item_id):
 
         remove_employee_auth_fields(payload)
 
-        if employee_is_alumni_payload(merged_employee):
-            deactivate_employee_login_user(db, merged_employee)
-            remove_employee_auth_fields(payload)
-        else:
-            user, user_error = sync_employee_login_user(db, merged_employee, raw_password)
-
-            if user_error:
-                return jsonify({"message": user_error}), 400
-
-            if user:
-                payload["user_id"] = str(user["_id"])
-
     validation_error = "" if self_photo_update else validate_required_fields(collection, payload)
 
     if validation_error:
@@ -4641,10 +4717,20 @@ def update_collection_item(collection, item_id):
         "updated_by_name": current_user_name(),
     })
 
-    mongo_collection.update_one(
-        {"_id": item_obj_id},
-        {"$set": payload},
-    )
+    try:
+        mongo_collection.update_one(
+            {"_id": item_obj_id},
+            {"$set": payload},
+        )
+    except DuplicateKeyError:
+        if collection == "employees":
+            return jsonify({
+                "message": "Employee ID/code is already assigned to another active employee in this company"
+            }), 409
+
+        return jsonify({
+            "message": "A record with the same unique value already exists"
+        }), 409
 
     updated = mongo_collection.find_one({"_id": item_obj_id})
 
@@ -4652,7 +4738,52 @@ def update_collection_item(collection, item_id):
         if employee_is_alumni_payload(updated):
             deactivate_employee_login_user(db, updated)
         else:
-            sync_employee_login_user(db, updated)
+            user, user_error = sync_employee_login_user(
+                db,
+                updated,
+                raw_password,
+            )
+
+            if user_error:
+                mongo_collection.replace_one(
+                    {"_id": existing["_id"]},
+                    existing,
+                    upsert=True,
+                )
+                rollback_employee_login_user(
+                    db,
+                    previous_user=employee_login_user_before,
+                    current_user=user,
+                )
+                return jsonify({"message": user_error}), employee_user_error_status(user_error)
+
+            if user and normalize_text(updated.get("user_id")) != str(user["_id"]):
+                try:
+                    mongo_collection.update_one(
+                        {"_id": item_obj_id},
+                        {"$set": {
+                            "user_id": str(user["_id"]),
+                            "updated_at": now_utc(),
+                            "updated_by": current_user_id(),
+                            "updated_by_name": current_user_name(),
+                        }},
+                    )
+                except DuplicateKeyError:
+                    mongo_collection.replace_one(
+                        {"_id": existing["_id"]},
+                        existing,
+                        upsert=True,
+                    )
+                    rollback_employee_login_user(
+                        db,
+                        previous_user=employee_login_user_before,
+                        current_user=user,
+                    )
+                    return jsonify({
+                        "message": "This login account is already linked to another active employee in this company"
+                    }), 409
+
+            updated = mongo_collection.find_one({"_id": item_obj_id})
 
             for leave_type in BALANCE_LEAVE_TYPES:
                 ensure_leave_balance(db, updated, leave_type)

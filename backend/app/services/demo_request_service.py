@@ -2,6 +2,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from werkzeug.security import generate_password_hash
 
 
@@ -39,6 +40,24 @@ def now_utc():
 
 def safe_str(value):
     return str(value or "").strip()
+
+
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = dict(payload or {})
+
+    return sorted({
+        safe_str(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if safe_str(payload.get(field_name))
+    })
 
 
 def normalize_email(value):
@@ -388,6 +407,7 @@ def build_tenant_document(demo_request, tenant_id, credentials, approved_by, con
 def build_admin_user_document(demo_request, tenant_id, credentials, approved_by):
     admin_name = safe_str(demo_request.get("contact_person_name")) or f"{demo_request.get('company_name')} Admin"
     created_at = now_utc()
+    emp_code = f"{tenant_id.upper()}-ADMIN"
 
     return {
         "tenant_id": tenant_id,
@@ -398,6 +418,8 @@ def build_admin_user_document(demo_request, tenant_id, credentials, approved_by)
         "password_hash": generate_password_hash(credentials["admin_password"]),
         "role": "admin",
         "roles": ["admin", "hr_manager"],
+        "emp_code": emp_code,
+        "employee_code": emp_code,
         "is_active": True,
         "status": "active",
         "is_deleted": False,
@@ -417,7 +439,13 @@ def build_admin_employee_document(demo_request, tenant_id, user_id, credentials,
         "tenant_id": tenant_id,
         "user_id": safe_str(user_id),
         "emp_code": emp_code,
+        "employee_code": emp_code,
         "employee_id": emp_code,
+        "identity_alias_keys": employee_identity_alias_keys({
+            "employee_id": emp_code,
+            "employee_code": emp_code,
+            "emp_code": emp_code,
+        }),
         "name": admin_name,
         "employee_name": admin_name,
         "email": credentials["admin_email"],
@@ -509,67 +537,108 @@ def approve_demo_request(db, demo_request_id, approved_by, config=None):
         approved_by,
         config=config,
     )
-    tenant_result = db.tenants.insert_one(tenant_doc)
+    tenant_result = None
+    user_result = None
+    employee_result = None
+    subscription_result = None
 
-    user_doc = build_admin_user_document(
-        demo_request,
-        tenant_id,
-        credentials,
-        approved_by,
-    )
-    user_result = db.users.insert_one(user_doc)
+    try:
+        tenant_result = db.tenants.insert_one(tenant_doc)
 
-    employee_doc = build_admin_employee_document(
-        demo_request,
-        tenant_id,
-        user_result.inserted_id,
-        credentials,
-        approved_by,
-    )
-    employee_result = db.employees.insert_one(employee_doc)
+        user_doc = build_admin_user_document(
+            demo_request,
+            tenant_id,
+            credentials,
+            approved_by,
+        )
+        user_result = db.users.insert_one(user_doc)
 
-    db.users.update_one(
-        {"_id": user_result.inserted_id},
-        {
-            "$set": {
-                "employee_id": str(employee_result.inserted_id),
-                "employee_ref_id": str(employee_result.inserted_id),
-                "emp_code": employee_doc["emp_code"],
-                "department": employee_doc["department"],
-                "designation": employee_doc["designation"],
-                "updated_at": now_utc(),
-            }
-        },
-    )
+        employee_doc = build_admin_employee_document(
+            demo_request,
+            tenant_id,
+            user_result.inserted_id,
+            credentials,
+            approved_by,
+        )
+        employee_result = db.employees.insert_one(employee_doc)
 
-    subscription_doc = build_demo_subscription_document(
-        demo_request,
-        tenant_id,
-        config=config,
-    )
-    subscription_result = db.subscriptions.insert_one(subscription_doc)
+        db.users.update_one(
+            {"_id": user_result.inserted_id},
+            {
+                "$set": {
+                    "employee_id": str(employee_result.inserted_id),
+                    "employee_ref_id": str(employee_result.inserted_id),
+                    "emp_code": employee_doc["emp_code"],
+                    "employee_code": employee_doc["employee_code"],
+                    "department": employee_doc["department"],
+                    "designation": employee_doc["designation"],
+                    "updated_at": now_utc(),
+                }
+            },
+        )
 
-    db.demo_requests.update_one(
-        {"_id": demo_request["_id"]},
-        {
-            "$set": {
-                "status": "approved",
-                "approval_status": "approved",
-                "approved_at": now_utc(),
-                "approved_by": safe_str(approved_by),
-                "tenant_id": tenant_id,
-                "tenant_object_id": str(tenant_result.inserted_id),
-                "admin_user_id": str(user_result.inserted_id),
-                "admin_employee_id": str(employee_result.inserted_id),
-                "subscription_id": str(subscription_result.inserted_id),
-                "generated_admin_email": credentials["admin_email"],
-                "generated_admin_password_masked": "********",
-                "trial_start_date": tenant_doc["trial_start_date"],
-                "trial_end_date": tenant_doc["trial_end_date"],
-                "updated_at": now_utc(),
-            }
-        },
-    )
+        subscription_doc = build_demo_subscription_document(
+            demo_request,
+            tenant_id,
+            config=config,
+        )
+        subscription_result = db.subscriptions.insert_one(subscription_doc)
+
+        demo_update_result = db.demo_requests.update_one(
+            {
+                "_id": demo_request["_id"],
+                "status": {"$in": ["pending", "otp_verified"]},
+                "otp_verified": True,
+                "is_deleted": {"$ne": True},
+            },
+            {
+                "$set": {
+                    "status": "approved",
+                    "approval_status": "approved",
+                    "approved_at": now_utc(),
+                    "approved_by": safe_str(approved_by),
+                    "tenant_id": tenant_id,
+                    "tenant_object_id": str(tenant_result.inserted_id),
+                    "admin_user_id": str(user_result.inserted_id),
+                    "admin_employee_id": str(employee_result.inserted_id),
+                    "subscription_id": str(subscription_result.inserted_id),
+                    "generated_admin_email": credentials["admin_email"],
+                    "generated_admin_password_masked": "********",
+                    "trial_start_date": tenant_doc["trial_start_date"],
+                    "trial_end_date": tenant_doc["trial_end_date"],
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+
+        if demo_update_result.modified_count != 1:
+            raise DemoRequestError(
+                "This demo request changed while approval was in progress. Please refresh and retry.",
+                409,
+            )
+    except Exception as exc:
+        if subscription_result is not None:
+            db.subscriptions.delete_one({"_id": subscription_result.inserted_id})
+
+        if employee_result is not None:
+            db.employees.delete_one({"_id": employee_result.inserted_id})
+
+        if user_result is not None:
+            db.users.delete_one({"_id": user_result.inserted_id})
+
+        if tenant_result is not None:
+            db.tenants.delete_one({"_id": tenant_result.inserted_id})
+
+        if isinstance(exc, DemoRequestError):
+            raise
+
+        if isinstance(exc, DuplicateKeyError):
+            raise DemoRequestError(
+                "The generated company, admin email, or employee ID/code already exists. Please retry approval.",
+                409,
+            ) from exc
+
+        raise
 
     return {
         "tenant": tenant_doc,

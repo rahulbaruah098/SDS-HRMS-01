@@ -1,6 +1,7 @@
 from calendar import monthrange
 from copy import copy
 from datetime import date, datetime, timedelta
+import re
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -250,67 +251,283 @@ def employee_last_working_date(employee):
     )
 
 
-def employee_identifier_values(employee):
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+IDENTITY_MATCH_PRIORITY = (
+    "employee_ref",
+    "user_ref",
+    "alias",
+    "email",
+)
+
+
+def normalize_identity_value(value):
+    return normalize_text(value).lower()
+
+
+def looks_like_object_id(value):
+    return bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{24}",
+            normalize_text(value),
+        )
+    )
+
+
+def add_unique_identity(target, value):
+    value = normalize_identity_value(value)
+
+    if value and value not in target:
+        target.append(value)
+
+
+def stored_identity_aliases(payload):
+    payload = payload or {}
+    values = payload.get("identity_alias_keys") or []
+
+    if not isinstance(values, (list, tuple, set)):
+        return []
+
+    aliases = []
+
+    for value in values:
+        add_unique_identity(aliases, value)
+
+    return aliases
+
+
+def employee_identity_groups(employee):
+    """Return employee identifiers in safe matching order.
+
+    Immutable Mongo employee references and linked user references are kept
+    separate from editable/legacy employee codes. Phone numbers are deliberately
+    excluded because they are not reliable employee identity keys.
+    """
     employee = employee or {}
+    groups = {
+        "employee_ref": [],
+        "user_ref": [],
+        "alias": [],
+        "email": [],
+    }
+
+    employee_object_id = employee.get("_id")
+
+    if employee_object_id:
+        add_unique_identity(groups["employee_ref"], str(employee_object_id))
+
+    for value in (
+        employee.get("employee_ref_id"),
+        employee.get("employee_mongo_id"),
+        employee.get("employee_record_id"),
+    ):
+        if looks_like_object_id(value):
+            add_unique_identity(groups["employee_ref"], value)
+        else:
+            add_unique_identity(groups["alias"], value)
+
+    raw_employee_id = employee.get("employee_id")
+
+    if looks_like_object_id(raw_employee_id):
+        add_unique_identity(groups["employee_ref"], raw_employee_id)
+    else:
+        add_unique_identity(groups["alias"], raw_employee_id)
+
+    raw_id = employee.get("id")
+
+    if looks_like_object_id(raw_id):
+        add_unique_identity(groups["employee_ref"], raw_id)
+    else:
+        add_unique_identity(groups["alias"], raw_id)
+
+    add_unique_identity(groups["user_ref"], employee.get("user_id"))
+
+    for alias in stored_identity_aliases(employee):
+        add_unique_identity(groups["alias"], alias)
+
+    for field_name in EMPLOYEE_IDENTITY_FIELDS:
+        value = employee.get(field_name)
+
+        if field_name == "employee_id" and looks_like_object_id(value):
+            continue
+
+        add_unique_identity(groups["alias"], value)
+
+    add_unique_identity(groups["email"], employee.get("email"))
+    add_unique_identity(groups["email"], employee.get("official_email"))
+
+    return groups
+
+
+def attendance_row_identity_groups(row):
+    """Return attendance/leave identifiers without using the row's own _id."""
+    row = row or {}
+    groups = {
+        "employee_ref": [],
+        "user_ref": [],
+        "alias": [],
+        "email": [],
+    }
+
+    for value in (
+        row.get("employee_ref_id"),
+        row.get("employee_mongo_id"),
+        row.get("employee_record_id"),
+    ):
+        if looks_like_object_id(value):
+            add_unique_identity(groups["employee_ref"], value)
+        else:
+            add_unique_identity(groups["alias"], value)
+
+    raw_employee_id = row.get("employee_id")
+
+    if looks_like_object_id(raw_employee_id):
+        add_unique_identity(groups["employee_ref"], raw_employee_id)
+    else:
+        add_unique_identity(groups["alias"], raw_employee_id)
+
+    add_unique_identity(groups["user_ref"], row.get("user_id"))
+
+    for alias in stored_identity_aliases(row):
+        add_unique_identity(groups["alias"], alias)
+
+    for field_name in EMPLOYEE_IDENTITY_FIELDS:
+        value = row.get(field_name)
+
+        if field_name == "employee_id" and looks_like_object_id(value):
+            continue
+
+        add_unique_identity(groups["alias"], value)
+
+    add_unique_identity(groups["email"], row.get("email"))
+    add_unique_identity(groups["email"], row.get("official_email"))
+
+    return groups
+
+
+def flatten_identity_groups(groups):
     values = []
 
-    def add(value):
-        value = normalize_text(value)
-
-        if value and value not in values:
-            values.append(value)
-
-    employee_id = employee.get("_id")
-
-    if employee_id:
-        add(str(employee_id))
-
-    add(employee.get("id"))
-    add(employee.get("employee_id"))
-    add(employee.get("employee_code"))
-    add(employee.get("emp_code"))
-    add(employee.get("code"))
-    add(employee.get("user_id"))
-    add(employee.get("employee_ref_id"))
-    add(employee.get("email"))
-    add(employee.get("official_email"))
-    add(employee.get("phone"))
-    add(employee.get("mobile"))
+    for group_name in IDENTITY_MATCH_PRIORITY:
+        for value in groups.get(group_name, []):
+            add_unique_identity(values, value)
 
     return values
+
+
+def employee_identifier_values(employee):
+    return flatten_identity_groups(employee_identity_groups(employee))
+
 
 def attendance_row_identifier_values(row):
-    row = row or {}
-    values = []
+    return flatten_identity_groups(attendance_row_identity_groups(row))
 
-    def add(value):
-        value = normalize_text(value)
-
-        if value and value not in values:
-            values.append(value)
-
-    row_id = row.get("_id")
-
-    if row_id:
-        add(str(row_id))
-
-    add(row.get("employee_id"))
-    add(row.get("employee_ref_id"))
-    add(row.get("employee_code"))
-    add(row.get("emp_code"))
-    add(row.get("code"))
-    add(row.get("user_id"))
-    add(row.get("id"))
-    add(row.get("email"))
-    add(row.get("official_email"))
-    add(row.get("phone"))
-    add(row.get("mobile"))
-
-    return values
 
 def attendance_employee_identifier(row):
     identifiers = attendance_row_identifier_values(row)
     return identifiers[0] if identifiers else ""
+
+
+def identity_tenant_id(payload):
+    return normalize_identity_value((payload or {}).get("tenant_id"))
+
+
+def ambiguous_fallback_identities(employees):
+    """Find editable aliases/emails shared by multiple employee masters.
+
+    Such values are excluded from fallback matching so an old duplicate code or
+    shared email cannot silently place attendance against the wrong employee.
+    """
+    owners_by_key = {
+        "alias": {},
+        "email": {},
+    }
+
+    for index, employee in enumerate(employees or []):
+        groups = employee_identity_groups(employee)
+        tenant_id = identity_tenant_id(employee)
+        owner = (
+            groups["employee_ref"][0]
+            if groups["employee_ref"]
+            else groups["user_ref"][0]
+            if groups["user_ref"]
+            else f"employee-row-{index}"
+        )
+
+        for group_name in ("alias", "email"):
+            for value in groups[group_name]:
+                for tenant_key in {tenant_id, ""}:
+                    key = (tenant_key, value)
+                    owners_by_key[group_name].setdefault(key, set()).add(owner)
+
+    return {
+        group_name: {
+            key
+            for key, owners in owners_by_key[group_name].items()
+            if len(owners) > 1
+        }
+        for group_name in ("alias", "email")
+    }
+
+
+def empty_identity_lookup():
+    return {
+        group_name: {}
+        for group_name in IDENTITY_MATCH_PRIORITY
+    }
+
+
+def add_identity_lookup_row(
+    lookup,
+    row,
+    day_key,
+    code,
+    ambiguous_identities=None,
+):
+    groups = attendance_row_identity_groups(row)
+    tenant_id = identity_tenant_id(row)
+    ambiguous_identities = ambiguous_identities or {
+        "alias": set(),
+        "email": set(),
+    }
+
+    for group_name in IDENTITY_MATCH_PRIORITY:
+        for value in groups[group_name]:
+            if (
+                group_name in {"alias", "email"}
+                and (tenant_id, value) in ambiguous_identities.get(group_name, set())
+            ):
+                continue
+
+            lookup[group_name][(tenant_id, value, day_key)] = code
+
+
+def identity_lookup_code(lookup, employee, day_key):
+    groups = employee_identity_groups(employee)
+    tenant_id = identity_tenant_id(employee)
+    tenant_candidates = [tenant_id]
+
+    # Tenantless historical rows may still be used only after exact-tenant
+    # matching fails. Cross-tenant identifiers are never searched.
+    if tenant_id:
+        tenant_candidates.append("")
+
+    for group_name in IDENTITY_MATCH_PRIORITY:
+        for value in groups[group_name]:
+            for tenant_key in tenant_candidates:
+                code = lookup.get(group_name, {}).get(
+                    (tenant_key, value, day_key)
+                )
+
+                if code:
+                    return code
+
+    return ""
 
 
 def attendance_status_code(row):
@@ -542,8 +759,9 @@ def leave_date_range(row):
     return start, end
 
 
-def build_attendance_lookup(attendance_logs):
-    lookup = {}
+def build_attendance_lookup(attendance_logs, employees=None):
+    lookup = empty_identity_lookup()
+    ambiguous_identities = ambiguous_fallback_identities(employees)
 
     for row in attendance_logs or []:
         employee_keys = attendance_row_identifier_values(row)
@@ -565,14 +783,20 @@ def build_attendance_lookup(attendance_logs):
         if not code:
             continue
 
-        for emp_key in employee_keys:
-            lookup[(emp_key, day_key)] = code
+        add_identity_lookup_row(
+            lookup,
+            row,
+            day_key,
+            code,
+            ambiguous_identities=ambiguous_identities,
+        )
 
     return lookup
 
 
-def build_leave_lookup(leave_requests):
-    lookup = {}
+def build_leave_lookup(leave_requests, employees=None):
+    lookup = empty_identity_lookup()
+    ambiguous_identities = ambiguous_fallback_identities(employees)
 
     for row in leave_requests or []:
         code = leave_status_code(row)
@@ -589,9 +813,13 @@ def build_leave_lookup(leave_requests):
         current = start
 
         while current <= end:
-            for emp_key in employee_keys:
-                lookup[(emp_key, current.isoformat())] = code
-
+            add_identity_lookup_row(
+                lookup,
+                row,
+                current.isoformat(),
+                code,
+                ambiguous_identities=ambiguous_identities,
+            )
             current += timedelta(days=1)
 
     return lookup
@@ -613,23 +841,27 @@ def build_holiday_lookup(holidays):
 
 def code_for_employee_date(employee, target_date, attendance_lookup, leave_lookup, holiday_lookup):
     target_key = target_date.isoformat()
-    identifiers = employee_identifier_values(employee)
 
-    # A real approved leave or attendance record must take precedence over
-    # employee-profile date metadata. This prevents a valid attendance entry
-    # from disappearing when joining_date or last_working_date is stale or
-    # entered incorrectly in the employee master.
-    for identifier in identifiers:
-        leave_code = leave_lookup.get((identifier, target_key))
+    # Approved leave and real attendance still take precedence over employee
+    # profile dates, but matching now uses immutable employee/user references
+    # before editable legacy codes and email aliases.
+    leave_code = identity_lookup_code(
+        leave_lookup,
+        employee,
+        target_key,
+    )
 
-        if leave_code:
-            return leave_code
+    if leave_code:
+        return leave_code
 
-    for identifier in identifiers:
-        attendance_code = attendance_lookup.get((identifier, target_key))
+    attendance_code = identity_lookup_code(
+        attendance_lookup,
+        employee,
+        target_key,
+    )
 
-        if attendance_code:
-            return attendance_code
+    if attendance_code:
+        return attendance_code
 
     joining_date = employee_joining_date(employee)
     last_working_date = employee_last_working_date(employee)
@@ -1127,8 +1359,14 @@ def create_attendance_sheet(
         ws.merge_cells(start_row=4, start_column=col, end_row=5, end_column=col)
         apply_cell_style(ws.cell(4, col), fill=HEADER_FILL, bold=True)
 
-    attendance_lookup = build_attendance_lookup(attendance_logs)
-    leave_lookup = build_leave_lookup(leave_requests)
+    attendance_lookup = build_attendance_lookup(
+        attendance_logs,
+        employees=employees,
+    )
+    leave_lookup = build_leave_lookup(
+        leave_requests,
+        employees=employees,
+    )
     holiday_lookup = build_holiday_lookup(holidays)
 
     sorted_employees = sorted(

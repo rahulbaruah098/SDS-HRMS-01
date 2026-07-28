@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, g, current_app
 from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 from datetime import datetime, time, timedelta
+import re
 from werkzeug.security import generate_password_hash
 
 from app.extensions import get_db
@@ -184,7 +185,9 @@ EMPLOYEE_PROFILE_FIELDS = [
     "previous_employer_name",
     "previous_employment_tenure_from_date",
     "employee_id",
+    "employee_code",
     "emp_code",
+    "code",
     "job_type",
     "project",
     "state",
@@ -249,6 +252,46 @@ def employee_identity_alias_keys(payload):
         for field_name in EMPLOYEE_IDENTITY_FIELDS
         if normalize_text(payload.get(field_name))
     })
+
+
+def employee_identity_conflict(db, employee_doc, exclude_employee_id=None):
+    employee_doc = employee_doc or {}
+    tenant_id = normalize_text(employee_doc.get("tenant_id")).lower()
+    aliases = employee_identity_alias_keys(employee_doc)
+
+    if not tenant_id or not aliases:
+        return None
+
+    identity_queries = [
+        {"identity_alias_keys": {"$in": aliases}},
+    ]
+
+    for field_name in EMPLOYEE_IDENTITY_FIELDS:
+        for alias in aliases:
+            identity_queries.append({
+                field_name: {
+                    "$regex": f"^{re.escape(alias)}$",
+                    "$options": "i",
+                }
+            })
+
+    query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": identity_queries,
+    }
+
+    if exclude_employee_id:
+        exclude_object_id = (
+            exclude_employee_id
+            if isinstance(exclude_employee_id, ObjectId)
+            else safe_object_id(exclude_employee_id)
+        )
+
+        if exclude_object_id:
+            query["_id"] = {"$ne": exclude_object_id}
+
+    return db.employees.find_one(query)
 
 
 def normalize_email(value):
@@ -954,6 +997,7 @@ def employee_display_name(employee_doc):
 def employee_code(employee_doc):
     return (
         normalize_text(employee_doc.get("employee_id"))
+        or normalize_text(employee_doc.get("employee_code"))
         or normalize_text(employee_doc.get("emp_code"))
         or normalize_text(employee_doc.get("code"))
         or ""
@@ -988,6 +1032,7 @@ def user_profile_payload_from_employee(employee_doc, existing_user=None):
         "employee_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
         "employee_ref_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
         "emp_code": employee_code(employee_doc),
+        "employee_code": employee_code(employee_doc),
         "department": employee_doc.get("department", ""),
         "designation": employee_doc.get("designation", ""),
         "is_team_leader": bool_string(employee_doc.get("is_team_leader")),
@@ -1148,7 +1193,9 @@ def build_employee_profile_payload(data):
 
     payload["phone"] = normalize_text(payload.get("phone"))
     payload["employee_id"] = normalize_text(payload.get("employee_id"))
+    payload["employee_code"] = normalize_text(payload.get("employee_code"))
     payload["emp_code"] = normalize_text(payload.get("emp_code"))
+    payload["code"] = normalize_text(payload.get("code"))
     payload["department"] = normalize_text(payload.get("department"))
     payload["designation"] = normalize_text(payload.get("designation"))
     payload["branch"] = normalize_text(payload.get("branch"))
@@ -1537,7 +1584,14 @@ def create_company():
         apply_profile_photo_aliases(emp_doc, admin_photo)
         emp_doc["identity_alias_keys"] = employee_identity_alias_keys(emp_doc)
 
-        emp_res = db.employees.insert_one(emp_doc)
+        try:
+            emp_res = db.employees.insert_one(emp_doc)
+        except DuplicateKeyError:
+            db.users.delete_one({"_id": user_res.inserted_id})
+            return jsonify({
+                "message": "Company created, but its admin employee ID/code conflicts with another active employee"
+            }), 409
+
         created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
         if created_emp:
@@ -2055,6 +2109,7 @@ def list_users():
             user["employee_ref_id"] = str(emp["_id"])
             user["employee_id"] = str(emp["_id"])
             user["emp_code"] = employee_code(emp)
+            user["employee_code"] = employee_code(emp)
             user["department"] = emp.get("department", user.get("department", ""))
             user["designation"] = emp.get("designation", user.get("designation", ""))
             user["is_it_support_head"] = bool_string(emp.get("is_it_support_head"))
@@ -2313,7 +2368,12 @@ def update_user(user_id):
         user_update["updated_at"] = now()
         user_update["updated_by"] = str(g.current_user["_id"])
 
-        db.users.update_one({"_id": user_obj_id}, {"$set": user_update})
+        try:
+            db.users.update_one({"_id": user_obj_id}, {"$set": user_update})
+        except DuplicateKeyError:
+            return jsonify({
+                "message": "User email or employee code conflicts with another active user in this company"
+            }), 409
 
     updated_user = db.users.find_one({"_id": user_obj_id})
     tenant_for_lookup = (
@@ -2329,6 +2389,10 @@ def update_user(user_id):
 
     emp_update = build_employee_profile_payload(data)
 
+    for identity_field in EMPLOYEE_IDENTITY_FIELDS:
+        if identity_field not in data:
+            emp_update.pop(identity_field, None)
+
     if incoming_photo:
         apply_profile_photo_aliases(emp_update, incoming_photo)
 
@@ -2342,35 +2406,26 @@ def update_user(user_id):
     if "tenant_id" in user_update:
         emp_update["tenant_id"] = user_update["tenant_id"]
 
-    if emp_update.get("employee_id"):
-        duplicate_query = {
-            "tenant_id": tenant_for_lookup,
-            "employee_id": emp_update.get("employee_id"),
-            "is_deleted": {"$ne": True},
-        }
+    identity_candidate = dict(existing_emp or {})
+    identity_candidate.update(emp_update)
+    identity_candidate.setdefault("tenant_id", tenant_for_lookup)
+    identity_candidate["identity_alias_keys"] = employee_identity_alias_keys(identity_candidate)
 
-        if existing_emp:
-            duplicate_query["_id"] = {"$ne": existing_emp["_id"]}
+    identity_conflict = employee_identity_conflict(
+        db,
+        identity_candidate,
+        exclude_employee_id=existing_emp.get("_id") if existing_emp else None,
+    )
 
-        duplicate_employee_id = db.employees.find_one(duplicate_query)
+    if identity_conflict:
+        if user_update:
+            db.users.replace_one({"_id": user_obj_id}, existing_user)
 
-        if duplicate_employee_id:
-            return jsonify({"message": "Employee ID already exists in this tenant"}), 409
+        return jsonify({
+            "message": "Employee ID/code is already assigned to another active employee in this company"
+        }), 409
 
-    if emp_update.get("emp_code"):
-        duplicate_query = {
-            "tenant_id": tenant_for_lookup,
-            "emp_code": emp_update.get("emp_code"),
-            "is_deleted": {"$ne": True},
-        }
-
-        if existing_emp:
-            duplicate_query["_id"] = {"$ne": existing_emp["_id"]}
-
-        duplicate_emp_code = db.employees.find_one(duplicate_query)
-
-        if duplicate_emp_code:
-            return jsonify({"message": "Employee code already exists in this tenant"}), 409
+    emp_update["identity_alias_keys"] = identity_candidate["identity_alias_keys"]
 
     if "team_leader_id" in emp_update:
         emp_update["team_leader_name"] = resolve_employee_name(
@@ -2398,10 +2453,19 @@ def update_user(user_id):
                 if photo:
                     apply_profile_photo_aliases(emp_update, photo)
 
-            db.employees.update_one(
-                {"_id": existing_emp["_id"]},
-                {"$set": emp_update},
-            )
+            try:
+                db.employees.update_one(
+                    {"_id": existing_emp["_id"]},
+                    {"$set": emp_update},
+                )
+            except DuplicateKeyError:
+                if user_update:
+                    db.users.replace_one({"_id": user_obj_id}, existing_user)
+
+                return jsonify({
+                    "message": "Employee ID/code is already assigned to another active employee in this company"
+                }), 409
+
             updated_emp = db.employees.find_one({"_id": existing_emp["_id"]})
         else:
             if not incoming_photo:
@@ -2432,7 +2496,18 @@ def update_user(user_id):
             emp_update["created_by"] = str(g.current_user["_id"])
             emp_update["is_deleted"] = False
 
-            res = db.employees.insert_one(emp_update)
+            emp_update["identity_alias_keys"] = employee_identity_alias_keys(emp_update)
+
+            try:
+                res = db.employees.insert_one(emp_update)
+            except DuplicateKeyError:
+                if user_update:
+                    db.users.replace_one({"_id": user_obj_id}, existing_user)
+
+                return jsonify({
+                    "message": "Employee ID/code is already assigned to another active employee in this company"
+                }), 409
+
             updated_emp = db.employees.find_one({"_id": res.inserted_id})
 
         if updated_emp:
@@ -2487,6 +2562,7 @@ def update_user(user_id):
         refreshed["employee_ref_id"] = str(employee_profile["_id"])
         refreshed["employee_id"] = str(employee_profile["_id"])
         refreshed["emp_code"] = employee_code(employee_profile)
+        refreshed["employee_code"] = employee_code(employee_profile)
         refreshed["department"] = employee_profile.get("department", refreshed.get("department", ""))
         refreshed["designation"] = employee_profile.get("designation", refreshed.get("designation", ""))
         refreshed["is_it_support_head"] = bool_string(employee_profile.get("is_it_support_head"))
@@ -2699,6 +2775,7 @@ def list_tenant_users_for_user_control():
             user["employee_id"] = str(emp["_id"])
             user["employee_name"] = employee_display_name(emp)
             user["emp_code"] = employee_code(emp)
+            user["employee_code"] = employee_code(emp)
             user["department"] = emp.get("department", user.get("department", ""))
             user["designation"] = emp.get("designation", user.get("designation", ""))
             user["phone"] = emp.get("phone", "")

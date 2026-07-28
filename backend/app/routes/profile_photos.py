@@ -1,4 +1,5 @@
 import os
+import re
 from uuid import uuid4
 from datetime import datetime
 
@@ -121,9 +122,44 @@ def current_user_id():
 
 def safe_object_id(value):
     try:
-        return ObjectId(str(value))
+        text = normalize_text(value)
+
+        if text and ObjectId.is_valid(text):
+            return ObjectId(text)
     except Exception:
         return None
+
+    return None
+
+
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = payload or {}
+    aliases = []
+
+    stored_aliases = payload.get("identity_alias_keys") or []
+
+    if isinstance(stored_aliases, (list, tuple, set)):
+        aliases.extend(
+            normalize_text(value).lower()
+            for value in stored_aliases
+            if normalize_text(value)
+        )
+
+    aliases.extend(
+        normalize_text(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if normalize_text(payload.get(field_name))
+    )
+
+    return sorted(set(aliases))
 
 
 def employee_email(employee):
@@ -359,17 +395,17 @@ def detect_extension(file_path, fallback_ext):
 
 def find_employee(db, employee_id):
     employee_id = normalize_text(employee_id)
+    tenant_id = current_tenant_id()
 
-    if not employee_id:
+    if not employee_id or not tenant_id:
         return None
 
     base_query = {
+        "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
     }
 
-    if not is_admin_user():
-        base_query["tenant_id"] = current_tenant_id()
-
+    # Immutable employee Mongo reference first.
     employee_obj_id = safe_object_id(employee_id)
 
     if employee_obj_id:
@@ -381,53 +417,65 @@ def find_employee(db, employee_id):
         if employee:
             return employee
 
-    lookup_or = [
-        {"employee_id": employee_id},
-        {"employee_code": employee_id},
-        {"emp_code": employee_id},
-        {"code": employee_id},
-        {"user_id": employee_id},
-        {"email": employee_id.lower()},
-        {"official_email": employee_id.lower()},
-    ]
-
+    # Linked login user second.
     employee = db.employees.find_one({
         **base_query,
-        "$or": lookup_or,
+        "user_id": employee_id,
     })
 
     if employee:
         return employee
 
-    if is_admin_user():
-        admin_base_query = {
-            "is_deleted": {"$ne": True},
-        }
+    # Canonical aliases next.
+    alias_value = employee_id.lower()
+    alias_conditions = [
+        {"identity_alias_keys": alias_value},
+    ]
 
-        if employee_obj_id:
-            employee = db.employees.find_one({
-                **admin_base_query,
-                "_id": employee_obj_id,
-            })
+    exact_alias = re.compile(
+        rf"^{re.escape(alias_value)}$",
+        re.IGNORECASE,
+    )
 
-            if employee:
-                return employee
+    alias_conditions.extend(
+        {field_name: exact_alias}
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+    )
 
-        return db.employees.find_one({
-            **admin_base_query,
-            "$or": lookup_or,
-        })
+    employee = db.employees.find_one({
+        **base_query,
+        "$or": alias_conditions,
+    })
 
-    return None
+    if employee:
+        return employee
+
+    # Email is the final tenant-scoped fallback.
+    exact_email = re.compile(
+        rf"^{re.escape(employee_id.lower())}$",
+        re.IGNORECASE,
+    )
+
+    return db.employees.find_one({
+        **base_query,
+        "$or": [
+            {"email": exact_email},
+            {"official_email": exact_email},
+        ],
+    })
 
 
 def can_update_employee_photo(employee):
     if not employee:
         return False
 
+    if normalize_text(employee.get("tenant_id")) != current_tenant_id():
+        return False
+
     if is_admin_user():
         return True
 
+    current_user = getattr(g, "current_user", {}) or {}
     user_id = current_user_id()
 
     if not user_id:
@@ -436,30 +484,23 @@ def can_update_employee_photo(employee):
     if normalize_text(employee.get("user_id")) == user_id:
         return True
 
-    current_user = getattr(g, "current_user", {}) or {}
+    employee_object_id = normalize_text(employee.get("_id"))
 
-    user_employee_id = normalize_text(
-        current_user.get("employee_id")
-        or current_user.get("employee_ref_id")
-        or current_user.get("employee_code")
-        or current_user.get("emp_code")
-        or current_user.get("code")
-    )
+    for field_name in ("employee_ref_id", "employee_id"):
+        user_employee_reference = normalize_text(
+            current_user.get(field_name)
+        )
 
-    employee_identifiers = {
-        normalize_text(employee.get("_id")),
-        normalize_text(employee.get("employee_id")),
-        normalize_text(employee.get("employee_code")),
-        normalize_text(employee.get("emp_code")),
-        normalize_text(employee.get("code")),
-        normalize_text(employee.get("user_id")),
-    }
+        if (
+            user_employee_reference
+            and user_employee_reference == employee_object_id
+        ):
+            return True
 
-    employee_identifiers = {
-        item for item in employee_identifiers if item
-    }
+    user_aliases = set(employee_identity_alias_keys(current_user))
+    employee_aliases = set(employee_identity_alias_keys(employee))
 
-    if user_employee_id and user_employee_id in employee_identifiers:
+    if user_aliases and employee_aliases.intersection(user_aliases):
         return True
 
     user_email = normalize_text(
@@ -472,19 +513,20 @@ def can_update_employee_photo(employee):
         normalize_text(employee.get("email")).lower(),
         normalize_text(employee.get("official_email")).lower(),
     }
+    employee_emails.discard("")
 
-    employee_emails = {
-        item for item in employee_emails if item
-    }
-
-    if user_email and user_email in employee_emails:
-        return True
-
-    return False
+    return bool(user_email and user_email in employee_emails)
 
 
 def sync_profile_media_to_user(db, employee, update_payload):
     if not employee or not update_payload:
+        return
+
+    tenant_id = normalize_text(
+        employee.get("tenant_id") or current_tenant_id()
+    )
+
+    if not tenant_id:
         return
 
     user_payload = {
@@ -496,20 +538,34 @@ def sync_profile_media_to_user(db, employee, update_payload):
     user_obj_id = safe_object_id(user_id)
 
     if user_obj_id:
-        db.users.update_one(
-            {"_id": user_obj_id},
+        result = db.users.update_one(
+            {
+                "_id": user_obj_id,
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            },
             {"$set": user_payload},
         )
-        return
+
+        if result.matched_count:
+            return
 
     email = employee_email(employee)
 
     if email:
+        exact_email = re.compile(
+            rf"^{re.escape(email)}$",
+            re.IGNORECASE,
+        )
+
         db.users.update_one(
             {
-                "email": email,
-                "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+                "tenant_id": tenant_id,
                 "is_deleted": {"$ne": True},
+                "$or": [
+                    {"email": exact_email},
+                    {"username": exact_email},
+                ],
             },
             {"$set": user_payload},
         )
@@ -1108,7 +1164,11 @@ def upload_profile_photo():
     }
 
     db.employees.update_one(
-        {"_id": employee["_id"]},
+        {
+            "_id": employee["_id"],
+            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+            "is_deleted": {"$ne": True},
+        },
         {"$set": update_payload},
     )
 
@@ -1173,7 +1233,11 @@ def upload_profile_cover():
     }
 
     db.employees.update_one(
-        {"_id": employee["_id"]},
+        {
+            "_id": employee["_id"],
+            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
+            "is_deleted": {"$ne": True},
+        },
         {"$set": update_payload},
     )
 

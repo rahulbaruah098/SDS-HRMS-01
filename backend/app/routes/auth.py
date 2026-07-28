@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, g, current_app
+from pymongo.errors import DuplicateKeyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import get_db
@@ -47,6 +48,18 @@ EMPLOYEE_CAPABILITY_ROLES = {
 }
 
 
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+class AuthIdentityConflict(RuntimeError):
+    pass
+
+
 def default_tenant_id():
     return current_app.config.get("DEFAULT_TENANT_ID", "sds")
 
@@ -57,6 +70,56 @@ def normalize_text(value):
 
 def normalize_email(value):
     return str(value or "").strip().lower()
+
+
+def safe_object_id(value):
+    try:
+        from bson import ObjectId
+
+        text = normalize_text(value)
+
+        if text and ObjectId.is_valid(text):
+            return ObjectId(text)
+    except Exception:
+        return None
+
+    return None
+
+
+def employee_identity_alias_keys(payload):
+    payload = payload or {}
+    aliases = []
+
+    stored_aliases = payload.get("identity_alias_keys") or []
+
+    if isinstance(stored_aliases, (list, tuple, set)):
+        aliases.extend(
+            normalize_text(value).lower()
+            for value in stored_aliases
+            if normalize_text(value)
+        )
+
+    aliases.extend(
+        normalize_text(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if normalize_text(payload.get(field_name))
+    )
+
+    return sorted(set(aliases))
+
+
+def canonical_employee_code(employee, user=None):
+    employee = employee or {}
+    user = user or {}
+
+    return normalize_text(
+        employee.get("employee_code")
+        or employee.get("emp_code")
+        or employee.get("employee_id")
+        or employee.get("code")
+        or user.get("employee_code")
+        or user.get("emp_code")
+    )
 
 
 def normalize_role_value(value):
@@ -309,59 +372,87 @@ def find_employee_for_user(db, user):
     if not user:
         return None
 
-    tenant_id = user.get("tenant_id") or default_tenant_id()
-    user_id = str(user["_id"])
-    email = normalize_email(user.get("email"))
-    employee_ref_id = normalize_text(user.get("employee_ref_id") or user.get("employee_id"))
+    tenant_id = normalize_text(
+        user.get("tenant_id") or default_tenant_id()
+    )
+    user_id = normalize_text(user.get("_id") or user.get("id"))
 
-    employee = db.employees.find_one({
+    if not tenant_id or not user_id:
+        return None
+
+    base_query = {
         "tenant_id": tenant_id,
-        "user_id": user_id,
         "is_deleted": {"$ne": True},
-    })
+    }
 
-    if employee:
-        return employee
+    # 1. Immutable employee Mongo reference stored on the user.
+    employee_reference_values = [
+        normalize_text(user.get("employee_ref_id")),
+        normalize_text(user.get("employee_id")),
+    ]
+    employee_object_ids = []
 
+    for value in employee_reference_values:
+        object_id = safe_object_id(value)
+
+        if object_id and object_id not in employee_object_ids:
+            employee_object_ids.append(object_id)
+
+    if employee_object_ids:
+        employee = db.employees.find_one({
+            **base_query,
+            "_id": {"$in": employee_object_ids},
+        })
+
+        if employee:
+            return employee
+
+    # 2. Authoritative linked login user.
     employee = db.employees.find_one({
+        **base_query,
         "user_id": user_id,
-        "is_deleted": {"$ne": True},
     })
 
     if employee:
         return employee
 
-    if employee_ref_id:
-        try:
-            from bson import ObjectId
+    # 3. Tenant-scoped identity aliases retained for legacy users.
+    aliases = employee_identity_alias_keys(user)
 
-            employee = db.employees.find_one({
-                "_id": ObjectId(employee_ref_id),
-                "is_deleted": {"$ne": True},
-            })
+    if aliases:
+        employee = db.employees.find_one({
+            **base_query,
+            "$or": [
+                {"identity_alias_keys": {"$in": aliases}},
+                *[
+                    {
+                        field_name: {
+                            "$in": aliases,
+                        }
+                    }
+                    for field_name in EMPLOYEE_IDENTITY_FIELDS
+                ],
+            ],
+        })
 
-            if employee:
-                return employee
-        except Exception:
-            pass
+        if employee:
+            return employee
+
+    # 4. Email is the final tenant-scoped fallback.
+    email = normalize_email(
+        user.get("email")
+        or user.get("username")
+        or user.get("official_email")
+    )
 
     if email:
-        employee = db.employees.find_one({
-            "tenant_id": tenant_id,
-            "email": email,
-            "is_deleted": {"$ne": True},
+        return db.employees.find_one({
+            **base_query,
+            "$or": [
+                {"email": email},
+                {"official_email": email},
+            ],
         })
-
-        if employee:
-            return employee
-
-        employee = db.employees.find_one({
-            "email": email,
-            "is_deleted": {"$ne": True},
-        })
-
-        if employee:
-            return employee
 
     return None
 
@@ -442,24 +533,125 @@ def sync_user_employee_photo(db, user, employee):
     return user, employee
 
 
+def restore_document(collection, document):
+    document = dict(document or {})
+
+    if not document.get("_id"):
+        return
+
+    collection.replace_one(
+        {"_id": document["_id"]},
+        document,
+        upsert=True,
+    )
+
+
+def linked_employee_conflict(db, user, employee):
+    tenant_id = normalize_text(
+        employee.get("tenant_id")
+        or user.get("tenant_id")
+        or default_tenant_id()
+    )
+    user_id = normalize_text(user.get("_id"))
+    employee_id = normalize_text(employee.get("_id"))
+    linked_user_id = normalize_text(employee.get("user_id"))
+
+    if linked_user_id and linked_user_id != user_id:
+        linked_user_object_id = safe_object_id(linked_user_id)
+
+        if linked_user_object_id:
+            linked_user = db.users.find_one({
+                "_id": linked_user_object_id,
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            })
+
+            if linked_user:
+                return (
+                    "This employee profile is already linked to another "
+                    "active login account."
+                )
+
+    for field_name in ("employee_ref_id", "employee_id"):
+        linked_employee_id = normalize_text(user.get(field_name))
+
+        if not linked_employee_id or linked_employee_id == employee_id:
+            continue
+
+        linked_employee_object_id = safe_object_id(linked_employee_id)
+
+        if not linked_employee_object_id:
+            continue
+
+        linked_employee = db.employees.find_one({
+            "_id": linked_employee_object_id,
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
+
+        if linked_employee and linked_employee["_id"] != employee["_id"]:
+            return (
+                "This login account is already linked to another active "
+                "employee profile."
+            )
+
+    return ""
+
+
 def sync_user_employee_link(db, user, employee):
     if not user or not employee:
         return user, employee
 
+    tenant_id = normalize_text(
+        user.get("tenant_id") or default_tenant_id()
+    )
+    employee_tenant_id = normalize_text(
+        employee.get("tenant_id") or tenant_id
+    )
+
+    if not tenant_id or employee_tenant_id != tenant_id:
+        raise AuthIdentityConflict(
+            "The login account and employee profile belong to different companies."
+        )
+
+    conflict_message = linked_employee_conflict(
+        db,
+        user,
+        employee,
+    )
+
+    if conflict_message:
+        raise AuthIdentityConflict(conflict_message)
+
+    user_before = dict(user)
+    employee_before = dict(employee)
+
     user_id = str(user["_id"])
     employee_id = str(employee["_id"])
+    employee_code = canonical_employee_code(employee, user)
 
     user_update = {
         "employee_id": employee_id,
         "employee_ref_id": employee_id,
-        "emp_code": employee.get("employee_id") or employee.get("emp_code") or user.get("emp_code", ""),
-        "department": employee.get("department", user.get("department", "")),
-        "designation": employee.get("designation", user.get("designation", "")),
+        "emp_code": employee_code,
+        "employee_code": employee_code,
+        "department": employee.get(
+            "department",
+            user.get("department", ""),
+        ),
+        "designation": employee.get(
+            "designation",
+            user.get("designation", ""),
+        ),
     }
 
     employee_update = {
         "user_id": user_id,
-        "employee_name": employee.get("employee_name") or employee.get("name") or user.get("name", ""),
+        "employee_name": (
+            employee.get("employee_name")
+            or employee.get("name")
+            or user.get("name", "")
+        ),
     }
 
     photo = merge_profile_photo_from_sources(employee, user)
@@ -467,24 +659,54 @@ def sync_user_employee_link(db, user, employee):
     if photo:
         apply_profile_photo_aliases(user_update, photo)
         apply_profile_photo_aliases(employee_update, photo)
+
+    user_written = False
+
+    try:
+        db.users.update_one(
+            {
+                "_id": user["_id"],
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            },
+            {"$set": user_update},
+        )
+        user_written = True
+
+        db.employees.update_one(
+            {
+                "_id": employee["_id"],
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+            },
+            {"$set": employee_update},
+        )
+    except DuplicateKeyError as exc:
+        if user_written:
+            restore_document(db.users, user_before)
+
+        restore_document(db.employees, employee_before)
+
+        raise AuthIdentityConflict(
+            "The employee ID/code or login link is already assigned to "
+            "another active record in this company."
+        ) from exc
+    except Exception:
+        if user_written:
+            restore_document(db.users, user_before)
+
+        restore_document(db.employees, employee_before)
+        raise
+
+    user.update(user_update)
+    employee.update(employee_update)
+
+    if photo:
         apply_profile_photo_aliases(user, photo)
         apply_profile_photo_aliases(employee, photo)
     else:
         apply_profile_photo_aliases(user)
         apply_profile_photo_aliases(employee)
-
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": user_update},
-    )
-
-    db.employees.update_one(
-        {"_id": employee["_id"]},
-        {"$set": employee_update},
-    )
-
-    user.update(user_update)
-    employee.update(employee_update)
 
     return user, employee
 
@@ -613,7 +835,18 @@ def login():
 
     raw_employee = find_employee_for_user(db, user)
 
-    user, raw_employee = sync_user_employee_link(db, user, raw_employee)
+    try:
+        user, raw_employee = sync_user_employee_link(
+            db,
+            user,
+            raw_employee,
+        )
+    except AuthIdentityConflict as exc:
+        return jsonify({
+            "message": str(exc),
+            "code": "employee_identity_conflict",
+        }), 409
+
     user, raw_employee = sync_user_employee_photo(db, user, raw_employee)
 
     employee = employee_snapshot(raw_employee, user) if raw_employee else None
@@ -773,7 +1006,18 @@ def me():
 
     raw_employee = find_employee_for_user(db, user)
 
-    user, raw_employee = sync_user_employee_link(db, user, raw_employee)
+    try:
+        user, raw_employee = sync_user_employee_link(
+            db,
+            user,
+            raw_employee,
+        )
+    except AuthIdentityConflict as exc:
+        return jsonify({
+            "message": str(exc),
+            "code": "employee_identity_conflict",
+        }), 409
+
     user, raw_employee = sync_user_employee_photo(db, user, raw_employee)
 
     employee = employee_snapshot(raw_employee, user) if raw_employee else None
