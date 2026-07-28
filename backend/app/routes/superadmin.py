@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, g, current_app
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from datetime import datetime, time, timedelta
 from werkzeug.security import generate_password_hash
 
@@ -230,6 +231,24 @@ def bool_string(value):
 
 def normalize_text(value):
     return str(value or "").strip()
+
+
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = payload or {}
+
+    return sorted({
+        normalize_text(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if normalize_text(payload.get(field_name))
+    })
 
 
 def normalize_email(value):
@@ -1516,6 +1535,7 @@ def create_company():
             "is_deleted": False,
         }
         apply_profile_photo_aliases(emp_doc, admin_photo)
+        emp_doc["identity_alias_keys"] = employee_identity_alias_keys(emp_doc)
 
         emp_res = db.employees.insert_one(emp_doc)
         created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
@@ -1524,7 +1544,8 @@ def create_company():
             user_update = {
                 "employee_id": str(created_emp["_id"]),
                 "employee_ref_id": str(created_emp["_id"]),
-                "emp_code": created_emp.get("emp_code", ""),
+                "emp_code": created_emp.get("employee_id") or created_emp.get("employee_code") or created_emp.get("emp_code") or "",
+                "employee_code": created_emp.get("employee_id") or created_emp.get("employee_code") or created_emp.get("emp_code") or "",
                 "department": created_emp.get("department", ""),
                 "designation": created_emp.get("designation", ""),
                 "is_it_support_head": created_emp.get("is_it_support_head", "false"),
@@ -2162,7 +2183,15 @@ def create_user():
     if truthy(emp.get("is_it_support_head")):
         emp["is_it_support_member"] = "true"
 
-    emp_res = db.employees.insert_one(emp)
+    emp["identity_alias_keys"] = employee_identity_alias_keys(emp)
+
+    try:
+        emp_res = db.employees.insert_one(emp)
+    except DuplicateKeyError:
+        db.users.delete_one({"_id": user_res.inserted_id})
+        return jsonify({
+            "message": "Employee ID/code is already assigned to another active employee in this company"
+        }), 409
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
     if created_emp:
@@ -2170,6 +2199,7 @@ def create_user():
             "employee_id": str(created_emp["_id"]),
             "employee_ref_id": str(created_emp["_id"]),
             "emp_code": employee_code(created_emp),
+            "employee_code": employee_code(created_emp),
             "department": created_emp.get("department", ""),
             "designation": created_emp.get("designation", ""),
             "is_it_support_head": bool_string(created_emp.get("is_it_support_head")),
@@ -2832,7 +2862,15 @@ def create_tenant_employee_for_user_control():
     if truthy(emp.get("is_it_support_head")):
         emp["is_it_support_member"] = "true"
 
-    emp_res = db.employees.insert_one(emp)
+    emp["identity_alias_keys"] = employee_identity_alias_keys(emp)
+
+    try:
+        emp_res = db.employees.insert_one(emp)
+    except DuplicateKeyError:
+        db.users.delete_one({"_id": user_res.inserted_id})
+        return jsonify({
+            "message": "Employee ID/code is already assigned to another active employee in this company"
+        }), 409
     created_emp = db.employees.find_one({"_id": emp_res.inserted_id})
 
     if created_emp:
@@ -2840,6 +2878,7 @@ def create_tenant_employee_for_user_control():
             "employee_id": str(created_emp["_id"]),
             "employee_ref_id": str(created_emp["_id"]),
             "emp_code": employee_code(created_emp),
+            "employee_code": employee_code(created_emp),
             "department": created_emp.get("department", ""),
             "designation": created_emp.get("designation", ""),
             "is_team_leader": bool_string(created_emp.get("is_team_leader")),

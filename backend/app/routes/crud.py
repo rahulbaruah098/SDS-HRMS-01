@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, g, current_app
 from datetime import datetime
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from werkzeug.security import generate_password_hash
 import re
 
@@ -992,6 +993,72 @@ def employee_joining_date(payload):
     )
 
 
+EMPLOYEE_IDENTITY_FIELDS = (
+    "employee_id",
+    "employee_code",
+    "emp_code",
+    "code",
+)
+
+
+def employee_identity_alias_keys(payload):
+    payload = payload or {}
+
+    return sorted({
+        normalize_text(payload.get(field_name)).lower()
+        for field_name in EMPLOYEE_IDENTITY_FIELDS
+        if normalize_text(payload.get(field_name))
+    })
+
+
+def employee_identity_conflict(db, employee_doc, exclude_employee_id=None):
+    employee_doc = employee_doc or {}
+
+    tenant_id = normalize_text(
+        employee_doc.get("tenant_id") or current_tenant_id()
+    )
+    aliases = employee_identity_alias_keys(employee_doc)
+
+    if not tenant_id or not aliases:
+        return None
+
+    alias_patterns = [
+        re.compile(rf"^{re.escape(alias)}$", re.IGNORECASE)
+        for alias in aliases
+    ]
+
+    alias_conditions = [
+        {"identity_alias_keys": {"$in": aliases}},
+    ]
+
+    for field_name in EMPLOYEE_IDENTITY_FIELDS:
+        alias_conditions.append({
+            field_name: {"$in": alias_patterns},
+        })
+
+    query = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": alias_conditions,
+    }
+
+    if exclude_employee_id is not None:
+        query["_id"] = {"$ne": exclude_employee_id}
+
+    return db.employees.find_one(
+        query,
+        {
+            "_id": 1,
+            "name": 1,
+            "employee_name": 1,
+            "employee_id": 1,
+            "employee_code": 1,
+            "emp_code": 1,
+            "identity_alias_keys": 1,
+        },
+    )
+
+
 def employee_date_of_birth(payload):
     return (
         normalize_text(payload.get("date_of_birth"))
@@ -1040,6 +1107,12 @@ def build_user_sync_payload(employee_doc, existing_user=None):
     status = normalize_text(employee_doc.get("status") or "active")
     avatar = employee_avatar_from_payload(employee_doc)
     cover = employee_cover_image_from_payload(employee_doc)
+    canonical_employee_code = normalize_text(
+        employee_doc.get("employee_id")
+        or employee_doc.get("employee_code")
+        or employee_doc.get("emp_code")
+        or employee_doc.get("code")
+    )
 
     is_active = not (
         status.lower() in {"inactive", "disabled", "deleted"}
@@ -1061,7 +1134,8 @@ def build_user_sync_payload(employee_doc, existing_user=None):
         "role": "employee",
         "employee_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else employee_doc.get("employee_id", ""),
         "employee_ref_id": str(employee_doc.get("_id")) if employee_doc.get("_id") else "",
-        "emp_code": employee_doc.get("emp_code") or employee_doc.get("employee_id") or employee_doc.get("code") or "",
+        "emp_code": canonical_employee_code,
+        "employee_code": canonical_employee_code,
         "department": employee_doc.get("department", ""),
         "designation": employee_doc.get("designation", ""),
         "is_team_leader": bool_string(employee_doc.get("is_team_leader")),
@@ -4009,6 +4083,14 @@ def create_collection_item(collection):
         payload.setdefault("is_it_support_head", "false")
         payload.setdefault("is_it_support_member", "false")
         normalize_employee_capability_flags(payload)
+        payload["identity_alias_keys"] = employee_identity_alias_keys(payload)
+
+        identity_conflict = employee_identity_conflict(db, payload)
+
+        if identity_conflict:
+            return jsonify({
+                "message": "Employee ID/code is already assigned to another active employee in this company"
+            }), 409
 
         hierarchy_error = normalize_employee_reporting_mapping(
             db,
@@ -4518,6 +4600,21 @@ def update_collection_item(collection, item_id):
             payload["dob"] = date_of_birth
             merged_employee["date_of_birth"] = date_of_birth
             merged_employee["dob"] = date_of_birth
+
+        identity_aliases = employee_identity_alias_keys(merged_employee)
+        payload["identity_alias_keys"] = identity_aliases
+        merged_employee["identity_alias_keys"] = identity_aliases
+
+        identity_conflict = employee_identity_conflict(
+            db,
+            merged_employee,
+            exclude_employee_id=existing["_id"],
+        )
+
+        if identity_conflict:
+            return jsonify({
+                "message": "Employee ID/code is already assigned to another active employee in this company"
+            }), 409
 
         remove_employee_auth_fields(payload)
 
