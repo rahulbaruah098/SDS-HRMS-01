@@ -644,9 +644,63 @@ function normalizeNotificationMeta(notification = {}) {
 }
 
 function notificationTarget(meta = {}) {
-  const target = String(meta.target || meta.page || '').trim();
+  const target = String(meta.target || meta.page || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
 
-    if (
+  const notificationType = String(
+    meta.notification_type || meta.type || '',
+  )
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(' ', '_');
+
+  const platformBillingTargets = [
+    'billing',
+    'subscription',
+    'subscriptions',
+    'payment',
+    'payments',
+    'order',
+    'orders',
+    'payment_orders',
+    'billing_management',
+    'subscription_management',
+  ];
+
+  if (
+    notificationType.startsWith('platform_') &&
+    (
+      platformBillingTargets.includes(target) ||
+      notificationType.includes('payment') ||
+      notificationType.includes('billing') ||
+      notificationType.includes('subscription')
+    )
+  ) {
+    return 'subscriptions';
+  }
+
+  if (
+    ['billing', 'upgrade', 'subscribe', 'payment'].includes(target)
+  ) {
+    return 'billing';
+  }
+
+  if (
+    [
+      'subscription_expired',
+      'trial_expired',
+      'demo_expired',
+      'upgrade_required',
+    ].includes(target)
+  ) {
+    return 'subscription_expired';
+  }
+
+  if (
     [
       'recruitment',
       'recruitment_hiring_requests',
@@ -1414,7 +1468,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     goTo('billing');
 
     try {
-      window.history.pushState({}, '', '/billing');
+      window.history.pushState({}, '', '/hrms/billing');
     } catch {
       // Ignore browser history errors.
     }
@@ -1424,7 +1478,34 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     goTo('subscription_expired');
 
     try {
-      window.history.pushState({}, '', '/subscription-expired');
+      window.history.pushState({}, '', '/hrms/subscription-expired');
+    } catch {
+      // Ignore browser history errors.
+    }
+  }
+
+  function goToNotificationTarget(target) {
+    const normalizedTarget = String(target || 'notifications').trim() || 'notifications';
+
+    if (typeof setPage === 'function') {
+      setPage(normalizedTarget);
+    }
+
+    setSidebarOpen(false);
+    setNotificationOpen(false);
+
+    try {
+      const routeMap = {
+        billing: '/hrms/billing',
+        subscription_expired: '/hrms/subscription-expired',
+        premium_requests: '/hrms/premium-requests',
+      };
+
+      window.history.pushState(
+        {},
+        '',
+        routeMap[normalizedTarget] || '/hrms',
+      );
     } catch {
       // Ignore browser history errors.
     }
@@ -1443,6 +1524,13 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
     setSidebarOpen(false);
     setNotificationOpen(false);
+
+    try {
+      window.history.replaceState({}, '', '/login');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch {
+      window.location.href = '/login';
+    }
   }
 
   async function toggleNotifications() {
@@ -1468,7 +1556,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         const target = notificationTarget(normalizeNotificationMeta(notification));
 
         if (target) {
-          goTo(target);
+          goToNotificationTarget(target);
         }
       }
 
@@ -1515,7 +1603,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     await markNotificationPopupSeen(notification);
 
     if (target) {
-      goTo(target);
+      goToNotificationTarget(target);
     }
   }
 

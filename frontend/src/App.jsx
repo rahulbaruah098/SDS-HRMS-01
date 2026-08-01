@@ -752,6 +752,11 @@ function applyProfilePhotoAliases(payload = {}, photoValue = '') {
   return payload;
 }
 
+const HRMS_HOME_PATH = '/hrms';
+const HRMS_LOGIN_PATH = '/login';
+const HRMS_DEMO_REGISTRATION_PATH = '/apply-demo-registration';
+const HRMS_SUBSCRIPTION_EXPIRED_PATH = '/hrms/subscription-expired';
+
 function getBrowserPathname() {
   if (typeof window === 'undefined') {
     return '/';
@@ -789,58 +794,71 @@ function isApplyDemoRegistrationPath(pathname) {
 }
 
 function isBillingPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
+  const path = String(pathname || '/')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
 
-  return (
-    path === '/billing' ||
-    path === '/billing/' ||
-    path === '/upgrade' ||
-    path === '/upgrade/' ||
-    path === '/subscription' ||
-    path === '/subscription/' ||
-    path === '/subscribe' ||
-    path === '/subscribe/' ||
-    path === '/payment' ||
-    path === '/payment/' ||
-    path === '/pricing' ||
-    path === '/pricing/' ||
-    path === '/plans' ||
-    path === '/plans/'
-  );
+  return [
+    '/hrms/billing',
+    '/hrms/upgrade',
+    '/hrms/subscription',
+    '/hrms/subscribe',
+    '/hrms/payment',
+    '/hrms/plans',
+
+    // Backward-compatible non-conflicting legacy URLs.
+    '/billing',
+    '/upgrade',
+    '/subscription',
+    '/subscribe',
+    '/payment',
+    '/plans',
+  ].includes(path);
 }
 
 function isPremiumRequestsPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
+  const path = String(pathname || '/')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
 
-  return (
-    path === '/premium-requests' ||
-    path === '/premium-requests/' ||
-    path === '/premium-request' ||
-    path === '/premium-request/' ||
-    path === '/premium-plan-requests' ||
-    path === '/premium-plan-requests/' ||
-    path === '/custom-premium-requests' ||
-    path === '/custom-premium-requests/' ||
-    path === '/sales-requests' ||
-    path === '/sales-requests/'
-  );
+  return [
+    '/hrms/premium-requests',
+    '/hrms/premium-request',
+    '/hrms/premium-plan-requests',
+    '/hrms/custom-premium-requests',
+    '/hrms/sales-requests',
+
+    // Backward-compatible legacy URLs.
+    '/premium-requests',
+    '/premium-request',
+    '/premium-plan-requests',
+    '/custom-premium-requests',
+    '/sales-requests',
+  ].includes(path);
 }
 
 function isSubscriptionExpiredPath(pathname) {
-  const path = String(pathname || '/').trim().toLowerCase();
+  const path = String(pathname || '/')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
 
-  return (
-    path === '/subscription-expired' ||
-    path === '/subscription-expired/' ||
-    path === '/trial-expired' ||
-    path === '/trial-expired/' ||
-    path === '/trial-ended' ||
-    path === '/trial-ended/' ||
-    path === '/upgrade-required' ||
-    path === '/upgrade-required/' ||
-    path === '/demo-expired' ||
-    path === '/demo-expired/'
-  );
+  return [
+    '/hrms/subscription-expired',
+    '/hrms/trial-expired',
+    '/hrms/trial-ended',
+    '/hrms/upgrade-required',
+    '/hrms/demo-expired',
+
+    // Backward-compatible legacy URLs.
+    '/subscription-expired',
+    '/trial-expired',
+    '/trial-ended',
+    '/upgrade-required',
+    '/demo-expired',
+  ].includes(path);
 }
 
 function readStoredEmployee() {
@@ -1292,18 +1310,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!normalizedUser || !isTrialRegistrationRoute) {
-      return;
-    }
-
-    try {
-      window.history.replaceState({}, '', '/');
-      setCurrentPath('/');
-    } catch {
-      // Ignore browser history errors.
-    }
-  }, [isTrialRegistrationRoute, normalizedUser]);
 
   useEffect(() => {
     if (!normalizedUser || !isBillingPath(currentPath)) {
@@ -1318,8 +1324,8 @@ export default function App() {
       setPage('dashboard');
 
       try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
+        window.history.replaceState({}, '', HRMS_HOME_PATH);
+        setCurrentPath(HRMS_HOME_PATH);
       } catch {
         // Ignore browser history errors.
       }
@@ -1341,8 +1347,8 @@ export default function App() {
       setPage('dashboard');
 
       try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
+        window.history.replaceState({}, '', HRMS_HOME_PATH);
+        setCurrentPath(HRMS_HOME_PATH);
       } catch {
         // Ignore browser history errors.
       }
@@ -1362,8 +1368,8 @@ export default function App() {
       setPage('dashboard');
 
       try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
+        window.history.replaceState({}, '', HRMS_HOME_PATH);
+        setCurrentPath(HRMS_HOME_PATH);
       } catch {
         // Ignore browser history errors.
       }
@@ -1393,8 +1399,8 @@ export default function App() {
     setPage('subscription_expired');
 
     try {
-      window.history.replaceState({}, '', '/subscription-expired');
-      setCurrentPath('/subscription-expired');
+      window.history.replaceState({}, '', HRMS_SUBSCRIPTION_EXPIRED_PATH);
+      setCurrentPath(HRMS_SUBSCRIPTION_EXPIRED_PATH);
     } catch {
       // Ignore browser history errors.
     }
@@ -1409,8 +1415,8 @@ export default function App() {
       setPage('dashboard');
 
       try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
+        window.history.replaceState({}, '', HRMS_HOME_PATH);
+        setCurrentPath(HRMS_HOME_PATH);
       } catch {
         // Ignore browser history errors.
       }
@@ -1420,8 +1426,8 @@ export default function App() {
       setPage('dashboard');
 
       try {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
+        window.history.replaceState({}, '', HRMS_HOME_PATH);
+        setCurrentPath(HRMS_HOME_PATH);
       } catch {
         // Ignore browser history errors.
       }
@@ -1451,10 +1457,8 @@ export default function App() {
     );
 
     try {
-      if (isApplyDemoRegistrationPath(getBrowserPathname())) {
-        window.history.replaceState({}, '', '/');
-        setCurrentPath('/');
-      }
+      window.history.replaceState({}, '', HRMS_HOME_PATH);
+      setCurrentPath(HRMS_HOME_PATH);
     } catch {
       // Ignore browser history errors.
     }
@@ -1633,15 +1637,15 @@ if (isCareerPortalRoute) {
   return <CareerPortal key={currentPath} />;
 }
 
-if (!normalizedUser) {
-  if (isTrialRegistrationRoute) {
-    return (
-      <CustomAlertProvider>
-        <ApplyDemoRegistration />
-      </CustomAlertProvider>
-    );
-  }
+if (isTrialRegistrationRoute) {
+  return (
+    <CustomAlertProvider>
+      <ApplyDemoRegistration />
+    </CustomAlertProvider>
+  );
+}
 
+if (!normalizedUser) {
   return (
     <CustomAlertProvider>
       <Login onLogin={handleSetUser} />

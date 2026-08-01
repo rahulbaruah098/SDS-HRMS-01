@@ -1526,34 +1526,36 @@ function redirectForSaasRestriction(path = '', data = {}, status = 0) {
   const code = normalizeErrorCode(data.code || data.error_code || data.reason);
   const currentPath = String(window.location.pathname || '').toLowerCase();
 
+  const expiredPaths = new Set([
+    '/hrms/subscription-expired',
+    '/hrms/trial-expired',
+    '/hrms/demo-expired',
+  ]);
+
   if (SAAS_EXPIRED_ERROR_CODES.has(code) || status === 402) {
+    if (!expiredPaths.has(currentPath)) {
+      window.location.assign('/hrms/subscription-expired');
+    }
+
+    return;
+  }
+
+  if (SAAS_BILLING_ERROR_CODES.has(code)) {
+    if (canCurrentUserOpenClientBilling()) {
+      if (currentPath !== '/hrms/billing') {
+        window.location.assign('/hrms/billing');
+      }
+
+      return;
+    }
+
     if (
-      currentPath !== '/subscription-expired' &&
-      currentPath !== '/trial-expired' &&
-      currentPath !== '/demo-expired'
+      code === 'tenant_suspended' &&
+      !expiredPaths.has(currentPath)
     ) {
-      window.location.assign('/subscription-expired');
+      window.location.assign('/hrms/subscription-expired');
     }
-
-    return;
   }
-
-if (SAAS_BILLING_ERROR_CODES.has(code)) {
-  if (canCurrentUserOpenClientBilling()) {
-    if (currentPath !== '/billing') {
-      window.location.assign('/billing');
-    }
-
-    return;
-  }
-
-  if (
-    code === 'tenant_suspended' &&
-    currentPath !== '/subscription-expired'
-  ) {
-    window.location.assign('/subscription-expired');
-  }
-}
 }
 
 function buildApiError(data = {}, status = 0, fallbackMessage = 'Request failed.') {

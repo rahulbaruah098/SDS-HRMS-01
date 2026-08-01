@@ -5,26 +5,46 @@
 
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
 
     <meta
       name="description"
-      content="SDS HRMS - Human Resource Management System"
+      content="YourComate HRMS — connected people, attendance, approvals and workforce operations."
     />
 
     <meta name="theme-color" content="#1B4024" />
 
-    <title>SDS HRMS</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/favicon.svg"
+    />
+
+    <link
+      rel="preload"
+      as="image"
+      href="/images/yc-logo-96.webp"
+      type="image/webp"
+      fetchpriority="high"
+    />
+
+    <title>YourComate HRMS</title>
   </head>
 
   <body>
     <noscript>
-      SDS HRMS requires JavaScript to run. Please enable JavaScript in your browser.
+      YourComate HRMS requires JavaScript to run. Please enable JavaScript in
+      your browser.
     </noscript>
 
     <div id="root"></div>
+
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script type="module" src="/src/main.jsx"></script>
+
+    <script
+      type="module"
+      src="/src/integrated-main.jsx"
+    ></script>
   </body>
 </html>

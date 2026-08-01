@@ -1,0 +1,2000 @@
+/* =====================================================================
+   YOURCOMATE HOMEPAGE
+   Homepage-only styling. The hero restores the earlier playful blue
+   design while using the real YourComate logo and the site's icon system.
+===================================================================== */
+
+.yc-restored-home {
+  --yc-home-ink: #0b2a5b;
+  --yc-home-ink-soft: #5b6f92;
+  --yc-home-violet: #6174e5;
+  --yc-home-violet-deep: #3555a4;
+  --yc-home-blue: #8fd7f6;
+  --yc-home-blue-deep: #dceeff;
+  --yc-home-teal: #69d9d0;
+  --yc-home-lime: #34c9c4;
+  --yc-home-pink: #ff4f78;
+  --yc-home-paper: #fbfdff;
+  --yc-home-line: rgba(11, 42, 91, 0.14);
+}
+
+/* ---------------------------------------------------------------------
+   Restored reference-led hero
+--------------------------------------------------------------------- */
+.yc-minoru-hero {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: calc(100dvh - var(--yc-header-height, 96px));
+  min-height: 0;
+  overflow: hidden;
+  color: var(--yc-home-ink);
+  background: var(--yc-home-blue-deep);
+  font-family: var(--yc-ui, var(--body));
+}
+
+.yc-minoru-shell {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) clamp(188px, 24vh, 230px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.yc-minoru-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+border-radius: 0;
+width: 100%;
+margin: 0;
+border: 0;
+  background:
+    radial-gradient(circle at 48% 47%, rgba(255, 255, 255, 0.7), transparent 34%),
+    radial-gradient(circle at 12% 18%, rgba(97, 218, 229, 0.22), transparent 28%),
+    radial-gradient(circle at 88% 14%, rgba(154, 164, 245, 0.18), transparent 30%),
+    linear-gradient(135deg, #edf8ff 0%, #d9f7fb 48%, #e8e4ff 100%);
+}
+
+.yc-minoru-main::before {
+  content: none;
+  display: none;
+}
+
+.yc-minoru-organic {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 46%;
+  width: clamp(230px, 27vw, 460px);
+  aspect-ratio: 1.05;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.yc-minoru-organic::before,
+.yc-minoru-organic::after,
+.yc-minoru-organic i {
+  content: "";
+  position: absolute;
+  border-radius: 46% 54% 58% 42% / 53% 44% 56% 47%;
+  background: linear-gradient(145deg, #6fe2d6, #79bdf2);
+}
+
+.yc-minoru-organic::before {
+  inset: 11% 8%;
+  transform: rotate(12deg);
+}
+
+.yc-minoru-organic::after {
+  inset: 19% -1% 17% 13%;
+  transform: rotate(-29deg);
+  opacity: 0.88;
+}
+
+.yc-minoru-organic i:nth-child(1) { inset: -2% 30% 52% 29%; }
+.yc-minoru-organic i:nth-child(2) { inset: 25% -3% 24% 57%; transform: rotate(21deg); }
+.yc-minoru-organic i:nth-child(3) { inset: 54% 29% -2% 28%; transform: rotate(-8deg); }
+.yc-minoru-organic i:nth-child(4) { inset: 24% 57% 23% -2%; transform: rotate(-25deg); }
+.yc-minoru-organic i:nth-child(5) {
+  inset: 19% 20%;
+  background: linear-gradient(145deg, #8de4dc, #84b5f1);
+}
+
+.yc-minoru-brand-stage {
+  position: absolute;
+  z-index: 3;
+  inset: 46% clamp(20px, 2.7vw, 48px) auto;
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) clamp(145px, 14vw, 238px) minmax(0, 1.18fr);
+  align-items: center;
+  gap: clamp(10px, 1.3vw, 24px);
+  transform: translateY(-50%);
+}
+
+.yc-minoru-word {
+  min-width: 0;
+  color: #0b2a5b;
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(72px, 11.6vw, 202px);
+  font-weight: 950;
+  line-height: 0.74;
+  letter-spacing: -0.085em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  text-shadow: 0 18px 36px rgba(58, 88, 156, 0.18);
+}
+
+.yc-minoru-word-your {
+  justify-self: end;
+  text-align: right;
+}
+
+.yc-minoru-word-comate {
+  justify-self: start;
+  text-align: left;
+}
+
+.yc-minoru-logo-mark {
+  position: relative;
+  z-index: 5;
+  justify-self: center;
+
+  display: grid;
+  place-items: center;
+
+  width: clamp(150px, 17vw, 285px);
+  aspect-ratio: 1 / 1;
+
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+
+  transform-origin: 50% 55%;
+  animation: ycHeroLogoBreathe 3.6s ease-in-out infinite;
+
+  will-change: transform, filter;
+}
+
+/* Remove the previous white background shape completely. */
+.yc-minoru-logo-mark::before {
+  content: none;
+  display: none;
+}
+
+.yc-minoru-logo-mark img {
+  position: static;
+
+  display: block;
+  width: 100%;
+  height: 100%;
+
+  max-width: none;
+  object-fit: contain;
+
+  transform: none;
+  clip-path: none;
+
+  background: transparent;
+
+  filter:
+    drop-shadow(0 8px 14px rgba(69, 112, 229, 0.16))
+    drop-shadow(0 11px 20px rgba(42, 205, 194, 0.17));
+}
+
+@keyframes ycHeroLogoBreathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(0.97);
+    filter: brightness(0.96) saturate(1);
+  }
+
+  50% {
+    transform: translateY(-6px) scale(1.035);
+    filter: brightness(1.1) saturate(1.12);
+  }
+}
+
+.yc-minoru-tagline {
+  position: absolute;
+  z-index: 7;
+  left: 50%;
+  bottom: clamp(38px, 5.3vh, 66px);
+  width: max-content;
+  max-width: calc(100% - 48px);
+  margin: 0;
+  transform: translateX(-50%);
+  color: #0b2a5b;
+  font-family: var(--yc-display, var(--heading));
+  font-size: clamp(17px, 1.75vw, 30px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  text-align: center;
+  text-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.72),
+    0 8px 20px rgba(72, 98, 158, 0.14);
+}
+
+.yc-minoru-blob {
+  position: absolute;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  min-width: clamp(138px, 12vw, 190px);
+  min-height: clamp(60px, 5.7vw, 88px);
+  padding: 15px 21px;
+  border: 2px solid rgba(16, 22, 63, 0.12);
+  border-radius: 48% 52% 56% 44% / 48% 44% 56% 52%;
+  color: var(--yc-home-ink);
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(10px, 0.8vw, 13px);
+  font-weight: 900;
+  line-height: 1;
+  text-decoration: none;
+  box-shadow: 0 9px 0 rgba(31, 29, 98, 0.88);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.yc-minoru-blob svg {
+  width: 14px;
+  flex: 0 0 auto;
+}
+
+.yc-minoru-blob:hover {
+  box-shadow: 0 14px 0 rgba(31, 29, 98, 0.88);
+  filter: saturate(1.06);
+}
+
+.yc-minoru-saya-star {
+  position: absolute;
+  z-index: 10;
+  top: clamp(28px, 5vh, 66px);
+  left: clamp(190px, 20vw, 356px);
+
+  width: clamp(84px, 7.4vw, 116px);
+  aspect-ratio: 1;
+
+  display: grid;
+  place-content: center;
+  gap: 3px;
+  padding: 15px;
+
+  color: #30275f;
+  background: linear-gradient(145deg, #ffe38a, #f6bd35);
+
+  clip-path: polygon(
+    50% 0%,
+    61% 30%,
+    88% 12%,
+    76% 41%,
+    100% 50%,
+    76% 59%,
+    88% 88%,
+    61% 70%,
+    50% 100%,
+    39% 70%,
+    12% 88%,
+    24% 59%,
+    0% 50%,
+    24% 41%,
+    12% 12%,
+    39% 30%
+  );
+
+  filter:
+    drop-shadow(0 8px 0 rgba(31, 29, 98, 0.82))
+    drop-shadow(0 15px 22px rgba(31, 29, 98, 0.16));
+
+  font-family: var(--yc-ui, var(--body));
+  line-height: 1;
+  text-align: center;
+  text-decoration: none;
+
+  transition:
+    transform 180ms ease,
+    filter 180ms ease;
+}
+
+.yc-minoru-saya-star span,
+.yc-minoru-saya-star strong {
+  display: block;
+  color: inherit;
+  text-align: center;
+}
+
+.yc-minoru-saya-star span {
+  white-space: nowrap;
+}
+
+.yc-minoru-saya-star strong {
+  width: 100%;
+  max-width: 74px;
+  margin-inline: auto;
+  white-space: normal;
+  overflow-wrap: normal;
+  line-height: 0.92;
+  text-wrap: balance;
+}
+
+.yc-minoru-saya-star span {
+  font-size: clamp(5.5px, 0.45vw, 7px);
+  font-weight: 950;
+  letter-spacing: 0.08em;
+}
+
+.yc-minoru-saya-star strong {
+  max-width: 74px;
+  margin-inline: auto;
+  font-size: clamp(7px, 0.62vw, 10px);
+  font-weight: 950;
+  line-height: 0.92;
+}
+
+.yc-minoru-saya-star:hover {
+  transform: translateY(-5px) rotate(4deg) scale(1.04);
+  filter:
+    drop-shadow(0 11px 0 rgba(31, 29, 98, 0.82))
+    drop-shadow(0 19px 26px rgba(31, 29, 98, 0.19))
+    saturate(1.06);
+}
+
+
+.yc-minoru-login {
+  top: clamp(36px, 6vh, 76px);
+  left: clamp(24px, 7vw, 138px);
+  transform: rotate(-8deg);
+  background: #f6c64d;
+}
+
+.yc-minoru-login:hover {
+  transform: translateY(-5px) rotate(-4deg);
+}
+
+.yc-minoru-demo {
+  right: clamp(26px, 7vw, 140px);
+  bottom: clamp(76px, 10.5vh, 126px);
+  transform: rotate(7deg);
+  background: var(--yc-home-pink);
+}
+
+.yc-minoru-demo:hover {
+  transform: translateY(-5px) rotate(3deg);
+}
+
+/* Clean, continuous autoplay line: no pills, boxes or blurred effects. */
+.yc-minoru-marquee,
+.yc-minoru-marquee::before,
+.yc-minoru-marquee::after {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.yc-minoru-marquee::before,
+.yc-minoru-marquee::after {
+  content: none !important;
+  display: none !important;
+}
+
+.yc-minoru-marquee {
+  position: absolute;
+  z-index: 8;
+  left: 0;
+  right: 0;
+  bottom: clamp(8px, 1.5vh, 18px);
+  overflow: hidden;
+  padding-block: 8px;
+  pointer-events: none;
+}
+
+.yc-minoru-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: ycMarquee 19s linear infinite;
+  will-change: transform;
+}
+
+.yc-minoru-marquee-group {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.yc-minoru-marquee-group span {
+  display: inline-block;
+  flex: 0 0 auto;
+  padding-inline: clamp(28px, 3.2vw, 58px);
+
+  color: #123d78;
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(12px, 1vw, 17px);
+  font-weight: 950;
+  line-height: 1.15;
+  letter-spacing: 0.012em;
+  white-space: nowrap;
+
+  text-shadow: none;
+  filter: none;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+.yc-minoru-marquee-group span:nth-child(4n + 1) {
+  color: #123d78;
+}
+
+.yc-minoru-marquee-group span:nth-child(4n + 2) {
+  color: #2f72d8;
+}
+
+.yc-minoru-marquee-group span:nth-child(4n + 3) {
+  color: #18aaa8;
+}
+
+.yc-minoru-marquee-group span:nth-child(4n + 4) {
+  color: #5b67d7;
+}
+
+.yc-minoru-info {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(270px, 0.78fr) minmax(0, 2.55fr);
+  align-items: center;
+  gap: clamp(20px, 2vw, 34px);
+
+  min-height: 0;
+  padding:
+    clamp(17px, 1.55vw, 24px)
+    clamp(26px, 2.8vw, 48px);
+
+  background:
+    radial-gradient(circle at 88% 12%, rgba(183, 224, 246, 0.38), transparent 29%),
+    linear-gradient(
+      108deg,
+      #092b63 0%,
+      #123f79 34%,
+      #cdeef8 68%,
+      #e6e7ff 100%
+    );
+}
+
+.yc-minoru-info::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.035),
+      transparent 33%,
+      transparent 72%,
+      rgba(255, 255, 255, 0.025)
+    );
+}
+
+.yc-minoru-info > header {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  padding-right: clamp(18px, 1.8vw, 30px);
+  border-right: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.yc-minoru-info > header small {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  width: max-content;
+  margin: 0 0 10px;
+
+  color: #58dfd4;
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(7px, 0.58vw, 9px);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+
+
+.yc-minoru-info > header h1 {
+  display: grid;
+  gap: 1px;
+  max-width: 440px;
+  margin: 0;
+
+  color: #ffffff;
+  font-family: var(--yc-display, var(--heading));
+  font-size: clamp(29px, 2.55vw, 46px);
+  font-weight: 760;
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+}
+
+.yc-minoru-info > header h1 span {
+  display: block;
+  white-space: nowrap;
+}
+
+.yc-minoru-cards {
+  position: relative;
+  z-index: 1;
+
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(11px, 1vw, 15px);
+
+  min-width: 0;
+  min-height: 0;
+}
+
+.yc-minoru-cards > a {
+  --yc-card-bg: #f8fbff;
+
+  position: relative;
+  display: grid;
+  grid-template-columns: clamp(40px, 3vw, 50px) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(11px, 1vw, 15px);
+
+  min-width: 0;
+  min-height: clamp(72px, 7.4vw, 90px);
+  padding: clamp(13px, 1.1vw, 17px);
+
+  border: 1px solid rgba(181, 205, 229, 0.82);
+  border-radius: clamp(18px, 1.55vw, 24px);
+
+  color: #0b2a5b;
+  background: var(--yc-card-bg);
+
+ box-shadow:
+  8px 10px 0 #a9d6f5,
+  0 16px 28px rgba(36, 74, 128, 0.14);
+
+  text-decoration: none;
+
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.yc-minoru-cards > a:nth-child(1) {
+  --yc-card-bg: #f8fbff;
+}
+
+.yc-minoru-cards > a:nth-child(2) {
+  --yc-card-bg: #f5f3ff;
+}
+
+.yc-minoru-cards > a:nth-child(3) {
+  --yc-card-bg: #eefbff;
+}
+
+.yc-minoru-cards > a:nth-child(4) {
+  --yc-card-bg: #f0fbf8;
+}
+
+.yc-minoru-cards > a:hover {
+  border-color: rgba(124, 132, 169, 0.78);
+ box-shadow:
+  10px 12px 0 #b8dff7,
+  0 20px 32px rgba(36, 74, 128, 0.18);
+}
+
+.yc-minoru-card-number {
+  display: grid;
+  place-items: center;
+
+  width: clamp(40px, 3vw, 50px);
+  height: clamp(40px, 3vw, 50px);
+
+  border-radius: clamp(13px, 1.1vw, 17px);
+
+  color: #ffffff;
+  background: linear-gradient(145deg, #3f7ef0, #2ed1c1);
+
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(9px, 0.72vw, 11px);
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: 0.01em;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.yc-minoru-card-copy {
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.yc-minoru-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.yc-minoru-card-title strong {
+  min-width: 0;
+  color: #0b2a5b;
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(11px, 0.92vw, 14px);
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+}
+
+.yc-minoru-card-symbol {
+  flex: 0 0 auto;
+
+  color: #2c5faa;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: clamp(15px, 1.2vw, 19px);
+  font-weight: 700;
+  line-height: 1;
+
+  opacity: 0.78;
+}
+
+.yc-minoru-card-copy small {
+  display: block;
+  max-width: 240px;
+  margin-top: 5px;
+
+  color: #5b6f92;
+  font-family: var(--yc-ui, var(--body));
+  font-size: clamp(7px, 0.62vw, 9.5px);
+  font-weight: 550;
+  line-height: 1.35;
+}
+
+@keyframes ycMarquee {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-50%, 0, 0); }
+}
+
+@keyframes ycLogoFloat {
+  0%, 100% { transform: translateY(0) rotate(-0.6deg); }
+  50% { transform: translateY(-7px) rotate(0.6deg); }
+}
+
+@media (min-width: 1121px) and (min-height: 700px) {
+  .yc-horizontal-mode .yc-minoru-hero {
+    height: var(--yc-deck-height) !important;
+    min-height: var(--yc-deck-height) !important;
+    max-height: var(--yc-deck-height) !important;
+  }
+
+  .yc-horizontal-mode .yc-minoru-shell {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+@media (min-width: 1121px) and (max-height: 820px) {
+  .yc-minoru-shell {
+    grid-template-rows: minmax(0, 1fr) clamp(168px, 22vh, 190px);
+  }
+
+  .yc-minoru-brand-stage {
+    grid-template-columns:
+      minmax(0, 0.82fr)
+      clamp(116px, 11vw, 170px)
+      minmax(0, 1.18fr);
+  }
+
+  .yc-minoru-word {
+    font-size: clamp(58px, 9vw, 148px);
+  }
+
+  .yc-minoru-organic {
+    width: clamp(180px, 21vw, 315px);
+  }
+
+  .yc-minoru-login {
+    top: 22px;
+  }
+
+  .yc-minoru-saya-star {
+    top: 12px;
+    left: clamp(500px, 58vw, 780px);
+    right: auto;
+    width: clamp(72px, 6.8vw, 94px);
+
+    transform: translateX(-50%);
+  }
+
+  .yc-minoru-demo {
+    bottom: 58px;
+  }
+
+  .yc-minoru-tagline {
+    bottom: 28px;
+    font-size: clamp(14px, 1.3vw, 21px);
+  }
+
+  .yc-minoru-marquee {
+    bottom: 2px;
+    padding-block: 5px;
+  }
+
+  .yc-minoru-info {
+    gap: 18px;
+    padding-block: 12px;
+  }
+
+  .yc-minoru-info > header small {
+    margin-bottom: 7px;
+  }
+
+  .yc-minoru-info > header h1 {
+    font-size: clamp(26px, 2.3vw, 40px);
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 66px;
+    padding-block: 10px;
+    box-shadow:
+  7px 8px 0 #a9d6f5,
+  0 12px 20px rgba(36, 74, 128, 0.13);
+  }
+}
+
+@media (max-width: 1280px) {
+  .yc-minoru-info {
+    grid-template-columns: minmax(235px, 0.75fr) minmax(0, 2.4fr);
+    gap: 18px;
+    padding-inline: 24px;
+  }
+
+  .yc-minoru-info > header h1 {
+    font-size: clamp(27px, 2.6vw, 39px);
+  }
+
+  .yc-minoru-cards {
+    gap: 10px;
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 70px;
+    padding: 12px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .yc-minoru-hero {
+    height: auto;
+    min-height: calc(100dvh - var(--yc-header-height, 96px));
+    overflow: visible;
+  }
+
+  .yc-minoru-shell {
+    grid-template-rows: minmax(500px, 67vh) auto;
+    height: auto;
+  }
+
+  .yc-minoru-info {
+    grid-template-columns: minmax(220px, 0.62fr) minmax(0, 1.38fr);
+    align-items: center;
+    gap: 18px;
+    padding: 18px 22px 22px;
+  }
+
+  .yc-minoru-info > header {
+    padding-right: 18px;
+  }
+
+  .yc-minoru-info > header h1 {
+    font-size: clamp(27px, 3.5vw, 40px);
+  }
+
+  .yc-minoru-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 11px;
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 76px;
+  }
+}
+
+@media (max-width: 900px) {
+  .yc-minoru-brand-stage {
+    inset-inline: 18px;
+    grid-template-columns:
+      minmax(0, 0.78fr)
+      clamp(110px, 19vw, 168px)
+      minmax(0, 1.22fr);
+    gap: 8px;
+  }
+
+  .yc-minoru-word {
+    font-size: clamp(50px, 10.6vw, 94px);
+  }
+
+  .yc-minoru-organic {
+    width: clamp(184px, 34vw, 300px);
+  }
+
+  .yc-minoru-login {
+    left: 18px;
+  }
+
+  .yc-minoru-demo {
+    right: 18px;
+  }
+
+  .yc-minoru-info {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+
+  .yc-minoru-info > header {
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  }
+
+  .yc-minoru-info > header h1 {
+    grid-template-columns: repeat(2, max-content);
+    gap: 8px;
+    max-width: none;
+    font-size: clamp(28px, 4.5vw, 38px);
+  }
+}
+
+/* =====================================================================
+   HOMEPAGE HERO — MOBILE / APP
+   Direct replacement of every old phone rule. The first viewport contains
+   only the blue visual hero; the headline and four cards continue below.
+===================================================================== */
+
+@media (max-width: 760px) {
+  .yc-minoru-hero {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .yc-minoru-shell {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    display: block;
+  }
+
+  .yc-minoru-main {
+    position: relative;
+    width: 100%;
+    height: calc(100dvh - var(--yc-header-height, 96px));
+    height: calc(100svh - var(--yc-header-height, 96px));
+    min-height: calc(100dvh - var(--yc-header-height, 96px));
+    min-height: calc(100svh - var(--yc-header-height, 96px));
+    max-height: calc(100dvh - var(--yc-header-height, 96px));
+    max-height: calc(100svh - var(--yc-header-height, 96px));
+    margin: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+  }
+
+ .yc-minoru-blob {
+  min-width: 0;
+  width: clamp(116px, 36vw, 148px);
+  min-height: 40px;
+  padding: 8px 11px;
+
+  gap: 8px;
+
+  font-size: clamp(7px, 2.2vw, 9px);
+
+  box-shadow: 0 4px 0 rgba(31, 29, 98, 0.86);
+}
+
+  .yc-minoru-blob svg {
+  width: 11px;
+}
+
+.yc-minoru-login {
+  top: 10.5%;
+  right: auto;
+  bottom: auto;
+  left: clamp(18px, 6vw, 30px);
+
+  transform: rotate(-7deg);
+}
+
+  .yc-minoru-login:hover {
+    transform: rotate(-7deg);
+  }
+
+.yc-minoru-saya-star {
+  top: clamp(32px, 8.5%, 64px);
+  right: clamp(22px, 7vw, 38px);
+  left: auto;
+
+  width: clamp(76px, 23vw, 98px);
+  padding: 12px;
+
+  filter:
+    drop-shadow(0 5px 0 rgba(31, 29, 98, 0.82))
+    drop-shadow(0 11px 17px rgba(31, 29, 98, 0.15));
+}
+
+.yc-minoru-saya-star span {
+  font-size: clamp(4.8px, 1.35vw, 6px);
+}
+
+.yc-minoru-saya-star strong {
+  max-width: 58px;
+  margin-inline: auto;
+  font-size: clamp(5.7px, 1.65vw, 7.4px);
+  line-height: 0.9;
+  white-space: normal;
+  text-wrap: balance;
+}
+
+.yc-minoru-saya-star:hover {
+  transform: none;
+}
+
+.yc-minoru-demo {
+  top: 80%;
+  right: clamp(30px, 10vw, 48px);
+  bottom: auto;
+  left: auto;
+
+  transform: translateY(-50%) rotate(7deg);
+}
+
+  .yc-minoru-demo:hover {
+    transform: translateY(-50%) rotate(7deg);
+  }
+
+.yc-minoru-brand-stage {
+  top: 42%;
+  inset-inline: 2px;
+
+  grid-template-columns:
+    minmax(0, 0.86fr)
+    clamp(78px, 24vw, 108px)
+    minmax(0, 1.14fr);
+  gap: 1px;
+
+  transform: translateY(-50%);
+}
+
+ .yc-minoru-word {
+  font-size: clamp(31px, 11.8vw, 46px);
+  line-height: 0.78;
+  letter-spacing: -0.078em;
+}
+
+ .yc-minoru-organic {
+  top: 42%;
+  width: clamp(126px, 38vw, 168px);
+}
+
+ .yc-minoru-logo-mark {
+  width: clamp(84px, 25vw, 110px);
+  max-width: none;
+
+  animation: none;
+  will-change: auto;
+}
+.yc-minoru-tagline {
+  top: 68%;
+  left: 50%;
+  bottom: auto;
+
+  width: calc(100% - 30px);
+  max-width: 370px;
+
+  transform: translate(-50%, -50%);
+
+  font-size: clamp(10px, 3.15vw, 13.5px);
+  line-height: 1.2;
+
+  white-space: normal;
+  text-wrap: balance;
+}
+
+  .yc-minoru-marquee {
+    bottom: 0;
+    padding-block: 3px;
+  }
+
+  .yc-minoru-marquee-track {
+    animation-duration: 26s;
+    will-change: auto;
+  }
+
+.yc-minoru-marquee-group span {
+  padding-inline: 17px;
+
+  font-size: clamp(8px, 2.45vw, 10.5px);
+  letter-spacing: 0;
+}
+
+  .yc-minoru-info {
+    position: relative;
+
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    padding:
+      clamp(24px, 6.5vw, 34px)
+      clamp(14px, 4.5vw, 22px)
+      clamp(28px, 7vw, 38px);
+
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: clamp(18px, 4.8vw, 24px);
+    align-items: stretch;
+
+    overflow: visible;
+
+    color: #0b2a5b;
+    border-top: 1px solid rgba(49, 91, 145, 0.16);
+
+    background:
+      radial-gradient(
+        circle at 12% 0%,
+        rgba(121, 219, 238, 0.26),
+        transparent 38%
+      ),
+      radial-gradient(
+        circle at 94% 12%,
+        rgba(191, 190, 249, 0.22),
+        transparent 34%
+      ),
+      linear-gradient(
+        180deg,
+        #f5fbff 0%,
+        #f3f7ff 52%,
+        #f2fbfa 100%
+      );
+  }
+
+  .yc-minoru-info::before {
+    opacity: 0.28;
+
+    background:
+      linear-gradient(
+        90deg,
+        rgba(49, 91, 145, 0.035),
+        transparent 34%,
+        transparent 70%,
+        rgba(98, 84, 218, 0.025)
+      );
+  }
+
+  .yc-minoru-info > header {
+    min-width: 0;
+    padding: 0 2px clamp(16px, 4vw, 20px);
+
+    display: grid;
+    align-content: start;
+    gap: 8px;
+
+    border-right: 0;
+    border-bottom: 1px solid rgba(49, 91, 145, 0.16);
+  }
+
+  .yc-minoru-info > header small {
+    width: max-content;
+    margin: 0;
+
+    color: #2e6ea9;
+
+    font-size: clamp(6.5px, 1.8vw, 8px);
+    letter-spacing: 0.15em;
+  }
+
+  .yc-minoru-info > header h1 {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 0.18em;
+
+  color: #0b2a5b;
+
+  font-size: clamp(16px, 5.25vw, 22px);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  text-align: left;
+
+  white-space: nowrap;
+}
+
+.yc-minoru-info > header h1 span {
+  display: inline;
+  width: auto;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.yc-minoru-info > header h1 span:last-child {
+  color: #2e9f9f;
+  text-align: left;
+}
+  .yc-minoru-cards {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(11px, 3.2vw, 15px);
+  }
+
+  .yc-minoru-cards > a {
+    min-width: 0;
+    min-height: clamp(94px, 25vw, 112px);
+    padding: clamp(12px, 3.4vw, 16px);
+
+    display: grid;
+    grid-template-columns:
+      clamp(32px, 9vw, 38px)
+      minmax(0, 1fr);
+    align-items: center;
+    gap: clamp(8px, 2.5vw, 11px);
+
+    border: 1px solid rgba(125, 158, 193, 0.34);
+    border-radius: clamp(17px, 4.8vw, 22px);
+
+    box-shadow:
+      4px 5px 0 #b8def4,
+      0 12px 22px rgba(46, 88, 137, 0.09);
+  }
+
+  .yc-minoru-cards > a:nth-child(1) {
+    --yc-card-bg: #f8fbff;
+  }
+
+  .yc-minoru-cards > a:nth-child(2) {
+    --yc-card-bg: #f5f3ff;
+  }
+
+  .yc-minoru-cards > a:nth-child(3) {
+    --yc-card-bg: #eefbff;
+  }
+
+  .yc-minoru-cards > a:nth-child(4) {
+    --yc-card-bg: #f0fbf8;
+  }
+
+  .yc-minoru-cards > a:hover {
+    transform: none;
+
+    border-color: rgba(125, 158, 193, 0.34);
+
+    box-shadow:
+      4px 5px 0 #b8def4,
+      0 12px 22px rgba(46, 88, 137, 0.09);
+  }
+
+  .yc-minoru-card-number {
+    width: clamp(32px, 9vw, 38px);
+    height: clamp(32px, 9vw, 38px);
+
+    border-radius: clamp(10px, 3vw, 13px);
+
+    background: linear-gradient(145deg, #3f7ef0, #2ed1c1);
+
+    font-size: clamp(7px, 2vw, 8.5px);
+
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      2px 3px 0 rgba(158, 196, 232, 0.52);
+  }
+
+  .yc-minoru-card-copy {
+    min-width: 0;
+    padding: 0;
+
+    display: grid;
+    align-content: center;
+  }
+
+  .yc-minoru-card-title {
+    min-width: 0;
+
+    display: block;
+  }
+
+  .yc-minoru-card-title strong {
+    display: block;
+
+    color: #0b2a5b;
+
+    font-size: clamp(9px, 2.55vw, 11px);
+    line-height: 1.15;
+    letter-spacing: -0.012em;
+  }
+
+  .yc-minoru-card-symbol {
+    display: none;
+  }
+
+  .yc-minoru-card-copy small {
+    max-width: none;
+    margin-top: 4px;
+
+    color: #5b6f92;
+
+    font-size: clamp(6.4px, 1.8vw, 7.6px);
+    line-height: 1.34;
+  }
+}
+
+@media (max-width: 420px) {
+ .yc-minoru-blob {
+  width: clamp(108px, 34vw, 128px);
+  min-height: 37px;
+  padding: 7px 9px;
+
+  font-size: clamp(6.8px, 2.05vw, 8px);
+
+  box-shadow: 0 3px 0 rgba(31, 29, 98, 0.84);
+}
+
+  .yc-minoru-login {
+    top: 11.5%;
+    left: clamp(15px, 5vw, 24px);
+  }
+
+  .yc-minoru-saya-star {
+    top: clamp(30px, 8.5%, 52px);
+    right: clamp(16px, 5.5vw, 24px);
+    left: auto;
+    width: clamp(70px, 22vw, 88px);
+  }
+
+  .yc-minoru-demo {
+    top: 78.5%;
+    right: clamp(38px, 14vw, 52px);
+  }
+
+ .yc-minoru-brand-stage {
+  top: 42%;
+
+  grid-template-columns:
+    minmax(0, 0.86fr)
+    clamp(72px, 23vw, 90px)
+    minmax(0, 1.14fr);
+}
+
+ .yc-minoru-word {
+  font-size: clamp(28px, 10.8vw, 39px);
+}
+
+ .yc-minoru-organic {
+  top: 42%;
+  width: clamp(112px, 36vw, 142px);
+}
+
+ .yc-minoru-logo-mark {
+  width: clamp(76px, 24vw, 94px);
+}
+
+.yc-minoru-tagline {
+  top: 69%;
+
+  font-size: clamp(9px, 2.8vw, 11px);
+}
+
+  .yc-minoru-marquee-group span {
+    padding-inline: 12px;
+    font-size: 6.7px;
+  }
+
+  .yc-minoru-info {
+    padding: 22px 12px 27px;
+    gap: 18px;
+  }
+
+  .yc-minoru-info > header {
+    padding-inline: 1px;
+    padding-bottom: 16px;
+  }
+
+ .yc-minoru-info > header h1 {
+  max-width: none;
+  font-size: clamp(15px, 5.1vw, 20px);
+}
+
+  .yc-minoru-cards {
+    gap: 10px;
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 96px;
+    padding: 11px 10px;
+
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 8px;
+
+    border-radius: 17px;
+
+    box-shadow:
+      3px 4px 0 #b8def4,
+      0 9px 17px rgba(46, 88, 137, 0.08);
+  }
+
+  .yc-minoru-card-number {
+    width: 32px;
+    height: 32px;
+
+    border-radius: 10px;
+
+    font-size: 7px;
+  }
+
+  .yc-minoru-card-title strong {
+    font-size: clamp(8.5px, 2.45vw, 10px);
+  }
+
+  .yc-minoru-card-copy small {
+    font-size: clamp(5.9px, 1.7vw, 6.8px);
+  }
+}
+
+@media (max-width: 420px) and (max-height: 720px) {
+  .yc-minoru-login {
+    top: 10.5%;
+  }
+
+  .yc-minoru-saya-star {
+    top: clamp(24px, 7.5%, 42px);
+    right: clamp(15px, 5vw, 22px);
+    left: auto;
+  }
+
+  .yc-minoru-demo {
+    top: 77%;
+  }
+
+  .yc-minoru-brand-stage,
+  .yc-minoru-organic {
+    top: 40%;
+  }
+
+ .yc-minoru-word {
+  font-size: clamp(26px, 10vw, 36px);
+}
+
+ .yc-minoru-brand-stage {
+  grid-template-columns:
+    minmax(0, 0.86fr)
+    clamp(66px, 21vw, 82px)
+    minmax(0, 1.14fr);
+}
+
+ .yc-minoru-logo-mark {
+  width: clamp(70px, 22vw, 86px);
+}
+
+ .yc-minoru-organic {
+  width: clamp(102px, 33vw, 128px);
+}
+.yc-minoru-tagline {
+  top: 68%;
+
+  font-size: clamp(8.5px, 2.65vw, 10.5px);
+}
+}
+
+@media (max-width: 760px) and (orientation: landscape) and (max-height: 520px) {
+  .yc-minoru-main {
+    height: calc(100svh - 88px);
+    min-height: calc(100svh - 88px);
+    max-height: calc(100svh - 88px);
+  }
+
+  .yc-minoru-login {
+    top: 14%;
+  }
+
+  .yc-minoru-saya-star {
+    top: 9%;
+    right: clamp(24px, 7vw, 52px);
+    left: auto;
+    width: clamp(62px, 12vw, 78px);
+  }
+
+  .yc-minoru-demo {
+    top: 76%;
+    right: 9%;
+  }
+
+  .yc-minoru-brand-stage,
+  .yc-minoru-organic {
+    top: 42%;
+  }
+
+  .yc-minoru-tagline {
+    top: 70%;
+  }
+
+  .yc-minoru-info {
+    padding: 18px;
+
+    grid-template-columns:
+      minmax(160px, 0.44fr)
+      minmax(0, 1.56fr);
+    gap: 18px;
+    align-items: center;
+  }
+
+  .yc-minoru-info > header {
+    padding: 0 18px 0 0;
+
+    border-right: 1px solid rgba(49, 91, 145, 0.16);
+    border-bottom: 0;
+  }
+
+  .yc-minoru-info > header h1 {
+    font-size: clamp(20px, 3.6vw, 28px);
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 82px;
+  }
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .yc-minoru-logo-mark {
+    animation: none;
+    will-change: auto;
+  }
+
+  .yc-minoru-marquee-track {
+    animation-duration: 26s;
+    will-change: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yc-minoru-logo-mark,
+  .yc-minoru-marquee-track {
+    animation: none !important;
+  }
+}
+
+/* =====================================================================
+   HOMEPAGE HERO — WEB LAYOUT RESTRUCTURE
+   Desktop-only layout matching the supplied reference.
+   Mobile/app rules above remain unchanged.
+===================================================================== */
+@media (min-width: 1121px) {
+  .yc-minoru-hero {
+    height: calc(100dvh - var(--yc-header-height, 96px));
+    min-height: 620px;
+    max-height: none;
+    overflow: hidden;
+    background: #eaf8ff;
+  }
+
+  .yc-minoru-shell {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* One continuous hero surface. */
+  .yc-minoru-main {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background:
+      radial-gradient(
+        circle at 47% 37%,
+        rgba(255, 255, 255, 0.94),
+        transparent 29%
+      ),
+      radial-gradient(
+        circle at 8% 8%,
+        rgba(94, 212, 229, 0.18),
+        transparent 28%
+      ),
+      radial-gradient(
+        circle at 92% 10%,
+        rgba(148, 155, 238, 0.18),
+        transparent 30%
+      ),
+      linear-gradient(
+        132deg,
+        #eefbff 0%,
+        #dff8fb 48%,
+        #eceaff 100%
+      );
+  }
+
+  /* The decorative dot/star layer is removed in every view. */
+  .yc-minoru-main::before {
+    content: none;
+    display: none;
+  }
+
+  /* Central blue/teal organic shape and hero image. */
+  .yc-minoru-organic {
+    top: 38%;
+    width: clamp(250px, 24vw, 410px);
+    opacity: 0.91;
+  }
+
+  .yc-minoru-organic::before,
+  .yc-minoru-organic::after,
+  .yc-minoru-organic i {
+    background:
+      linear-gradient(
+        145deg,
+        rgba(114, 225, 219, 0.94),
+        rgba(112, 183, 237, 0.92)
+      );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      0 22px 46px rgba(68, 146, 194, 0.12);
+  }
+
+  .yc-minoru-organic i:nth-child(5) {
+    background:
+      linear-gradient(
+        145deg,
+        rgba(145, 228, 222, 0.96),
+        rgba(131, 177, 235, 0.94)
+      );
+  }
+
+  .yc-minoru-brand-stage {
+    top: 38%;
+    inset-inline: clamp(34px, 4.5vw, 78px);
+    grid-template-columns:
+      minmax(0, 0.83fr)
+      clamp(145px, 13vw, 218px)
+      minmax(0, 1.17fr);
+    gap: clamp(8px, 1.25vw, 20px);
+  }
+
+  .yc-minoru-word {
+    color: #3974b5;
+    font-size: clamp(82px, 10.6vw, 184px);
+    text-shadow:
+      0 16px 30px rgba(68, 111, 169, 0.13),
+      0 2px 0 rgba(255, 255, 255, 0.68);
+  }
+
+  .yc-minoru-logo-mark {
+    width: clamp(150px, 14vw, 230px);
+  }
+
+  /* Existing button design and colours remain intact. */
+  .yc-minoru-login {
+    top: clamp(30px, 5vh, 60px);
+    left: clamp(34px, 7vw, 130px);
+  }
+
+  .yc-minoru-saya-star {
+    top: clamp(18px, 3.2vh, 38px);
+    left: clamp(620px, 58vw, 980px);
+    right: auto;
+
+    transform: translateX(-50%);
+  }
+
+  .yc-minoru-saya-star:hover {
+    transform:
+      translateX(-50%)
+      translateY(-5px)
+      rotate(4deg)
+      scale(1.04);
+  }
+
+  .yc-minoru-demo {
+    top: 57%;
+    right: clamp(34px, 7vw, 132px);
+    bottom: auto;
+  }
+
+  /* Reference-positioned central tagline. */
+  .yc-minoru-tagline {
+    top: 67%;
+    bottom: auto;
+    color: #577da5;
+    font-size: clamp(16px, 1.45vw, 24px);
+    font-weight: 680;
+    text-shadow:
+      0 2px 0 rgba(255, 255, 255, 0.82),
+      0 7px 18px rgba(77, 114, 163, 0.1);
+  }
+
+  /* Clean autoplay text without any strip/background box. */
+  .yc-minoru-marquee {
+    z-index: 14;
+    bottom: 0;
+    padding-block: 7px;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .yc-minoru-marquee-group span {
+    padding-inline: clamp(30px, 3vw, 54px);
+    color: #4d7faa;
+    font-size: clamp(10px, 0.82vw, 13px);
+    font-weight: 850;
+  }
+
+  .yc-minoru-marquee-group span:nth-child(4n + 1) {
+    color: #4d7faa;
+  }
+
+  .yc-minoru-marquee-group span:nth-child(4n + 2) {
+    color: #2f8eb2;
+  }
+
+  .yc-minoru-marquee-group span:nth-child(4n + 3) {
+    color: #279c98;
+  }
+
+  .yc-minoru-marquee-group span:nth-child(4n + 4) {
+    color: #6477c5;
+  }
+
+  /* ---------------------------------------------------------------
+     The heading and four cards are overlaid inside the same hero.
+  --------------------------------------------------------------- */
+  .yc-minoru-info {
+    position: absolute;
+    z-index: 11;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    padding: 0;
+    display: block;
+    overflow: visible;
+    color: #577da5;
+    border: 0;
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .yc-minoru-info::before {
+    content: none;
+    display: none;
+  }
+
+  /* Lower-left heading in the same position as the reference image. */
+  .yc-minoru-info > header {
+    position: absolute;
+    z-index: 12;
+    left: clamp(60px, 4.5vw, 84px);
+    top: 58%;
+    width: min(360px, 29vw);
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    pointer-events: none;
+  }
+
+  .yc-minoru-info > header small {
+    order: 2;
+    width: max-content;
+    margin: 10px 0 0;
+    color: #2f8eb2;
+    font-size: clamp(6.5px, 0.5vw, 8px);
+    letter-spacing: 0.17em;
+  }
+
+  .yc-minoru-info > header h1 {
+    order: 1;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    display: grid;
+    gap: 0;
+    color: #5d82a8;
+    font-size: clamp(29px, 2.75vw, 48px);
+    font-weight: 720;
+    line-height: 0.92;
+    letter-spacing: -0.047em;
+    text-shadow: none;
+  }
+
+  .yc-minoru-info > header h1 span {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  .yc-minoru-info > header h1 span:last-child {
+    color: #2b9f9f;
+  }
+
+  /* Four compact cards in one horizontal line. */
+  .yc-minoru-cards {
+    position: absolute;
+    z-index: 13;
+    left: 50%;
+    bottom: clamp(46px, 5.7vh, 66px);
+    width: min(92vw, 1040px);
+    min-width: 0;
+    min-height: 0;
+    transform: translateX(-50%);
+    display: grid;
+    grid-template-columns:
+      minmax(0, 0.95fr)
+      minmax(0, 1.05fr)
+      minmax(0, 1.25fr)
+      minmax(0, 1fr);
+    grid-template-rows: 1fr;
+    gap: clamp(12px, 1.35vw, 20px);
+    pointer-events: auto;
+  }
+
+  /* Match the visual order used in the supplied reference. */
+  .yc-minoru-cards > a:nth-child(1) {
+    order: 1;
+    --yc-card-bg:
+      linear-gradient(145deg, #f9fdff, #eef8ff);
+  }
+
+  .yc-minoru-cards > a:nth-child(2) {
+    order: 3;
+    --yc-card-bg:
+      linear-gradient(145deg, #fbfaff, #f2efff);
+  }
+
+  .yc-minoru-cards > a:nth-child(3) {
+    order: 2;
+    --yc-card-bg:
+      linear-gradient(145deg, #f6fcff, #ebf8fb);
+  }
+
+  .yc-minoru-cards > a:nth-child(4) {
+    order: 4;
+    --yc-card-bg:
+      linear-gradient(145deg, #f7fcfa, #eaf8f4);
+  }
+
+  .yc-minoru-cards > a {
+    min-width: 0;
+    min-height: 56px;
+    height: 56px;
+    padding: 8px 11px;
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    border: 1px solid rgba(155, 194, 221, 0.32);
+    border-radius: 12px;
+    color: #4b739e;
+    background: var(--yc-card-bg);
+    box-shadow:
+      4px 5px 0 rgba(185, 220, 241, 0.58),
+      0 10px 18px rgba(63, 111, 158, 0.07);
+  }
+
+  .yc-minoru-cards > a:hover {
+    border-color: rgba(118, 175, 214, 0.48);
+    box-shadow:
+      5px 6px 0 rgba(174, 215, 239, 0.68),
+      0 13px 22px rgba(63, 111, 158, 0.1);
+  }
+
+  .yc-minoru-card-number {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    background:
+      linear-gradient(
+        145deg,
+        #5b91e5,
+        #43c4bd
+      );
+    font-size: 8px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      0 4px 9px rgba(71, 145, 186, 0.13);
+  }
+
+  .yc-minoru-card-copy {
+    min-width: 0;
+    padding: 0;
+    display: grid;
+    align-content: center;
+  }
+
+  .yc-minoru-card-title {
+    display: block;
+    min-width: 0;
+  }
+
+  .yc-minoru-card-title strong {
+    display: block;
+    overflow: hidden;
+    color: #4b739e;
+    font-size: clamp(9px, 0.72vw, 11px);
+    font-weight: 850;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* No right-side symbols in the web cards. */
+  .yc-minoru-card-symbol {
+    display: none;
+  }
+
+  .yc-minoru-card-copy small {
+    display: block;
+    overflow: hidden;
+    max-width: none;
+    margin-top: 3px;
+    color: #7890a9;
+    font-size: clamp(6px, 0.48vw, 7.5px);
+    line-height: 1.22;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Short desktop heights preserve the same reference composition. */
+@media (min-width: 1121px) and (max-height: 760px) {
+  .yc-minoru-hero {
+    min-height: 560px;
+  }
+
+  .yc-minoru-brand-stage,
+  .yc-minoru-organic {
+    top: 35%;
+  }
+
+  .yc-minoru-brand-stage {
+    grid-template-columns:
+      minmax(0, 0.83fr)
+      clamp(120px, 10.5vw, 170px)
+      minmax(0, 1.17fr);
+  }
+
+  .yc-minoru-word {
+    font-size: clamp(64px, 8.7vw, 140px);
+  }
+
+  .yc-minoru-organic {
+    width: clamp(200px, 20vw, 310px);
+  }
+
+  .yc-minoru-logo-mark {
+    width: clamp(125px, 11vw, 178px);
+  }
+
+  .yc-minoru-tagline {
+    top: 63%;
+    font-size: clamp(13px, 1.15vw, 18px);
+  }
+
+  .yc-minoru-saya-star {
+    top: 10px;
+    left: clamp(540px, 58vw, 840px);
+    right: auto;
+    width: clamp(70px, 6.4vw, 90px);
+
+    transform: translateX(-50%);
+  }
+
+  .yc-minoru-info > header {
+    top: 54%;
+  }
+
+  .yc-minoru-info > header h1 {
+    font-size: clamp(25px, 2.2vw, 37px);
+  }
+
+  .yc-minoru-demo {
+    top: 54%;
+  }
+
+  .yc-minoru-cards {
+    bottom: 38px;
+  }
+
+  .yc-minoru-cards > a {
+    min-height: 50px;
+    height: 50px;
+    padding-block: 6px;
+  }
+
+  .yc-minoru-card-number {
+    width: 34px;
+    height: 34px;
+  }
+
+  .yc-minoru-marquee {
+    padding-block: 4px;
+  }
+}
+
+/* Homepage hero buttons temporarily unavailable. */
+.yc-minoru-coming-soon {
+  flex-direction: column;
+  gap: 5px;
+  cursor: default;
+  pointer-events: none;
+}
+
+.yc-minoru-blob-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+}
+
+.yc-minoru-coming-soon > small {
+  display: block;
+  color: currentColor;
+  font-size: clamp(6px, 0.52vw, 8px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+@media (max-width: 760px) {
+  .yc-minoru-coming-soon {
+    gap: 3px;
+  }
+
+  .yc-minoru-blob-line {
+    gap: 8px;
+  }
+
+  .yc-minoru-coming-soon > small {
+    font-size: clamp(5px, 1.45vw, 6.5px);
+  }
+}
+

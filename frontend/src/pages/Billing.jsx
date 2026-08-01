@@ -1787,7 +1787,7 @@ export default function Billing({ user = {}, setPage }) {
       }
 
       try {
-        window.history.replaceState({}, '', '/');
+        window.history.replaceState({}, '', '/hrms');
       } catch {
         // Ignore browser history errors.
       }
@@ -2132,7 +2132,7 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     try {
-      window.history.replaceState({}, '', '/');
+      window.history.replaceState({}, '', '/hrms');
     } catch {
       // Ignore browser history errors.
     }

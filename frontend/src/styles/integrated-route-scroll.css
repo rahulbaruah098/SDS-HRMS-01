@@ -1,0 +1,203 @@
+/*
+ * Keeps the public website's viewport behaviour isolated from HRMS routes.
+ * Import this file after styles/index.css in integrated-main.jsx.
+ */
+
+/*
+ * Public website routes use normal document-level vertical scrolling.
+ * These rules override the global smooth-scroll and overscroll restrictions
+ * only while the public website is active.
+ */
+html.yc-website-mode,
+body.yc-website-mode {
+  width: 100%;
+  min-height: 100%;
+  height: auto !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scroll-behavior: auto !important;
+  scroll-snap-type: none !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: auto !important;
+}
+
+/*
+ * Standard public routes must not inherit horizontal-page scrolling,
+ * snapping, overscroll blocking, or gesture restrictions.
+ */
+html.yc-website-mode .public-site.yc-standard-route,
+html.yc-website-mode .public-site.yc-standard-route .public-scroll-track,
+html.yc-website-mode .public-site.yc-standard-route .public-horizontal-viewport,
+html.yc-website-mode .public-site.yc-standard-route .public-horizontal-shell,
+html.yc-website-mode .public-site.yc-standard-route .public-main {
+  scroll-behavior: auto !important;
+  scroll-snap-type: none !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: auto !important;
+}
+
+/*
+ * The standard-route wrappers stay in the normal document flow so the body
+ * remains the only vertical scroll container.
+ */
+html.yc-website-mode .public-site.yc-standard-route,
+html.yc-website-mode .public-site.yc-standard-route .public-scroll-track,
+html.yc-website-mode .public-site.yc-standard-route .public-horizontal-viewport,
+html.yc-website-mode .public-site.yc-standard-route .public-horizontal-shell {
+  height: auto !important;
+  max-height: none !important;
+  overflow-y: visible !important;
+}
+
+html.yc-hrms-mode,
+body.yc-hrms-mode {
+  width: 100%;
+  min-height: 100%;
+  height: auto !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-y !important;
+}
+
+html.yc-hrms-mode #root {
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* Login must use normal document scrolling instead of fixed viewport panels. */
+html.yc-hrms-mode .yc-employee-login-page {
+  width: 100%;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-y !important;
+}
+
+html.yc-hrms-mode .yc-employee-login-page .yc-employee-login-shell {
+  height: auto !important;
+  min-height: calc(100dvh - 88px) !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+html.yc-hrms-mode
+  .yc-employee-login-page
+  .yc-login-onboarding-story,
+html.yc-hrms-mode
+  .yc-employee-login-page
+  .auth-premium-form-panel,
+html.yc-hrms-mode
+  .yc-employee-login-page
+  .auth-premium-form-card {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  overscroll-behavior: auto !important;
+  touch-action: pan-y !important;
+}
+
+/* Preserve the existing stacked mobile layout while keeping one page scrollbar. */
+@media (max-width: 820px) {
+  html.yc-hrms-mode .yc-employee-login-page .yc-employee-login-shell {
+    min-height: 0 !important;
+  }
+
+  html.yc-hrms-mode
+    .yc-employee-login-page
+    .yc-employee-login-shell
+    > .auth-premium-form-panel {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+  }
+}
+
+/*
+ * HRMS desktop shell isolation
+ *
+ * The HRMS sidebar must remain visible for the full document scroll. A sticky
+ * sidebar can stop at the boundary of an ancestor affected by the integrated
+ * website layout. On desktop, keep the existing sidebar as a fixed viewport
+ * column and offset the existing main content by the same configured width.
+ *
+ * AppLayout already defines --layout-sidebar-w, so the original sidebar width,
+ * menu contents and role-based behaviour remain unchanged.
+ */
+@media (min-width: 1101px) {
+  html.yc-hrms-mode .app-shell.layout-photo-aware {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+  }
+
+  html.yc-hrms-mode
+    .app-shell.layout-photo-aware
+    > .sidebar {
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    z-index: 70 !important;
+    width: var(--layout-sidebar-w) !important;
+    max-width: var(--layout-sidebar-w) !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    transform: none !important;
+  }
+
+  html.yc-hrms-mode
+    .app-shell.layout-photo-aware
+    > .sidebar
+    > nav {
+    min-height: 0 !important;
+    flex: 1 1 auto !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  html.yc-hrms-mode
+    .app-shell.layout-photo-aware
+    > .main {
+    box-sizing: border-box !important;
+    width: calc(100% - var(--layout-sidebar-w)) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    margin: 0 0 0 var(--layout-sidebar-w) !important;
+  }
+}
+
+/*
+ * Keep the existing AppLayout drawer behaviour unchanged on tablets and
+ * phones. The desktop content offset must be fully removed below 1101px.
+ */
+@media (max-width: 1100px) {
+  html.yc-hrms-mode .app-shell.layout-photo-aware {
+    display: block !important;
+  }
+
+  html.yc-hrms-mode
+    .app-shell.layout-photo-aware
+    > .main {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+}
+

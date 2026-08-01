@@ -1,6 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
+import AuthPageFooter from '../components/AuthPageFooter';
+import AuthWorkflowCanvas from '../components/AuthWorkflowCanvas';
+import CloudflareTurnstile from '../components/CloudflareTurnstile';
+import Brand from '../components/Brand';
+import Icon from '../components/Icon';
+import '../styles/auth-pages.css';
 
 const INITIAL_FORM = {
   company_name: '',
@@ -14,16 +21,217 @@ const INITIAL_FORM = {
   message: '',
 };
 
-const COMPANY_TYPE_OPTIONS = [
-  'Private Limited',
-  'LLP',
-  'Partnership',
-  'Proprietorship',
-  'NGO / Society',
-  'Government / Department',
-  'Startup',
-  'Other',
+const COMPANY_TYPES = [
+  ['', 'Select company type'],
+  ['Private Limited', 'Private Limited'],
+  ['Public Limited', 'Public Limited'],
+  ['LLP', 'Limited Liability Partnership'],
+  ['Partnership', 'Partnership'],
+  ['Proprietorship', 'Proprietorship'],
+  ['NGO / Society', 'NGO / Trust'],
+  ['Other', 'Other'],
 ];
+
+const STEPS = [
+  ['01', 'Apply', 'Share the company and primary contact details.'],
+  ['02', 'Verify', 'Confirm the registered company email through OTP.'],
+  ['03', 'Review', 'Superadmin reviews the verified request.'],
+  ['04', 'Access', 'Approved credentials are delivered by email.'],
+];
+
+const DEMO_PLANS = [
+  {
+    id: 'demo',
+    name: 'Demo',
+    label: '15 days',
+    note: 'Up to 10 employees · Full Premium access',
+    features: [
+      'Every Premium module unlocked',
+      'All business add-ons included',
+      'Advanced attendance, payroll and HR workflows',
+      'Performance, expenses, recruitment and alumni',
+      'SSO, API, multi-company and enterprise reporting',
+      'Saya AI included',
+    ],
+    action: ['Included in this request', '#demo-form'],
+  },
+  {
+    id: 'essential',
+    name: 'Essential',
+    label: '₹2,495/month',
+    note: 'Up to 50 employees',
+    description: 'Starter HRMS subscription for small teams.',
+    features: [
+      'Full HRMS access',
+      'Up to 50 employees',
+      'Attendance, leave, projects and employee records',
+      'Standard support',
+    ],
+    action: ['Choose Essential', '/contact?topic=essential'],
+  },
+  {
+    id: 'growth',
+    name: 'Growth',
+    label: '₹4,495/month',
+    note: 'Up to 100 employees',
+    description: 'Recommended HRMS subscription for growing companies.',
+    features: [
+      'Full HRMS access',
+      'Up to 100 employees',
+      'All operational HRMS modules',
+      'Priority support',
+    ],
+    action: ['Choose Growth', '/contact?topic=growth'],
+    featured: true,
+  },
+  {
+    id: 'premium',
+    name: 'Premium',
+    label: 'Custom',
+    note: 'Unlimited employees',
+    description: 'Custom enterprise HRMS subscription with unlimited employees.',
+    features: [
+      'Full HRMS access',
+      'Unlimited employees',
+      'All modules included',
+      'Custom onboarding and support',
+    ],
+    action: ['Contact Sales', '/contact?topic=premium'],
+  },
+];
+
+
+const PUBLIC_PAID_PLAN_CODES = ["essential", "growth", "premium"];
+
+function normalizePublicPlanCode(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+}
+
+function publicPlanAmount(plan = {}) {
+  const amount = Number(plan.amount || 0);
+
+  if (
+    plan.is_custom_pricing ||
+    plan.is_unlimited_employees ||
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    return "Custom";
+  }
+
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: plan.currency || "INR",
+      maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    }).format(amount);
+  } catch {
+    return `₹${amount.toLocaleString("en-IN")}`;
+  }
+}
+
+function publicPlanInterval(plan = {}) {
+  if (plan.is_custom_pricing) {
+    return "";
+  }
+
+  const interval = String(plan.billing_interval || "monthly")
+    .trim()
+    .toLowerCase();
+
+  const labels = {
+    monthly: "/month",
+    quarterly: "/quarter",
+    yearly: "/year",
+    annual: "/year",
+    annually: "/year",
+    one_time: " one time",
+    custom: "",
+  };
+
+  return labels[interval] ?? `/${interval.replaceAll("_", " ")}`;
+}
+
+function publicPlanEmployeeText(plan = {}) {
+  if (plan.is_unlimited_employees) {
+    return "Unlimited employees";
+  }
+
+  const limit = Number(
+    plan.included_employees ?? plan.employee_limit,
+  );
+
+  if (Number.isFinite(limit) && limit > 0) {
+    return `Up to ${limit.toLocaleString("en-IN")} employees`;
+  }
+
+  return "";
+}
+
+function mergeDemoPagePlans(payload = {}) {
+  const livePlans = Array.isArray(payload.plans)
+    ? payload.plans
+    : [];
+
+  const liveByCode = new Map(
+    livePlans.map((plan) => [
+      normalizePublicPlanCode(plan.plan_code),
+      plan,
+    ]),
+  );
+
+  return DEMO_PLANS.map((fallback) => {
+    if (fallback.id === "demo") {
+      return fallback;
+    }
+
+    const livePlan = liveByCode.get(fallback.id);
+
+    if (!livePlan) {
+      return fallback;
+    }
+
+    const features = Array.isArray(livePlan.features)
+      ? livePlan.features
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+      : [];
+
+    return {
+      ...fallback,
+      id:
+        normalizePublicPlanCode(livePlan.plan_code) ||
+        fallback.id,
+      name:
+        livePlan.display_name ||
+        livePlan.plan_name ||
+        fallback.name,
+      label: `${publicPlanAmount(livePlan)}${publicPlanInterval(livePlan)}`,
+      note:
+        publicPlanEmployeeText(livePlan) ||
+        fallback.note,
+      description:
+        livePlan.description ||
+        fallback.description,
+      features: features.length
+        ? features
+        : fallback.features,
+      featured:
+        typeof livePlan.is_recommended === "boolean"
+          ? livePlan.is_recommended
+          : fallback.featured,
+    };
+  }).filter(
+    (plan) =>
+      plan.id === "demo" ||
+      PUBLIC_PAID_PLAN_CODES.includes(plan.id),
+  );
+}
+
 
 function normalizeEmail(value = '') {
   return String(value || '').trim().toLowerCase();
@@ -41,6 +249,18 @@ function fieldValue(form, key) {
   return String(form[key] || '').trim();
 }
 
+function preparePublicPageNavigation() {
+  if ('scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+
+  window.scrollTo({
+    top: 0,
+    left: 0,
+    behavior: 'auto',
+  });
+}
+
 function getRequestStatusLabel(status = '') {
   const normalized = String(status || '').trim().toLowerCase();
 
@@ -52,39 +272,82 @@ function getRequestStatusLabel(status = '') {
   return normalized ? normalized.replace(/_/g, ' ') : 'Not Submitted';
 }
 
-function StatusPill({ status }) {
-  const normalized = String(status || '').trim().toLowerCase();
-  const className = [
-    'demo-status-pill',
-    normalized === 'approved' ? 'success' : '',
-    normalized === 'rejected' ? 'danger' : '',
-    normalized === 'pending' ? 'warning' : '',
-    normalized === 'otp_pending' ? 'info' : '',
-  ].filter(Boolean).join(' ');
+function Field({ label, note, children, wide = false }) {
+  return (
+    <label className={`demo-premium-field ${wide ? 'is-wide' : ''}`}>
+      <span>
+        <b>{label}</b>
+        {note && <small>{note}</small>}
+      </span>
 
-  return <span className={className}>{getRequestStatusLabel(status)}</span>;
+      {children}
+    </label>
+  );
 }
 
-export default function ApplyDemoRegistration() {
+function DemoRegistrationContent() {
   const alerts = useCustomAlert();
+
   const [form, setForm] = useState(INITIAL_FORM);
+  const [pricingPlans, setPricingPlans] = useState(DEMO_PLANS);
   const [otp, setOtp] = useState('');
   const [requestInfo, setRequestInfo] = useState(null);
   const [step, setStep] = useState('form');
+
   const [submitting, setSubmitting] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [resending, setResending] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
 
-  const requestId = requestInfo?.request_id || requestInfo?.id || requestInfo?._id || '';
-  const requestEmail = requestInfo?.email || requestInfo?.company_email || normalizeEmail(form.company_email);
-  const requestStatus = requestInfo?.request?.status || requestInfo?.status || '';
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileError, setTurnstileError] = useState('');
 
-  const progress = useMemo(() => {
-    if (step === 'done') return 100;
-    if (step === 'otp') return 58;
-    return 24;
-  }, [step]);
+
+  const requestId =
+    requestInfo?.request_id ||
+    requestInfo?.id ||
+    requestInfo?._id ||
+    '';
+
+  const requestEmail =
+    requestInfo?.email ||
+    requestInfo?.company_email ||
+    normalizeEmail(form.company_email);
+
+  const requestStatus =
+    requestInfo?.request?.status ||
+    requestInfo?.status ||
+    '';
+
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadPublicPricing() {
+      try {
+        const payload = await api('/billing/pricing', {
+          method: 'GET',
+          timeoutMs: 30000,
+        });
+
+        if (active) {
+          setPricingPlans(mergeDemoPagePlans(payload));
+        }
+      } catch (error) {
+        console.error('Unable to load public pricing plans.', error);
+
+        if (active) {
+          setPricingPlans(DEMO_PLANS);
+        }
+      }
+    }
+
+    loadPublicPricing();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function updateField(key, value) {
     setForm((prev) => ({
@@ -94,12 +357,16 @@ export default function ApplyDemoRegistration() {
   }
 
   function goToLogin() {
-    try {
-      window.history.pushState({}, '', '/');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    } catch {
-      window.location.href = '/';
+    window.location.href = '/login';
+  }
+
+  function goBack() {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
     }
+
+    goToLogin();
   }
 
   function validateForm() {
@@ -120,30 +387,50 @@ export default function ApplyDemoRegistration() {
     }
 
     if (!isValidEmail(companyEmail)) {
-      alerts.warning('Please enter a valid company email address.', 'Invalid Email');
+      alerts.warning(
+        'Please enter a valid company email address.',
+        'Invalid Email',
+      );
       return false;
     }
 
     if (!companyPhone) {
-      alerts.warning('Company phone number is required.', 'Missing Company Phone');
+      alerts.warning(
+        'Company phone number is required.',
+        'Missing Company Phone',
+      );
       return false;
     }
 
     if (!contactPersonName) {
-      alerts.warning('Contact person name is required.', 'Missing Contact Person');
+      alerts.warning(
+        'Contact person name is required.',
+        'Missing Contact Person',
+      );
       return false;
     }
 
     if (!contactPersonPhone) {
-      alerts.warning('Contact person phone number is required.', 'Missing Contact Phone');
+      alerts.warning(
+        'Contact person phone number is required.',
+        'Missing Contact Phone',
+      );
       return false;
     }
 
+    if (!turnstileToken) {
+      setTurnstileError(
+        'Please complete the Cloudflare verification before submitting.',
+      );
+      return false;
+    }
+
+    setTurnstileError('');
     return true;
   }
 
-  async function submitDemoRequest(e) {
-    e.preventDefault();
+  async function submitDemoRequest(event) {
+    event.preventDefault();
 
     if (!validateForm()) return;
 
@@ -168,24 +455,38 @@ export default function ApplyDemoRegistration() {
 
       setRequestInfo(data);
       setStep('otp');
+
       alerts.success(
-        data.message || 'Trial registration submitted. Please verify the OTP sent to your company email.',
+        data.message ||
+          'Trial registration submitted. Please verify the OTP sent to your company email.',
         'OTP Sent',
       );
+
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById('demo-form')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     } catch (err) {
-      alerts.error(err.message || 'Unable to submit trial registration.', 'Trial Registration Failed');
+      alerts.error(
+        err.message || 'Unable to submit trial registration.',
+        'Trial Registration Failed',
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function verifyOtp(e) {
-    e.preventDefault();
+  async function verifyOtp(event) {
+    event.preventDefault();
 
     const enteredOtp = String(otp || '').trim();
 
     if (!enteredOtp) {
-      alerts.warning('Please enter the OTP sent to your company email.', 'Missing OTP');
+      alerts.warning(
+        'Please enter the OTP sent to your company email.',
+        'Missing OTP',
+      );
       return;
     }
 
@@ -207,13 +508,19 @@ export default function ApplyDemoRegistration() {
         request_id: requestId,
         email: requestEmail,
       });
+
       setStep('done');
+
       alerts.success(
-        data.message || 'Email verified successfully. Your request is now pending Superadmin approval.',
+        data.message ||
+          'Email verified successfully. Your request is now pending Superadmin approval.',
         'Email Verified',
       );
     } catch (err) {
-      alerts.error(err.message || 'Unable to verify OTP.', 'OTP Verification Failed');
+      alerts.error(
+        err.message || 'Unable to verify OTP.',
+        'OTP Verification Failed',
+      );
     } finally {
       setVerifying(false);
     }
@@ -221,7 +528,10 @@ export default function ApplyDemoRegistration() {
 
   async function resendOtp() {
     if (!requestId && !requestEmail) {
-      alerts.warning('Demo request reference is missing. Please submit the form again.', 'Cannot Resend OTP');
+      alerts.warning(
+        'Demo request reference is missing. Please submit the form again.',
+        'Cannot Resend OTP',
+      );
       return;
     }
 
@@ -237,9 +547,15 @@ export default function ApplyDemoRegistration() {
         timeoutMs: 45000,
       });
 
-      alerts.success(data.message || 'OTP resent to the registered company email.', 'OTP Resent');
+      alerts.success(
+        data.message || 'OTP resent to the registered company email.',
+        'OTP Resent',
+      );
     } catch (err) {
-      alerts.error(err.message || 'Unable to resend OTP.', 'Resend Failed');
+      alerts.error(
+        err.message || 'Unable to resend OTP.',
+        'Resend Failed',
+      );
     } finally {
       setResending(false);
     }
@@ -252,7 +568,10 @@ export default function ApplyDemoRegistration() {
     if (requestEmail) params.set('email', requestEmail);
 
     if (!params.toString()) {
-      alerts.warning('Demo request reference is missing.', 'Cannot Check Status');
+      alerts.warning(
+        'Demo request reference is missing.',
+        'Cannot Check Status',
+      );
       return;
     }
 
@@ -272,940 +591,669 @@ export default function ApplyDemoRegistration() {
       }));
 
       const status = data?.request?.status;
+
       alerts.info(
         `Current status: ${getRequestStatusLabel(status)}.`,
         'Trial Request Status',
       );
     } catch (err) {
-      alerts.error(err.message || 'Unable to check request status.', 'Status Check Failed');
+      alerts.error(
+        err.message || 'Unable to check request status.',
+        'Status Check Failed',
+      );
     } finally {
       setCheckingStatus(false);
     }
   }
 
+  const activeProgressIndex =
+    step === 'done' ? 2 : step === 'otp' ? 1 : 0;
+
   return (
-    <div className="demo-apply-page">
-      <style>
-        {`
-          .demo-apply-page {
-            min-height: 100vh;
-            width: 100%;
-            padding: 24px;
-            background:
-              radial-gradient(circle at 9% 12%, rgba(14, 165, 233, 0.24), transparent 30%),
-              radial-gradient(circle at 86% 18%, rgba(20, 184, 166, 0.22), transparent 28%),
-              radial-gradient(circle at 50% 96%, rgba(99, 102, 241, 0.16), transparent 28%),
-              linear-gradient(135deg, #020617 0%, #0f172a 48%, #111827 100%);
-            color: #0f172a;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            position: relative;
-            overflow-x: hidden;
-          }
-
-          .demo-apply-page::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background-image:
-              linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-            background-size: 42px 42px;
-            pointer-events: none;
-            mask-image: radial-gradient(circle at center, black 0%, transparent 82%);
-          }
-
-          .demo-shell {
-            width: min(1180px, 100%);
-            display: grid;
-            grid-template-columns: 0.88fr 1.12fr;
-            gap: 24px;
-            position: relative;
-            z-index: 1;
-          }
-
-          .demo-info-panel,
-          .demo-form-panel {
-            border: 1px solid rgba(226, 232, 240, 0.18);
-            border-radius: 34px;
-            box-shadow:
-              0 32px 90px rgba(0, 0, 0, 0.34),
-              inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            overflow: hidden;
-          }
-
-          .demo-info-panel {
-            padding: 30px;
-            background: rgba(15, 23, 42, 0.70);
-            backdrop-filter: blur(24px);
-            color: #f8fafc;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            min-height: 680px;
-          }
-
-          .demo-brand-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            margin-bottom: 34px;
-          }
-
-          .demo-brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-          }
-
-          .demo-logo {
-            width: 52px;
-            height: 52px;
-            border-radius: 18px;
-            background: linear-gradient(135deg, #38bdf8, #14b8a6);
-            color: #ffffff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 950;
-            font-size: 18px;
-            box-shadow: 0 20px 46px rgba(20, 184, 166, 0.24);
-          }
-
-          .demo-brand b {
-            display: block;
-            font-size: 16px;
-            letter-spacing: -0.02em;
-          }
-
-          .demo-brand span {
-            display: block;
-            color: #94a3b8;
-            font-size: 12px;
-            margin-top: 2px;
-          }
-
-          .demo-back-btn {
-            border: 1px solid rgba(226, 232, 240, 0.16);
-            background: rgba(255, 255, 255, 0.06);
-            color: #e2e8f0;
-            border-radius: 14px;
-            padding: 10px 13px;
-            font-weight: 850;
-            font-size: 12px;
-            cursor: pointer;
-            transition: 0.2s ease;
-          }
-
-          .demo-back-btn:hover {
-            transform: translateY(-1px);
-            background: rgba(255, 255, 255, 0.10);
-          }
-
-          .demo-title-kicker {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 11px;
-            border-radius: 999px;
-            background: rgba(14, 165, 233, 0.12);
-            border: 1px solid rgba(125, 211, 252, 0.20);
-            color: #bae6fd;
-            font-size: 11px;
-            font-weight: 900;
-            margin-bottom: 14px;
-          }
-
-          .demo-info-panel h1 {
-            margin: 0;
-            font-size: clamp(32px, 4.2vw, 56px);
-            line-height: 0.98;
-            letter-spacing: -0.07em;
-          }
-
-          .demo-info-panel h1 span {
-            background: linear-gradient(135deg, #67e8f9, #5eead4, #bfdbfe);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-          }
-
-          .demo-info-panel p {
-            margin: 18px 0 0;
-            color: #cbd5e1;
-            font-size: 14px;
-            line-height: 1.7;
-            max-width: 520px;
-          }
-
-          .demo-benefit-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-            margin-top: 30px;
-          }
-
-          .demo-benefit-card {
-            border: 1px solid rgba(226, 232, 240, 0.12);
-            background: rgba(255, 255, 255, 0.055);
-            border-radius: 22px;
-            padding: 16px;
-          }
-
-          .demo-benefit-card i {
-            width: 34px;
-            height: 34px;
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(14, 165, 233, 0.16);
-            margin-bottom: 12px;
-            font-style: normal;
-          }
-
-          .demo-benefit-card b {
-            display: block;
-            font-size: 13px;
-            color: #f8fafc;
-            margin-bottom: 4px;
-          }
-
-          .demo-benefit-card span {
-            display: block;
-            font-size: 11.5px;
-            line-height: 1.45;
-            color: #94a3b8;
-          }
-
-          .demo-flow-box {
-            margin-top: 28px;
-            border: 1px solid rgba(45, 212, 191, 0.20);
-            background: rgba(15, 118, 110, 0.12);
-            border-radius: 24px;
-            padding: 16px;
-          }
-
-          .demo-flow-box b {
-            display: block;
-            color: #ccfbf1;
-            font-size: 13px;
-            margin-bottom: 10px;
-          }
-
-          .demo-flow-line {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            align-items: center;
-            color: #e0f2fe;
-            font-size: 11px;
-            font-weight: 850;
-          }
-
-          .demo-flow-line span {
-            padding: 7px 9px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(226, 232, 240, 0.11);
-          }
-
-          .demo-form-panel {
-            background: rgba(255, 255, 255, 0.96);
-            backdrop-filter: blur(24px);
-          }
-
-          .demo-form-header {
-            padding: 28px 28px 18px;
-            border-bottom: 1px solid #e2e8f0;
-            background:
-              radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 35%),
-              linear-gradient(135deg, #ffffff, #f8fafc);
-          }
-
-          .demo-form-header-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-          }
-
-          .demo-form-header h2 {
-            margin: 0;
-            font-size: 24px;
-            letter-spacing: -0.045em;
-            color: #0f172a;
-          }
-
-          .demo-form-header p {
-            margin: 7px 0 0;
-            color: #64748b;
-            font-size: 13px;
-            line-height: 1.55;
-          }
-
-          .demo-status-pill {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 8px 11px;
-            border-radius: 999px;
-            background: #eef2ff;
-            color: #4338ca;
-            font-size: 11px;
-            font-weight: 950;
-            white-space: nowrap;
-            text-transform: capitalize;
-          }
-
-          .demo-status-pill.success {
-            background: #dcfce7;
-            color: #166534;
-          }
-
-          .demo-status-pill.danger {
-            background: #fee2e2;
-            color: #991b1b;
-          }
-
-          .demo-status-pill.warning {
-            background: #fef3c7;
-            color: #92400e;
-          }
-
-          .demo-status-pill.info {
-            background: #e0f2fe;
-            color: #0369a1;
-          }
-
-          .demo-progress-track {
-            margin-top: 18px;
-            width: 100%;
-            height: 9px;
-            border-radius: 999px;
-            background: #e2e8f0;
-            overflow: hidden;
-          }
-
-          .demo-progress-fill {
-            height: 100%;
-            border-radius: inherit;
-            background: linear-gradient(90deg, #0284c7, #14b8a6);
-            transition: width 0.28s ease;
-          }
-
-          .demo-step-labels {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-top: 10px;
-            color: #94a3b8;
-            font-size: 10.5px;
-            font-weight: 850;
-          }
-
-          .demo-step-labels span:nth-child(2) {
-            text-align: center;
-          }
-
-          .demo-step-labels span:nth-child(3) {
-            text-align: right;
-          }
-
-          .demo-form-body {
-            padding: 26px 28px 28px;
-          }
-
-          .demo-form-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 16px;
-          }
-
-          .demo-field {
-            display: grid;
-            gap: 8px;
-          }
-
-          .demo-field.full {
-            grid-column: 1 / -1;
-          }
-
-          .demo-field label {
-            font-size: 12px;
-            color: #334155;
-            font-weight: 950;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-          }
-
-          .demo-field label small {
-            color: #94a3b8;
-            font-size: 10px;
-            font-weight: 850;
-          }
-
-          .demo-input,
-          .demo-select,
-          .demo-textarea {
-            width: 100%;
-            border: 1px solid #cbd5e1;
-            background: #ffffff;
-            border-radius: 16px;
-            padding: 13px 14px;
-            outline: none;
-            color: #0f172a;
-            font-size: 13px;
-            font-weight: 750;
-            transition: 0.18s ease;
-          }
-
-          .demo-textarea {
-            min-height: 92px;
-            resize: vertical;
-            line-height: 1.5;
-          }
-
-          .demo-input:focus,
-          .demo-select:focus,
-          .demo-textarea:focus {
-            border-color: #0284c7;
-            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.13);
-          }
-
-          .demo-help-note {
-            margin-top: 16px;
-            padding: 14px;
-            border-radius: 18px;
-            border: 1px solid #bae6fd;
-            background: #f0f9ff;
-            color: #0369a1;
-            font-size: 12px;
-            line-height: 1.55;
-            font-weight: 760;
-          }
-
-          .demo-action-row {
-            margin-top: 20px;
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-          }
-
-          .demo-primary-btn,
-          .demo-secondary-btn,
-          .demo-ghost-btn {
-            border: 0;
-            border-radius: 16px;
-            padding: 13px 16px;
-            font-weight: 950;
-            font-size: 12px;
-            cursor: pointer;
-            transition: 0.2s ease;
-          }
-
-          .demo-primary-btn {
-            color: #ffffff;
-            background: linear-gradient(135deg, #0f766e, #0284c7);
-            box-shadow: 0 16px 32px rgba(14, 116, 144, 0.24);
-          }
-
-          .demo-primary-btn:hover:not(:disabled),
-          .demo-secondary-btn:hover:not(:disabled),
-          .demo-ghost-btn:hover:not(:disabled) {
-            transform: translateY(-1px);
-          }
-
-          .demo-primary-btn:disabled,
-          .demo-secondary-btn:disabled,
-          .demo-ghost-btn:disabled {
-            opacity: 0.68;
-            cursor: not-allowed;
-          }
-
-          .demo-secondary-btn {
-            color: #0f172a;
-            background: #e0f2fe;
-            border: 1px solid #bae6fd;
-          }
-
-          .demo-ghost-btn {
-            color: #475569;
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-          }
-
-          .demo-otp-card,
-          .demo-done-card {
-            border: 1px solid #e2e8f0;
-            border-radius: 24px;
-            background:
-              radial-gradient(circle at top right, rgba(20, 184, 166, 0.13), transparent 34%),
-              #ffffff;
-            padding: 22px;
-          }
-
-          .demo-otp-icon,
-          .demo-done-icon {
-            width: 62px;
-            height: 62px;
-            border-radius: 22px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 26px;
-            background: linear-gradient(135deg, #ecfeff, #e0f2fe);
-            border: 1px solid #bae6fd;
-            margin-bottom: 16px;
-          }
-
-          .demo-otp-card h3,
-          .demo-done-card h3 {
-            margin: 0;
-            color: #0f172a;
-            font-size: 22px;
-            letter-spacing: -0.04em;
-          }
-
-          .demo-otp-card p,
-          .demo-done-card p {
-            margin: 10px 0 0;
-            color: #64748b;
-            font-size: 13px;
-            line-height: 1.6;
-          }
-
-          .demo-otp-input {
-            margin-top: 18px;
-            width: min(280px, 100%);
-            border: 1px solid #94a3b8;
-            background: #ffffff;
-            border-radius: 18px;
-            padding: 16px 18px;
-            outline: none;
-            color: #0f172a;
-            font-size: 24px;
-            font-weight: 950;
-            letter-spacing: 0.32em;
-            text-align: center;
-          }
-
-          .demo-summary-grid {
-            margin-top: 18px;
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-          }
-
-          .demo-summary-item {
-            border: 1px solid #e2e8f0;
-            background: #f8fafc;
-            border-radius: 18px;
-            padding: 13px;
-          }
-
-          .demo-summary-item span {
-            display: block;
-            color: #94a3b8;
-            font-size: 10.5px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin-bottom: 4px;
-          }
-
-          .demo-summary-item b {
-            display: block;
-            color: #0f172a;
-            font-size: 12.5px;
-            word-break: break-word;
-          }
-
-          .demo-final-note {
-            margin-top: 18px;
-            border-radius: 18px;
-            padding: 14px;
-            background: #ecfdf5;
-            border: 1px solid #bbf7d0;
-            color: #166534;
-            font-size: 12px;
-            line-height: 1.55;
-            font-weight: 800;
-          }
-
-          @media (max-width: 980px) {
-            .demo-shell {
-              grid-template-columns: 1fr;
-            }
-
-            .demo-info-panel {
-              min-height: auto;
-            }
-          }
-
-          @media (max-width: 720px) {
-            .demo-apply-page {
-              padding: 14px;
-              align-items: stretch;
-            }
-
-            .demo-info-panel,
-            .demo-form-panel {
-              border-radius: 24px;
-            }
-
-            .demo-info-panel,
-            .demo-form-header,
-            .demo-form-body {
-              padding: 20px;
-            }
-
-            .demo-brand-row,
-            .demo-form-header-top {
-              flex-direction: column;
-              align-items: flex-start;
-            }
-
-            .demo-benefit-grid,
-            .demo-form-grid,
-            .demo-summary-grid {
-              grid-template-columns: 1fr;
-            }
-
-            .demo-field.full {
-              grid-column: auto;
-            }
-
-            .demo-action-row {
-              justify-content: stretch;
-            }
-
-            .demo-primary-btn,
-            .demo-secondary-btn,
-            .demo-ghost-btn {
-              width: 100%;
-            }
-          }
-        `}
-      </style>
-
-      <main className="demo-shell">
-        <section className="demo-info-panel">
-          <div>
-            <div className="demo-brand-row">
-              <div className="demo-brand">
-                <div className="demo-logo">YC</div>
-                <div>
-                  <b>YourComate HRMS</b>
-                  <span>SaaS trial registration</span>
-                </div>
-              </div>
-
-              <button type="button" className="demo-back-btn" onClick={goToLogin}>
-                ← Back to Login
-              </button>
-            </div>
-
-            <div className="demo-title-kicker">✨ Company trial onboarding</div>
+    <div className="app-page demo-premium-page">
+      <header className="auth-premium-header demo-premium-header">
+        <Link
+          to="/"
+          className="auth-mobile-back-link"
+          aria-label="Back to website"
+        >
+          <span aria-hidden="true">←</span>
+        </Link>
+
+        <Brand compact />
+
+        <div>
+          <Link to="/" className="auth-premium-link">
+            Back to website
+          </Link>
+
+          <button
+            type="button"
+            className="button button-ghost button-small"
+            onClick={goToLogin}
+          >
+            LOGIN
+          </button>
+        </div>
+      </header>
+
+      <main className="demo-premium-shell" id="demo-form">
+        <aside className="demo-premium-story">
+          <div className="demo-premium-story-copy">
             <h1>
-              Apply for your <span>15-day full-access HRMS trial.</span>
+              See the workday
+              <em> before you commit.</em>
             </h1>
+
             <p>
-              Register your company details, verify your email by OTP, and wait for Superadmin approval.
-              After approval, your company admin login will be generated and your 15-day full-access trial will start.
+              Submit your company details, verify the registered email and
+              receive a 15-day YourComate workspace with every Premium feature
+              unlocked after approval.
             </p>
 
-            <div className="demo-benefit-grid">
-              <div className="demo-benefit-card">
-                <i>📧</i>
-                <b>OTP email verification</b>
-                <span>Company email is verified through SMTP before the request goes to Superadmin.</span>
-              </div>
+            <div className="demo-premium-facts">
+              <span>
+                <Icon name="email" />
+                <b>Email OTP</b>
+                <small>Verified request</small>
+              </span>
 
-              <div className="demo-benefit-card">
-                <i>✅</i>
-                <b>Superadmin approval</b>
-                <span>Only approved companies receive trial login credentials.</span>
-              </div>
+              <span>
+                <Icon name="calendar" />
+                <b>15-day trial</b>
+                <small>Up to 10 employees</small>
+              </span>
 
-              <div className="demo-benefit-card">
-                <i>👥</i>
-                <b>Full trial access</b>
-                <span>All HRMS modules are available during the 15-day trial.</span>
-              </div>
-
-              <div className="demo-benefit-card">
-                <i>📊</i>
-                <b>Upgrade after trial</b>
-                <span>After 15 days, payment is required to continue using HRMS.</span>
-              </div>
+              <span>
+                <Icon name="sparkle" />
+                <b>Full Premium access</b>
+                <small>Every module and add-on unlocked</small>
+              </span>
             </div>
           </div>
 
-          <div className="demo-flow-box">
-            <b>Trial approval flow</b>
-            <div className="demo-flow-line">
-              <span>Apply</span>
-              <span>OTP</span>
-              <span>Verify</span>
-              <span>Superadmin Approval</span>
-              <span>Credentials Email</span>
-              <span>15-Day Trial</span>
+          <AuthWorkflowCanvas variant="demo" steps={STEPS} />
+        </aside>
+
+        <section className="demo-premium-form-panel">
+          <header className="demo-premium-form-heading">
+            <div>
+              <small>
+                {step === 'form'
+                  ? 'Step 01 · Company details'
+                  : step === 'otp'
+                    ? 'Step 02 · Email verification'
+                    : 'Step 03 · Approval pending'}
+              </small>
+
+              <h2>
+                {step === 'form'
+                  ? 'Start your demo request.'
+                  : step === 'otp'
+                    ? 'Verify the company email.'
+                    : 'Your request is verified.'}
+              </h2>
+
+              <p>
+                {step === 'form'
+                  ? 'Required fields are marked below. OTP and final credentials are sent to the registered company email.'
+                  : step === 'otp'
+                    ? `Enter the OTP sent to ${requestEmail}.`
+                    : 'The verified request is now waiting for Superadmin review.'}
+              </p>
             </div>
+
+            <span>
+              <i />
+              {requestStatus
+                ? getRequestStatusLabel(requestStatus)
+                : step === 'form'
+                  ? 'Secure submission'
+                  : step === 'otp'
+                    ? 'OTP pending'
+                    : 'Verification complete'}
+            </span>
+          </header>
+
+          <div
+            className="demo-premium-progress"
+            aria-label="Demo request progress"
+          >
+            {STEPS.slice(0, 3).map(([number, title], index) => (
+              <span
+                className={index <= activeProgressIndex ? 'active' : ''}
+                key={number}
+              >
+                <b>{number}</b>
+                <small>{title}</small>
+              </span>
+            ))}
           </div>
-        </section>
 
-        <section className="demo-form-panel">
-          <div className="demo-form-header">
-            <div className="demo-form-header-top">
-              <div>
-                <h2>Apply for Trial Registration</h2>
-                <p>
-                  Fill the company details carefully. The OTP and final login credentials will be sent to the registered company email.
-                </p>
-              </div>
+          {step === 'form' && (
+            <form
+              className="demo-premium-form"
+              onSubmit={submitDemoRequest}
+              noValidate
+            >
+              <fieldset>
+                <legend>
+                  <span>
+                    <Icon name="building" />
+                  </span>
 
-              <StatusPill status={requestStatus || step} />
-            </div>
-
-            <div className="demo-progress-track">
-              <div className="demo-progress-fill" style={{ width: `${progress}%` }} />
-            </div>
-            <div className="demo-step-labels">
-              <span>Company Details</span>
-              <span>OTP Verify</span>
-              <span>Approval Pending</span>
-            </div>
-          </div>
-
-          <div className="demo-form-body">
-            {step === 'form' && (
-              <form onSubmit={submitDemoRequest}>
-                <div className="demo-form-grid">
-                  <div className="demo-field">
-                    <label>
-                      Company Name <small>required</small>
-                    </label>
-                    <input
-                      className="demo-input"
-                      value={form.company_name}
-                      placeholder="Example: Rahul Baruah Private Limited"
-                      onChange={(e) => updateField('company_name', e.target.value)}
-                    />
+                  <div>
+                    <small>Section 01</small>
+                    <strong>Company identity</strong>
                   </div>
+                </legend>
 
-                  <div className="demo-field">
-                    <label>
-                      Company Email <small>OTP will be sent here</small>
-                    </label>
+                <div className="demo-premium-grid">
+                  <Field label="Company name" note="Required">
                     <input
-                      className="demo-input"
+                      type="text"
+                      name="company_name"
+                      value={form.company_name}
+                      placeholder="Your Company Private Limited"
+                      autoComplete="organization"
+                      required
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('company_name', event.target.value)
+                      }
+                    />
+                  </Field>
+
+                  <Field label="Company email" note="OTP is sent here">
+                    <input
                       type="email"
+                      name="company_email"
                       value={form.company_email}
                       placeholder="company@example.com"
-                      onChange={(e) => updateField('company_email', e.target.value)}
+                      autoComplete="email"
+                      required
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('company_email', event.target.value)
+                      }
                     />
-                  </div>
+                  </Field>
 
-                  <div className="demo-field">
-                    <label>
-                      Company Phone <small>required</small>
-                    </label>
+                  <Field label="Company phone" note="Required">
                     <input
-                      className="demo-input"
+                      type="tel"
+                      name="company_phone"
                       value={form.company_phone}
                       placeholder="Company phone number"
-                      onChange={(e) => updateField('company_phone', e.target.value)}
+                      autoComplete="tel"
+                      inputMode="tel"
+                      required
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('company_phone', event.target.value)
+                      }
                     />
-                  </div>
+                  </Field>
 
-                  <div className="demo-field">
-                    <label>
-                      Company Type <small>optional</small>
-                    </label>
+                  <Field label="Company type" note="Optional">
                     <select
-                      className="demo-select"
+                      name="company_type"
                       value={form.company_type}
-                      onChange={(e) => updateField('company_type', e.target.value)}
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('company_type', event.target.value)
+                      }
                     >
-                      <option value="">Select company type</option>
-                      {COMPANY_TYPE_OPTIONS.map((option) => (
-                        <option key={option} value={option}>{option}</option>
+                      {COMPANY_TYPES.map(([value, label]) => (
+                        <option value={value} key={value || 'empty'}>
+                          {label}
+                        </option>
                       ))}
                     </select>
-                  </div>
+                  </Field>
 
-                  <div className="demo-field">
-                    <label>
-                      Contact Person Name <small>required</small>
-                    </label>
+                  <Field label="Company address" note="Optional" wide>
+                    <textarea
+                      name="company_address"
+                      value={form.company_address}
+                      placeholder="Enter the registered company address"
+                      autoComplete="street-address"
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('company_address', event.target.value)
+                      }
+                    />
+                  </Field>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>
+                  <span>
+                    <Icon name="people" />
+                  </span>
+
+                  <div>
+                    <small>Section 02</small>
+                    <strong>Primary contact</strong>
+                  </div>
+                </legend>
+
+                <div className="demo-premium-grid">
+                  <Field label="Contact person name" note="Required">
                     <input
-                      className="demo-input"
+                      type="text"
+                      name="contact_person_name"
                       value={form.contact_person_name}
                       placeholder="Primary contact person"
-                      onChange={(e) => updateField('contact_person_name', e.target.value)}
+                      autoComplete="name"
+                      required
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField(
+                          'contact_person_name',
+                          event.target.value,
+                        )
+                      }
                     />
-                  </div>
+                  </Field>
 
-                  <div className="demo-field">
-                    <label>
-                      Contact Person Phone <small>required</small>
-                    </label>
+                  <Field label="Contact person phone" note="Required">
                     <input
-                      className="demo-input"
+                      type="tel"
+                      name="contact_person_phone"
                       value={form.contact_person_phone}
                       placeholder="Contact person phone"
-                      onChange={(e) => updateField('contact_person_phone', e.target.value)}
+                      autoComplete="tel"
+                      inputMode="tel"
+                      required
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField(
+                          'contact_person_phone',
+                          event.target.value,
+                        )
+                      }
                     />
-                  </div>
+                  </Field>
+                </div>
+              </fieldset>
 
-                  <div className="demo-field">
-                    <label>
-                      Expected Employee Count <small>optional</small>
-                    </label>
+              <fieldset>
+                <legend>
+                  <span>
+                    <Icon name="sparkle" />
+                  </span>
+
+                  <div>
+                    <small>Section 03</small>
+                    <strong>Evaluation needs</strong>
+                  </div>
+                </legend>
+
+                <div className="demo-premium-grid">
+                  <Field
+                    label="Expected employee count"
+                    note="Optional"
+                  >
                     <input
-                      className="demo-input"
                       type="number"
-                      min="1"
+                      name="requested_employee_count"
                       value={form.requested_employee_count}
                       placeholder="Example: 25"
-                      onChange={(e) => updateField('requested_employee_count', e.target.value)}
+                      min="1"
+                      inputMode="numeric"
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField(
+                          'requested_employee_count',
+                          event.target.value,
+                        )
+                      }
                     />
-                  </div>
+                  </Field>
 
-                  <div className="demo-field full">
-                    <label>
-                      Company Address <small>optional</small>
-                    </label>
+                  <Field
+                    label="Message or requirement"
+                    note="Optional"
+                    wide
+                  >
                     <textarea
-                      className="demo-textarea"
-                      value={form.company_address}
-                      placeholder="Enter registered company address"
-                      onChange={(e) => updateField('company_address', e.target.value)}
-                    />
-                  </div>
-
-                  <div className="demo-field full">
-                    <label>
-                      Message / Requirement <small>optional</small>
-                    </label>
-                    <textarea
-                      className="demo-textarea"
+                      name="message"
                       value={form.message}
-                      placeholder="Tell us briefly why your company wants to use YourComate HRMS"
-                      onChange={(e) => updateField('message', e.target.value)}
+                      placeholder="Tell us what your organisation wants to evaluate"
+                      disabled={submitting}
+                      onChange={(event) =>
+                        updateField('message', event.target.value)
+                      }
                     />
-                  </div>
+                  </Field>
                 </div>
+              </fieldset>
 
-                <div className="demo-help-note">
-                  After submission, an OTP will be sent to the company email. Your request will go to Superadmin only after OTP verification.
-                </div>
+              <CloudflareTurnstile
+                onVerify={(token) => {
+                  setTurnstileToken(token);
+                  setTurnstileError('');
+                }}
+                onExpire={() => {
+                  setTurnstileToken('');
+                  setTurnstileError(
+                    'Cloudflare verification expired. Please verify again.',
+                  );
+                }}
+              />
 
-                <div className="demo-action-row">
-                  <button type="button" className="demo-ghost-btn" onClick={goToLogin}>
-                    Cancel
-                  </button>
-                  <button type="submit" className="demo-primary-btn" disabled={submitting}>
-                    {submitting ? 'Sending OTP...' : 'Submit & Send OTP'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {step === 'otp' && (
-              <form className="demo-otp-card" onSubmit={verifyOtp}>
-                <div className="demo-otp-icon">📧</div>
-                <h3>Verify company email</h3>
-                <p>
-                  We have sent an OTP to <b>{requestEmail}</b>. Enter it below to submit the request for Superadmin approval.
+              {turnstileError && (
+                <p
+                  className="demo-premium-verification-error"
+                  role="alert"
+                >
+                  <Icon name="warning" />
+                  {turnstileError}
                 </p>
+              )}
 
-                <input
-                  className="demo-otp-input"
-                  value={otp}
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="OTP"
-                  onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
-                />
+              <div className="demo-premium-information">
+                <Icon name="email" />
 
-                <div className="demo-summary-grid">
-                  <div className="demo-summary-item">
-                    <span>Company</span>
-                    <b>{fieldValue(form, 'company_name')}</b>
-                  </div>
-                  <div className="demo-summary-item">
-                    <span>Request ID</span>
-                    <b>{requestId || 'Generated'}</b>
-                  </div>
-                </div>
-
-                <div className="demo-action-row">
-                  <button type="button" className="demo-ghost-btn" onClick={() => setStep('form')}>
-                    Edit Details
-                  </button>
-                  <button type="button" className="demo-secondary-btn" disabled={resending} onClick={resendOtp}>
-                    {resending ? 'Resending...' : 'Resend OTP'}
-                  </button>
-                  <button type="submit" className="demo-primary-btn" disabled={verifying}>
-                    {verifying ? 'Verifying...' : 'Verify OTP'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {step === 'done' && (
-              <div className="demo-done-card">
-                <div className="demo-done-icon">✅</div>
-                <h3>Request sent to Superadmin</h3>
                 <p>
-                  Your company email has been verified. The request is now waiting for Superadmin approval.
-                  Once approved, the generated admin email and password will be sent to the registered company email.
+                  After submission, an OTP is sent to the company email. The
+                  request enters the Superadmin review queue only after
+                  successful verification.
                 </p>
-
-                <div className="demo-summary-grid">
-                  <div className="demo-summary-item">
-                    <span>Company</span>
-                    <b>{requestInfo?.request?.company_name || fieldValue(form, 'company_name')}</b>
-                  </div>
-                  <div className="demo-summary-item">
-                    <span>Registered Email</span>
-                    <b>{requestInfo?.request?.company_email || requestEmail}</b>
-                  </div>
-                  <div className="demo-summary-item">
-                    <span>Status</span>
-                    <b>{getRequestStatusLabel(requestInfo?.request?.status || 'pending')}</b>
-                  </div>
-                  <div className="demo-summary-item">
-                    <span>Trial Access After Approval</span>
-                    <b>15 days / full HRMS access</b>
-                  </div>
-                </div>
-
-                <div className="demo-final-note">
-                  Trial access starts only after approval. The approved company will receive login credentials like initials@yourcomate.com and initials@1234. After 15 days, payment converts the trial company into an official registered paid company.
-                </div>
-
-                <div className="demo-action-row">
-                  <button type="button" className="demo-secondary-btn" disabled={checkingStatus} onClick={checkStatus}>
-                    {checkingStatus ? 'Checking...' : 'Check Status'}
-                  </button>
-                  <button type="button" className="demo-primary-btn" onClick={goToLogin}>
-                    Back to Login
-                  </button>
-                </div>
               </div>
-            )}
-          </div>
+
+              <div className="demo-premium-actions">
+                <button
+                  className="button button-ghost"
+                  type="button"
+                  disabled={submitting}
+                  onClick={goBack}
+                >
+                  Cancel and go back
+                </button>
+
+                <button
+                  className="button button-primary"
+                  type="submit"
+                  disabled={submitting || !turnstileToken}
+                >
+                  {submitting ? 'Submitting…' : 'Submit and send OTP'}
+                  <Icon name="arrow" />
+                </button>
+              </div>
+            </form>
+          )}
+
+          {step === 'otp' && (
+            <form
+              className="demo-premium-form"
+              onSubmit={verifyOtp}
+              noValidate
+            >
+              <fieldset>
+                <legend>
+                  <span>
+                    <Icon name="email" />
+                  </span>
+
+                  <div>
+                    <small>Section 04</small>
+                    <strong>Email verification</strong>
+                  </div>
+                </legend>
+
+                <div className="demo-premium-grid">
+                  <Field
+                    label="One-time password"
+                    note={`Sent to ${requestEmail}`}
+                    wide
+                  >
+                    <input
+                      type="text"
+                      name="otp"
+                      value={otp}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={10}
+                      placeholder="Enter OTP"
+                      required
+                      disabled={verifying}
+                      onChange={(event) =>
+                        setOtp(
+                          event.target.value.replace(/[^0-9]/g, ''),
+                        )
+                      }
+                    />
+                  </Field>
+                </div>
+              </fieldset>
+
+              <div className="demo-premium-information">
+                <Icon name="shield" />
+
+                <p>
+                  Company: <b>{fieldValue(form, 'company_name')}</b>
+                  <br />
+                  Request ID: <b>{requestId || 'Generated'}</b>
+                </p>
+              </div>
+
+              <div className="demo-premium-actions">
+                <button
+                  className="button button-ghost"
+                  type="button"
+                  disabled={verifying || resending}
+                  onClick={() => setStep('form')}
+                >
+                  Edit details
+                </button>
+
+                <button
+                  className="button button-ghost"
+                  type="button"
+                  disabled={resending || verifying}
+                  onClick={resendOtp}
+                >
+                  {resending ? 'Resending…' : 'Resend OTP'}
+                </button>
+
+                <button
+                  className="button button-primary"
+                  type="submit"
+                  disabled={verifying || resending}
+                >
+                  {verifying ? 'Verifying…' : 'Verify OTP'}
+                  <Icon name="arrow" />
+                </button>
+              </div>
+            </form>
+          )}
+
+          {step === 'done' && (
+            <div className="demo-premium-form">
+              <fieldset>
+                <legend>
+                  <span>
+                    <Icon name="check" />
+                  </span>
+
+                  <div>
+                    <small>Verification complete</small>
+                    <strong>Request sent to Superadmin</strong>
+                  </div>
+                </legend>
+
+                <div className="demo-premium-information">
+                  <Icon name="email" />
+
+                  <p>
+                    Your company email has been verified. The request is now
+                    waiting for Superadmin approval. Once approved, the
+                    generated admin email and password will be sent to the
+                    registered company email.
+                  </p>
+                </div>
+
+                <div className="demo-premium-grid">
+                  <Field label="Company">
+                    <input
+                      value={
+                        requestInfo?.request?.company_name ||
+                        fieldValue(form, 'company_name')
+                      }
+                      readOnly
+                    />
+                  </Field>
+
+                  <Field label="Registered email">
+                    <input
+                      value={
+                        requestInfo?.request?.company_email ||
+                        requestEmail
+                      }
+                      readOnly
+                    />
+                  </Field>
+
+                  <Field label="Status">
+                    <input
+                      value={getRequestStatusLabel(
+                        requestInfo?.request?.status || 'pending',
+                      )}
+                      readOnly
+                    />
+                  </Field>
+
+                  <Field label="Trial access after approval">
+                    <input
+                      value="15 days / full HRMS access"
+                      readOnly
+                    />
+                  </Field>
+                </div>
+              </fieldset>
+
+              <div className="demo-premium-information">
+                <Icon name="sparkle" />
+
+                <p>
+                  Trial access starts only after approval. The approved company
+                  will receive generated login credentials by email. After 15
+                  days, payment converts the trial company into an official
+                  registered paid company.
+                </p>
+              </div>
+
+              <div className="demo-premium-actions">
+                <button
+                  className="button button-ghost"
+                  type="button"
+                  disabled={checkingStatus}
+                  onClick={checkStatus}
+                >
+                  {checkingStatus ? 'Checking…' : 'Check status'}
+                </button>
+
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={goToLogin}
+                >
+                  Back to login
+                  <Icon name="arrow" />
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </main>
+
+      <section
+        className="demo-pricing-extension"
+        aria-labelledby="demo-pricing-title"
+      >
+        <div className="page-width demo-pricing-content">
+          <header className="demo-pricing-heading">
+            <div>
+              <span className="public-kicker">
+                <Icon name="chart" /> Pricing preview
+              </span>
+
+              <h2 id="demo-pricing-title">
+                Estimate the plan that fits after your demo.
+              </h2>
+            </div>
+
+            <p>
+              Adjust the employee count to compare the published Essential and
+              Growth monthly estimates, then review all four access options.
+            </p>
+          </header>
+
+          <div className="demo-plan-grid">
+            {pricingPlans.map((plan) => (
+              <article
+                className={`demo-plan-card ${
+                  plan.featured ? 'is-featured' : ''
+                }`}
+                key={plan.name}
+              >
+                {plan.featured && (
+                  <b className="demo-plan-badge">Recommended</b>
+                )}
+
+                <header>
+                  <small>{plan.note}</small>
+                  <h3>{plan.name}</h3>
+                  <strong>{plan.label}</strong>
+                </header>
+
+                <ul>
+                  {plan.features.map((feature) => (
+                    <li key={feature}>
+                      <Icon name="check" />
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+
+                {plan.action[1].startsWith('#') ? (
+                  <a
+                    className="button button-ghost"
+                    href={plan.action[1]}
+                  >
+                    {plan.action[0]}
+                  </a>
+                ) : (
+                  <a
+                    className={`button ${
+                      plan.featured
+                        ? 'button-primary'
+                        : 'button-ghost'
+                    }`}
+                    href={plan.action[1]}
+                    onClick={preparePublicPageNavigation}
+                  >
+                    {plan.action[0]}
+                  </a>
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <AuthPageFooter />
     </div>
+  );
+}
+
+export default function ApplyDemoRegistration() {
+  return (
+    <BrowserRouter>
+      <DemoRegistrationContent />
+    </BrowserRouter>
   );
 }

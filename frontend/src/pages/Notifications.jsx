@@ -802,16 +802,14 @@ export default function Notifications({ setPage } = {}) {
 
     try {
       const routeMap = {
-        billing: '/billing',
-        subscription_expired: '/subscription-expired',
-        companies: '/companies',
-        demo_requests: '/demo-requests',
-        premium_requests: '/premium-requests',
-        subscriptions: '/subscriptions',
-        notifications: '/notifications',
+        billing: '/hrms/billing',
+        subscription_expired: '/hrms/subscription-expired',
+        premium_requests: '/hrms/premium-requests',
       };
 
-      window.history.pushState({}, '', routeMap[normalizedPage] || '/');
+      const nextPath = routeMap[normalizedPage] || '/hrms';
+
+      window.history.pushState({}, '', nextPath);
     } catch {
       // Ignore browser history errors.
     }
