@@ -30,7 +30,10 @@ EMPLOYEE_CAPABILITY_ROLES = {
 }
 
 ACCESS_TOKEN_MINUTES = 30
-REFRESH_SESSION_DAYS = 180
+
+# Refresh sessions remain valid until the user explicitly logs out,
+# the account is disabled/deleted, or an administrator revokes the session.
+REFRESH_SESSION_DAYS = None
 
 def safe_object_id(value):
     try:
@@ -159,9 +162,12 @@ def hash_refresh_token(token):
 
 def refresh_session_expiry():
     """
-    Returns the MongoDB expiry time for the refresh session.
+    Persistent mobile sessions do not expire automatically.
+
+    The session remains valid until logout, account deactivation/deletion,
+    or explicit administrative revocation.
     """
-    return now_utc() + timedelta(days=REFRESH_SESSION_DAYS)
+    return None
 
 def issue_access_token(user):
     """

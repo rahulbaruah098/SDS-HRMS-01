@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, g, current_app
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -801,7 +802,7 @@ def create_auth_session(db, user, login_data=None):
         "created_at": current_time,
         "updated_at": current_time,
         "last_used_at": current_time,
-        "expires_at": refresh_session_expiry(),
+        "expires_at": None,
         "revoked_at": None,
     })
 
@@ -876,13 +877,182 @@ def login():
         "refresh_token": refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": REFRESH_SESSION_DAYS * 24 * 60 * 60,
+        "refresh_expires_in": None,
         "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
         "tenant": tenant_payload["tenant"],
         "subscription": tenant_payload["subscription"],
         "is_platform_superadmin": tenant_payload["is_platform_superadmin"],
     })
+
+
+@auth_bp.post("/refresh")
+def refresh_access_token():
+    """
+    Rotates the refresh token and returns a new access/refresh token pair.
+
+    This endpoint intentionally does not use @current_user_required because
+    the access token may already be expired or missing when it is called.
+    """
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    raw_refresh_token = normalize_text(data.get("refresh_token"))
+
+    if not raw_refresh_token:
+        return jsonify({"message": "Refresh token is required"}), 400
+
+    ensure_auth_session_indexes(db)
+
+    current_time = now_utc()
+    current_hash = hash_refresh_token(raw_refresh_token)
+
+    session = db.auth_sessions.find_one({
+        "refresh_token_hash": current_hash,
+        "is_revoked": {"$ne": True},
+    })
+
+    if not session:
+        return jsonify({
+            "message": "Invalid or revoked refresh token"
+        }), 401
+
+    user_obj_id = safe_object_id(session.get("user_id"))
+
+    if not user_obj_id:
+        db.auth_sessions.update_one(
+            {"_id": session["_id"]},
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": current_time,
+                    "updated_at": current_time,
+                }
+            },
+        )
+        return jsonify({"message": "Invalid refresh session"}), 401
+
+    user = db.users.find_one({
+        "_id": user_obj_id,
+        "is_active": True,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not user:
+        db.auth_sessions.update_one(
+            {"_id": session["_id"]},
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": current_time,
+                    "updated_at": current_time,
+                }
+            },
+        )
+        return jsonify({"message": "User account is unavailable"}), 401
+
+    user = sync_user_login_defaults(db, user)
+    raw_employee = find_employee_for_user(db, user)
+
+    try:
+        user, raw_employee = sync_user_employee_link(
+            db,
+            user,
+            raw_employee,
+        )
+    except AuthIdentityConflict as exc:
+        return jsonify({
+            "message": str(exc),
+            "code": "employee_identity_conflict",
+        }), 409
+
+    user, raw_employee = sync_user_employee_photo(
+        db,
+        user,
+        raw_employee,
+    )
+
+    employee = (
+        employee_snapshot(raw_employee, user)
+        if raw_employee
+        else None
+    )
+
+    user = sync_user_employee_capabilities(
+        db,
+        user,
+        employee,
+    )
+
+    new_refresh_token = generate_refresh_token()
+    new_refresh_hash = hash_refresh_token(new_refresh_token)
+
+    # Atomic rotation: only the current valid token can rotate this session.
+    updated_session = db.auth_sessions.find_one_and_update(
+        {
+            "_id": session["_id"],
+            "refresh_token_hash": current_hash,
+            "is_revoked": {"$ne": True},
+        },
+        {
+            "$set": {
+                "refresh_token_hash": new_refresh_hash,
+                "last_used_at": current_time,
+                "updated_at": current_time,
+                "expires_at": None,
+            }
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+
+    if not updated_session:
+        return jsonify({
+            "message": "Refresh token has already been rotated"
+        }), 409
+
+    access_token = issue_access_token(user)
+
+    return jsonify({
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_MINUTES * 60,
+        "refresh_expires_in": None,
+    }), 200
+
+
+@auth_bp.post("/logout")
+def logout():
+    """
+    Revokes the current refresh session.
+
+    The endpoint is idempotent and does not require a valid access token.
+    """
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    raw_refresh_token = normalize_text(data.get("refresh_token"))
+
+    if raw_refresh_token:
+        current_time = now_utc()
+
+        db.auth_sessions.update_one(
+            {
+                "refresh_token_hash": hash_refresh_token(
+                    raw_refresh_token
+                ),
+                "is_revoked": {"$ne": True},
+            },
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": current_time,
+                    "updated_at": current_time,
+                }
+            },
+        )
+
+    return jsonify({"message": "Logged out successfully"}), 200
 
 
 @auth_bp.post("/change-password")

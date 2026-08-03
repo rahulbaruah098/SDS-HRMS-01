@@ -257,23 +257,6 @@ def deep_merge(base, updates):
 def slugify(value): return re.sub(r"[^a-z0-9]+", "-", safe_str(value).lower()).strip("-")[:90] or "job"
 def token_hash(value): return hashlib.sha256(safe_str(value).encode()).hexdigest()
 
-EMPLOYEE_IDENTITY_FIELDS = (
-    "employee_id",
-    "employee_code",
-    "emp_code",
-    "code",
-)
-
-
-def employee_identity_alias_keys(payload):
-    payload = dict(payload or {})
-    return sorted({
-        safe_str(payload.get(field_name)).lower()
-        for field_name in EMPLOYEE_IDENTITY_FIELDS
-        if safe_str(payload.get(field_name))
-    })
-
-
 def ensure_recruitment_indexes(db):
     indexes = [
         (HIRING_REQUESTS, [("tenant_id",1),("reference_no",1)], {"unique":True}),
@@ -463,21 +446,36 @@ class RecruitmentService:
             )
         return {"department": department, "department_id": department_id}
     def _users_for_final_hiring_approval(self):
+        # Older tenant users may not contain an explicit is_active=True field.
+        # Treat them as active unless they are explicitly disabled/inactive.
         users = list(
             self.db.users.find(
                 {
                     "tenant_id": self.tenant_id,
-                    "is_active": True,
                     "is_deleted": {"$ne": True},
+                    "is_active": {"$ne": False},
+                    "status": {"$ne": "inactive"},
                 }
             )
         )
-        return [
-            user
-            for user in users
-            if (normalize_roles(user) & FINAL_APPROVAL_ROLES)
-            or (normalize_capabilities(user) & FINAL_APPROVAL_CAPABILITIES)
-        ]
+
+        approvers = []
+        for user in users:
+            roles = normalize_roles(user)
+
+            # Support role fields used by older and newer user documents.
+            for key in ("primary_role", "dashboard_role", "user_role"):
+                value = normalize_key(user.get(key))
+                if value:
+                    roles.add(value)
+
+            if (roles & FINAL_APPROVAL_ROLES) or (
+                normalize_capabilities(user)
+                & FINAL_APPROVAL_CAPABILITIES
+            ):
+                approvers.append(user)
+
+        return approvers
 
     def _users_for_hr_publishing(self):
         return self._users_for_roles(HR_PUBLISH_ROLES)
@@ -559,13 +557,54 @@ class RecruitmentService:
         return old, new
     def _users_for_roles(self, roles):
         roles = sorted({normalize_key(r) for r in roles})
-        return list(self.db.users.find({"tenant_id":self.tenant_id,"is_active":True,"is_deleted":{"$ne":True},"$or":[{"roles":{"$in":roles}},{"role":{"$in":roles}}]}))
+        role_variants = sorted(
+            set(roles)
+            | {role.replace("_", " ") for role in roles}
+            | {role.replace("_", "-") for role in roles}
+        )
+        query = {
+            "tenant_id": self.tenant_id,
+            "is_deleted": {"$ne": True},
+            "is_active": {"$ne": False},
+            "status": {"$ne": "inactive"},
+            "$or": [
+                {"roles": {"$in": role_variants}},
+                {"role": {"$in": role_variants}},
+                {"primary_role": {"$in": role_variants}},
+                {"dashboard_role": {"$in": role_variants}},
+            ],
+        }
+        return [
+            user
+            for user in self.db.users.find(query)
+            if normalize_roles(user) & set(roles)
+        ]
+
     def _active_users(self, ids):
-        object_ids=[]
+        object_ids = []
+        string_ids = []
         for value in unique_strings(ids):
-            try: object_ids.append(ObjectId(value))
-            except Exception: pass
-        return list(self.db.users.find({"_id":{"$in":object_ids},"tenant_id":self.tenant_id,"is_active":True,"is_deleted":{"$ne":True}})) if object_ids else []
+            string_ids.append(value)
+            try:
+                object_ids.append(ObjectId(value))
+            except Exception:
+                pass
+
+        if not object_ids and not string_ids:
+            return []
+
+        query = {
+            "tenant_id": self.tenant_id,
+            "is_deleted": {"$ne": True},
+            "is_active": {"$ne": False},
+            "status": {"$ne": "inactive"},
+            "$or": [
+                {"_id": {"$in": object_ids}},
+                {"_id": {"$in": string_ids}},
+                {"user_id": {"$in": string_ids}},
+            ],
+        }
+        return list(self.db.users.find(query))
     def _notify(self, ids, *, title, body, target, entity_type, entity_id, application_id="", priority="normal", popup=False):
         now=utcnow(); docs=[]
         for uid in unique_strings(ids): docs.append({"tenant_id":self.tenant_id,"user_id":uid,"user_ids":[uid],"title":safe_str(title),"body":safe_str(body),"message":safe_str(body),"notification_type":"recruitment","priority":normalize_key(priority),"target":normalize_key(target),"target_scope":"selected_users","audience":"selected_users","show_popup":bool(popup),"popup_seen":False,"read":False,"status":"unread","created_at":now,"updated_at":now,"created_by":self.actor_id or "system","created_by_name":self.actor_name,"created_by_role":sorted(self.actor_roles) or ["system"],"is_deleted":False,"meta":{"page":"recruitment","target":normalize_key(target),"entity_type":normalize_key(entity_type),"entity_id":safe_str(entity_id),"application_id":safe_str(application_id)}})
@@ -1593,8 +1632,19 @@ class RecruitmentService:
     def change_application_status(self, application_id, status, *, reason="", notes=""):
         self._require_hr()
         application = self._get(APPLICATIONS, application_id, "Application")
+        current_status = normalize_key(application.get("status"))
+        requested_status = normalize_key(status)
+
+        # The Flutter app uses `interviewed` as the explicit
+        # "Complete Interview Process" action. When the application is
+        # already interviewed, validate all rounds and mark only the
+        # interview process as completed instead of attempting the invalid
+        # interviewed -> interviewed status transition.
+        if current_status == "interviewed" and requested_status == "interviewed":
+            return self.complete_interview_process(application["_id"])
+
         old, new = self._transition(
-            application.get("status"), status, APPLICATION_TRANSITIONS, "Application"
+            current_status, requested_status, APPLICATION_TRANSITIONS, "Application"
         )
         reason = safe_str(reason)
         if new in {"rejected", "on_hold", "withdrawn", "did_not_join", "joining_deferred"} and not reason:
@@ -1614,6 +1664,12 @@ class RecruitmentService:
             "updated_by_name": self.actor_name,
         }
         if new == "selected":
+            if application.get("interview_process_completed") is not True:
+                raise RecruitmentServiceError(
+                    "Complete the full interview process before selecting the candidate.",
+                    code="interview_process_not_completed",
+                    status_code=409,
+                )
             update["selected_at"] = now
             update["selected_by"] = self.actor_id
             update["selected_by_name"] = self.actor_name
@@ -1760,6 +1816,11 @@ class RecruitmentService:
                 "status": "interview_scheduled",
                 "stage": "interview_scheduled",
                 "next_interview_at": scheduled_at,
+                "interview_process_status": "in_progress",
+                "interview_process_completed": False,
+                "interview_process_completed_at": None,
+                "interview_process_completed_by": "",
+                "interview_process_completed_by_name": "",
                 "updated_at": now,
                 "updated_by": self.actor_id,
                 "updated_by_name": self.actor_name,
@@ -1956,6 +2017,8 @@ class RecruitmentService:
                     "status": "interviewed",
                     "stage": "interviewed",
                     "last_interview_at": now,
+                    "interview_process_status": "in_progress",
+                    "interview_process_completed": False,
                     "updated_at": now,
                 }},
             )
@@ -1978,16 +2041,18 @@ class RecruitmentService:
     def submit_interview_feedback(self, interview_id, payload):
         self._auth()
         interview = self._get(INTERVIEWS, interview_id, "Interview")
-        assigned = self.actor_id in unique_strings(interview.get("interviewer_user_ids") or [])
-        if not assigned and not self._has(HR_ROLES):
+        assigned = self.actor_id in unique_strings(
+            interview.get("interviewer_user_ids") or []
+        )
+        if not assigned:
             raise RecruitmentServiceError(
                 "You are not assigned to submit feedback for this interview.",
                 code="interview_feedback_access_denied",
                 status_code=403,
             )
-        if normalize_key(interview.get("status")) not in {"completed", "scheduled", "rescheduled"}:
+        if normalize_key(interview.get("status")) != "completed":
             raise RecruitmentServiceError(
-                "Feedback cannot be submitted for this interview status.",
+                "Feedback can be submitted only after the interview is completed.",
                 code="interview_feedback_not_allowed",
                 status_code=409,
             )
@@ -2134,13 +2199,54 @@ class RecruitmentService:
             query["scheduled_at"] = date_filter
         if not self._has(HR_ROLES):
             query["interviewer_user_ids"] = self.actor_id
-        return self._paged(
+
+        result = self._paged(
             INTERVIEWS,
             query,
             page,
             page_size,
             sort=[("scheduled_at", ASCENDING), ("created_at", DESCENDING)],
         )
+
+        interview_ids = [
+            str(item.get("_id"))
+            for item in result.get("items", [])
+            if item.get("_id")
+        ]
+
+        actor_feedback = {}
+        if interview_ids and self.actor_id:
+            rows = self._c(FEEDBACK).find(
+                self._q({
+                    "interview_id": {"$in": interview_ids},
+                    "interviewer_user_id": self.actor_id,
+                })
+            )
+            actor_feedback = {
+                safe_str(row.get("interview_id")): row
+                for row in rows
+            }
+
+        for item in result.get("items", []):
+            interview_id = str(item.get("_id"))
+            feedback = actor_feedback.get(interview_id)
+            count = int(item.get("feedback_count") or 0)
+
+            assigned = self.actor_id in unique_strings(
+                item.get("interviewer_user_ids") or []
+            )
+
+            item["feedback_count"] = count
+            item["feedback_given"] = count > 0
+            # This flag represents whether the current user is the assigned
+            # interviewer for this round. Flutter uses it to allow that
+            # interviewer to mark a scheduled round as completed, and then to
+            # submit/edit feedback after completion.
+            item["can_submit_feedback"] = bool(assigned)
+            item["my_feedback_submitted"] = feedback is not None
+            item["my_feedback"] = feedback or {}
+
+        return result
 
     def list_interview_feedback(self, interview_id):
         self._require_reader()
@@ -2157,6 +2263,110 @@ class RecruitmentService:
             ).sort("submitted_at", ASCENDING)
         )
 
+    def complete_interview_process(self, application_id):
+        """Complete the full multi-round interview process for an application.
+
+        This does not create a new application-stage transition. It validates
+        the existing interview records and records process completion while the
+        application remains in the supported ``interviewed`` stage.
+        """
+        self._require_hr()
+        application = self._get(APPLICATIONS, application_id, "Application")
+        current = normalize_key(application.get("status"))
+
+        if current != "interviewed":
+            raise RecruitmentServiceError(
+                "The application must be in the interviewed stage before completing the interview process.",
+                code="application_not_interviewed",
+                status_code=409,
+            )
+
+        application_key = str(application["_id"])
+        interviews = list(
+            self._c(INTERVIEWS).find(
+                self._q({"application_id": application_key})
+            )
+        )
+
+        completed = [
+            item
+            for item in interviews
+            if normalize_key(item.get("status")) == "completed"
+        ]
+        if not completed:
+            raise RecruitmentServiceError(
+                "At least one completed interview is required.",
+                code="completed_interview_required",
+                status_code=409,
+            )
+
+        active = [
+            item
+            for item in interviews
+            if normalize_key(item.get("status")) in {"scheduled", "rescheduled"}
+        ]
+        if active:
+            raise RecruitmentServiceError(
+                "Complete or cancel all active interview rounds first.",
+                code="active_interview_rounds_exist",
+                status_code=409,
+                details={
+                    "active_interview_ids": [
+                        str(item.get("_id")) for item in active
+                    ]
+                },
+            )
+
+        missing_feedback = [
+            item
+            for item in completed
+            if int(item.get("feedback_count") or 0) <= 0
+        ]
+        if missing_feedback:
+            raise RecruitmentServiceError(
+                "Feedback is required for every completed interview round.",
+                code="interview_feedback_incomplete",
+                status_code=409,
+                details={
+                    "interview_ids": [
+                        str(item.get("_id")) for item in missing_feedback
+                    ]
+                },
+            )
+
+        if application.get("interview_process_completed") is True:
+            return application
+
+        now = utcnow()
+        update = {
+            "interview_process_status": "completed",
+            "interview_process_completed": True,
+            "interview_process_completed_at": now,
+            "interview_process_completed_by": self.actor_id,
+            "interview_process_completed_by_name": self.actor_name,
+            "updated_at": now,
+            "updated_by": self.actor_id,
+            "updated_by_name": self.actor_name,
+        }
+        self._c(APPLICATIONS).update_one(
+            {"_id": application["_id"], "tenant_id": self.tenant_id},
+            {"$set": update},
+        )
+        self._activity(
+            "interview_process_completed",
+            "application",
+            application["_id"],
+            application_id=application["_id"],
+            message="All required interview rounds and feedback were completed.",
+            old="interviewed",
+            new="interviewed",
+            details={
+                "completed_interview_count": len(completed),
+                "completed_by": self.actor_id,
+            },
+        )
+        return self._get(APPLICATIONS, application["_id"], "Application")
+
     # ------------------------------------------------------------------
     # Offers
     # ------------------------------------------------------------------
@@ -2168,6 +2378,12 @@ class RecruitmentService:
             raise RecruitmentServiceError(
                 "An offer can only be prepared for a selected candidate.",
                 code="application_not_selected",
+                status_code=409,
+            )
+        if application.get("interview_process_completed") is not True:
+            raise RecruitmentServiceError(
+                "Complete the full interview process before preparing an offer.",
+                code="interview_process_not_completed",
                 status_code=409,
             )
         data = dict(payload or {})
@@ -3251,60 +3467,8 @@ class RecruitmentService:
 
         prefix = normalize_key(self._settings().get("employee_code_prefix") or "EMP").upper().replace("_", "-")
         emp_code = safe_str(data.get("emp_code") or self._next("employee", prefix))
-        identity_aliases = employee_identity_alias_keys({
-            "employee_id": emp_code,
-            "employee_code": emp_code,
-            "emp_code": emp_code,
-        })
-        identity_conditions = [
-            {"identity_alias_keys": {"$in": identity_aliases}},
-        ]
-        for identity_alias in identity_aliases:
-            exact_alias = f"^{re.escape(identity_alias)}$"
-            identity_conditions.extend(
-                {
-                    field_name: {
-                        "$regex": exact_alias,
-                        "$options": "i",
-                    }
-                }
-                for field_name in EMPLOYEE_IDENTITY_FIELDS
-            )
-
-        if self.db.employees.find_one({
-            "tenant_id": self.tenant_id,
-            "is_deleted": {"$ne": True},
-            "$or": identity_conditions,
-        }):
-            raise RecruitmentServiceError(
-                "Employee ID/code is already assigned to another active employee in this company.",
-                code="employee_code_exists",
-                status_code=409,
-            )
-
-        if self.db.users.find_one({
-            "tenant_id": self.tenant_id,
-            "is_deleted": {"$ne": True},
-            "$or": [
-                {
-                    "emp_code": {
-                        "$regex": f"^{re.escape(emp_code)}$",
-                        "$options": "i",
-                    }
-                },
-                {
-                    "employee_code": {
-                        "$regex": f"^{re.escape(emp_code)}$",
-                        "$options": "i",
-                    }
-                },
-            ],
-        }):
-            raise RecruitmentServiceError(
-                "Employee ID/code is already assigned to another active user in this company.",
-                code="employee_code_exists",
-                status_code=409,
-            )
+        if self.db.employees.find_one({"tenant_id": self.tenant_id, "$or": [{"emp_code": emp_code}, {"employee_id": emp_code}], "is_deleted": {"$ne": True}}):
+            raise RecruitmentServiceError("Employee code already exists.", code="employee_code_exists", status_code=409)
 
         temporary_password = safe_str(data.get("temporary_password")) or secrets.token_urlsafe(9)
         if len(temporary_password) < 8:
@@ -3319,8 +3483,6 @@ class RecruitmentService:
             "password_hash": generate_password_hash(temporary_password),
             "role": "employee",
             "roles": ["employee"],
-            "emp_code": emp_code,
-            "employee_code": emp_code,
             "is_active": True,
             "status": "active",
             "must_change_password": True,
@@ -3330,14 +3492,7 @@ class RecruitmentService:
             "created_by": self.actor_id,
             "source": "recruitment_conversion",
         }
-        try:
-            user_result = self.db.users.insert_one(user_doc)
-        except DuplicateKeyError as exc:
-            raise RecruitmentServiceError(
-                "A user already exists with this email address or employee code.",
-                code="employee_identity_exists",
-                status_code=409,
-            ) from exc
+        user_result = self.db.users.insert_one(user_doc)
 
         employee_doc = {
             "tenant_id": self.tenant_id,
@@ -3347,7 +3502,6 @@ class RecruitmentService:
             "email": email,
             "phone": safe_str(data.get("phone") or candidate.get("phone")),
             "employee_id": emp_code,
-            "employee_code": emp_code,
             "emp_code": emp_code,
             "department": safe_str(data.get("department") or terms.get("department") or application.get("department")),
             "designation": safe_str(data.get("designation") or terms.get("designation") or application.get("job_title")),
@@ -3382,21 +3536,7 @@ class RecruitmentService:
             "created_by": self.actor_id,
             "is_deleted": False,
         }
-        employee_doc["identity_alias_keys"] = employee_identity_alias_keys(employee_doc)
-
-        try:
-            employee_result = self.db.employees.insert_one(employee_doc)
-        except DuplicateKeyError as exc:
-            self.db.users.delete_one({"_id": user_result.inserted_id})
-            raise RecruitmentServiceError(
-                "Employee ID/code is already assigned to another active employee in this company.",
-                code="employee_code_exists",
-                status_code=409,
-            ) from exc
-        except Exception:
-            self.db.users.delete_one({"_id": user_result.inserted_id})
-            raise
-
+        employee_result = self.db.employees.insert_one(employee_doc)
         employee_doc["_id"] = employee_result.inserted_id
         self.db.users.update_one(
             {"_id": user_result.inserted_id},
@@ -3404,7 +3544,6 @@ class RecruitmentService:
                 "employee_id": str(employee_result.inserted_id),
                 "employee_ref_id": str(employee_result.inserted_id),
                 "emp_code": emp_code,
-                "employee_code": emp_code,
                 "department": employee_doc.get("department"),
                 "designation": employee_doc.get("designation"),
                 "updated_at": now,

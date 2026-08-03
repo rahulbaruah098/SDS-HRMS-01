@@ -869,6 +869,24 @@ def update_application_screening(application_id: str):
     )
 
 
+@recruitment_bp.post("/applications/<application_id>/interview-process/complete")
+@tenant_module_required("recruitment")
+def complete_interview_process(application_id: str):
+    item = _service().complete_interview_process(application_id)
+    audit(
+        "complete_recruitment_interview_process",
+        "recruitment_applications",
+        application_id,
+    )
+    return _json_response(
+        {
+            "ok": True,
+            "message": "Interview process completed successfully.",
+            "item": item,
+        }
+    )
+
+
 @recruitment_bp.post("/applications/<application_id>/status")
 @tenant_module_required("recruitment")
 def change_application_status(application_id: str):
