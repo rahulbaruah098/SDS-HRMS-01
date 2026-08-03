@@ -9,6 +9,8 @@ import {
 
 import AppLayout from './layouts/AppLayout';
 import Login from './pages/Login';
+import AccountAccessHelp from './pages/AccountAccessHelp.jsx';
+import AccountAccessTracking from './pages/AccountAccessTracking.jsx';
 // Page file name remains ApplyDemoRegistration for compatibility, but UI copy now says Trial Registration.
 import ApplyDemoRegistration from './pages/ApplyDemoRegistration.jsx';
 import CareerPortal from './pages/CareerPortal.jsx';
@@ -755,6 +757,8 @@ function applyProfilePhotoAliases(payload = {}, photoValue = '') {
 const HRMS_HOME_PATH = '/hrms';
 const HRMS_LOGIN_PATH = '/login';
 const HRMS_DEMO_REGISTRATION_PATH = '/apply-demo-registration';
+const ACCOUNT_ACCESS_HELP_PATH = '/account-access-help';
+const ACCOUNT_ACCESS_TRACKING_PATH = '/account-access-track';
 const HRMS_SUBSCRIPTION_EXPIRED_PATH = '/hrms/subscription-expired';
 
 function getBrowserPathname() {
@@ -791,6 +795,23 @@ function isApplyDemoRegistrationPath(pathname) {
     '/register-demo',
     '/register-demo/',
   ].includes(path);
+}
+
+function normalizePublicPath(pathname) {
+  const normalized = String(pathname || '/')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
+
+  return normalized || '/';
+}
+
+function isAccountAccessHelpPath(pathname) {
+  return normalizePublicPath(pathname) === ACCOUNT_ACCESS_HELP_PATH;
+}
+
+function isAccountAccessTrackingPath(pathname) {
+  return normalizePublicPath(pathname) === ACCOUNT_ACCESS_TRACKING_PATH;
 }
 
 function isBillingPath(pathname) {
@@ -1291,7 +1312,14 @@ export default function App() {
     () => isApplyDemoRegistrationPath(currentPath),
     [currentPath],
   );
-
+  const isAccountAccessHelpRoute = useMemo(
+    () => isAccountAccessHelpPath(currentPath),
+    [currentPath],
+  );
+  const isAccountAccessTrackingRoute = useMemo(
+    () => isAccountAccessTrackingPath(currentPath),
+    [currentPath],
+  );
 
   const isCareerPortalRoute = useMemo(
     () => isCareerPortalPath(currentPath),
@@ -1641,6 +1669,22 @@ if (isTrialRegistrationRoute) {
   return (
     <CustomAlertProvider>
       <ApplyDemoRegistration />
+    </CustomAlertProvider>
+  );
+}
+
+if (isAccountAccessHelpRoute) {
+  return (
+    <CustomAlertProvider>
+      <AccountAccessHelp />
+    </CustomAlertProvider>
+  );
+}
+
+if (isAccountAccessTrackingRoute) {
+  return (
+    <CustomAlertProvider>
+      <AccountAccessTracking />
     </CustomAlertProvider>
   );
 }

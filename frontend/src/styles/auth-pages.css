@@ -2470,3 +2470,762 @@
     gap: 16px !important;
   }
 }
+
+/* =====================================================================
+   YOURCOMATE ACCOUNT ACCESS SUPPORT
+   Shared public styling for the login entry link, employee lookup form,
+   request success state and public ticket tracking page.
+===================================================================== */
+
+.yc-login-account-access-link {
+  width: 100%;
+  margin: 10px 0 0;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--yc-auth-muted, #60708f);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.yc-login-account-access-link svg,
+.yc-login-account-access-link .icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.yc-login-account-access-link:hover:not(:disabled),
+.yc-login-account-access-link:focus-visible:not(:disabled) {
+  color: var(--yc-auth-primary, #5d63df);
+  transform: translateY(-1px);
+}
+
+.yc-login-account-access-link:focus-visible {
+  outline: 2px solid rgba(93, 99, 223, 0.3);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.yc-login-account-access-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.yc-account-access-page {
+  min-height: 100dvh;
+  height: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 8% 15%, rgba(142, 215, 246, 0.24), transparent 31%),
+    radial-gradient(circle at 91% 77%, rgba(105, 217, 208, 0.18), transparent 30%),
+    linear-gradient(145deg, #f8fbff 0%, #f4f6ff 52%, #fbfdff 100%);
+}
+
+.yc-account-access-page .auth-premium-header {
+  position: relative;
+  z-index: 5;
+}
+
+.yc-account-access-shell {
+  width: min(1180px, calc(100% - 48px));
+  min-height: calc(100dvh - 94px);
+  height: auto;
+  margin: 0 auto;
+  padding: 34px 0 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(430px, 1.08fr);
+  align-items: stretch;
+  gap: clamp(28px, 4vw, 58px);
+  overflow: visible;
+}
+
+.yc-account-access-story,
+.yc-account-access-form-panel {
+  min-width: 0;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.yc-account-access-story {
+  position: relative;
+  padding: clamp(32px, 5vw, 68px) clamp(24px, 4vw, 54px);
+  border: 1px solid rgba(69, 91, 154, 0.11);
+  border-radius: 34px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(241, 247, 255, 0.93)),
+    #fff;
+  box-shadow: 0 28px 75px rgba(39, 62, 117, 0.11);
+  isolation: isolate;
+}
+
+.yc-account-access-story::before,
+.yc-account-access-story::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.yc-account-access-story::before {
+  width: 210px;
+  height: 210px;
+  top: -70px;
+  right: -65px;
+  background: rgba(143, 215, 246, 0.26);
+  filter: blur(2px);
+}
+
+.yc-account-access-story::after {
+  width: 150px;
+  height: 150px;
+  left: -56px;
+  bottom: -48px;
+  background: rgba(105, 217, 208, 0.19);
+}
+
+.yc-account-access-story-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.yc-account-access-kicker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 11px;
+  margin: 0 0 18px;
+  border: 1px solid rgba(92, 99, 223, 0.18);
+  border-radius: 999px;
+  background: rgba(92, 99, 223, 0.08);
+  color: #4f57bd;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.yc-account-access-story h1 {
+  max-width: 620px;
+  margin: 0;
+  color: #102c5c;
+  font-size: clamp(38px, 5vw, 66px);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.yc-account-access-story h1 em {
+  display: block;
+  margin-top: 7px;
+  color: #6470df;
+  font-style: normal;
+}
+
+.yc-account-access-story-copy > p {
+  max-width: 590px;
+  margin: 22px 0 0;
+  color: #61718e;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.yc-account-access-flow {
+  margin-top: 34px;
+  display: grid;
+  gap: 13px;
+}
+
+.yc-account-access-flow article {
+  display: grid;
+  grid-template-columns: 39px minmax(0, 1fr);
+  align-items: start;
+  gap: 13px;
+  padding: 15px 16px;
+  border: 1px solid rgba(49, 78, 135, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.yc-account-access-flow article > span {
+  width: 39px;
+  height: 39px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, #e8edff, #eef9ff);
+  color: #5c65ce;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.yc-account-access-flow strong {
+  display: block;
+  color: #1a3766;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.yc-account-access-flow small {
+  display: block;
+  margin-top: 4px;
+  color: #75829a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.yc-account-access-security-note {
+  position: relative;
+  z-index: 1;
+  margin-top: 26px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid rgba(52, 167, 150, 0.17);
+  border-radius: 18px;
+  background: rgba(232, 251, 247, 0.74);
+}
+
+.yc-account-access-security-note > svg,
+.yc-account-access-security-note > .icon {
+  width: 38px;
+  height: 38px;
+  padding: 9px;
+  border-radius: 12px;
+  color: #259786;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.yc-account-access-security-note strong {
+  color: #1c665f;
+  font-size: 12px;
+}
+
+.yc-account-access-security-note p {
+  margin: 4px 0 0;
+  color: #5d7b78;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.yc-account-access-form-panel {
+  display: flex;
+  align-items: flex-start;
+}
+
+.yc-account-access-form-card {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: clamp(24px, 3.2vw, 38px);
+  overflow: visible;
+  border-radius: 30px;
+  box-shadow: 0 28px 75px rgba(39, 62, 117, 0.13);
+}
+
+.yc-account-access-form {
+  display: grid;
+  gap: 20px;
+}
+
+.yc-account-access-section {
+  display: grid;
+  gap: 15px;
+  padding: 20px;
+  border: 1px solid rgba(44, 71, 127, 0.1);
+  border-radius: 20px;
+  background: #fbfcff;
+}
+
+.yc-account-access-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.yc-account-access-section-heading h3,
+.yc-account-access-section-heading strong {
+  margin: 0;
+  color: #173560;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.yc-account-access-section-heading p,
+.yc-account-access-section-heading small {
+  margin: 4px 0 0;
+  color: #76839a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.yc-account-access-lookup-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.yc-account-access-lookup-button .button {
+  min-height: 48px;
+  padding-inline: 18px;
+  white-space: nowrap;
+}
+
+.yc-account-access-page .auth-premium-input {
+  min-width: 0;
+}
+
+.yc-account-access-textarea {
+  min-height: 126px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.yc-account-access-character-count {
+  margin: -8px 2px 0;
+  color: #8490a5;
+  font-size: 10px;
+  text-align: right;
+}
+
+.yc-account-access-verified-banner {
+  padding: 13px 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(42, 169, 108, 0.2);
+  border-radius: 14px;
+  background: #edfaf3;
+  color: #267c54;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.yc-account-access-verified-banner svg,
+.yc-account-access-verified-banner .icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.yc-account-access-profile-grid,
+.yc-ticket-tracking-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.yc-account-access-profile-grid > div,
+.yc-ticket-tracking-detail {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(55, 81, 132, 0.09);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.yc-account-access-profile-grid small,
+.yc-ticket-tracking-detail small {
+  display: block;
+  margin-bottom: 5px;
+  color: #8792a6;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.yc-account-access-profile-grid strong,
+.yc-ticket-tracking-detail strong,
+.yc-ticket-tracking-detail p {
+  display: block;
+  margin: 0;
+  color: #203c68;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.yc-account-access-track-link {
+  text-align: center;
+  color: #697792;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.yc-account-access-track-link button,
+.yc-account-access-track-link a {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #5963d0;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.yc-account-access-success {
+  min-height: 440px;
+  padding: clamp(26px, 5vw, 54px) 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.yc-account-access-success-icon {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 20px;
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, #dcf8eb, #edfdf7);
+  color: #25976e;
+  box-shadow: 0 16px 35px rgba(37, 151, 110, 0.13);
+}
+
+.yc-account-access-success-icon svg,
+.yc-account-access-success-icon .icon {
+  width: 32px;
+  height: 32px;
+}
+
+.yc-account-access-success h2 {
+  margin: 0;
+  color: #153460;
+  font-size: clamp(26px, 3vw, 36px);
+  letter-spacing: -0.035em;
+}
+
+.yc-account-access-success > p {
+  max-width: 510px;
+  margin: 13px 0 0;
+  color: #6c7991;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.yc-account-access-ticket-id {
+  width: min(100%, 390px);
+  margin: 24px auto 0;
+  padding: 17px;
+  border: 1px dashed rgba(87, 98, 208, 0.32);
+  border-radius: 16px;
+  background: #f4f5ff;
+}
+
+.yc-account-access-ticket-id small {
+  display: block;
+  color: #7e87a2;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.yc-account-access-ticket-id strong {
+  display: block;
+  margin-top: 7px;
+  color: #4e58c4;
+  font-size: clamp(20px, 3vw, 28px);
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+
+.yc-account-access-success-actions,
+.yc-ticket-tracking-actions {
+  width: 100%;
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.yc-ticket-tracking-shell {
+  grid-template-columns: minmax(0, 0.9fr) minmax(440px, 1.1fr);
+}
+
+.yc-ticket-tracking-form {
+  gap: 18px;
+}
+
+.yc-ticket-tracking-result {
+  display: grid;
+  gap: 14px;
+}
+
+.yc-ticket-tracking-summary {
+  padding: 18px;
+  border: 1px solid rgba(72, 91, 149, 0.11);
+  border-radius: 18px;
+  background: linear-gradient(145deg, #fbfcff, #f5f8ff);
+}
+
+.yc-ticket-tracking-summary > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.yc-ticket-tracking-summary small {
+  display: block;
+  color: #8290a6;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.yc-ticket-tracking-summary h2,
+.yc-ticket-tracking-summary strong {
+  margin: 5px 0 0;
+  color: #193760;
+  overflow-wrap: anywhere;
+}
+
+.yc-ticket-tracking-page .auth-status-badge {
+  flex: 0 0 auto;
+  text-transform: capitalize;
+}
+
+.yc-ticket-tracking-page .auth-status-badge.status-open,
+.yc-ticket-tracking-page .auth-status-badge.status-pending {
+  color: #9b651c;
+  background: #fff7e7;
+  border-color: rgba(204, 145, 49, 0.22);
+}
+
+.yc-ticket-tracking-page .auth-status-badge.status-in_progress {
+  color: #3159a4;
+  background: #edf4ff;
+  border-color: rgba(63, 103, 181, 0.2);
+}
+
+.yc-ticket-tracking-page .auth-status-badge.status-resolved,
+.yc-ticket-tracking-page .auth-status-badge.status-closed {
+  color: #277a54;
+  background: #ebf9f2;
+  border-color: rgba(38, 145, 94, 0.2);
+}
+
+.yc-ticket-tracking-page .auth-status-badge.status-rejected {
+  color: #a23e4d;
+  background: #fff0f2;
+  border-color: rgba(183, 68, 86, 0.2);
+}
+
+.yc-ticket-tracking-resolution {
+  padding: 17px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 13px;
+  border: 1px solid rgba(40, 150, 107, 0.16);
+  border-radius: 17px;
+  background: #eefaf4;
+}
+
+.yc-ticket-tracking-resolution-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: #fff;
+  color: #27966b;
+}
+
+.yc-ticket-tracking-resolution-icon svg,
+.yc-ticket-tracking-resolution-icon .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.yc-ticket-tracking-resolution strong {
+  color: #24684f;
+  font-size: 12px;
+}
+
+.yc-ticket-tracking-resolution p {
+  margin: 5px 0 0;
+  color: #5c766d;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.yc-ticket-tracking-empty {
+  min-height: 250px;
+  padding: 34px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px dashed rgba(78, 98, 151, 0.19);
+  border-radius: 19px;
+  background: #fbfcff;
+}
+
+.yc-ticket-tracking-empty > svg,
+.yc-ticket-tracking-empty > .icon {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 14px;
+  color: #7885cf;
+}
+
+.yc-ticket-tracking-empty strong {
+  color: #29466f;
+  font-size: 13px;
+}
+
+.yc-ticket-tracking-empty p {
+  max-width: 380px;
+  margin: 7px auto 0;
+  color: #7d899e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@media (max-width: 1080px) {
+  .yc-account-access-shell,
+  .yc-ticket-tracking-shell {
+    width: min(760px, calc(100% - 28px));
+    grid-template-columns: 1fr;
+    gap: 20px;
+    padding-top: 22px;
+  }
+
+  .yc-account-access-story {
+    padding: 34px;
+  }
+
+  .yc-account-access-story h1 {
+    max-width: 680px;
+    font-size: clamp(36px, 7vw, 58px);
+  }
+
+  .yc-account-access-form-panel {
+    display: block;
+  }
+}
+
+@media (max-width: 720px) {
+  .yc-account-access-page .auth-premium-header {
+    padding-inline: 14px;
+  }
+
+  .yc-account-access-shell,
+  .yc-ticket-tracking-shell {
+    width: calc(100% - 20px);
+    padding: 14px 0 max(24px, env(safe-area-inset-bottom));
+    gap: 14px;
+  }
+
+  .yc-account-access-story {
+    padding: 28px 20px;
+    border-radius: 24px;
+  }
+
+  .yc-account-access-story h1 {
+    font-size: clamp(32px, 11vw, 46px);
+  }
+
+  .yc-account-access-story-copy > p {
+    margin-top: 16px;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .yc-account-access-flow {
+    margin-top: 24px;
+  }
+
+  .yc-account-access-form-card {
+    padding: 19px 14px;
+    border-radius: 23px;
+  }
+
+  .yc-account-access-section {
+    padding: 16px 13px;
+    border-radius: 17px;
+  }
+
+  .yc-account-access-lookup-button {
+    grid-template-columns: 1fr;
+  }
+
+  .yc-account-access-lookup-button .button {
+    width: 100%;
+  }
+
+  .yc-account-access-profile-grid,
+  .yc-ticket-tracking-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .yc-account-access-success-actions,
+  .yc-ticket-tracking-actions {
+    flex-direction: column;
+  }
+
+  .yc-account-access-success-actions .button,
+  .yc-ticket-tracking-actions .button {
+    width: 100%;
+  }
+
+  .yc-ticket-tracking-summary > div:first-child {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 420px) {
+  .yc-login-account-access-link {
+    font-size: 12px;
+  }
+
+  .yc-account-access-story {
+    padding-inline: 17px;
+  }
+
+  .yc-account-access-flow article {
+    grid-template-columns: 34px minmax(0, 1fr);
+    padding: 13px;
+  }
+
+  .yc-account-access-flow article > span {
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+  }
+
+  .yc-account-access-security-note {
+    grid-template-columns: 34px minmax(0, 1fr);
+    padding: 13px;
+  }
+
+  .yc-account-access-security-note > svg,
+  .yc-account-access-security-note > .icon {
+    width: 34px;
+    height: 34px;
+  }
+}

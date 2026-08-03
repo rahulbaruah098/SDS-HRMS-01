@@ -18,6 +18,8 @@ const HRMS_PREFIX = "/hrms";
 
 const HRMS_PUBLIC_ROUTES = [
   "/login",
+  "/account-access-help",
+  "/account-access-track",
   "/apply-trial-registration",
   "/trial-registration",
   "/register-trial",
@@ -190,7 +192,11 @@ function IntegratedApp() {
     );
   }
 
-  return <App />;
+  return (
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  );
 }
 
 createRoot(rootElement).render(

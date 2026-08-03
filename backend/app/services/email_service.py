@@ -1854,3 +1854,367 @@ def send_recruitment_joining_status_email(
         due_text=joining_date,
         reply_to=reply_to,
     )
+
+# ---------------------------------------------------------------------------
+# Account-access support notifications
+# ---------------------------------------------------------------------------
+
+def _account_access_value(value, fallback="—"):
+    """Return a safe display value for account-access emails."""
+
+    return safe_str(value) or fallback
+
+
+def _account_access_tracking_url(config, ticket_id, tracking_url=None):
+    """Build the public ticket-tracking URL without exposing backend routes."""
+
+    explicit_url = safe_str(tracking_url)
+    if explicit_url:
+        return explicit_url
+
+    frontend_url = safe_str(
+        get_config(config, "FRONTEND_URL")
+        or get_config(config, "APP_FRONTEND_URL")
+        or get_config(config, "PUBLIC_APP_URL")
+    ).rstrip("/")
+
+    if not frontend_url:
+        return ""
+
+    return f"{frontend_url}/account-access-track?ticket={safe_str(ticket_id)}"
+
+
+def _account_access_rows_html(rows):
+    rendered = []
+    for label, value in rows:
+        value = safe_str(value)
+        if not value:
+            continue
+        rendered.append(
+            f"""
+            <tr>
+              <td style="padding:7px 10px 7px 0;color:#64748b;font-size:13px;vertical-align:top;white-space:nowrap;">{escape(safe_str(label))}</td>
+              <td style="padding:7px 0;color:#0f172a;font-size:13px;font-weight:700;vertical-align:top;">{escape(value)}</td>
+            </tr>
+            """
+        )
+    return "".join(rendered)
+
+
+def _account_access_rows_text(rows):
+    return "\n".join(
+        f"{safe_str(label)}: {safe_str(value)}"
+        for label, value in rows
+        if safe_str(value)
+    )
+
+
+def _account_access_button(label, url):
+    url = safe_str(url)
+    if not url:
+        return ""
+
+    return f"""
+      <p style="margin:22px 0 0;">
+        <a href="{escape(url)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:800;padding:12px 18px;border-radius:12px;">
+          {escape(safe_str(label))}
+        </a>
+      </p>
+    """
+
+
+def send_account_access_submission_email(
+    config,
+    to_email,
+    employee_name,
+    ticket_id,
+    company_name,
+    issue_category,
+    subject_line,
+    submitted_at=None,
+    tracking_url=None,
+    reply_to=None,
+):
+    """Confirm a new account-access request to the employee."""
+
+    employee_name = _account_access_value(employee_name, "Employee")
+    ticket_id = _account_access_value(ticket_id)
+    company_name = _account_access_value(company_name, "your organisation")
+    issue_category = _account_access_value(issue_category)
+    subject_line = _account_access_value(subject_line)
+    tracking_url = _account_access_tracking_url(config, ticket_id, tracking_url)
+
+    rows = [
+        ("Ticket ID", ticket_id),
+        ("Company", company_name),
+        ("Issue Category", issue_category),
+        ("Subject", subject_line),
+        ("Submitted", submitted_at),
+        ("Status", "Open"),
+    ]
+
+    subject = f"Account-access request received - {ticket_id}"
+    text_body = f"""Dear {employee_name},
+
+Your account-access request has been submitted successfully. The HR and IT support team of {company_name} have been notified.
+
+{_account_access_rows_text(rows)}
+
+{('Track your request: ' + tracking_url) if tracking_url else 'Please keep the ticket ID safe for tracking.'}
+
+You will receive another email when the request is updated or resolved.
+
+Regards,
+{company_name}
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Account-access request received",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(employee_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;color:#334155;">Your account-access request has been submitted successfully. The HR and IT support team of <strong>{escape(company_name)}</strong> have been notified.</p>
+        <div style="margin:20px 0;background:#eff6ff;border:1px solid #bfdbfe;border-radius:16px;padding:18px;">
+          <table role="presentation" style="width:100%;border-collapse:collapse;">
+            {_account_access_rows_html(rows)}
+          </table>
+        </div>
+        <p style="margin:0;color:#475569;line-height:1.7;">Keep this ticket ID safe. You will receive another email when the request is updated or resolved.</p>
+        {_account_access_button('Track Request', tracking_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_account_access_team_alert_email(
+    config,
+    to_email,
+    recipient_name,
+    ticket_id,
+    employee_name,
+    employee_code,
+    employee_email,
+    department,
+    designation,
+    company_name,
+    issue_category,
+    subject_line,
+    description,
+    submitted_at=None,
+    management_url=None,
+    reply_to=None,
+):
+    """Notify a tenant HR or IT recipient about a new request."""
+
+    recipient_name = _account_access_value(recipient_name, "Team Member")
+    ticket_id = _account_access_value(ticket_id)
+    employee_name = _account_access_value(employee_name, "Employee")
+    company_name = _account_access_value(company_name, "Your organisation")
+    description = _account_access_value(description)
+
+    rows = [
+        ("Ticket ID", ticket_id),
+        ("Employee", employee_name),
+        ("Employee Code", employee_code),
+        ("Email", employee_email),
+        ("Department", department),
+        ("Designation", designation),
+        ("Company", company_name),
+        ("Issue Category", issue_category),
+        ("Subject", subject_line),
+        ("Submitted", submitted_at),
+    ]
+
+    subject = f"New account-access request - {ticket_id}"
+    text_body = f"""Dear {recipient_name},
+
+A new account-access request has been submitted for {company_name}.
+
+{_account_access_rows_text(rows)}
+
+Description:
+{description}
+
+{('Open the request: ' + safe_str(management_url)) if safe_str(management_url) else 'Please open YourComate HRMS to review and assign this request.'}
+
+Regards,
+YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "New account-access request",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(recipient_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;color:#334155;">A new account-access request has been submitted for <strong>{escape(company_name)}</strong>.</p>
+        <div style="margin:20px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:18px;">
+          <table role="presentation" style="width:100%;border-collapse:collapse;">
+            {_account_access_rows_html(rows)}
+          </table>
+        </div>
+        <div style="margin:0;background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:16px;">
+          <p style="margin:0 0 7px;color:#9a3412;font-weight:800;">Employee description</p>
+          <p style="margin:0;color:#7c2d12;line-height:1.7;white-space:pre-wrap;">{escape(description)}</p>
+        </div>
+        {_account_access_button('Open Request', management_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_account_access_resolution_email(
+    config,
+    to_email,
+    employee_name,
+    ticket_id,
+    company_name,
+    status,
+    resolution_remarks,
+    resolved_at=None,
+    resolved_by=None,
+    tracking_url=None,
+    reply_to=None,
+):
+    """Notify the employee when an account-access request is resolved."""
+
+    employee_name = _account_access_value(employee_name, "Employee")
+    ticket_id = _account_access_value(ticket_id)
+    company_name = _account_access_value(company_name, "your organisation")
+    status = _account_access_value(status, "Resolved")
+    resolution_remarks = _account_access_value(
+        resolution_remarks,
+        "Your account-access issue has been marked as resolved.",
+    )
+    tracking_url = _account_access_tracking_url(config, ticket_id, tracking_url)
+
+    rows = [
+        ("Ticket ID", ticket_id),
+        ("Status", status),
+        ("Resolved", resolved_at),
+        ("Resolved By", resolved_by),
+    ]
+
+    subject = f"Account-access request {status.lower()} - {ticket_id}"
+    text_body = f"""Dear {employee_name},
+
+Your account-access request has been updated by {company_name}.
+
+{_account_access_rows_text(rows)}
+
+Resolution remarks:
+{resolution_remarks}
+
+Please try signing in again. If the problem continues, use your ticket ID when contacting HR or IT support.
+
+{('Track your request: ' + tracking_url) if tracking_url else ''}
+
+Regards,
+{company_name}
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Account-access request resolved",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(employee_name)}</strong>,</p>
+        <p style="margin:0;line-height:1.7;color:#334155;">Your account-access request has been updated by <strong>{escape(company_name)}</strong>.</p>
+        <div style="margin:20px 0;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:18px;">
+          <table role="presentation" style="width:100%;border-collapse:collapse;">
+            {_account_access_rows_html(rows)}
+          </table>
+        </div>
+        <div style="margin:0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;">
+          <p style="margin:0 0 7px;color:#334155;font-weight:800;">Resolution remarks</p>
+          <p style="margin:0;color:#475569;line-height:1.7;white-space:pre-wrap;">{escape(resolution_remarks)}</p>
+        </div>
+        <p style="margin:18px 0 0;color:#475569;line-height:1.7;">Please try signing in again. If the issue continues, provide this ticket ID to your HR or IT support team.</p>
+        {_account_access_button('Track Request', tracking_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )
+
+
+def send_account_access_status_email(
+    config,
+    to_email,
+    employee_name,
+    ticket_id,
+    company_name,
+    status,
+    latest_update=None,
+    tracking_url=None,
+    reply_to=None,
+):
+    """Notify the employee about a non-resolution status update."""
+
+    employee_name = _account_access_value(employee_name, "Employee")
+    ticket_id = _account_access_value(ticket_id)
+    company_name = _account_access_value(company_name, "your organisation")
+    status = _account_access_value(status, "Updated")
+    latest_update = _account_access_value(
+        latest_update,
+        "Your request status has been updated.",
+    )
+    tracking_url = _account_access_tracking_url(config, ticket_id, tracking_url)
+
+    subject = f"Account-access request update - {ticket_id}"
+    text_body = f"""Dear {employee_name},
+
+Your account-access request has been updated.
+
+Ticket ID: {ticket_id}
+Status: {status}
+Latest update: {latest_update}
+
+{('Track your request: ' + tracking_url) if tracking_url else ''}
+
+Regards,
+{company_name}
+Powered by YourComate HRMS
+"""
+
+    html_body = html_shell(
+        "Account-access request updated",
+        f"""
+        <p style="margin:0 0 12px;line-height:1.7;">Dear <strong>{escape(employee_name)}</strong>,</p>
+        <p style="margin:0;color:#334155;line-height:1.7;">Your account-access request has been updated.</p>
+        <div style="margin:20px 0;background:#eff6ff;border:1px solid #bfdbfe;border-radius:16px;padding:18px;">
+          <table role="presentation" style="width:100%;border-collapse:collapse;">
+            {_account_access_rows_html([('Ticket ID', ticket_id), ('Status', status), ('Latest Update', latest_update)])}
+          </table>
+        </div>
+        {_account_access_button('Track Request', tracking_url)}
+        """,
+    )
+
+    return send_email(
+        config,
+        to_email,
+        subject,
+        text_body,
+        html_body,
+        reply_to=reply_to,
+    )

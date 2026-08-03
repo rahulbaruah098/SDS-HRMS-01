@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import {
+  api,
   assignItSupportTicket,
   createItSupportTicket,
   escalateItSupportTicket,
@@ -44,6 +45,15 @@ const DEFAULT_ESCALATION_TYPES = [
   { value: 'network_infrastructure', label: 'Network / Infrastructure Major Issue' },
   { value: 'security_issue', label: 'Security Issue' },
   { value: 'major_problem', label: 'Other Major Problem' },
+];
+
+const accountAccessCategories = [
+  { value: 'forgot_password', label: 'Forgot password' },
+  { value: 'account_locked', label: 'Account locked' },
+  { value: 'cannot_login', label: 'Cannot log in' },
+  { value: 'email_or_code_issue', label: 'Email or employee code issue' },
+  { value: 'otp_or_verification', label: 'OTP or verification issue' },
+  { value: 'other', label: 'Other account-access issue' },
 ];
 
 const emptyTicketForm = {
@@ -117,6 +127,27 @@ function priorityClass(priority = '') {
   if (key === 'medium') return 'info';
 
   return 'muted';
+}
+
+function accountAccessManager(profile = {}, permissions = {}) {
+  const rawRoles = [
+    profile.role,
+    ...(Array.isArray(profile.roles) ? profile.roles : []),
+    ...(Array.isArray(profile.user_roles) ? profile.user_roles : []),
+  ];
+  const roles = rawRoles.map((role) => String(role || '').toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'));
+
+  return Boolean(
+    permissions.is_it_head ||
+    permissions.is_it_member ||
+    permissions.can_manage ||
+    permissions.can_manage_normal ||
+    roles.some((role) => ['super_admin', 'admin', 'hr', 'hr_admin', 'hr_manager', 'it_head', 'it_support_head'].includes(role))
+  );
+}
+
+function accountAccessStatusLabel(value = '') {
+  return optionLabel([], value || 'open');
 }
 
 function optionLabel(options = [], value = '') {
@@ -1088,6 +1119,92 @@ const IT_SUPPORT_SHEET_STYLES = `
   }
 }
 
+
+.it-support-page .account-access-desk {
+  margin-top: 20px;
+}
+
+.it-support-page .account-access-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(150px, .55fr)) auto;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.it-support-page .account-access-toolbar input,
+.it-support-page .account-access-toolbar select,
+.it-support-page .account-access-editor input,
+.it-support-page .account-access-editor select,
+.it-support-page .account-access-editor textarea {
+  width: 100%;
+  border: 1px solid var(--border, #dbe3ef);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  padding: 11px 12px;
+  color: inherit;
+  font: inherit;
+}
+
+.it-support-page .account-access-list {
+  display: grid;
+  gap: 14px;
+}
+
+.it-support-page .account-access-ticket {
+  border: 1px solid var(--border, #dbe3ef);
+  border-radius: 18px;
+  padding: 16px;
+  background: var(--surface, #fff);
+}
+
+.it-support-page .account-access-ticket-head,
+.it-support-page .account-access-ticket-meta,
+.it-support-page .account-access-ticket-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.it-support-page .account-access-ticket h3 {
+  margin: 10px 0 6px;
+  font-size: 1rem;
+}
+
+.it-support-page .account-access-ticket p {
+  margin: 0;
+  color: var(--muted, #64748b);
+}
+
+.it-support-page .account-access-ticket-meta {
+  justify-content: flex-start;
+  margin-top: 12px;
+  font-size: .84rem;
+  color: var(--muted, #64748b);
+}
+
+.it-support-page .account-access-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #dbe3ef);
+}
+
+.it-support-page .account-access-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .it-support-page .account-access-toolbar,
+  .it-support-page .account-access-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 `;
 
 export default function ITSupport() {
@@ -1135,6 +1252,13 @@ const [panelMode, setPanelMode] = useState('');
 const [activeActionKey, setActiveActionKey] = useState('');
 const [showMyTicketsSheet, setShowMyTicketsSheet] = useState(false);
 
+  const [accountAccessTickets, setAccountAccessTickets] = useState([]);
+  const [accountAccessLoading, setAccountAccessLoading] = useState(false);
+  const [accountAccessSaving, setAccountAccessSaving] = useState('');
+  const [accountAccessFilters, setAccountAccessFilters] = useState({ status: '', issue_category: '', search: '' });
+  const [accountAccessDrafts, setAccountAccessDrafts] = useState({});
+
+
   const [filters, setFilters] = useState({
     status: '',
     priority: '',
@@ -1152,6 +1276,7 @@ const [showMyTicketsSheet, setShowMyTicketsSheet] = useState(false);
   const superAdminEscalatedAccess = Boolean(permissions.can_view_escalated || permissions.is_super_admin);
   const canSeeDesk = manageAccess || workAccess || superAdminEscalatedAccess;
   const canEscalate = Boolean(permissions.can_escalate && manageAccess);
+  const canManageAccountAccess = accountAccessManager(profile, permissions);
 
   const myTicketRows = myTickets || [];
   const deskTicketRows = teamTickets || [];
@@ -1284,6 +1409,74 @@ function closePanel() {
   setReviewForm(emptyReviewForm);
   setReopenForm(emptyReopenForm);
   setEscalationForm(emptyEscalationForm);
+}
+
+
+async function loadAccountAccessTickets(nextFilters = accountAccessFilters) {
+  if (!canManageAccountAccess) return;
+
+  setAccountAccessLoading(true);
+  try {
+    const params = new URLSearchParams();
+    Object.entries(nextFilters).forEach(([key, value]) => {
+      if (normalizeText(value)) params.set(key, normalizeText(value));
+    });
+    params.set('limit', '100');
+
+    const response = await api(`/account-access/requests?${params.toString()}`);
+    const payload = response?.data || response || {};
+    const rows = payload.items || payload.requests || payload.tickets || [];
+    setAccountAccessTickets(Array.isArray(rows) ? rows : []);
+  } catch (err) {
+    alerts.error(err.message || 'Unable to load account-access requests.', 'Account Access Load Failed');
+  } finally {
+    setAccountAccessLoading(false);
+  }
+}
+
+function updateAccountAccessDraft(ticket, key, value) {
+  const id = ticket.ticket_id || ticket.ticket_no || ticket._id;
+  setAccountAccessDrafts((prev) => ({
+    ...prev,
+    [id]: {
+      status: ticket.status || 'open',
+      assigned_to_name: ticket.assigned_to_name || '',
+      latest_update: ticket.latest_update || ticket.status_note || '',
+      resolution_remarks: ticket.resolution_remarks || ticket.resolution_note || '',
+      ...(prev[id] || {}),
+      [key]: value,
+    },
+  }));
+}
+
+async function saveAccountAccessTicket(ticket) {
+  const id = ticket.ticket_id || ticket.ticket_no || ticket._id;
+  const draft = {
+    status: ticket.status || 'open',
+    assigned_to_name: ticket.assigned_to_name || '',
+    latest_update: ticket.latest_update || ticket.status_note || '',
+    resolution_remarks: ticket.resolution_remarks || ticket.resolution_note || '',
+    ...(accountAccessDrafts[id] || {}),
+  };
+
+  if (draft.status === 'resolved' && !normalizeText(draft.resolution_remarks)) {
+    alerts.warning('Resolution remarks are required before resolving the request.', 'Resolution Required');
+    return;
+  }
+
+  setAccountAccessSaving(id);
+  try {
+    await api(`/account-access/requests/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(draft),
+    });
+    alerts.success('Account-access request updated successfully.', 'Request Updated');
+    await loadAccountAccessTickets();
+  } catch (err) {
+    alerts.error(err.message || 'Unable to update account-access request.', 'Update Failed');
+  } finally {
+    setAccountAccessSaving('');
+  }
 }
 
 async function loadData() {
@@ -1981,6 +2174,17 @@ function renderTicketCard(ticket, section = 'my') {
   }, []);
 
   useEffect(() => {
+    if (!canManageAccountAccess) {
+      setAccountAccessTickets([]);
+      return;
+    }
+
+    loadAccountAccessTickets();
+    // Account-access requests must load after profile/permission data resolves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageAccountAccess]);
+
+  useEffect(() => {
     if (!showMyTicketsSheet) return undefined;
 
     const previousOverflow = document.body.style.overflow;
@@ -2253,6 +2457,117 @@ function renderTicketCard(ticket, section = 'my') {
             document.body,
           )
         : null}
+
+      {canManageAccountAccess ? (
+        <section className="panel grievance-list-panel account-access-desk">
+          <div className="section-heading">
+            <div>
+              <h2>Account Access Requests</h2>
+              <p>Review pre-login access issues raised by employees of your company.</p>
+            </div>
+            <ShieldAlert size={22} />
+          </div>
+
+          <div className="account-access-toolbar">
+            <input
+              value={accountAccessFilters.search}
+              onChange={(event) => setAccountAccessFilters((prev) => ({ ...prev, search: event.target.value }))}
+              placeholder="Search ticket, employee or email"
+            />
+            <select
+              value={accountAccessFilters.status}
+              onChange={(event) => setAccountAccessFilters((prev) => ({ ...prev, status: event.target.value }))}
+            >
+              <option value="">All Status</option>
+              {['open', 'assigned', 'in_progress', 'resolved', 'closed', 'rejected', 'reopened'].map((status) => (
+                <option key={status} value={status}>{accountAccessStatusLabel(status)}</option>
+              ))}
+            </select>
+            <select
+              value={accountAccessFilters.issue_category}
+              onChange={(event) => setAccountAccessFilters((prev) => ({ ...prev, issue_category: event.target.value }))}
+            >
+              <option value="">All Issue Types</option>
+              {accountAccessCategories.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+            <button type="button" className="ghost-btn" onClick={() => loadAccountAccessTickets()}>
+              <RefreshCw size={16} /> Apply
+            </button>
+          </div>
+
+          {accountAccessLoading ? (
+            <div className="empty-state"><Loader2 className="spin" size={28} /><p>Loading account-access requests...</p></div>
+          ) : accountAccessTickets.length ? (
+            <div className="account-access-list">
+              {accountAccessTickets.map((ticket) => {
+                const id = ticket.ticket_id || ticket.ticket_no || ticket._id;
+                const draft = {
+                  status: ticket.status || 'open',
+                  assigned_to_name: ticket.assigned_to_name || '',
+                  latest_update: ticket.latest_update || ticket.status_note || '',
+                  resolution_remarks: ticket.resolution_remarks || ticket.resolution_note || '',
+                  ...(accountAccessDrafts[id] || {}),
+                };
+
+                return (
+                  <article key={id} className="account-access-ticket">
+                    <div className="account-access-ticket-head">
+                      <strong>{id}</strong>
+                      <span className={`pill ${statusClass(ticket.status)}`}>{accountAccessStatusLabel(ticket.status)}</span>
+                    </div>
+                    <h3>{ticket.subject || 'Account access assistance'}</h3>
+                    <p>{ticket.description || ticket.issue_description || 'No description provided.'}</p>
+                    <div className="account-access-ticket-meta">
+                      <span>{ticket.employee_name || 'Employee'}</span>
+                      <span>{ticket.employee_code || '—'}</span>
+                      <span>{ticket.department || '—'}</span>
+                      <span>{ticket.email || ticket.employee_email || '—'}</span>
+                      <span>{formatDate(ticket.created_at || ticket.submitted_at)}</span>
+                    </div>
+
+                    <div className="account-access-editor">
+                      <div className="account-access-editor-grid">
+                        <label>
+                          <span>Status</span>
+                          <select value={draft.status} onChange={(event) => updateAccountAccessDraft(ticket, 'status', event.target.value)}>
+                            {['open', 'assigned', 'in_progress', 'resolved', 'closed', 'rejected', 'reopened'].map((status) => (
+                              <option key={status} value={status}>{accountAccessStatusLabel(status)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Assigned To</span>
+                          <input value={draft.assigned_to_name} onChange={(event) => updateAccountAccessDraft(ticket, 'assigned_to_name', event.target.value)} placeholder="IT Head or support member" />
+                        </label>
+                      </div>
+                      <label>
+                        <span>Latest Update</span>
+                        <textarea rows={3} value={draft.latest_update} onChange={(event) => updateAccountAccessDraft(ticket, 'latest_update', event.target.value)} placeholder="Progress visible to the employee" />
+                      </label>
+                      <label>
+                        <span>Resolution Remarks</span>
+                        <textarea rows={3} value={draft.resolution_remarks} onChange={(event) => updateAccountAccessDraft(ticket, 'resolution_remarks', event.target.value)} placeholder="Required when resolving the issue" />
+                      </label>
+                      <div className="account-access-ticket-actions">
+                        <small>The employee will receive email updates when the backend notification service is enabled.</small>
+                        <button type="button" className="primary" disabled={accountAccessSaving === id} onClick={() => saveAccountAccessTicket(ticket)}>
+                          {accountAccessSaving === id ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+                          Save Update
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-state"><ShieldAlert size={30} /><p>No account-access requests found.</p></div>
+          )}
+        </section>
+      ) : null}
+
       {canSeeDesk ? (
         <section className="panel grievance-list-panel">
           <div className="section-heading">

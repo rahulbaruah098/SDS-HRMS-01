@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { BrowserRouter } from 'react-router-dom';
 import { api, setSession, refreshCurrentSession, currentUser } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 import AuthPageFooter from '../components/AuthPageFooter';
@@ -32,6 +31,10 @@ export default function Login({ onLogin }) {
 
   function openDemoRegistration() {
     window.location.href = '/apply-demo-registration';
+  }
+
+  function openAccountAccessHelp() {
+    window.location.href = '/account-access-help';
   }
 
   async function submit(e) {
@@ -78,8 +81,7 @@ export default function Login({ onLogin }) {
   }
 
   return (
-    <BrowserRouter>
-      <div className="app-page auth-premium-page login-page yc-employee-login-page">
+    <div className="app-page auth-premium-page login-page yc-employee-login-page">
       <header className="auth-premium-header">
         <button
           type="button"
@@ -302,6 +304,16 @@ export default function Login({ onLogin }) {
 
                 <Icon name="arrow" />
               </button>
+
+              <button
+                type="button"
+                className="yc-login-account-access-link"
+                disabled={loading}
+                onClick={openAccountAccessHelp}
+              >
+                <Icon name="help" />
+                <span>Can’t access your account?</span>
+              </button>
             </form>
 
             <div className="auth-premium-security-row">
@@ -335,8 +347,7 @@ export default function Login({ onLogin }) {
         </section>
       </main>
 
-        <AuthPageFooter />
-      </div>
-    </BrowserRouter>
+      <AuthPageFooter />
+    </div>
   );
 }

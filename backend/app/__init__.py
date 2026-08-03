@@ -24,6 +24,7 @@ from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
 from app.routes.ai_assistant import ai_assistant_bp
 from .routes.recruitment import recruitment_bp
+from .routes.account_access import account_access_bp
 from .services.recruitment_service import ensure_recruitment_indexes
 
 
@@ -125,6 +126,13 @@ def create_app():
     # Keep this early because it is used from the public login/demo registration flow.
     app.register_blueprint(demo_requests_bp, url_prefix="/api/v1/demo-requests")
 
+
+    # Public account-access support APIs:
+    # employee lookup by registered email/employee code, account-access request
+    # submission, public ticket tracking, and tenant-restricted HR/IT handling.
+    # Keep this before authenticated and generic CRUD routes because employees
+    # must be able to create and track these tickets without signing in.
+    app.register_blueprint(account_access_bp, url_prefix="/api/v1/account-access")
 
     # YourComate SaaS billing/payment APIs:
     # billing summary, Razorpay order creation, payment verification,
@@ -289,6 +297,7 @@ def create_app():
             "modules": [
                 "Authentication",
                 "SaaS Trial Requests",
+                "Public Account Access Support",
                 "Dashboard",
                 "Employee Master",
                 "Attendance",
@@ -325,6 +334,7 @@ def create_app():
                 "allowed_origins": allowed_origins,
             },
             "saas_demo_requests_module": True,
+            "account_access_support_module": True,
             "attendance_module": True,
             "direct_attendance_modes": ["office", "wfh", "field"],
             "field_attendance_requires": ["field_location", "field_photo", "location_metadata"],
@@ -376,6 +386,7 @@ def create_app():
             "route_order": [
                 "auth",
                 "demo_requests",
+                "account_access",
                 "billing",
                 "payroll",
                 "dashboard",
