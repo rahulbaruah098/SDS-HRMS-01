@@ -202,11 +202,16 @@ export default function Login({ onLogin }) {
         <section className="auth-premium-form-panel">
           <div className="auth-premium-form-card">
             <header>
-              <div>
-                <small>Employee sign in</small>
-                <h2>WELCOME BACK</h2>
-                <p>Use the account shared by your organisation.</p>
-              </div>
+             <div className="yc-login-heading-copy">
+  <small>Employee sign in</small>
+
+  <h2 className="yc-login-heading">
+    <span>WELCOME</span>
+    <span>BACK</span>
+  </h2>
+
+  <p>Use the account shared by your organisation.</p>
+</div>
 
               <div
                 className="yc-login-header-statuses"

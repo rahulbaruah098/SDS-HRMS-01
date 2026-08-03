@@ -244,18 +244,6 @@ export default function HomePage() {
       <section className="yc-minoru-hero" data-panel-label="YourComate HRMS">
         <div className="yc-minoru-shell">
           <div className="yc-minoru-main">
-            <button
-              type="button"
-              className="yc-minoru-blob yc-minoru-login yc-minoru-coming-soon"
-              aria-disabled="true"
-            >
-              <span className="yc-minoru-blob-line">
-                <span>Get the app</span>
-                <Icon name="arrow" />
-              </span>
-              <small>Coming soon</small>
-            </button>
-
             <Link
               className="yc-minoru-saya-star"
               to="/saya"
@@ -265,17 +253,22 @@ export default function HomePage() {
               <strong>SAYA ASSISTANT</strong>
             </Link>
 
-            <button
-              type="button"
-              className="yc-minoru-blob yc-minoru-demo yc-minoru-coming-soon"
-              aria-disabled="true"
+            <Link
+              className="yc-minoru-login-portal"
+              to="/login"
+              aria-label="Open YourComate login"
             >
-              <span className="yc-minoru-blob-line">
-                <span>Watch our video</span>
+              <span className="yc-minoru-login-portal-icon" aria-hidden="true">
+                <Icon name="people" />
+              </span>
+              <span className="yc-minoru-login-portal-copy">
+                <small>YOUR WORKSPACE</small>
+                <strong>Login</strong>
+              </span>
+              <span className="yc-minoru-login-portal-arrow" aria-hidden="true">
                 <Icon name="arrow" />
               </span>
-              <small>Coming soon</small>
-            </button>
+            </Link>
             <div className="yc-minoru-organic" aria-hidden="true"><i /><i /><i /><i /><i /></div>
             <div className="yc-minoru-brand-stage" aria-label="Your Comate">
               <span className="yc-minoru-word yc-minoru-word-your">YOUR</span>

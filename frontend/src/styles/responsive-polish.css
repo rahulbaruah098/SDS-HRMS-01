@@ -18,7 +18,6 @@ img, video, svg { max-width: 100%; }
 .yc-store-badges.is-compact:not(.yc-footer-store-badges) .yc-store-badge > svg { width:30px; height:34px; }
 .yc-store-badges.is-compact:not(.yc-footer-store-badges) strong { font-size:17px; }
 
-.yc-get-app-star, .yc-watch-video-blob { isolation:isolate; }
 .yc-star-cluster { position:absolute; inset:0; pointer-events:none; }
 .yc-star-cluster i { position:absolute; width:7px; height:7px; background:currentColor; clip-path:polygon(50% 0,61% 38%,100% 50%,61% 62%,50% 100%,39% 62%,0 50%,39% 38%); animation:ycTwinkle 2.7s ease-in-out infinite; }
 .yc-star-cluster i:nth-child(1){top:16%;left:18%}.yc-star-cluster i:nth-child(2){right:17%;top:22%;animation-delay:.6s}.yc-star-cluster i:nth-child(3){left:24%;bottom:18%;animation-delay:1.2s}.yc-star-cluster i:nth-child(4){right:22%;bottom:16%;animation-delay:1.8s}
@@ -28,11 +27,10 @@ img, video, svg { max-width: 100%; }
 
 .yc-home-human-icon { width:42px; height:42px; flex:0 0 auto; display:grid; place-items:center; border-radius:14px 5px 14px 5px; color:#30275f; background:rgba(255,255,255,.76); border:1px solid rgba(48,39,95,.16); box-shadow:4px 4px 0 rgba(48,39,95,.1); }
 .yc-home-human-icon svg { width:19px; height:19px; }
-.yc-minoru-card-symbol svg { width:14px; }
 .yc-shift-official-card > .yc-home-human-icon { align-self:center; }
 .yc-soft-role-tabs button b, .yc-soft-role-metrics b, .yc-soft-role-actions b { display:grid; place-items:center; }
 .yc-soft-role-tabs button b svg, .yc-soft-role-metrics b svg, .yc-soft-role-actions b svg { width:16px; height:16px; }
-.yc-soft-module-number, .yc-minoru-card-number, .yc-shift-official-number { display:none !important; }
+.yc-soft-module-number, .yc-shift-official-number { display:none !important; }
 
 .yc-app-showcase-panel { position:relative; background:linear-gradient(145deg,#f4efff 0%,#eaf7ff 52%,#fff6d8 100%); overflow:hidden; }
 .yc-app-showcase-panel::before { content:""; position:absolute; width:440px; aspect-ratio:1; right:-130px; top:-150px; border-radius:50%; background:radial-gradient(circle,rgba(101,88,217,.22),transparent 68%); }
@@ -724,7 +722,7 @@ img, video, svg { max-width: 100%; }
   .yc-footer-store-badges .yc-store-badge strong {
     font-size:clamp(9px,3.1vw,12px);
   }
-  .yc-minoru-main,.yc-minoru-info,.yc-shift-official-workflow,.yc-soft-modules-board,.yc-soft-role-workbench,.yc-app-showcase-shell,.yc-saya-showcase-shell { max-width:100%; }
+  .yc-shift-official-workflow,.yc-soft-modules-board,.yc-soft-role-workbench,.yc-app-showcase-shell,.yc-saya-showcase-shell { max-width:100%; }
   .yc-home-human-icon { width:38px;height:38px; }
   .yc-app-showcase-shell { gap:18px; padding-block:64px; }
   .yc-app-showcase-copy h2 { font-size:clamp(44px,14vw,68px); }
@@ -786,35 +784,32 @@ img, video, svg { max-width: 100%; }
 @media(max-width:1100px){.yc-saya-page-hero-shell,.yc-saya-conversation-shell{grid-template-columns:1fr}.yc-saya-page-orbit{min-height:610px}.yc-saya-capability-grid-new{grid-template-columns:repeat(2,minmax(0,1fr))}.yc-saya-conversation-shell>header{position:static}}
 @media(max-width:760px){.yc-saya-page-hero-shell{padding-block:70px;gap:24px}.yc-saya-page-copy h1{font-size:clamp(52px,16vw,78px)}.yc-saya-page-orbit{min-height:500px;transform:scale(.88);margin-inline:-8%}.yc-saya-float-card{min-width:150px}.yc-saya-capability-grid-new{grid-template-columns:1fr}.yc-saya-conversation-list article{padding:19px}}
 
-/* 2026-07 correction pass: retain the original numbered-card frames, with one icon replacing each number. */
+/* 2026-07 correction pass: retain numbered-card frames outside the homepage hero. */
 .yc-home-human-icon { display:none !important; }
 .yc-soft-module-icon { display:none !important; }
-.yc-minoru-card-number.yc-icon-number-box,
 .yc-shift-official-number.yc-icon-number-box,
 .yc-soft-module-number.yc-icon-number-box {
   display:grid !important;
   place-items:center;
   line-height:1;
+  font-size:0;
 }
-.yc-icon-number-box svg { width:clamp(17px,1.35vw,22px); height:clamp(17px,1.35vw,22px); }
-.yc-minoru-card-number.yc-icon-number-box { font-size:0; }
-.yc-shift-official-number.yc-icon-number-box { font-size:0; }
-.yc-soft-module-number.yc-icon-number-box { font-size:0; }
+.yc-shift-official-number.yc-icon-number-box svg,
+.yc-soft-module-number.yc-icon-number-box svg {
+  width:clamp(17px,1.35vw,22px);
+  height:clamp(17px,1.35vw,22px);
+}
 
-/* Preserve readable card content at every width instead of squeezing it into one corner. */
-.yc-minoru-cards > a,
+/* Preserve readable card content outside the homepage hero. */
 .yc-shift-official-card,
 .yc-soft-module-card {
   min-width:0;
 }
-.yc-minoru-card-copy,
 .yc-shift-official-card-copy,
 .yc-soft-module-copy {
   min-width:0;
   width:100%;
 }
-.yc-minoru-card-copy strong,
-.yc-minoru-card-copy small,
 .yc-shift-official-card-copy strong,
 .yc-shift-official-card-copy small,
 .yc-soft-module-copy strong,
@@ -1086,8 +1081,6 @@ img, video, svg { max-width: 100%; }
   .yc-saya-phone-desk { grid-template-columns:repeat(3,minmax(0,1fr)); min-height:520px !important; }
 }
 @media (max-width:760px) {
-  .yc-minoru-cards > a { grid-template-columns:44px minmax(0,1fr) !important; align-items:center !important; }
-  .yc-minoru-card-number.yc-icon-number-box { width:44px; height:44px; }
   .yc-shift-official-card { grid-template-columns:48px minmax(0,1fr) auto !important; align-items:center !important; }
   .yc-shift-official-number.yc-icon-number-box { width:48px; height:48px; }
   .yc-soft-module-card { grid-template-columns:48px minmax(0,1fr) auto !important; align-items:center !important; }

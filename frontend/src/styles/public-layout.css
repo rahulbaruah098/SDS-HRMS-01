@@ -2158,7 +2158,7 @@ border-color: rgba(159, 194, 218, 0.64);
     display: block !important;
   }
 
-  .yc-horizontal-enabled > section,
+  .yc-horizontal-enabled > section:not(.yc-minoru-hero),
   .yc-horizontal-enabled > article,
   .yc-horizontal-enabled > div {
     width: 100% !important;
