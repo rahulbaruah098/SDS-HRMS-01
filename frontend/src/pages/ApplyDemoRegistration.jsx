@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 import AuthPageFooter from '../components/AuthPageFooter';
@@ -1251,9 +1251,5 @@ function DemoRegistrationContent() {
 }
 
 export default function ApplyDemoRegistration() {
-  return (
-    <BrowserRouter>
-      <DemoRegistrationContent />
-    </BrowserRouter>
-  );
+  return <DemoRegistrationContent />;
 }
