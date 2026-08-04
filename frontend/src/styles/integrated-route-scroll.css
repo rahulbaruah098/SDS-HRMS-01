@@ -54,8 +54,8 @@ html.yc-website-mode
   top: auto !important;
 }
 
-/* Tablet and mobile use natural vertical flow, including the homepage. */
-@media (max-width: 1120px), (max-height: 699px) {
+/* Phones and very short landscape screens use natural vertical flow. */
+@media (max-width: 760px), (max-height: 559px) {
   html.yc-website-mode .public-scroll-track,
   html.yc-website-mode .public-horizontal-viewport,
   html.yc-website-mode .public-horizontal-shell,

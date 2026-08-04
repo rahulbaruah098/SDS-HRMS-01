@@ -708,7 +708,7 @@ border: 0;
   50% { transform: translateY(-7px) rotate(0.6deg); }
 }
 
-@media (min-width: 1121px) and (min-height: 700px) {
+@media (min-width: 761px) and (min-height: 560px) {
   .yc-horizontal-mode .yc-minoru-hero {
     height: var(--yc-deck-height) !important;
     min-height: var(--yc-deck-height) !important;
@@ -721,7 +721,7 @@ border: 0;
   }
 }
 
-@media (min-width: 1121px) and (max-height: 820px) {
+@media (min-width: 761px) and (min-height: 560px) and (max-height: 820px) {
   .yc-minoru-shell {
     grid-template-rows: minmax(0, 1fr) clamp(168px, 22vh, 190px);
   }

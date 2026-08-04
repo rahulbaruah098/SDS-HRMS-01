@@ -324,9 +324,7 @@ export default function HomePage() {
       <section id="yourcomate-app" className="public-section yc-app-showcase-panel" data-panel-label="YourComate mobile app">
         <div className="page-width yc-app-showcase-shell">
    <header className="yc-app-showcase-copy">
-  <span className="yc-app-kicker">
-    <Icon name="mobile" /> YOURCOMATE ON THE GO
-  </span>
+  
 
  <h2 className="yc-app-editorial-heading">
   <span>Your complete workday,</span>

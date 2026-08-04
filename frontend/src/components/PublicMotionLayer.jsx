@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 
-const HORIZONTAL_QUERY = "(min-width: 1121px) and (min-height: 700px)";
+const HORIZONTAL_QUERY = "(min-width: 761px) and (min-height: 560px)";
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 function panelLabel(panel, index) {
@@ -113,6 +113,12 @@ export default function PublicMotionLayer() {
     let measureFrame = 0;
     let resizeObserver = null;
     let lastFrameAt = performance.now();
+    let touchPointerId = null;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartScrollY = 0;
+    let touchStartedAt = 0;
+    let touchAxis = null;
 
     const emitState = (index) => {
       if (index === activeIndex) return;
@@ -199,7 +205,7 @@ export default function PublicMotionLayer() {
         header?.getBoundingClientRect().height || 0,
       );
 
-      deckHeight = Math.max(520, window.innerHeight - headerHeight);
+      deckHeight = Math.max(1, window.innerHeight - headerHeight);
       panelWidth = Math.max(1, viewport.clientWidth || window.innerWidth);
       trackStart = track.getBoundingClientRect().top + window.scrollY - headerHeight;
       maxTravel = Math.max(0, (panels.length - 1) * deckHeight);
@@ -234,6 +240,91 @@ export default function PublicMotionLayer() {
         behavior:
           behavior === "auto" || reducedMotion.matches ? "auto" : "smooth",
       });
+    };
+
+    const resetTouchGesture = () => {
+      touchPointerId = null;
+      touchStartX = 0;
+      touchStartY = 0;
+      touchStartScrollY = 0;
+      touchStartedAt = 0;
+      touchAxis = null;
+    };
+
+    const handlePointerDown = (event) => {
+      if (
+        !desktop ||
+        !media.matches ||
+        !["touch", "pen"].includes(event.pointerType) ||
+        event.isPrimary === false
+      ) {
+        return;
+      }
+
+      const local = window.scrollY - trackStart;
+      if (local < -1 || local > maxTravel + 1) return;
+
+      touchPointerId = event.pointerId;
+      touchStartX = event.clientX;
+      touchStartY = event.clientY;
+      touchStartScrollY = window.scrollY;
+      touchStartedAt = performance.now();
+      touchAxis = null;
+      viewport.setPointerCapture?.(event.pointerId);
+    };
+
+    const handlePointerMove = (event) => {
+      if (event.pointerId !== touchPointerId || !desktop || !media.matches) return;
+
+      const deltaX = event.clientX - touchStartX;
+      const deltaY = event.clientY - touchStartY;
+
+      if (!touchAxis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= 8) {
+        touchAxis = Math.abs(deltaX) > Math.abs(deltaY) * 1.15
+          ? "horizontal"
+          : "vertical";
+      }
+
+      if (touchAxis !== "horizontal") return;
+
+      event.preventDefault();
+      const travelRatio = deckHeight / Math.max(1, panelWidth);
+      const nextY = clamp(
+        touchStartScrollY - deltaX * travelRatio,
+        trackStart,
+        trackStart + maxTravel,
+      );
+
+      window.scrollTo({ top: nextY, left: 0, behavior: "auto" });
+    };
+
+    const finishPointerGesture = (event) => {
+      if (event.pointerId !== touchPointerId) return;
+
+      const deltaX = event.clientX - touchStartX;
+      const elapsed = Math.max(1, performance.now() - touchStartedAt);
+      const velocity = Math.abs(deltaX) / elapsed;
+      const wasHorizontal = touchAxis === "horizontal";
+
+      viewport.releasePointerCapture?.(event.pointerId);
+      resetTouchGesture();
+
+      if (!wasHorizontal || !desktop || !media.matches) return;
+
+      const progress = getDocumentProgress();
+      let nextIndex = Math.round(progress);
+
+      if (Math.abs(deltaX) >= Math.min(90, panelWidth * 0.12) || velocity >= 0.45) {
+        nextIndex = deltaX < 0 ? Math.ceil(progress) : Math.floor(progress);
+      }
+
+      goToPanel(nextIndex);
+    };
+
+    const handlePointerCancel = (event) => {
+      if (event.pointerId !== touchPointerId) return;
+      viewport.releasePointerCapture?.(event.pointerId);
+      resetTouchGesture();
     };
 
     const handleKeyDown = (event) => {
@@ -304,6 +395,8 @@ export default function PublicMotionLayer() {
       track.style.removeProperty("height");
       main.style.removeProperty("width");
       shell.style.removeProperty("transform");
+      viewport.style.removeProperty("touch-action");
+      resetTouchGesture();
 
       panels.forEach((panel) => {
         panel.classList.remove("yc-page-panel", "is-active");
@@ -325,6 +418,7 @@ export default function PublicMotionLayer() {
       document.documentElement.classList.add("yc-horizontal-mode");
       document.body.classList.add("yc-horizontal-mode");
       site.classList.add("yc-deck-ready");
+      viewport.style.touchAction = "pan-y";
 
       panels.forEach((panel, index) => {
         panel.classList.add("yc-page-panel");
@@ -349,6 +443,10 @@ export default function PublicMotionLayer() {
     window.addEventListener("resize", handleViewportChange, { passive: true });
     window.addEventListener("orientationchange", handleViewportChange, { passive: true });
     window.addEventListener("keydown", handleKeyDown);
+    viewport.addEventListener("pointerdown", handlePointerDown);
+    viewport.addEventListener("pointermove", handlePointerMove, { passive: false });
+    viewport.addEventListener("pointerup", finishPointerGesture);
+    viewport.addEventListener("pointercancel", handlePointerCancel);
     window.addEventListener("yc-page-deck-go", handleGo);
     window.addEventListener("yc-scroll-to-hash", handleHash);
     media.addEventListener?.("change", handleViewportChange);
@@ -362,6 +460,10 @@ export default function PublicMotionLayer() {
       window.removeEventListener("resize", handleViewportChange);
       window.removeEventListener("orientationchange", handleViewportChange);
       window.removeEventListener("keydown", handleKeyDown);
+      viewport.removeEventListener("pointerdown", handlePointerDown);
+      viewport.removeEventListener("pointermove", handlePointerMove);
+      viewport.removeEventListener("pointerup", finishPointerGesture);
+      viewport.removeEventListener("pointercancel", handlePointerCancel);
       window.removeEventListener("yc-page-deck-go", handleGo);
       window.removeEventListener("yc-scroll-to-hash", handleHash);
       media.removeEventListener?.("change", handleViewportChange);

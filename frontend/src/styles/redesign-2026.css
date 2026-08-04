@@ -1451,7 +1451,7 @@ border-color: rgba(159, 194, 218, 0.64);
 }
 
 /* Stable homepage-only horizontal deck. Footer stays normal vertical flow. */
-@media (min-width: 1121px) and (min-height: 700px) {
+@media (min-width: 761px) and (min-height: 560px) {
   html.yc-horizontal-mode {
     overflow-y: auto !important;
     scroll-behavior: auto !important;
@@ -2072,7 +2072,7 @@ border-color: rgba(159, 194, 218, 0.64);
 }
 
 /* Fit the existing homepage sections inside the desktop deck. */
-@media (min-width: 1121px) and (min-height: 700px) {
+@media (min-width: 761px) and (min-height: 560px) {
   .yc-manifesto-grid,
   .yc-role-layout,
   .public-saya-grid {
@@ -2100,8 +2100,8 @@ border-color: rgba(159, 194, 218, 0.64);
   }
 }
 
-/* Tablet and mobile: natural vertical flow, no cropped transformed panels. */
-@media (max-width: 1120px), (max-height: 699px) {
+/* Phones and very short landscape screens: natural vertical flow. */
+@media (max-width: 760px), (max-height: 559px) {
   html,
   body {
     overflow-x: hidden !important;
@@ -2537,7 +2537,7 @@ border-color: rgba(159, 194, 218, 0.64);
 }
 
 /* Sticky deck must not sit inside an overflow-clipped ancestor. */
-@media (min-width: 1121px) and (min-height: 700px) {
+@media (min-width: 761px) and (min-height: 560px) {
   html.yc-horizontal-mode,
   html.yc-horizontal-mode body {
     overflow-x: clip !important;
