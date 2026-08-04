@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 
-const DESKTOP_QUERY = "(min-width: 1121px) and (min-height: 700px)";
+const HORIZONTAL_QUERY = "(min-width: 1121px) and (min-height: 700px)";
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 function panelLabel(panel, index) {
@@ -54,10 +54,7 @@ export default function PublicMotionLayer() {
       return () => {
         site.classList.remove("yc-standard-route");
         sections.forEach((section) => {
-          section.classList.remove(
-            "yc-perf-section",
-            "yc-perf-in-view",
-          );
+          section.classList.remove("yc-perf-section", "yc-perf-in-view");
         });
       };
     }
@@ -84,10 +81,7 @@ export default function PublicMotionLayer() {
       observer.disconnect();
       site.classList.remove("yc-standard-route");
       sections.forEach((section) => {
-        section.classList.remove(
-          "yc-perf-section",
-          "yc-perf-in-view",
-        );
+        section.classList.remove("yc-perf-section", "yc-perf-in-view");
       });
     };
   }, [location.pathname]);
@@ -98,7 +92,7 @@ export default function PublicMotionLayer() {
     const viewport = track?.querySelector(":scope > .public-horizontal-viewport");
     const shell = viewport?.querySelector(":scope > .public-horizontal-shell");
     const main = shell?.querySelector(":scope > .public-main");
-    const media = window.matchMedia(DESKTOP_QUERY);
+    const media = window.matchMedia(HORIZONTAL_QUERY);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     if (!site || !track || !viewport || !shell || !main) return undefined;
@@ -171,9 +165,6 @@ export default function PublicMotionLayer() {
 
       const elapsed = Math.min(42, Math.max(1, now - lastFrameAt));
       lastFrameAt = now;
-
-      // A short critically damped follow keeps wheel and trackpad input soft,
-      // while remaining fast enough that the deck never feels detached.
       const response = 1 - Math.exp(-elapsed / 34);
       const nextProgress =
         currentProgress + (targetProgress - currentProgress) * response;
@@ -194,16 +185,14 @@ export default function PublicMotionLayer() {
     };
 
     const updateFromDocument = () => {
-      if (!desktop) return;
-
+      if (!desktop || !media.matches) return;
       targetProgress = getDocumentProgress();
       requestRender();
     };
 
     const measure = () => {
       measureFrame = 0;
-
-      if (!desktop) return;
+      if (!desktop || !media.matches) return;
 
       const header = document.querySelector(".public-site-header");
       const headerHeight = Math.ceil(
@@ -231,7 +220,7 @@ export default function PublicMotionLayer() {
     };
 
     const goToPanel = (index, behavior = "smooth") => {
-      if (!desktop) return;
+      if (!desktop || !media.matches) return;
 
       const nextIndex = clamp(
         Number(index) || 0,
@@ -250,6 +239,7 @@ export default function PublicMotionLayer() {
     const handleKeyDown = (event) => {
       if (
         !desktop ||
+        !media.matches ||
         event.defaultPrevented ||
         event.target.closest?.("input, textarea, select, [contenteditable='true']")
       ) {
@@ -341,22 +331,27 @@ export default function PublicMotionLayer() {
         panel.dataset.panelIndex = String(index);
       });
 
-      resizeObserver = new ResizeObserver(requestMeasure);
-      resizeObserver.observe(viewport);
-      const header = document.querySelector(".public-site-header");
-      if (header) resizeObserver.observe(header);
+      if (typeof ResizeObserver === "function") {
+        resizeObserver = new ResizeObserver(requestMeasure);
+        resizeObserver.observe(viewport);
+        const header = document.querySelector(".public-site-header");
+        if (header) resizeObserver.observe(header);
+      }
 
       requestMeasure();
     };
 
-    const handleMediaChange = () => setup();
+    const handleViewportChange = () => {
+      setup();
+    };
 
     window.addEventListener("scroll", updateFromDocument, { passive: true });
-    window.addEventListener("resize", requestMeasure, { passive: true });
+    window.addEventListener("resize", handleViewportChange, { passive: true });
+    window.addEventListener("orientationchange", handleViewportChange, { passive: true });
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("yc-page-deck-go", handleGo);
     window.addEventListener("yc-scroll-to-hash", handleHash);
-    media.addEventListener?.("change", handleMediaChange);
+    media.addEventListener?.("change", handleViewportChange);
     reducedMotion.addEventListener?.("change", requestRender);
 
     setup();
@@ -364,11 +359,12 @@ export default function PublicMotionLayer() {
     return () => {
       clear();
       window.removeEventListener("scroll", updateFromDocument);
-      window.removeEventListener("resize", requestMeasure);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("orientationchange", handleViewportChange);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("yc-page-deck-go", handleGo);
       window.removeEventListener("yc-scroll-to-hash", handleHash);
-      media.removeEventListener?.("change", handleMediaChange);
+      media.removeEventListener?.("change", handleViewportChange);
       reducedMotion.removeEventListener?.("change", requestRender);
     };
   }, [location.pathname, location.hash]);

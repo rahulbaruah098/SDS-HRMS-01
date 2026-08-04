@@ -168,20 +168,6 @@ export default function Login({ onLogin }) {
             </div>
           </div>
 
-          <div className="yc-login-access-help">
-            <span>
-              <Icon name="help" />
-            </span>
-
-            <p>
-              <strong>Unable to access your account?</strong>
-              <small>
-                Contact your organisation’s HR or IT team for account
-                assistance.
-              </small>
-            </p>
-          </div>
-
           <aside
             className="yc-login-testing-notice"
             aria-label="Testing phase notice"

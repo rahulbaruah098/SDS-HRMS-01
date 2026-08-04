@@ -120,63 +120,39 @@ function normalizeTicketId(payload = {}) {
 
 const ACCOUNT_ACCESS_PAGE_STYLES = `
   .yc-account-access-page {
-    --yc-aa-ink: #10264f;
-    --yc-aa-muted: #657697;
-    --yc-aa-primary: #6174e5;
-    --yc-aa-primary-deep: #4059bd;
-    --yc-aa-cyan: #92dcf7;
-    --yc-aa-teal: #74ddd3;
-    --yc-aa-paper: #f8fbff;
-    --yc-aa-white: #ffffff;
-    --yc-aa-line: rgba(16, 38, 79, 0.12);
-    --yc-aa-shadow: 0 28px 80px rgba(27, 53, 112, 0.13);
-    position: relative;
-    min-height: 100vh;
-    overflow-x: clip;
-    color: var(--yc-aa-ink);
-    background:
-      radial-gradient(circle at 8% 12%, rgba(146, 220, 247, 0.42), transparent 28rem),
-      radial-gradient(circle at 91% 8%, rgba(116, 221, 211, 0.25), transparent 25rem),
-      linear-gradient(145deg, #f8fbff 0%, #f4f8ff 48%, #fbfdff 100%);
+    --yc-aa-navy: #101a3a;
+    --yc-aa-violet: #6658dc;
+    --yc-aa-violet-deep: #35296f;
+    --yc-aa-cream: #fffdf7;
+    --yc-aa-lilac: #f1efff;
+    --yc-aa-blue: #eef7ff;
+    --yc-aa-mint: #eaf8f4;
+    --yc-aa-yellow: #fff3cc;
+    --yc-aa-muted: #69758d;
+    --yc-aa-line: rgba(23, 33, 63, 0.82);
+    --yc-aa-soft-line: rgba(23, 33, 63, 0.13);
+    min-width: 0;
+    min-height: 100svh;
+    overflow-x: hidden;
+    color: var(--yc-aa-navy);
+    background: linear-gradient(135deg, #f5f8ff 0%, #f7f3ff 52%, #f3f6ff 100%);
   }
 
-  .yc-account-access-page::before,
-  .yc-account-access-page::after {
-    content: "";
-    position: fixed;
-    z-index: 0;
-    border-radius: 999px;
-    pointer-events: none;
-    filter: blur(2px);
-  }
-
-  .yc-account-access-page::before {
-    width: 30rem;
-    height: 30rem;
-    left: -15rem;
-    bottom: -12rem;
-    background: rgba(97, 116, 229, 0.10);
-  }
-
-  .yc-account-access-page::after {
-    width: 20rem;
-    height: 20rem;
-    right: -8rem;
-    top: 30%;
-    background: rgba(146, 220, 247, 0.18);
+  .yc-account-access-page,
+  .yc-account-access-page * {
+    box-sizing: border-box;
   }
 
   .yc-account-access-page .auth-premium-header {
     position: relative;
-    z-index: 5;
-    width: min(100% - 48px, 1540px);
-    min-height: 84px;
-    margin: 0 auto;
-    padding: 16px 0;
+    width: min(1540px, calc(100% - 48px));
+    min-height: 78px;
+    margin-inline: auto;
+    padding: 14px 0 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 24px;
+    gap: 20px;
     background: transparent;
   }
 
@@ -186,532 +162,691 @@ const ACCOUNT_ACCESS_PAGE_STYLES = `
     gap: 10px;
   }
 
-  .yc-account-access-page .auth-premium-link {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--yc-aa-ink);
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
-    padding: 11px 14px;
-    border-radius: 999px;
-    transition: background 180ms ease, transform 180ms ease;
-  }
-
-  .yc-account-access-page .auth-premium-link:hover {
-    background: rgba(255,255,255,0.72);
-    transform: translateY(-1px);
-  }
-
+  .yc-account-access-page .auth-premium-link,
   .yc-account-access-page .button {
-    min-height: 44px;
-    border: 0;
-    border-radius: 14px;
-    padding: 0 18px;
+    min-width: 0;
+    min-height: 42px;
+    padding: 0 17px;
+    border: 1px solid var(--yc-aa-line);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 9px;
+    color: var(--yc-aa-navy);
+    background: rgba(255, 255, 255, 0.78);
     font: inherit;
-    font-weight: 800;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.2;
+    text-align: center;
+    text-decoration: none;
     cursor: pointer;
-    transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+    transition: transform 160ms ease, box-shadow 160ms ease;
   }
 
   .yc-account-access-page .button-primary {
+    border-color: var(--yc-aa-violet-deep);
+    border-radius: 999px;
     color: #fff;
-    background: linear-gradient(135deg, var(--yc-aa-primary), var(--yc-aa-primary-deep));
-    box-shadow: 0 12px 28px rgba(64, 89, 189, 0.24);
+    background: var(--yc-aa-violet-deep);
+    box-shadow: 0 10px 24px rgba(53, 41, 111, 0.2);
   }
 
-  .yc-account-access-page .button-secondary {
-    color: var(--yc-aa-ink);
+  .yc-account-access-page .button-secondary,
+  .yc-account-access-page .button-ghost {
+    border-radius: 12px;
     background: #fff;
-    border: 1px solid var(--yc-aa-line);
   }
 
-  .yc-account-access-page .button:hover:not(:disabled) {
+  .yc-account-access-page .button:hover:not(:disabled),
+  .yc-account-access-page .auth-premium-link:hover:not(:disabled) {
     transform: translateY(-2px);
   }
 
-  .yc-account-access-page .button:disabled {
+  .yc-account-access-page button:disabled {
     cursor: not-allowed;
-    opacity: 0.55;
-    box-shadow: none;
+    opacity: 0.56;
   }
 
   .yc-account-access-page .auth-mobile-back-link {
     display: none;
   }
 
+  /* The shell is only a layout grid. It has no outer card, border or shadow. */
   .yc-account-access-shell {
-    position: relative;
-    z-index: 2;
-    width: min(100% - 48px, 1540px);
-    margin: 0 auto;
-    padding: 26px 0 64px;
+    width: min(1540px, calc(100% - 48px));
+    margin-inline: auto;
+    padding: 0 0 54px;
     display: grid;
-    grid-template-columns: minmax(340px, 0.88fr) minmax(560px, 1.12fr);
-    align-items: start;
-    gap: clamp(28px, 4vw, 72px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    min-height: calc(100svh - 132px);
+    gap: 18px;
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .yc-account-access-story,
+  .yc-account-access-form-panel {
+    min-width: 0;
+    height: 100%;
+    border: 1px solid var(--yc-aa-line);
+    border-radius: 28px;
+    overflow: hidden;
+    box-shadow:
+      8px 9px 0 rgba(23, 33, 63, 0.88),
+      0 24px 58px rgba(23, 33, 63, 0.1);
   }
 
   .yc-account-access-story {
-    position: sticky;
-    top: 24px;
-    min-height: calc(100vh - 150px);
-    padding: clamp(30px, 4vw, 58px);
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    overflow: hidden;
-    border-radius: 38px;
-    color: #fff;
-    background:
-      linear-gradient(160deg, rgba(15, 43, 94, 0.98), rgba(55, 77, 165, 0.96)),
-      #10264f;
-    box-shadow: var(--yc-aa-shadow);
+    position: relative;
+    min-height: 0;
+    padding: clamp(30px, 3.2vw, 52px);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: clamp(20px, 2.3vh, 30px);
+    color: var(--yc-aa-navy);
+    background: linear-gradient(145deg, #f7fdff 0%, #f1efff 64%, #fffaf1 100%);
   }
 
-  .yc-account-access-story::before {
-    content: "";
-    position: absolute;
-    width: 25rem;
-    height: 25rem;
-    right: -9rem;
-    top: -10rem;
-    border-radius: 50%;
-    background: linear-gradient(135deg, rgba(146, 220, 247, 0.38), rgba(116, 221, 211, 0.06));
-  }
-
+  /* Removed the decorative circular/background figure. */
+  .yc-account-access-story::before,
   .yc-account-access-story::after {
-    content: "";
-    position: absolute;
-    width: 19rem;
-    height: 19rem;
-    left: -8rem;
-    bottom: -11rem;
-    border-radius: 50%;
-    border: 46px solid rgba(255,255,255,0.06);
+    content: none;
+    display: none;
   }
 
   .yc-account-access-story-copy,
   .yc-account-access-security-note {
     position: relative;
     z-index: 1;
+    min-width: 0;
   }
 
   .yc-account-access-kicker {
     display: inline-flex;
     width: fit-content;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 22px;
-    padding: 8px 12px;
-    border: 1px solid rgba(255,255,255,0.16);
-    border-radius: 999px;
-    color: #dff7ff;
-    background: rgba(255,255,255,0.08);
+    max-width: 100%;
+    margin-bottom: 18px;
+    color: var(--yc-aa-violet);
+    font-size: 10px;
+    font-weight: 950;
+    letter-spacing: 0.13em;
     text-transform: uppercase;
-    letter-spacing: 0.15em;
-    font-size: 0.72rem;
-    font-weight: 900;
   }
 
   .yc-account-access-story h1 {
+    max-width: 720px;
     margin: 0;
-    max-width: 700px;
-    color: #fff;
-    font-size: clamp(2.8rem, 4.7vw, 5.7rem);
-    line-height: 0.94;
+    color: var(--yc-aa-navy);
+    font-family: var(--yc-display, Georgia, serif);
+    font-size: clamp(50px, 5.1vw, 82px);
+    font-weight: 650;
+    line-height: 0.9;
     letter-spacing: -0.055em;
-    font-weight: 900;
+    overflow-wrap: anywhere;
   }
 
   .yc-account-access-story h1 em {
     display: block;
-    margin-top: 8px;
-    color: #aeeeff;
+    margin-top: 4px;
+    color: var(--yc-aa-violet);
     font-family: inherit;
-    font-style: normal;
+    font-style: italic;
+    font-weight: 650;
   }
 
   .yc-account-access-story-copy > p {
-    max-width: 650px;
-    margin: 24px 0 34px;
-    color: rgba(255,255,255,0.76);
-    font-size: clamp(1rem, 1.3vw, 1.18rem);
-    line-height: 1.75;
+    max-width: 690px;
+    margin: 24px 0 28px;
+    color: var(--yc-aa-muted);
+    font-size: clamp(14px, 1vw, 16px);
+    line-height: 1.65;
   }
 
   .yc-account-access-flow {
+    width: 100%;
     display: grid;
-    gap: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
   }
 
   .yc-account-access-flow article {
+    min-width: 0;
+    min-height: 86px;
+    padding: 13px;
     display: grid;
-    grid-template-columns: 46px 1fr;
+    grid-template-columns: 36px minmax(0, 1fr);
     align-items: center;
-    gap: 14px;
-    padding: 15px;
-    border: 1px solid rgba(255,255,255,0.11);
-    border-radius: 18px;
-    background: rgba(255,255,255,0.07);
-    backdrop-filter: blur(12px);
+    gap: 10px;
+    border: 1px solid var(--yc-aa-soft-line);
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.76);
+    box-shadow: 0 10px 24px rgba(23, 33, 63, 0.06);
   }
 
+  .yc-account-access-flow article:nth-child(1) { background: var(--yc-aa-blue); }
+  .yc-account-access-flow article:nth-child(2) { background: var(--yc-aa-lilac); }
+  .yc-account-access-flow article:nth-child(3) { background: var(--yc-aa-yellow); }
+
   .yc-account-access-flow article > span {
-    width: 42px;
-    height: 42px;
+    width: 34px;
+    height: 34px;
     display: grid;
     place-items: center;
-    border-radius: 14px;
-    color: #10264f;
-    background: linear-gradient(135deg, #c9f4ff, #91dfd7);
-    font-size: 0.78rem;
-    font-weight: 900;
+    border-radius: 10px;
+    color: #fff;
+    background: var(--yc-aa-violet-deep);
+    font-size: 9px;
+    font-weight: 950;
   }
 
   .yc-account-access-flow strong,
   .yc-account-access-flow small {
     display: block;
+    overflow-wrap: anywhere;
   }
 
   .yc-account-access-flow strong {
-    margin-bottom: 4px;
-    color: #fff;
-    font-size: 0.96rem;
+    color: var(--yc-aa-navy);
+    font-size: 11px;
   }
 
   .yc-account-access-flow small {
-    color: rgba(255,255,255,0.64);
-    line-height: 1.45;
+    margin-top: 4px;
+    color: var(--yc-aa-muted);
+    font-size: 9px;
+    line-height: 1.42;
   }
 
   .yc-account-access-security-note {
-    margin-top: 28px;
-    padding: 18px;
+    align-self: end;
+    width: 100%;
+    padding: 15px 16px;
     display: grid;
-    grid-template-columns: 42px 1fr;
-    gap: 14px;
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 20px;
-    background: rgba(7, 25, 61, 0.28);
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    border: 1px solid rgba(255, 217, 95, 0.22);
+    border-radius: 18px;
+    color: #fff;
+    background: linear-gradient(135deg, #12233b, #202d3a);
+    box-shadow: 0 14px 30px rgba(16, 26, 58, 0.16);
   }
 
   .yc-account-access-security-note > svg,
   .yc-account-access-security-note > span {
-    width: 42px;
-    height: 42px;
-    padding: 10px;
-    border-radius: 14px;
-    color: #10264f;
-    background: #baf2ff;
+    width: 38px;
+    height: 38px;
+    padding: 9px;
+    border-radius: 12px;
+    color: #ffe36e;
+    background: rgba(255, 217, 95, 0.12);
   }
 
   .yc-account-access-security-note strong {
     display: block;
-    margin-bottom: 4px;
     color: #fff;
+    font-size: 12px;
   }
 
   .yc-account-access-security-note p {
-    margin: 0;
-    color: rgba(255,255,255,0.67);
-    font-size: 0.88rem;
-    line-height: 1.55;
+    margin: 4px 0 0;
+    color: rgba(255, 255, 255, 0.74);
+    font-size: 10px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 
   .yc-account-access-form-panel {
-    min-width: 0;
+    align-self: stretch;
+    padding: clamp(24px, 3vw, 46px);
+    background: var(--yc-aa-cream);
   }
 
   .yc-account-access-form-card {
-    position: relative;
-    padding: clamp(26px, 3vw, 42px);
-    border: 1px solid rgba(255,255,255,0.88);
-    border-radius: 34px;
-    background: rgba(255,255,255,0.87);
-    box-shadow: var(--yc-aa-shadow);
-    backdrop-filter: blur(20px);
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 20px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .yc-account-access-form-card > header {
+    min-width: 0;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 18px;
-    padding-bottom: 24px;
-    border-bottom: 1px solid var(--yc-aa-line);
+    padding-bottom: 20px;
+  }
+
+  .yc-account-access-form-card > header > div {
+    min-width: 0;
   }
 
   .yc-account-access-form-card > header small {
     display: block;
-    margin-bottom: 5px;
-    color: var(--yc-aa-primary-deep);
-    font-weight: 900;
-    text-transform: uppercase;
+    margin-bottom: 7px;
+    color: var(--yc-aa-violet);
+    font-size: 10px;
+    font-weight: 950;
     letter-spacing: 0.11em;
-    font-size: 0.72rem;
+    text-transform: uppercase;
   }
 
   .yc-account-access-form-card > header h2 {
     margin: 0;
-    color: var(--yc-aa-ink);
-    font-size: clamp(1.65rem, 2.1vw, 2.35rem);
-    letter-spacing: -0.035em;
+    color: var(--yc-aa-navy);
+    font-family: var(--yc-display, Georgia, serif);
+    font-size: clamp(34px, 3.3vw, 54px);
+    font-weight: 650;
+    line-height: 0.95;
+    letter-spacing: -0.045em;
+    overflow-wrap: anywhere;
   }
 
   .yc-account-access-form-card > header p {
-    margin: 8px 0 0;
+    margin: 10px 0 0;
     color: var(--yc-aa-muted);
+    font-size: 13px;
     line-height: 1.55;
   }
 
   .yc-account-access-page .auth-status-badge {
-    flex: none;
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 9px 12px;
+    gap: 7px;
+    padding: 8px 11px;
+    border: 1px solid #bde6d6;
     border-radius: 999px;
-    color: #17664f;
-    background: #e9fbf4;
-    font-size: 0.78rem;
-    font-weight: 900;
+    color: #17684f;
+    background: #edf9f4;
+    font-size: 9px;
+    font-weight: 950;
     white-space: nowrap;
   }
 
   .yc-account-access-page .auth-status-badge i {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: #28ad7d;
-    box-shadow: 0 0 0 4px rgba(40, 173, 125, 0.13);
+    background: #2bb987;
+    box-shadow: 0 0 0 4px rgba(43, 185, 135, 0.12);
   }
 
   .yc-account-access-form {
+    width: 100%;
+    min-width: 0;
     display: grid;
-    gap: 20px;
-    padding-top: 24px;
+    gap: 16px;
   }
 
   .yc-account-access-section {
+    min-width: 0;
     display: grid;
-    gap: 18px;
-    padding: clamp(20px, 2.3vw, 28px);
-    border: 1px solid var(--yc-aa-line);
-    border-radius: 24px;
-    background: linear-gradient(180deg, #ffffff, #fbfdff);
+    gap: 16px;
+    padding: clamp(17px, 2vw, 24px);
+    border: 1px solid var(--yc-aa-soft-line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.76);
   }
 
   .yc-account-access-section-heading {
+    min-width: 0;
     display: grid;
-    grid-template-columns: 42px 1fr;
+    grid-template-columns: 38px minmax(0, 1fr);
     align-items: center;
-    gap: 13px;
+    gap: 11px;
   }
 
   .yc-account-access-section-heading > span {
-    width: 42px;
-    height: 42px;
+    width: 38px;
+    height: 38px;
     display: grid;
     place-items: center;
-    border-radius: 14px;
+    border-radius: 11px;
     color: #fff;
-    background: linear-gradient(135deg, var(--yc-aa-primary), var(--yc-aa-primary-deep));
-    box-shadow: 0 10px 22px rgba(64, 89, 189, 0.20);
-    font-size: 0.83rem;
-    font-weight: 900;
+    background: var(--yc-aa-violet-deep);
+    font-size: 9px;
+    font-weight: 950;
   }
 
   .yc-account-access-section-heading strong,
   .yc-account-access-section-heading small {
     display: block;
+    overflow-wrap: anywhere;
   }
 
   .yc-account-access-section-heading strong {
-    margin-bottom: 3px;
-    color: var(--yc-aa-ink);
-    font-size: 1rem;
+    color: var(--yc-aa-navy);
+    font-size: 12px;
   }
 
   .yc-account-access-section-heading small {
+    margin-top: 3px;
     color: var(--yc-aa-muted);
-    line-height: 1.45;
+    font-size: 10px;
   }
 
   .yc-account-access-form label {
-    position: relative;
+    min-width: 0;
     display: grid;
-    gap: 8px;
+    gap: 7px;
   }
 
   .yc-account-access-form label > span {
-    color: #334a72;
-    font-size: 0.82rem;
+    color: #243252;
+    font-size: 11px;
     font-weight: 850;
   }
 
   .yc-account-access-page .auth-premium-input {
-    min-height: 52px;
+    width: 100%;
+    min-width: 0;
+    min-height: 50px;
     display: grid;
-    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-columns: 20px minmax(0, 1fr);
     align-items: center;
     gap: 10px;
-    padding: 0 15px;
-    border: 1px solid #dce4f0;
-    border-radius: 15px;
-    background: #fff;
-    transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+    padding: 0 13px;
+    border: 1px solid #d9dfeb;
+    border-radius: 12px;
+    background: #edf4ff;
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
   }
 
   .yc-account-access-page .auth-premium-input:focus-within {
-    border-color: rgba(97, 116, 229, 0.75);
-    box-shadow: 0 0 0 4px rgba(97, 116, 229, 0.11);
-    transform: translateY(-1px);
+    border-color: rgba(102, 88, 220, 0.66);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(102, 88, 220, 0.1);
   }
 
   .yc-account-access-page .auth-premium-input > svg,
-  .yc-account-access-page .auth-premium-input > span {
-    width: 19px;
-    height: 19px;
-    color: #7383a3;
+  .yc-account-access-page .auth-premium-input > span:first-child {
+    width: 18px;
+    height: 18px;
+    color: var(--yc-aa-violet);
   }
 
   .yc-account-access-page input,
   .yc-account-access-page select,
   .yc-account-access-page textarea {
-    min-width: 0;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     border: 0;
     outline: 0;
-    color: var(--yc-aa-ink);
+    color: var(--yc-aa-navy);
     background: transparent;
     font: inherit;
+    font-size: 13px;
   }
 
   .yc-account-access-page input,
   .yc-account-access-page select {
-    min-height: 50px;
+    min-height: 48px;
   }
 
-  .yc-account-access-page input::placeholder,
-  .yc-account-access-page textarea::placeholder {
-    color: #9aa8bf;
+  .yc-account-access-page textarea {
+    resize: vertical;
+  }
+
+  .yc-account-access-lookup-control {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    gap: 10px;
   }
 
   .yc-account-access-lookup-input {
-    grid-template-columns: 22px minmax(0, 1fr) auto !important;
-    padding-right: 6px !important;
+    min-width: 0;
+    grid-template-columns: 20px minmax(0, 1fr);
+    padding-right: 13px;
   }
 
   .yc-account-access-lookup-button {
-    min-height: 40px;
+    min-width: 132px;
+    min-height: 50px;
+    padding: 0 18px;
     border: 0;
-    border-radius: 11px;
-    padding: 0 16px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: #fff;
-    background: linear-gradient(135deg, var(--yc-aa-primary), var(--yc-aa-primary-deep));
+    background: var(--yc-aa-violet-deep);
     font: inherit;
-    font-size: 0.84rem;
-    font-weight: 900;
-    cursor: pointer;
+    font-size: 11px;
+    font-weight: 950;
+    line-height: 1.2;
+    text-align: center;
     white-space: nowrap;
+    cursor: pointer;
   }
 
-  .yc-account-access-lookup-button:disabled {
-    opacity: 0.6;
-    cursor: wait;
-  }
-
-  .yc-account-access-profile-grid {
+  .yc-account-access-profile-grid,
+  .yc-ticket-tracking-grid {
+    min-width: 0;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 12px;
   }
 
   .yc-account-access-profile-grid input {
-    min-height: 49px;
-    padding: 0 14px;
-    border: 1px solid #e1e7f0;
-    border-radius: 13px;
-    color: #435777;
-    background: #f6f9fd;
-    cursor: default;
+    min-height: 46px;
+    padding: 0 12px;
+    border: 1px solid #dce3ed;
+    border-radius: 11px;
+    color: #52617b;
+    background: #f4f7fb;
   }
 
   .yc-account-access-verified-banner {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 12px 14px;
-    border: 1px solid #bfe8d9;
-    border-radius: 14px;
+    gap: 8px;
+    padding: 11px 13px;
+    border: 1px solid #bde5d6;
+    border-radius: 12px;
     color: #17684f;
-    background: #edfbf5;
-    font-size: 0.85rem;
+    background: #edf9f4;
+    font-size: 10px;
     font-weight: 900;
   }
 
-  .yc-account-access-verified-banner > svg,
-  .yc-account-access-verified-banner > span:first-child {
-    width: 18px;
-    height: 18px;
-  }
-
   .yc-account-access-textarea {
-    align-items: start !important;
-    padding-top: 15px !important;
+    align-items: start;
+    padding-top: 13px;
   }
 
   .yc-account-access-textarea textarea {
-    min-height: 130px;
-    resize: vertical;
-    line-height: 1.6;
+    min-height: 118px;
+    line-height: 1.55;
   }
 
   .yc-account-access-character-count {
     justify-self: end;
-    color: #8390a7;
-    font-size: 0.75rem;
+    color: #8793a8;
+    font-size: 9px;
   }
 
   .yc-account-access-page .auth-premium-submit {
     width: 100%;
-    min-height: 52px;
-    border-radius: 15px;
+    min-height: 50px;
+    border-radius: 999px;
   }
 
   .yc-account-access-track-link {
     width: 100%;
-    margin-top: 18px;
-    padding: 14px;
-    border: 0;
-    border-radius: 15px;
+    min-width: 0;
+    min-height: 46px;
+    margin-top: 2px;
+    padding: 10px 14px;
+    border: 1px solid var(--yc-aa-soft-line);
+    border-radius: 12px;
     color: var(--yc-aa-muted);
-    background: #f5f8fd;
+    background: #f4f6fb;
     font: inherit;
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
     cursor: pointer;
   }
 
   .yc-account-access-track-link strong {
-    color: var(--yc-aa-primary-deep);
+    color: var(--yc-aa-violet-deep);
   }
 
-  .yc-account-access-track-link > svg,
-  .yc-account-access-track-link > span:last-child {
-    width: 16px;
-    height: 16px;
-    margin-left: 7px;
+  .yc-account-access-track-link svg {
+    width: 14px;
+    height: 14px;
+    margin-left: 6px;
     vertical-align: middle;
   }
 
+  .yc-ticket-tracking-form {
+    padding-top: 2px;
+  }
+
+  .yc-ticket-tracking-result {
+    min-width: 0;
+    display: grid;
+    gap: 14px;
+    padding-top: 6px;
+  }
+
+  .yc-ticket-tracking-summary {
+    min-width: 0;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    border: 1px solid var(--yc-aa-soft-line);
+    border-radius: 16px;
+    background: var(--yc-aa-lilac);
+  }
+
+  .yc-ticket-tracking-summary > div {
+    min-width: 0;
+  }
+
+  .yc-ticket-tracking-summary small,
+  .yc-ticket-tracking-summary strong {
+    display: block;
+  }
+
+  .yc-ticket-tracking-summary strong {
+    margin-top: 4px;
+    color: var(--yc-aa-violet-deep);
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .yc-ticket-status {
+    flex: 0 0 auto;
+    max-width: 100%;
+    padding: 8px 11px;
+    border-radius: 999px;
+    color: #5c3d00;
+    background: #fff0b8;
+    font-size: 9px;
+    font-weight: 950;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .yc-ticket-status-resolved,
+  .yc-ticket-status-closed {
+    color: #17684f;
+    background: #dff7ed;
+  }
+
+  .yc-ticket-status-rejected {
+    color: #8a3041;
+    background: #ffe6eb;
+  }
+
+  .yc-ticket-status-in_progress {
+    color: #284f91;
+    background: #e4efff;
+  }
+
+  .yc-ticket-tracking-grid article,
+  .yc-ticket-tracking-detail {
+    min-width: 0;
+    padding: 13px;
+    border: 1px solid var(--yc-aa-soft-line);
+    border-radius: 13px;
+    background: #fff;
+  }
+
+  .yc-ticket-tracking-grid strong,
+  .yc-ticket-tracking-detail strong,
+  .yc-ticket-tracking-detail p {
+    overflow-wrap: anywhere;
+  }
+
+  .yc-ticket-tracking-resolution {
+    min-width: 0;
+    padding: 15px;
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+    border: 1px solid #bde5d6;
+    border-radius: 15px;
+    background: var(--yc-aa-mint);
+  }
+
+  .yc-ticket-tracking-resolution-icon {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    color: #fff;
+    background: #2bb987;
+  }
+
+  .yc-ticket-tracking-empty {
+    min-width: 0;
+    padding: 15px;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: center;
+    gap: 11px;
+    border: 1px solid #efd99a;
+    border-radius: 14px;
+    color: #745615;
+    background: #fff7dc;
+  }
+
+  .yc-ticket-tracking-actions {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 4px;
+  }
+
   .yc-account-access-success {
-    min-height: 570px;
-    padding: clamp(28px, 5vw, 64px);
+    min-height: 590px;
+    padding: 36px 12px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -719,233 +854,146 @@ const ACCOUNT_ACCESS_PAGE_STYLES = `
     text-align: center;
   }
 
-  .yc-account-access-success-icon {
-    width: 74px;
-    height: 74px;
-    display: grid;
-    place-items: center;
-    margin-bottom: 20px;
-    border-radius: 24px;
-    color: #fff;
-    background: linear-gradient(135deg, #28b987, #159c73);
-    box-shadow: 0 16px 36px rgba(21, 156, 115, 0.25);
+  .yc-account-access-details-panel {
+    grid-column: 1 / -1;
+    height: auto;
   }
 
-  .yc-account-access-success-icon > svg,
-  .yc-account-access-success-icon > span {
-    width: 30px;
-    height: 30px;
+  .yc-account-access-details-panel .yc-account-access-form-card {
+    justify-content: flex-start;
   }
 
-  .yc-account-access-success > small {
-    color: #159c73;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
+  .yc-account-access-details-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 
-  .yc-account-access-success h2 {
-    max-width: 620px;
-    margin: 12px 0;
-    color: var(--yc-aa-ink);
-    font-size: clamp(2rem, 3vw, 3rem);
-    letter-spacing: -0.045em;
-  }
-
-  .yc-account-access-success > p {
-    max-width: 560px;
-    margin: 0;
-    color: var(--yc-aa-muted);
-    line-height: 1.7;
-  }
-
-  .yc-account-access-ticket-id {
-    width: min(100%, 480px);
-    margin: 28px 0;
-    padding: 18px 22px;
-    display: grid;
-    gap: 6px;
-    border: 1px dashed rgba(97, 116, 229, 0.45);
-    border-radius: 18px;
-    background: #f5f7ff;
-  }
-
-  .yc-account-access-ticket-id span {
-    color: var(--yc-aa-muted);
-    font-size: 0.76rem;
-    font-weight: 850;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-  }
-
-  .yc-account-access-ticket-id strong {
-    overflow-wrap: anywhere;
-    color: var(--yc-aa-primary-deep);
-    font-size: clamp(1.35rem, 2.2vw, 2rem);
-    letter-spacing: 0.06em;
+  .yc-account-access-details-form > .yc-account-access-section {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: auto;
   }
 
   .yc-account-access-success-actions {
     display: flex;
-    justify-content: center;
     flex-wrap: wrap;
-    gap: 12px;
-  }
-
-  @media (min-width: 1800px) {
-    .yc-account-access-page .auth-premium-header,
-    .yc-account-access-shell {
-      width: min(100% - 96px, 1760px);
-    }
-
-    .yc-account-access-shell {
-      grid-template-columns: minmax(520px, 0.95fr) minmax(700px, 1.05fr);
-      gap: 88px;
-      padding-top: 42px;
-    }
-
-    .yc-account-access-story {
-      min-height: 760px;
-    }
+    justify-content: center;
+    gap: 10px;
   }
 
   @media (max-width: 1180px) {
     .yc-account-access-shell {
-      grid-template-columns: minmax(300px, 0.78fr) minmax(520px, 1.22fr);
-      gap: 26px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .yc-account-access-story {
-      padding: 34px;
-      border-radius: 30px;
+      padding: 30px;
     }
 
-    .yc-account-access-form-card {
-      border-radius: 28px;
+    .yc-account-access-flow {
+      grid-template-columns: 1fr;
+    }
+
+    .yc-account-access-flow article {
+      min-height: 68px;
     }
   }
 
   @media (max-width: 960px) {
     .yc-account-access-page .auth-premium-header,
     .yc-account-access-shell {
-      width: min(100% - 32px, 820px);
-    }
-
-    .yc-account-access-page .auth-premium-header {
-      min-height: 76px;
+      width: min(820px, calc(100% - 32px));
     }
 
     .yc-account-access-shell {
-      grid-template-columns: 1fr;
-      gap: 22px;
-      padding-top: 12px;
+      grid-template-columns: minmax(0, 1fr);
+      min-height: 0;
     }
 
     .yc-account-access-story {
       position: relative;
       top: auto;
       min-height: auto;
-      padding: 32px;
-    }
-
-    .yc-account-access-story h1 {
-      max-width: 680px;
-      font-size: clamp(2.6rem, 8vw, 4.8rem);
+      max-height: none;
+      overflow: hidden;
     }
 
     .yc-account-access-flow {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .yc-account-access-flow article {
-      grid-template-columns: 1fr;
-      align-items: start;
+    .yc-account-access-form-card {
+      min-height: 0;
     }
 
-    .yc-account-access-security-note {
-      max-width: 640px;
+    .yc-account-access-details-form {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .yc-account-access-details-form > .yc-account-access-section:last-child {
+      grid-column: auto;
     }
   }
 
   @media (max-width: 720px) {
     .yc-account-access-page .auth-premium-header {
       width: calc(100% - 24px);
-      min-height: 68px;
-      padding: 10px 0;
-    }
-
-    .yc-account-access-page .auth-premium-header > div:last-child {
-      gap: 6px;
+      min-height: 66px;
+      padding-block: 10px;
     }
 
     .yc-account-access-page .auth-premium-link {
       display: none;
     }
 
-    .yc-account-access-page .button-small {
-      min-height: 40px;
-      padding-inline: 13px;
-      font-size: 0.82rem;
-    }
-
     .yc-account-access-shell {
       width: calc(100% - 24px);
-      padding: 8px 0 36px;
+      padding-bottom: 34px;
+      gap: 14px;
     }
 
     .yc-account-access-story,
-    .yc-account-access-form-card {
-      border-radius: 24px;
+    .yc-account-access-form-panel {
+      border-radius: 22px;
+      box-shadow:
+        5px 6px 0 rgba(23, 33, 63, 0.84),
+        0 18px 38px rgba(23, 33, 63, 0.1);
     }
 
     .yc-account-access-story {
-      padding: 26px 22px;
+      padding: 25px 21px;
     }
 
     .yc-account-access-story h1 {
-      font-size: clamp(2.3rem, 12vw, 4rem);
-    }
-
-    .yc-account-access-story-copy > p {
-      margin: 18px 0 24px;
-      line-height: 1.6;
+      font-size: clamp(42px, 12vw, 64px);
     }
 
     .yc-account-access-flow {
       grid-template-columns: 1fr;
     }
 
-    .yc-account-access-flow article {
-      grid-template-columns: 42px 1fr;
-    }
-
-    .yc-account-access-security-note {
-      margin-top: 20px;
-    }
-
-    .yc-account-access-form-card {
+    .yc-account-access-form-panel {
       padding: 20px;
     }
 
     .yc-account-access-form-card > header {
       display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: start;
+      grid-template-columns: minmax(0, 1fr) auto;
     }
 
-    .yc-account-access-profile-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .yc-account-access-success {
-      min-height: 470px;
-      padding: 28px 10px;
+    .yc-account-access-profile-grid,
+    .yc-ticket-tracking-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 
   @media (max-width: 520px) {
     .yc-account-access-page .auth-premium-header {
       justify-content: center;
+    }
+
+    .yc-account-access-page .auth-premium-header > div:last-child {
+      display: none;
     }
 
     .yc-account-access-page .auth-mobile-back-link {
@@ -955,138 +1003,95 @@ const ACCOUNT_ACCESS_PAGE_STYLES = `
       height: 40px;
       display: grid;
       place-items: center;
-      border: 1px solid var(--yc-aa-line);
-      border-radius: 13px;
-      color: var(--yc-aa-ink);
-      background: rgba(255,255,255,0.82);
-      font-size: 1.2rem;
-    }
-
-    .yc-account-access-page .auth-premium-header > div:last-child {
-      display: none;
+      border: 1px solid var(--yc-aa-soft-line);
+      border-radius: 12px;
+      color: var(--yc-aa-navy);
+      background: #fff;
     }
 
     .yc-account-access-shell {
       width: calc(100% - 16px);
+      gap: 13px;
     }
 
     .yc-account-access-story {
-      padding: 24px 18px;
-      border-radius: 21px;
-    }
-
-    .yc-account-access-kicker {
-      margin-bottom: 16px;
-      font-size: 0.65rem;
+      padding: 22px 17px;
     }
 
     .yc-account-access-story h1 {
-      font-size: clamp(2.15rem, 13vw, 3.4rem);
+      font-size: clamp(38px, 12vw, 52px);
     }
 
     .yc-account-access-story-copy > p {
-      font-size: 0.94rem;
+      font-size: 13px;
     }
 
-    .yc-account-access-flow article {
-      padding: 12px;
-      border-radius: 15px;
-    }
-
-    .yc-account-access-security-note {
-      grid-template-columns: 36px 1fr;
-      padding: 14px;
-      border-radius: 16px;
-    }
-
-    .yc-account-access-form-card {
-      padding: 16px;
-      border-radius: 21px;
+    .yc-account-access-form-panel {
+      padding: 15px;
     }
 
     .yc-account-access-form-card > header {
-      grid-template-columns: 1fr;
-      padding-bottom: 18px;
-    }
-
-    .yc-account-access-page .auth-status-badge {
-      width: fit-content;
-    }
-
-    .yc-account-access-form {
-      padding-top: 16px;
-      gap: 14px;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .yc-account-access-section {
-      padding: 16px;
-      border-radius: 18px;
+      padding: 14px;
     }
 
-    .yc-account-access-section-heading {
-      grid-template-columns: 36px 1fr;
+    .yc-ticket-tracking-summary {
+      align-items: flex-start;
+      flex-direction: column;
     }
 
-    .yc-account-access-section-heading > span {
-      width: 36px;
-      height: 36px;
-      border-radius: 12px;
+    .yc-account-access-success-actions,
+    .yc-ticket-tracking-actions {
+      width: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
     }
 
-    .yc-account-access-lookup-input {
-      grid-template-columns: 20px minmax(0, 1fr) !important;
-      padding: 0 12px 8px !important;
+    .yc-account-access-success-actions .button,
+    .yc-ticket-tracking-actions .button,
+    .yc-ticket-tracking-actions .auth-premium-link {
+      width: 100%;
+      white-space: normal;
     }
+  }
 
-    .yc-account-access-lookup-input > svg,
-    .yc-account-access-lookup-input > span:first-child {
-      align-self: center;
+  @media (max-width: 720px) {
+    .yc-account-access-lookup-control {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 9px;
     }
 
     .yc-account-access-lookup-button {
-      grid-column: 1 / -1;
       width: 100%;
-      min-height: 42px;
-      margin-top: 2px;
+      min-width: 0;
+      min-height: 46px;
+      white-space: normal;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .yc-account-access-lookup-input {
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 9px;
+      padding-inline: 11px;
     }
 
-    .yc-account-access-success-actions {
-      width: 100%;
-      display: grid;
-    }
-
-    .yc-account-access-success-actions .button {
-      width: 100%;
+    .yc-account-access-lookup-input input {
+      font-size: 12px;
     }
   }
 
   @media (max-width: 360px) {
     .yc-account-access-story h1 {
-      font-size: 2rem;
+      font-size: 36px;
     }
 
-    .yc-account-access-form-card {
-      padding: 13px;
-    }
-
+    .yc-account-access-form-panel,
     .yc-account-access-section {
-      padding: 13px;
-    }
-
-    .yc-account-access-section-heading small {
-      font-size: 0.76rem;
-    }
-
-    .yc-account-access-track-link {
-      font-size: 0.82rem;
-    }
-  }
-
-  @media (max-height: 760px) and (min-width: 961px) {
-    .yc-account-access-story {
-      position: relative;
-      top: auto;
-      min-height: 680px;
+      padding: 12px;
     }
   }
 
@@ -1094,9 +1099,9 @@ const ACCOUNT_ACCESS_PAGE_STYLES = `
     .yc-account-access-page *,
     .yc-account-access-page *::before,
     .yc-account-access-page *::after {
-      scroll-behavior: auto !important;
-      transition: none !important;
-      animation: none !important;
+      animation: none;
+      transition: none;
+      scroll-behavior: auto;
     }
   }
 `;
@@ -1298,7 +1303,7 @@ export default function AccountAccessHelp() {
         </div>
       </header>
 
-      <main className="auth-premium-shell yc-account-access-shell">
+      <main className="yc-account-access-shell">
         <section className="auth-premium-story yc-account-access-story">
           <div className="auth-premium-story-copy">
             <small className="yc-account-access-kicker">Account assistance</small>
@@ -1406,7 +1411,7 @@ export default function AccountAccessHelp() {
 
                 <form
                   className="auth-premium-form yc-account-access-form"
-                  onSubmit={submitRequest}
+                  onSubmit={lookupEmployee}
                   noValidate
                 >
                   <div className="yc-account-access-section">
@@ -1421,10 +1426,11 @@ export default function AccountAccessHelp() {
                     <label>
                       <span>Employee code or registered email</span>
 
-                      <div className="auth-premium-input yc-account-access-lookup-input">
-                        <Icon name="people" />
+                      <div className="yc-account-access-lookup-control">
+                        <div className="auth-premium-input yc-account-access-lookup-input">
+                          <Icon name="people" />
 
-                        <input
+                          <input
                           type="text"
                           name="identifier"
                           value={form.identifier}
@@ -1433,6 +1439,7 @@ export default function AccountAccessHelp() {
                           disabled={lookupLoading || submitLoading}
                           onChange={(event) => updateIdentifier(event.target.value)}
                         />
+                        </div>
 
                         <button
                           type="button"
@@ -1446,130 +1453,6 @@ export default function AccountAccessHelp() {
                     </label>
                   </div>
 
-                  {employeeVerified && (
-                    <div className="yc-account-access-section">
-                      <div className="yc-account-access-section-heading">
-                        <span>2</span>
-                        <div>
-                          <strong>Confirm your profile</strong>
-                          <small>These details were loaded from YourComate.</small>
-                        </div>
-                      </div>
-
-                      <div className="yc-account-access-profile-grid">
-                        <label>
-                          <span>Employee name</span>
-                          <input type="text" value={form.employeeName} readOnly />
-                        </label>
-
-                        <label>
-                          <span>Employee code</span>
-                          <input type="text" value={form.employeeCode} readOnly />
-                        </label>
-
-                        <label>
-                          <span>Registered email</span>
-                          <input type="text" value={form.email} readOnly />
-                        </label>
-
-                        <label>
-                          <span>Department</span>
-                          <input type="text" value={form.department || 'Not assigned'} readOnly />
-                        </label>
-
-                        <label>
-                          <span>Designation</span>
-                          <input type="text" value={form.designation || 'Not assigned'} readOnly />
-                        </label>
-
-                        <label>
-                          <span>Company / tenant</span>
-                          <input type="text" value={form.tenantName} readOnly />
-                        </label>
-                      </div>
-
-                      <div className="yc-account-access-verified-banner">
-                        <Icon name="check" />
-                        <span>Employee profile verified</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {employeeVerified && (
-                    <div className="yc-account-access-section">
-                      <div className="yc-account-access-section-heading">
-                        <span>3</span>
-                        <div>
-                          <strong>Describe the access problem</strong>
-                          <small>Give the IT team enough detail to investigate.</small>
-                        </div>
-                      </div>
-
-                      <label>
-                        <span>Issue type</span>
-                        <div className="auth-premium-input">
-                          <Icon name="support" />
-                          <select
-                            name="issueCategory"
-                            value={form.issueCategory}
-                            disabled={submitLoading}
-                            onChange={(event) => updateField('issueCategory', event.target.value)}
-                          >
-                            <option value="">Select the issue type</option>
-                            {ISSUE_CATEGORIES.map((category) => (
-                              <option key={category.value} value={category.value}>
-                                {category.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </label>
-
-                      <label>
-                        <span>Subject</span>
-                        <div className="auth-premium-input">
-                          <Icon name="document" />
-                          <input
-                            type="text"
-                            name="subject"
-                            value={form.subject}
-                            maxLength={140}
-                            placeholder="Briefly state what is preventing access"
-                            disabled={submitLoading}
-                            onChange={(event) => updateField('subject', event.target.value)}
-                          />
-                        </div>
-                      </label>
-
-                      <label>
-                        <span>Description</span>
-                        <div className="auth-premium-input yc-account-access-textarea">
-                          <Icon name="chat" />
-                          <textarea
-                            name="description"
-                            value={form.description}
-                            rows={5}
-                            maxLength={1500}
-                            placeholder="Explain what happens when you try to sign in, including any error message you see."
-                            disabled={submitLoading}
-                            onChange={(event) => updateField('description', event.target.value)}
-                          />
-                        </div>
-                        <small className="yc-account-access-character-count">
-                          {form.description.length}/1500
-                        </small>
-                      </label>
-
-                      <button
-                        className="button button-primary auth-premium-submit"
-                        type="submit"
-                        disabled={!canSubmit}
-                      >
-                        {submitLoading ? 'Submitting request…' : 'Submit access request'}
-                        <Icon name="arrow" />
-                      </button>
-                    </div>
-                  )}
                 </form>
 
                 <button
@@ -1578,12 +1461,145 @@ export default function AccountAccessHelp() {
                   onClick={openTracking}
                 >
                   Already submitted a request? <strong>Track your ticket</strong>
-                  <Icon name="arrow" />
+
                 </button>
               </>
             )}
           </div>
         </section>
+
+        {employeeVerified && !ticketId && (
+          <section className="auth-premium-form-panel yc-account-access-form-panel yc-account-access-details-panel">
+            <div className="auth-premium-form-card yc-account-access-form-card">
+              <form
+                className="auth-premium-form yc-account-access-form yc-account-access-details-form"
+                onSubmit={submitRequest}
+                noValidate
+              >
+                        <div className="yc-account-access-section">
+                <div className="yc-account-access-section-heading">
+                  <span>2</span>
+                  <div>
+                    <strong>Confirm your profile</strong>
+                    <small>These details were loaded from YourComate.</small>
+                  </div>
+                </div>
+              
+                <div className="yc-account-access-profile-grid">
+                  <label>
+                    <span>Employee name</span>
+                    <input type="text" value={form.employeeName} readOnly />
+                  </label>
+              
+                  <label>
+                    <span>Employee code</span>
+                    <input type="text" value={form.employeeCode} readOnly />
+                  </label>
+              
+                  <label>
+                    <span>Registered email</span>
+                    <input type="text" value={form.email} readOnly />
+                  </label>
+              
+                  <label>
+                    <span>Department</span>
+                    <input type="text" value={form.department || 'Not assigned'} readOnly />
+                  </label>
+              
+                  <label>
+                    <span>Designation</span>
+                    <input type="text" value={form.designation || 'Not assigned'} readOnly />
+                  </label>
+              
+                  <label>
+                    <span>Company / tenant</span>
+                    <input type="text" value={form.tenantName} readOnly />
+                  </label>
+                </div>
+              
+                <div className="yc-account-access-verified-banner">
+                  <Icon name="check" />
+                  <span>Employee profile verified</span>
+                </div>
+                        </div>
+              
+                        <div className="yc-account-access-section">
+                <div className="yc-account-access-section-heading">
+                  <span>3</span>
+                  <div>
+                    <strong>Describe the access problem</strong>
+                    <small>Give the IT team enough detail to investigate.</small>
+                  </div>
+                </div>
+              
+                <label>
+                  <span>Issue type</span>
+                  <div className="auth-premium-input">
+                    <Icon name="support" />
+                    <select
+                      name="issueCategory"
+                      value={form.issueCategory}
+                      disabled={submitLoading}
+                      onChange={(event) => updateField('issueCategory', event.target.value)}
+                    >
+                      <option value="">Select the issue type</option>
+                      {ISSUE_CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>
+                          {category.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </label>
+              
+                <label>
+                  <span>Subject</span>
+                  <div className="auth-premium-input">
+                    <Icon name="document" />
+                    <input
+                      type="text"
+                      name="subject"
+                      value={form.subject}
+                      maxLength={140}
+                      placeholder="Briefly state what is preventing access"
+                      disabled={submitLoading}
+                      onChange={(event) => updateField('subject', event.target.value)}
+                    />
+                  </div>
+                </label>
+              
+                <label>
+                  <span>Description</span>
+                  <div className="auth-premium-input yc-account-access-textarea">
+                    <Icon name="chat" />
+                    <textarea
+                      name="description"
+                      value={form.description}
+                      rows={5}
+                      maxLength={1500}
+                      placeholder="Explain what happens when you try to sign in, including any error message you see."
+                      disabled={submitLoading}
+                      onChange={(event) => updateField('description', event.target.value)}
+                    />
+                  </div>
+                  <small className="yc-account-access-character-count">
+                    {form.description.length}/1500
+                  </small>
+                </label>
+              
+                <button
+                  className="button button-primary auth-premium-submit"
+                  type="submit"
+                  disabled={!canSubmit}
+                >
+                  {submitLoading ? 'Submitting request…' : 'Submit access request'}
+                  <Icon name="arrow" />
+                </button>
+                        </div>
+              </form>
+            </div>
+          </section>
+        )}
       </main>
 
       <AuthPageFooter />

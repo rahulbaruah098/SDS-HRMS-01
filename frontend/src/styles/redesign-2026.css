@@ -1028,36 +1028,6 @@ border-color: rgba(159, 194, 218, 0.64);
     padding-top: var(--yc-header-height);
   }
 
-  .public-scroll-track,
-  .public-horizontal-viewport,
-  .public-horizontal-shell,
-  .public-main {
-    width: 100% !important;
-    height: auto !important;
-    min-height: 0 !important;
-    transform: none !important;
-  }
-
-  .public-horizontal-viewport {
-    position: relative !important;
-    top: auto !important;
-    overflow: visible !important;
-  }
-
-  .public-main {
-    display: block !important;
-  }
-
-  .public-main > section:not(.public-page-hero):not(.yc-minoru-hero),
-  .public-main > article,
-  .public-main > div {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: none !important;
-    overflow: visible !important;
-  }
 
   .yc-reference-hero {
     height: calc(100dvh - var(--yc-header-height)) !important;
