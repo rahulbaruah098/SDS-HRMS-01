@@ -133,7 +133,7 @@ def current_saas_payload():
     }
 
 
-def tenant_query(extra=None, include_legacy=True):
+def tenant_query(extra=None, include_legacy=False):
     tenant_id = current_tenant_id()
     extra = extra or {}
 
@@ -186,31 +186,16 @@ def active_employee_filter(extra=None):
 
 def count_collection(db, collection, extra=None):
     """
-    Dashboard counter with safe fallback.
+    Count dashboard records only for the authenticated tenant.
 
-    1. First count using exact tenant_id.
-    2. Then count tenant + legacy blank/missing tenant_id.
-    3. If still 0, count without tenant_id filter.
-
-    This fixes KPI 000 issue when old records are saved with different tenant_id.
+    A zero result must remain zero. Never retry without tenant_id because
+    doing so would mix data belonging to different SaaS tenants.
     """
     extra = extra or {}
 
-    strict_count = db[collection].count_documents(
+    return db[collection].count_documents(
         tenant_query(extra, include_legacy=False)
     )
-
-    if strict_count:
-        return strict_count
-
-    legacy_count = db[collection].count_documents(
-        tenant_query(extra, include_legacy=True)
-    )
-
-    if legacy_count:
-        return legacy_count
-
-    return db[collection].count_documents(extra)
 
 
 def normalize_text(value):
