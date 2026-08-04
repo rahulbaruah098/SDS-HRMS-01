@@ -3623,6 +3623,106 @@ export function getTeamFieldAttendance(params = {}) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* My Visit APIs                                                              */
+/* -------------------------------------------------------------------------- */
+
+function fieldVisitId(value) {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    throw new Error('Visit ID is required.');
+  }
+
+  return encodeURIComponent(normalized);
+}
+
+export function getFieldVisits(params = {}) {
+  return api(`/field-visits${buildQuery(params)}`);
+}
+
+export function getMyFieldVisits(params = {}) {
+  return getFieldVisits({
+    ...params,
+    scope: 'mine',
+  });
+}
+
+export function getTeamFieldVisits(params = {}) {
+  return getFieldVisits({
+    ...params,
+    scope: 'team',
+  });
+}
+
+export function getFieldVisit(visitId) {
+  return api(`/field-visits/${fieldVisitId(visitId)}`);
+}
+
+export function createFieldVisit(payload = {}) {
+  return api('/field-visits', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateFieldVisit(visitId, payload = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function uploadFieldVisitPicture(visitId, picture) {
+  if (!(picture instanceof File)) {
+    throw new Error('A valid picture file is required.');
+  }
+
+  const formData = new FormData();
+  formData.append('picture', picture);
+
+  return api(`/field-visits/${fieldVisitId(visitId)}/pictures`, {
+    method: 'POST',
+    body: formData,
+    timeoutMs: 60000,
+  });
+}
+
+export function rescheduleFieldVisit(visitId, payload = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}/reschedule`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelFieldVisit(visitId, payload = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function startFieldVisit(visitId, location = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}/start`, {
+    method: 'POST',
+    body: JSON.stringify(location),
+  });
+}
+
+export function markFieldVisitReached(visitId, location = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}/reached`, {
+    method: 'POST',
+    body: JSON.stringify(location),
+  });
+}
+
+export function endFieldVisit(visitId, location = {}) {
+  return api(`/field-visits/${fieldVisitId(visitId)}/end`, {
+    method: 'POST',
+    body: JSON.stringify(location),
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* Holiday Calendar APIs                                                      */
 /* -------------------------------------------------------------------------- */
 

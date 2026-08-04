@@ -800,6 +800,19 @@ function notificationTarget(meta = {}) {
     return 'application_status';
   }
 
+if (
+  [
+    'my_visits',
+    'my-visits',
+    'field_visit',
+    'field-visit',
+    'field_visits',
+    'field-visits',
+  ].includes(target)
+) {
+  return 'my_visits';
+}
+
     if (
     [
       'attendance',
@@ -2680,17 +2693,24 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             <div className="nav-group" key={group}>
               <div className="nav-group-title">{group}</div>
 
-              {groupModules.map(([key, title, Icon]) => (
-                <button
-                  type="button"
-                  key={key}
-                  className={page === key ? 'active' : ''}
-                  onClick={() => goTo(key)}
-                >
-                  {Icon ? <Icon size={18} /> : null}
-                  {title}
-                </button>
-              ))}
+                    {groupModules.map(([key, title, Icon]) => {
+                      const targetPage =
+                        key === 'team_field_attendance'
+                          ? 'my_visits'
+                          : key;
+
+                      return (
+                        <button
+                          type="button"
+                          key={key}
+                          className={page === targetPage ? 'active' : ''}
+                          onClick={() => goTo(targetPage)}
+                        >
+                          {Icon ? <Icon size={18} /> : null}
+                          {title}
+                        </button>
+                      );
+                    })}
             </div>
           ))}
         </nav>

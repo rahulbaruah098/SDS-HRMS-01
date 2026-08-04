@@ -10,6 +10,7 @@ from .routes.billing import billing_bp
 from .routes.payroll import payroll_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
+from .routes.field_visits import field_visits_bp
 from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
 from .routes.grievances import grievances_bp
@@ -160,6 +161,13 @@ def create_app():
     # comp-off generation and comp-off claim.
     app.register_blueprint(attendance_bp, url_prefix="/api/v1/attendance")
 
+    # My Visit APIs:
+    # employee visit scheduling, notes, optional photos, rescheduling/cancellation,
+    # Start -> Reached -> End GPS checkpoints, visit history, and tenant-scoped
+    # Team Leader / Reporting Officer review with employee, date and department filters.
+    # Keep this before generic CRUD so visit workflow routes are resolved explicitly.
+    app.register_blueprint(field_visits_bp, url_prefix="/api/v1/field-visits")
+
     # Dedicated Project APIs:
     # project detail, project assignment, daily progress submission,
     # project progress history, and project analytics.
@@ -303,7 +311,7 @@ def create_app():
                 "Attendance",
                 "Direct Office/WFH/Field Attendance",
                 "Holiday Work Requests",
-                "Team Field Tracking",
+                "My Visit",
                 "Holiday Calendar",
                 "Comp-Off Credits",
                 "Leave Management",
@@ -339,7 +347,8 @@ def create_app():
             "direct_attendance_modes": ["office", "wfh", "field"],
             "field_attendance_requires": ["field_location", "field_photo", "location_metadata"],
             "holiday_work_requests": True,
-            "team_field_tracking": True,
+            "my_visit_module": True,
+            "field_visit_workflow": ["scheduled", "started", "reached", "completed", "cancelled"],
             "comp_off_claim_window": "Next working day through 7 working days after approved holiday work attendance",
             "leave_module": True,
             "leave_balance_module": True,
@@ -391,6 +400,7 @@ def create_app():
                 "payroll",
                 "dashboard",
                 "attendance",
+                "field_visits",
                 "projects",
                 "grievances",
                 "it_support",

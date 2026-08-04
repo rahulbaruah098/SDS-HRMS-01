@@ -649,10 +649,10 @@ export const coreModules = [
 
 [
   'team_field_attendance',
-  'Team Field Tracking',
+  'My Visit',
   Clock,
-  'Team Leaders, Reporting Officers and HR/Admin can view field attendance with visit place, photo and location map.',
-  ATTENDANCE_MANAGER_ROLES,
+  'Create and manage personal field visits. Team Leaders, Reporting Officers, HR and Admin can also review mapped employee visits.',
+  ALL_COMMON_ROLES,
 ],
 
   [

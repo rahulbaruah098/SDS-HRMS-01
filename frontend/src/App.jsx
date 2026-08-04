@@ -24,6 +24,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import EmployeeDashboard from './pages/EmployeeDashboard';
 import Attendance from './pages/Attendance';
 import AttendanceLogs from './pages/AttendanceLogs.jsx';
+import MyVisits from './pages/MyVisits.jsx';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
@@ -377,6 +378,18 @@ const PAGE_ALIASES = {
   attendance_mode_requests: 'attendance_mode_requests',
   wfh_field_requests: 'attendance_mode_requests',
 
+  my_visit: 'my_visits',
+  my_visits: 'my_visits',
+  field_visit: 'my_visits',
+  field_visits: 'my_visits',
+  team_field_attendance: 'my_visits',
+
+  'my-visit': 'my_visits',
+  'my-visits': 'my_visits',
+  'field-visit': 'my_visits',
+  'field-visits': 'my_visits',
+  'team-field-attendance': 'my_visits',
+
   application_status: 'application_status',
   application_statuses: 'application_status',
   application: 'application_status',
@@ -720,6 +733,18 @@ function normalizePageKey(page) {
   }
 
   return PAGE_ALIASES[key] || PAGE_ALIASES[key.toLowerCase()] || key;
+}
+
+function moduleAccessKey(page) {
+  const normalizedPage = normalizePageKey(page);
+
+  // Existing tenant permissions store this module under the legacy key.
+  // The visible page and route use "my_visits".
+  if (normalizedPage === 'my_visits') {
+    return 'team_field_attendance';
+  }
+
+  return normalizedPage;
 }
 
 function hasAnyRole(userRoles = [], allowedRoles = []) {
@@ -1132,7 +1157,7 @@ function PageRouter({ page, user, setPage }) {
     return <Payslips setPage={setPage} user={safeUser} />;
   }
 
-  if (!canAccessModule(safeUser, normalizedPage)) {
+  if (!canAccessModule(safeUser, moduleAccessKey(normalizedPage))) {
     return <UnauthorizedPage setPage={setPage} />;
   }
 
@@ -1142,6 +1167,10 @@ if (normalizedPage === 'attendance') {
 
 if (normalizedPage === 'attendance_logs') {
   return <AttendanceLogs setPage={setPage} user={safeUser} />;
+}
+
+if (normalizedPage === 'my_visits') {
+  return <MyVisits setPage={setPage} user={safeUser} />;
 }
 
 if (normalizedPage === 'companies') {
@@ -1626,7 +1655,10 @@ export default function App() {
       return;
     }
 
-    if (normalizedPage !== 'dashboard' && !canAccessModule(normalizedUser, normalizedPage)) {
+    if (
+      normalizedPage !== 'dashboard' &&
+      !canAccessModule(normalizedUser, moduleAccessKey(normalizedPage))
+    ) {
       setPage('dashboard');
     }
   }, [page, normalizedPage, normalizedUser]);
