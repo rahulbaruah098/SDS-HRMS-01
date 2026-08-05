@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   createEmployee,
   createPastEmployee,
@@ -1438,8 +1439,278 @@ export default function Employees({ user = {}, setPage } = {}) {
   return (
     <section className="hrms-employees-page">
       <style>{`
-        .hrms-employees-page{display:flex;flex-direction:column;gap:18px;color:#172033}.hrms-hero{border-radius:28px;padding:24px;background:radial-gradient(circle at top left,rgba(37,99,235,.18),transparent 34%),linear-gradient(135deg,#0f172a 0%,#1e293b 54%,#2563eb 100%);color:#fff;box-shadow:0 22px 50px rgba(15,23,42,.18);overflow:hidden;position:relative}.hrms-hero::after{content:"";position:absolute;width:220px;height:220px;border-radius:999px;right:-70px;top:-70px;background:rgba(255,255,255,.12)}.hrms-hero-content{position:relative;z-index:1;display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.hrms-kicker{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.14);color:#dbeafe;font-weight:800;font-size:12px;letter-spacing:.08em;text-transform:uppercase}.hrms-hero h1{margin:14px 0 8px;font-size:clamp(28px,4vw,42px);line-height:1.05}.hrms-hero p{max-width:780px;margin:0;color:rgba(255,255,255,.78);line-height:1.7}.hrms-refresh-btn,.hrms-primary-btn,.hrms-secondary-btn,.hrms-danger-soft-btn,.hrms-tab-btn{border:0;cursor:pointer;font-weight:800;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}.hrms-refresh-btn:hover,.hrms-primary-btn:hover,.hrms-secondary-btn:hover,.hrms-danger-soft-btn:hover,.hrms-tab-btn:hover{transform:translateY(-1px)}.hrms-refresh-btn{position:relative;z-index:1;border-radius:16px;padding:11px 15px;background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.22)}.hrms-stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.hrms-stat-card{background:#fff;border:1px solid #e7edf7;border-radius:22px;padding:18px;box-shadow:0 14px 35px rgba(15,23,42,.07)}.hrms-stat-card span{display:block;color:#64748b;font-size:13px;font-weight:800;margin-bottom:8px}.hrms-stat-card strong{font-size:30px;color:#0f172a}.hrms-tabs{display:flex;flex-wrap:wrap;gap:10px;background:#fff;border:1px solid #e7edf7;border-radius:22px;padding:10px;box-shadow:0 12px 32px rgba(15,23,42,.06)}.hrms-tab-btn{padding:12px 16px;border-radius:16px;color:#475569;background:#f8fafc}.hrms-tab-btn.active{background:#2563eb;color:#fff;box-shadow:0 12px 24px rgba(37,99,235,.25)}.hrms-alert{border-radius:18px;padding:13px 16px;font-weight:800;animation:hrmsSlideDown .24s ease both}.hrms-alert.success{color:#166534;background:#dcfce7;border:1px solid #bbf7d0}.hrms-alert.error{color:#991b1b;background:#fee2e2;border:1px solid #fecaca}@keyframes hrmsSlideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}.hrms-panel,.hrms-form-card{background:#fff;border:1px solid #e7edf7;border-radius:26px;padding:18px;box-shadow:0 18px 45px rgba(15,23,42,.08)}.hrms-section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}.hrms-section-heading h3{margin:0 0 5px;color:#0f172a;font-size:21px}.hrms-section-heading p{margin:0;color:#64748b;line-height:1.55}.hrms-actions,.hrms-row-actions{display:flex;flex-wrap:wrap;gap:10px}.hrms-filter-grid{display:grid;grid-template-columns:1.7fr repeat(4,minmax(130px,1fr)) auto;gap:10px;margin-bottom:16px}.hrms-filter-grid input,.hrms-filter-grid select,.hrms-field input,.hrms-field select{width:100%;border:1px solid #dbe4f0;background:#f8fafc;color:#172033;border-radius:15px;padding:12px 13px;outline:none;font:inherit;transition:border .18s ease,box-shadow .18s ease,background .18s ease}.hrms-filter-grid input:focus,.hrms-filter-grid select:focus,.hrms-field input:focus,.hrms-field select:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.12);background:#fff}.hrms-primary-btn{border-radius:15px;padding:12px 16px;background:#2563eb;color:#fff;box-shadow:0 12px 24px rgba(37,99,235,.22)}.hrms-primary-btn:disabled{opacity:.65;cursor:not-allowed}.hrms-secondary-btn{border-radius:15px;padding:12px 16px;background:#eef4ff;color:#1d4ed8}.hrms-danger-soft-btn{border-radius:14px;padding:10px 12px;background:#fff1f2;color:#be123c}.compact{padding:8px 10px!important;font-size:12px}.hrms-table-wrap{width:100%;overflow-x:auto;border:1px solid #e7edf7;border-radius:20px}.hrms-table{width:100%;min-width:1050px;border-collapse:collapse;background:#fff}.hrms-table th{text-align:left;background:#f8fafc;color:#475569;font-size:12px;letter-spacing:.04em;text-transform:uppercase;padding:14px;border-bottom:1px solid #e7edf7}.hrms-table td{padding:14px;border-bottom:1px solid #edf2f7;vertical-align:middle;color:#334155}.hrms-table tr:last-child td{border-bottom:0}.hrms-person-cell{display:flex;align-items:center;gap:12px;min-width:230px}.hrms-person-cell strong,.hrms-table td strong{display:block;color:#0f172a;font-weight:900}.hrms-person-cell small,.hrms-table td small{display:block;color:#64748b;margin-top:4px;font-size:12px}.hrms-employee-avatar{width:42px;height:42px;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;font-weight:900;object-fit:cover;flex:0 0 auto}.hrms-pill{display:inline-flex;align-items:center;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:900}.hrms-pill-green{background:#dcfce7;color:#166534}.hrms-pill-red{background:#ffe4e6;color:#be123c}.hrms-table-action{text-align:right!important;white-space:nowrap}.hrms-empty-state{border:1px dashed #cbd5e1;background:#f8fafc;color:#64748b;padding:28px;text-align:center;border-radius:20px;font-weight:800}.hrms-form-section{border:1px solid #edf2f7;border-radius:20px;padding:14px;margin-top:14px;background:#fbfdff}.hrms-form-section:first-of-type{margin-top:0}.hrms-form-section h4{margin:0 0 12px;color:#0f172a;font-size:15px}.hrms-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.hrms-field{display:flex;flex-direction:column;gap:7px}.hrms-field span{color:#334155;font-weight:900;font-size:13px}.hrms-field b{color:#dc2626;margin-left:3px}.hrms-searchable-field input{margin-bottom:8px}.hrms-searchable-field select{background:#fff}.hrms-checkbox-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}.hrms-checkbox{display:flex;gap:10px;align-items:center;border:1px solid #e7edf7;border-radius:16px;padding:12px;background:#f8fafc;font-weight:800;color:#334155}.hrms-checkbox input{width:18px;height:18px}.hrms-form-actions{margin-top:18px;display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap}.hrms-form-note{color:#64748b;font-weight:700;font-size:13px}.hrms-alumni-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(360px,.9fr);gap:18px}.hrms-modal-backdrop{position:fixed;inset:0;z-index:60;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:20px}.hrms-modal{width:min(1120px,100%);max-height:92vh;overflow:auto;background:#fff;border-radius:26px;padding:20px;box-shadow:0 30px 80px rgba(15,23,42,.28);animation:hrmsModalIn .22s ease both}.hrms-modal.small{width:min(560px,100%)}@keyframes hrmsModalIn{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}.hrms-modal h3{margin:0 0 6px;color:#0f172a}.hrms-modal p{margin:0 0 16px;color:#64748b}.hrms-modal-grid{display:grid;gap:12px}.hrms-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}@media(max-width:1100px){.hrms-filter-grid,.hrms-form-grid,.hrms-alumni-layout{grid-template-columns:1fr 1fr}.hrms-checkbox-grid,.hrms-stats-grid{grid-template-columns:1fr 1fr}}@media(max-width:720px){.hrms-hero-content,.hrms-section-heading{flex-direction:column}.hrms-filter-grid,.hrms-form-grid,.hrms-alumni-layout,.hrms-checkbox-grid,.hrms-stats-grid{grid-template-columns:1fr}.hrms-actions,.hrms-form-actions,.hrms-modal-actions{justify-content:stretch}.hrms-actions button,.hrms-form-actions button,.hrms-modal-actions button,.hrms-refresh-btn{width:100%}.hrms-hero{padding:20px;border-radius:22px}.hrms-row-actions{justify-content:flex-end}}
-      `}</style>
+        .hrms-employees-page {
+          --emp-ink: #101a3a;
+          --emp-soft: #596483;
+          --emp-violet: #6254da;
+          --emp-deep: #342b78;
+          --emp-blue: #3766db;
+          --emp-teal: #18aaa8;
+          --emp-flat-blue: #b9d7ff;
+          --emp-flat-violet: #c9c0ff;
+          --emp-flat-teal: #aee6d9;
+          --emp-ease: cubic-bezier(.22, 1, .36, 1);
+
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+          min-width: 0;
+          width: 100%;
+          padding-bottom: max(18px, env(safe-area-inset-bottom));
+          color: var(--emp-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
+        }
+
+        .hrms-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(24px, 2.8vw, 36px);
+          border: 1px solid rgba(171,181,211,.72);
+          border-radius: clamp(28px, 2.5vw, 40px);
+          color: var(--emp-ink);
+          background:
+            radial-gradient(circle at 8% 8%, rgba(121,219,238,.34), transparent 31%),
+            radial-gradient(circle at 92% 12%, rgba(191,190,249,.3), transparent 34%),
+            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
+          box-shadow: 12px 14px 0 var(--emp-flat-blue), 0 28px 48px rgba(34,38,110,.13);
+        }
+
+        .hrms-hero::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -2;
+          opacity: .42;
+          pointer-events: none;
+          background-image:
+            linear-gradient(rgba(65,55,161,.035) 1px,transparent 1px),
+            linear-gradient(90deg,rgba(65,55,161,.035) 1px,transparent 1px);
+          background-size: 42px 42px;
+        }
+
+        .hrms-hero::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: clamp(165px,20vw,290px);
+          aspect-ratio: 1;
+          right: clamp(-110px,-7vw,-55px);
+          top: clamp(-118px,-8vw,-60px);
+          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
+          background: linear-gradient(145deg,rgba(105,217,208,.72),rgba(121,189,242,.72));
+          transform: rotate(18deg);
+        }
+
+        .hrms-hero-content {
+          position: relative;
+          z-index: 2;
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+        }
+
+        .hrms-kicker {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          padding: 9px 13px;
+          border-radius: 999px;
+          color: #fff;
+          background: var(--emp-deep);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .hrms-hero h1 {
+          max-width: 900px;
+          margin: 15px 0 9px;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, var(--heading), inherit);
+          font-size: clamp(34px,4.4vw,66px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.055em;
+        }
+
+        .hrms-hero p {
+          max-width: 880px;
+          margin: 0;
+          color: var(--emp-soft);
+          font-size: clamp(13px,1vw,16px);
+          line-height: 1.68;
+        }
+
+        .hrms-refresh-btn,.hrms-primary-btn,.hrms-secondary-btn,.hrms-danger-soft-btn,.hrms-tab-btn {
+          appearance: none;
+          border: 1px solid transparent;
+          cursor: pointer;
+          font: inherit;
+          font-weight: 900;
+          line-height: 1;
+          touch-action: manipulation;
+          transition: transform 240ms var(--emp-ease),box-shadow 240ms var(--emp-ease),background 200ms ease,border-color 200ms ease,filter 200ms ease;
+        }
+
+        .hrms-refresh-btn:hover,.hrms-primary-btn:hover,.hrms-secondary-btn:hover,.hrms-danger-soft-btn:hover,.hrms-tab-btn:hover {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .hrms-refresh-btn:active,.hrms-primary-btn:active,.hrms-secondary-btn:active,.hrms-danger-soft-btn:active,.hrms-tab-btn:active {
+          transform: translateY(0) scale(.985);
+        }
+
+        .hrms-refresh-btn {
+          flex: 0 0 auto;
+          min-height: 44px;
+          padding: 12px 16px;
+          border-color: rgba(98,84,218,.18);
+          border-radius: 15px;
+          color: var(--emp-deep);
+          background: rgba(255,255,255,.86);
+          box-shadow: 5px 6px 0 rgba(52,43,120,.18);
+        }
+
+        .hrms-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4,minmax(0,1fr));
+          gap: 16px;
+        }
+
+        .hrms-stat-card {
+          min-width: 0;
+          padding: 18px;
+          border: 1px solid rgba(171,181,211,.68);
+          border-radius: 21px;
+          background: #f8fbff;
+          box-shadow: 7px 9px 0 var(--emp-flat-blue),0 18px 30px rgba(15,20,75,.08);
+          transition: transform 260ms var(--emp-ease),box-shadow 260ms var(--emp-ease),border-color 200ms ease;
+        }
+        .hrms-stat-card:nth-child(2){background:#f1efff;box-shadow:7px 9px 0 var(--emp-flat-violet),0 18px 30px rgba(15,20,75,.08)}
+        .hrms-stat-card:nth-child(3){background:#eaf8f4;box-shadow:7px 9px 0 var(--emp-flat-teal),0 18px 30px rgba(15,20,75,.08)}
+        .hrms-stat-card:nth-child(4){background:#fff4d5;box-shadow:7px 9px 0 #ffe0a5,0 18px 30px rgba(15,20,75,.08)}
+        .hrms-stat-card:hover{transform:translateY(-3px);border-color:rgba(98,84,218,.28)}
+        .hrms-stat-card span{display:block;margin-bottom:8px;color:var(--emp-soft);font-size:11px;font-weight:900;letter-spacing:.05em;text-transform:uppercase}
+        .hrms-stat-card strong{color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:clamp(29px,3vw,44px);line-height:1;letter-spacing:-.04em}
+
+        .hrms-tabs {
+          position: sticky;
+          top: max(8px,env(safe-area-inset-top));
+          z-index: 30;
+          display: flex;
+          gap: 7px;
+          overflow-x: auto;
+          padding: 8px;
+          border: 1px solid rgba(171,181,211,.7);
+          border-radius: 22px;
+          background: rgba(255,255,255,.88);
+          box-shadow: 7px 9px 0 #d1dcfa,0 18px 32px rgba(34,38,110,.09);
+          backdrop-filter: blur(16px);
+          scrollbar-width: none;
+          scroll-snap-type: x proximity;
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+        .hrms-tabs::-webkit-scrollbar{display:none}
+        .hrms-tab-btn{flex:0 0 auto;min-height:42px;padding:10px 14px;border-radius:13px;color:#4f5e7f;background:transparent;scroll-snap-align:start}
+        .hrms-tab-btn:hover{color:var(--emp-deep);background:#f1efff;border-color:rgba(98,84,218,.16)}
+        .hrms-tab-btn.active{color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(52,43,120,.72)}
+
+        .hrms-alert {
+          border-radius: 18px;
+          padding: 14px 16px;
+          font-weight: 800;
+          animation: hrmsSlideDown 380ms var(--emp-ease) both;
+        }
+        .hrms-alert.success{color:#13736f;background:#dff8f3;border:1px solid rgba(19,115,111,.2);box-shadow:5px 6px 0 rgba(174,230,217,.7)}
+        .hrms-alert.error{color:#b62f55;background:#ffe4ec;border:1px solid rgba(182,47,85,.18);box-shadow:5px 6px 0 rgba(255,209,223,.7)}
+        @keyframes hrmsSlideDown{from{opacity:0;transform:translateY(-10px);filter:blur(2px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
+
+        .hrms-panel,.hrms-form-card {
+          min-width: 0;
+          padding: clamp(17px,1.8vw,24px);
+          border: 1px solid rgba(171,181,211,.72);
+          border-radius: clamp(24px,2vw,32px);
+          background: linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
+          box-shadow: 9px 11px 0 #d1dcfa,0 24px 42px rgba(34,38,110,.1);
+          animation: hrmsContentIn 520ms var(--emp-ease) both;
+        }
+        .hrms-form-card{background:linear-gradient(145deg,#f4fbff 0%,#f8f1ff 56%,#fffaf0 100%);box-shadow:9px 11px 0 #c9ddf5,0 24px 42px rgba(34,38,110,.1)}
+        @keyframes hrmsContentIn{from{opacity:0;transform:translateY(16px) scale(.992);filter:blur(3px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+
+        .hrms-section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}
+        .hrms-section-heading>div{min-width:0}
+        .hrms-section-heading h3{margin:0 0 6px;color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:clamp(22px,2vw,30px);line-height:1;letter-spacing:-.03em}
+        .hrms-section-heading p{margin:0;color:var(--emp-soft);font-size:13px;line-height:1.55}
+        .hrms-actions,.hrms-row-actions{display:flex;flex-wrap:wrap;gap:10px}
+
+        .hrms-filter-grid{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(130px,1fr)) auto;gap:10px;margin-bottom:18px;padding:13px;border:1px solid rgba(171,181,211,.55);border-radius:18px;background:rgba(255,255,255,.72)}
+        .hrms-filter-grid input,.hrms-filter-grid select,.hrms-field input,.hrms-field select{width:100%;min-width:0;border:1px solid rgba(159,169,205,.62);border-radius:14px;outline:none;color:var(--emp-ink);background:rgba(255,255,255,.9);padding:12px 13px;font:inherit;transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease}
+        .hrms-filter-grid input:hover,.hrms-filter-grid select:hover,.hrms-field input:hover,.hrms-field select:hover{border-color:rgba(98,84,218,.34)}
+        .hrms-filter-grid input:focus,.hrms-filter-grid select:focus,.hrms-field input:focus,.hrms-field select:focus{border-color:var(--emp-violet);background:#fff;box-shadow:0 0 0 4px rgba(98,84,218,.11)}
+
+        .hrms-primary-btn{min-height:42px;padding:12px 16px;border-radius:14px;color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:5px 6px 0 rgba(52,43,120,.8)}
+        .hrms-primary-btn:disabled,.hrms-secondary-btn:disabled,.hrms-danger-soft-btn:disabled{opacity:.62;cursor:not-allowed;transform:none;box-shadow:none}
+        .hrms-secondary-btn{min-height:40px;padding:11px 14px;border-color:rgba(98,84,218,.18);border-radius:13px;color:var(--emp-deep);background:#f1efff;box-shadow:4px 5px 0 rgba(98,84,218,.14)}
+        .hrms-danger-soft-btn{min-height:40px;padding:10px 13px;border-color:rgba(182,47,85,.16);border-radius:13px;color:#b62f55;background:#ffe4ec}
+        .compact{min-height:34px!important;padding:8px 10px!important;font-size:11px}
+
+        .hrms-table-wrap{width:100%;overflow-x:auto;border:1px solid rgba(171,181,211,.62);border-radius:18px;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:rgba(98,84,218,.35) transparent;-webkit-overflow-scrolling:touch}
+        .hrms-table-wrap::-webkit-scrollbar{height:8px}.hrms-table-wrap::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(98,84,218,.35)}
+        .hrms-table{width:100%;min-width:1050px;border-collapse:separate;border-spacing:0;background:rgba(255,255,255,.72)}
+        .hrms-table th{position:sticky;top:0;z-index:2;padding:14px 16px;border-bottom:1px solid rgba(65,55,161,.12);color:#4f5e7f;background:rgba(241,239,255,.94);font-size:10px;font-weight:900;letter-spacing:.07em;text-align:left;text-transform:uppercase;backdrop-filter:blur(12px)}
+        .hrms-table td{padding:15px 16px;border-bottom:1px solid rgba(65,55,161,.09);color:#334164;background:rgba(255,255,255,.64);vertical-align:middle;transition:background 180ms ease}
+        .hrms-table tbody tr:hover td{background:rgba(237,246,255,.82)}
+        .hrms-table tr:last-child td{border-bottom:0}
+        .hrms-person-cell{display:flex;align-items:center;gap:12px;min-width:230px}.hrms-person-cell>div{min-width:0}
+        .hrms-person-cell strong,.hrms-table td strong{display:block;color:var(--emp-ink);font-weight:900;overflow-wrap:anywhere}
+        .hrms-person-cell small,.hrms-table td small{display:block;margin-top:4px;color:var(--emp-soft);font-size:11px;overflow-wrap:anywhere}
+        .hrms-employee-avatar{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:44px;height:44px;border:3px solid #fff;border-radius:15px;color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(98,84,218,.16),0 10px 20px rgba(34,38,110,.1);font-weight:900;object-fit:cover}
+        .hrms-pill{display:inline-flex;align-items:center;width:fit-content;padding:7px 10px;border-radius:999px;font-size:10px;font-weight:900;line-height:1}.hrms-pill-green{color:#13736f;background:#dff8f3}.hrms-pill-red{color:#b62f55;background:#ffe4ec}
+        .hrms-table-action{text-align:right!important;white-space:nowrap}
+        .hrms-empty-state{padding:30px 22px;border:1px dashed rgba(98,84,218,.35);border-radius:20px;color:var(--emp-soft);background:linear-gradient(145deg,rgba(237,248,255,.76),rgba(248,241,255,.72));font-weight:900;text-align:center}
+
+        .hrms-form-section{margin-top:16px;padding:16px;border:1px solid rgba(171,181,211,.55);border-radius:20px;background:rgba(255,255,255,.68);transition:transform 220ms var(--emp-ease),border-color 180ms ease,box-shadow 220ms var(--emp-ease)}
+        .hrms-form-section:hover{transform:translateY(-2px);border-color:rgba(98,84,218,.24);box-shadow:5px 6px 0 rgba(185,215,255,.5)}
+        .hrms-form-section:first-of-type{margin-top:0}.hrms-form-section h4{margin:0 0 13px;color:var(--emp-ink);font-size:15px;font-weight:950}
+        .hrms-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+        .hrms-field{display:flex;min-width:0;flex-direction:column;gap:7px}.hrms-field span{color:#334164;font-size:12px;font-weight:900}.hrms-field b{margin-left:3px;color:#dc3f67}
+        .hrms-searchable-field input{margin-bottom:8px}.hrms-searchable-field select{background:#fff}
+        .hrms-checkbox-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+        .hrms-checkbox{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid rgba(159,169,205,.55);border-radius:15px;color:#334164;background:rgba(255,255,255,.72);font-size:12px;font-weight:900;transition:transform 180ms ease,border-color 180ms ease,background 180ms ease}.hrms-checkbox:hover{transform:translateY(-1px);border-color:rgba(98,84,218,.25);background:#fff}.hrms-checkbox input{width:18px;height:18px;accent-color:var(--emp-violet)}
+        .hrms-form-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px;padding-top:15px;border-top:1px solid rgba(65,55,161,.11)}
+        .hrms-form-note{color:var(--emp-soft);font-size:12px;font-weight:750;line-height:1.5}
+        .hrms-alumni-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(360px,.9fr);gap:20px;align-items:start}
+
+        .hrms-modal-backdrop{--emp-ink:#101a3a;--emp-soft:#596483;--emp-violet:#6254da;--emp-deep:#342b78;--emp-blue:#3766db;--emp-teal:#18aaa8;--emp-flat-blue:#b9d7ff;--emp-flat-violet:#c9c0ff;--emp-flat-teal:#aee6d9;--emp-ease:cubic-bezier(.22,1,.36,1);position:fixed;inset:0;z-index:10000;width:100vw;height:100dvh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));background:rgba(15,23,42,.48);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:hrmsBackdropIn 260ms ease both}
+        .hrms-modal{width:min(1120px,100%);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;padding:20px;border:1px solid rgba(171,181,211,.72);border-radius:26px;background:linear-gradient(145deg,#fff 0%,#f4fbff 52%,#f8f1ff 100%);box-shadow:0 30px 80px rgba(34,38,110,.24),10px 12px 0 rgba(185,215,255,.56);animation:hrmsModalIn 420ms var(--emp-ease) both;transform-origin:50% 14%;-webkit-overflow-scrolling:touch}
+        .hrms-modal.small{width:min(560px,100%)}
+        @keyframes hrmsBackdropIn{from{opacity:0;backdrop-filter:blur(0)}to{opacity:1;backdrop-filter:blur(8px)}}
+        @keyframes hrmsModalIn{from{opacity:0;transform:translateY(22px) scale(.965);filter:blur(4px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+        .hrms-modal h3{margin:0 0 6px;color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:24px;letter-spacing:-.03em}.hrms-modal p{margin:0 0 16px;color:var(--emp-soft)}
+        .hrms-modal-grid{display:grid;gap:12px}.hrms-modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px}
+
+        @media(min-width:1600px){.hrms-stats-grid{gap:20px}.hrms-form-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.hrms-alumni-layout{grid-template-columns:minmax(0,1.45fr) minmax(430px,.75fr)}}
+        @media(max-width:1180px){.hrms-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-alumni-layout{grid-template-columns:1fr}.hrms-checkbox-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(max-width:820px){.hrms-hero-content,.hrms-section-heading{flex-direction:column}.hrms-refresh-btn{width:100%}.hrms-actions{width:100%}.hrms-actions button{flex:1 1 auto}.hrms-filter-grid{grid-template-columns:1fr}.hrms-filter-grid .hrms-secondary-btn{width:100%}.hrms-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(max-width:640px){
+          .hrms-employees-page{gap:15px}.hrms-hero{padding:20px;border-radius:24px;box-shadow:7px 8px 0 var(--emp-flat-blue),0 18px 30px rgba(34,38,110,.1)}.hrms-hero h1{font-size:clamp(31px,9.5vw,43px)}
+          .hrms-tabs{top:max(6px,env(safe-area-inset-top));padding:7px;border-radius:17px}.hrms-tab-btn{min-height:42px;padding:10px 12px;font-size:10px}
+          .hrms-stat-card{padding:14px;border-radius:17px;box-shadow:4px 5px 0 var(--emp-flat-blue),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(2){box-shadow:4px 5px 0 var(--emp-flat-violet),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(3){box-shadow:4px 5px 0 var(--emp-flat-teal),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(4){box-shadow:4px 5px 0 #ffe0a5,0 12px 20px rgba(15,20,75,.07)}
+          .hrms-panel,.hrms-form-card{padding:16px;border-radius:22px;box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08)}.hrms-form-card{box-shadow:6px 7px 0 #c9ddf5,0 16px 28px rgba(34,38,110,.08)}
+          .hrms-form-grid,.hrms-checkbox-grid{grid-template-columns:1fr}.hrms-form-section{padding:14px}.hrms-actions,.hrms-row-actions,.hrms-form-actions,.hrms-modal-actions{width:100%;justify-content:stretch}.hrms-actions button,.hrms-form-actions button,.hrms-modal-actions button{width:100%}
+          .hrms-modal-backdrop{align-items:flex-end;padding:0}.hrms-modal,.hrms-modal.small{width:100%;max-width:100%;max-height:calc(100dvh - max(8px,env(safe-area-inset-top)));margin:0;padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));border-radius:24px 24px 0 0;box-shadow:0 -18px 60px rgba(34,38,110,.24);animation-name:hrmsMobileSheetIn;transform-origin:50% 100%}
+          @keyframes hrmsMobileSheetIn{from{opacity:0;transform:translateY(100%);filter:blur(3px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
+        }
+        @media(max-width:420px){.hrms-stats-grid{grid-template-columns:1fr}.hrms-stat-card{min-height:auto}.hrms-row-actions{display:grid;grid-template-columns:1fr}.hrms-row-actions button{width:100%}}
+        @media(orientation:landscape) and (max-height:600px){.hrms-modal,.hrms-modal.small{max-height:calc(100dvh - 8px)}}
+        @media(prefers-reduced-motion:reduce){.hrms-employees-page *,.hrms-employees-page *::before,.hrms-employees-page *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+`}</style>
 
       <div className="hrms-hero">
         <div className="hrms-hero-content">
@@ -1690,55 +1961,100 @@ export default function Employees({ user = {}, setPage } = {}) {
         </div>
       ) : null}
 
-      {editingEmployee ? (
-        <div className="hrms-modal-backdrop">
-          <div className="hrms-modal">
-            <EmployeeForm
-              title="Edit Employee"
-              subtitle={`Update details for ${editingEmployee.name || editingEmployee.employee_name || 'employee'}.`}
-              form={editForm}
-              setForm={setEditForm}
-              onSubmit={handleUpdateEmployee}
-              submitLabel="Update Employee"
-              loading={saving}
-              isEdit
-              organisations={organisations}
-              departments={departments}
-              designations={designations}
-              states={states}
-              teamLeaders={teamLeaders}
-              reportingOfficers={reportingOfficers}
-              teamLeaderSearch={editTeamLeaderSearch}
-              setTeamLeaderSearch={setEditTeamLeaderSearch}
-              reportingOfficerSearch={editReportingOfficerSearch}
-              setReportingOfficerSearch={setEditReportingOfficerSearch}
-            />
-            <div className="hrms-modal-actions">
-              <button type="button" className="hrms-secondary-btn" onClick={closeEditModal}>Close</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {editingEmployee
+        ? createPortal(
+            <div className="hrms-modal-backdrop">
+              <div className="hrms-modal">
+                <EmployeeForm
+                  title="Edit Employee"
+                  subtitle={`Update details for ${editingEmployee.name || editingEmployee.employee_name || 'employee'}.`}
+                  form={editForm}
+                  setForm={setEditForm}
+                  onSubmit={handleUpdateEmployee}
+                  submitLabel="Update Employee"
+                  loading={saving}
+                  isEdit
+                  organisations={organisations}
+                  departments={departments}
+                  designations={designations}
+                  states={states}
+                  teamLeaders={teamLeaders}
+                  reportingOfficers={reportingOfficers}
+                  teamLeaderSearch={editTeamLeaderSearch}
+                  setTeamLeaderSearch={setEditTeamLeaderSearch}
+                  reportingOfficerSearch={editReportingOfficerSearch}
+                  setReportingOfficerSearch={setEditReportingOfficerSearch}
+                />
+                <div className="hrms-modal-actions">
+                  <button
+                    type="button"
+                    className="hrms-secondary-btn"
+                    onClick={closeEditModal}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
-      {resignEmployee ? (
-        <div className="hrms-modal-backdrop">
-          <form className="hrms-modal small" onSubmit={handleConfirmResignation}>
-            <h3>Mark Employee as Resigned</h3>
-            <p>
-              This will move <strong>{resignEmployee.name || resignEmployee.employee_name}</strong> from Employee Master to Alumni and deactivate the employee login.
-            </p>
-            <div className="hrms-modal-grid">
-              <TextInput label="Last Working Date" name="last_working_date" value={resignForm.last_working_date} onChange={handleResignChange} type="date" required />
-              <SelectInput label="Exit Type" name="exit_type" value={resignForm.exit_type} onChange={handleResignChange} options={EXIT_TYPE_OPTIONS} />
-              <TextInput label="Reason" name="resignation_reason" value={resignForm.resignation_reason} onChange={handleResignChange} placeholder="Reason for resignation" />
-            </div>
-            <div className="hrms-modal-actions">
-              <button type="button" className="hrms-secondary-btn" onClick={closeResignModal}>Cancel</button>
-              <button type="submit" className="hrms-primary-btn" disabled={saving}>{saving ? 'Updating...' : 'Confirm Resignation'}</button>
-            </div>
-          </form>
-        </div>
-      ) : null}
+      {resignEmployee
+        ? createPortal(
+            <div className="hrms-modal-backdrop">
+              <form className="hrms-modal small" onSubmit={handleConfirmResignation}>
+                <h3>Mark Employee as Resigned</h3>
+                <p>
+                  This will move{' '}
+                  <strong>{resignEmployee.name || resignEmployee.employee_name}</strong>{' '}
+                  from Employee Master to Alumni and deactivate the employee login.
+                </p>
+                <div className="hrms-modal-grid">
+                  <TextInput
+                    label="Last Working Date"
+                    name="last_working_date"
+                    value={resignForm.last_working_date}
+                    onChange={handleResignChange}
+                    type="date"
+                    required
+                  />
+                  <SelectInput
+                    label="Exit Type"
+                    name="exit_type"
+                    value={resignForm.exit_type}
+                    onChange={handleResignChange}
+                    options={EXIT_TYPE_OPTIONS}
+                  />
+                  <TextInput
+                    label="Reason"
+                    name="resignation_reason"
+                    value={resignForm.resignation_reason}
+                    onChange={handleResignChange}
+                    placeholder="Reason for resignation"
+                  />
+                </div>
+                <div className="hrms-modal-actions">
+                  <button
+                    type="button"
+                    className="hrms-secondary-btn"
+                    onClick={closeResignModal}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="hrms-primary-btn"
+                    disabled={saving}
+                  >
+                    {saving ? 'Updating...' : 'Confirm Resignation'}
+                  </button>
+                </div>
+              </form>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
