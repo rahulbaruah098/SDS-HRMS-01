@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Navigate,
   Route,
@@ -26,6 +26,48 @@ import ResourcesPage from "./pages/ResourcesPage";
 import SayaPage from "./pages/SayaPage";
 import SecurityPage from "./pages/SecurityPage";
 import SupportPage from "./pages/SupportPage";
+
+const SPLASH_SESSION_KEY = "yourcomate_splash_seen_v1";
+
+function hasSeenWebsiteSplash() {
+  try {
+    return (
+      window.sessionStorage.getItem(SPLASH_SESSION_KEY) === "1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function rememberWebsiteSplash() {
+  try {
+    window.sessionStorage.setItem(SPLASH_SESSION_KEY, "1");
+  } catch {
+    // The splash still completes normally when browser storage is blocked.
+  }
+}
+
+function WebsiteSplashGate() {
+  const location = useLocation();
+  const [splashSeen, setSplashSeen] = useState(
+    hasSeenWebsiteSplash,
+  );
+
+  const isHomepage = location.pathname === "/";
+
+  const handleSplashComplete = () => {
+    rememberWebsiteSplash();
+    setSplashSeen(true);
+  };
+
+  if (!isHomepage || splashSeen) {
+    return null;
+  }
+
+  return (
+    <WebsiteSplash onComplete={handleSplashComplete} />
+  );
+}
 
 const SCROLL_STORAGE_KEY = "yourcomate_scroll_positions_v1";
 const MAX_SAVED_POSITIONS = 60;
@@ -459,7 +501,7 @@ function ScrollManager() {
 export default function WebsiteApp() {
   return (
     <>
-      <WebsiteSplash />
+      <WebsiteSplashGate />
       <ScrollManager />
       <Routes>
         <Route element={<PublicLayout />}>

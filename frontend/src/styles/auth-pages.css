@@ -949,7 +949,7 @@
   }
 }
 
-@media (min-width: 821px) and (max-width: 1120px) {
+@media (min-width: 821px) and (max-width: 1280px) {
   .yc-employee-login-page .yc-employee-login-shell {
     grid-template-columns:
       minmax(0, 1fr)
@@ -959,6 +959,67 @@
 
   .yc-employee-login-page .yc-login-onboarding-story {
     padding-inline: clamp(16px, 2.2vw, 24px) !important;
+  }
+
+  /* Keep the login title and status badges in separate responsive columns. */
+  .yc-employee-login-page
+    .auth-premium-form-card
+    > header {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 1fr)
+      clamp(88px, 10vw, 108px);
+    align-items: start;
+    gap: clamp(10px, 1.5vw, 16px);
+  }
+
+  .yc-employee-login-page
+    .auth-premium-form-card
+    .yc-login-heading-copy {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .yc-employee-login-page
+    .auth-premium-form-card
+    .yc-login-heading {
+    width: 100%;
+    max-width: 100%;
+    margin-top: 5px;
+
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+
+    font-size: clamp(28px, 5.2svh, 38px);
+    line-height: 0.88;
+  }
+
+  .yc-employee-login-page
+    .auth-premium-form-card
+    .yc-login-heading
+    > span {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  .yc-employee-login-page
+    .yc-login-header-statuses {
+    width: 100%;
+    min-width: 0;
+    max-width: 108px;
+  }
+
+  .yc-employee-login-page
+    .auth-status-badge,
+  .yc-employee-login-page
+    .yc-login-testing-status {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }
 

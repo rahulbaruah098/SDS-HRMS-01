@@ -80,8 +80,8 @@ export default function Login({ onLogin }) {
     }
   }
 
-  return (
-    <div className="app-page auth-premium-page login-page yc-employee-login-page">
+return (
+  <div className="auth-premium-page login-page yc-employee-login-page">
       <header className="auth-premium-header">
         <button
           type="button"

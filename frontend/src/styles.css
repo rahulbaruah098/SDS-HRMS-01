@@ -72,6 +72,28 @@ a {
   padding: 20px;
 }
 
+.login-page.yc-employee-login-page {
+  width: 100%;
+  max-width: none;
+  min-height: 100dvh;
+
+  margin: 0;
+  padding: 0;
+
+  display: flex;
+  place-items: initial;
+
+  border: 0;
+  border-radius: 0;
+
+  overflow-x: hidden;
+
+  background:
+    radial-gradient(circle at 15% 12%, rgba(102, 88, 220, 0.2), transparent 28%),
+    radial-gradient(circle at 88% 82%, rgba(55, 102, 219, 0.18), transparent 30%),
+    linear-gradient(135deg, #f8fbff, #f6f2ff);
+}
+
 .login-card {
   width: min(460px, 92vw);
   background: #fff;

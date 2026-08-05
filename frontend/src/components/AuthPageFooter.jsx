@@ -54,6 +54,8 @@ export default function AuthPageFooter() {
           </a>{" "}
           Group
         </span>
+
+        <span> Built in Assam❤️</span>
       </div>
     </footer>
   );
