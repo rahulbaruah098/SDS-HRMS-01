@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowUpRight,
+  BriefcaseBusiness,
+  CalendarDays,
+  Clock3,
+  LifeBuoy,
+  RefreshCw,
+  UserRound,
+} from 'lucide-react';
 import {
   api,
   getAttendanceStatus,
@@ -1240,6 +1249,129 @@ function LeaveApprovalTable({ rows = [], saving, onDecision }) {
   );
 }
 
+function AutoFitEmployeeName({ name }) {
+  const containerRef = useRef(null);
+  const textRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const text = textRef.current;
+
+    if (!container || !text) {
+      return undefined;
+    }
+
+    let frameId = 0;
+    let delayedFrameId = 0;
+
+    const fitName = () => {
+      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(delayedFrameId);
+
+      frameId = window.requestAnimationFrame(() => {
+        delayedFrameId = window.requestAnimationFrame(() => {
+          const availableWidth = Math.floor(
+            container.getBoundingClientRect().width,
+          );
+
+          if (!availableWidth) {
+            return;
+          }
+
+          const viewportWidth = window.innerWidth;
+
+          const maximumSize =
+            viewportWidth <= 360
+              ? 24
+              : viewportWidth <= 430
+                ? 28
+                : viewportWidth <= 640
+                  ? 34
+                  : viewportWidth <= 820
+                    ? 50
+                    : viewportWidth <= 1100
+                      ? 62
+                      : 72;
+
+          const minimumSize = viewportWidth <= 430 ? 10 : 15;
+
+          text.style.fontSize = `${maximumSize}px`;
+          text.style.transform = 'none';
+          text.style.width = 'max-content';
+
+          let currentSize = maximumSize;
+          let measuredWidth = text.getBoundingClientRect().width;
+
+          while (
+            measuredWidth > availableWidth &&
+            currentSize > minimumSize
+          ) {
+            currentSize -= 0.5;
+            text.style.fontSize = `${currentSize}px`;
+            measuredWidth = text.getBoundingClientRect().width;
+          }
+
+          if (measuredWidth > availableWidth) {
+            const horizontalScale = Math.max(
+              0.82,
+              availableWidth / measuredWidth,
+            );
+
+            text.style.transform = `scaleX(${horizontalScale})`;
+          } else {
+            text.style.transform = 'none';
+          }
+
+          text.style.setProperty(
+            '--employee-name-size',
+            `${currentSize}px`,
+          );
+        });
+      });
+    };
+
+    fitName();
+
+    const resizeObserver = new ResizeObserver(fitName);
+    resizeObserver.observe(container);
+
+    window.addEventListener('resize', fitName);
+    window.addEventListener('orientationchange', fitName);
+
+    const delayedFit = window.setTimeout(fitName, 250);
+
+    if (document.fonts?.ready) {
+      document.fonts.ready
+        .then(() => {
+          fitName();
+          window.setTimeout(fitName, 100);
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(delayedFrameId);
+      window.clearTimeout(delayedFit);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', fitName);
+      window.removeEventListener('orientationchange', fitName);
+    };
+  }, [name]);
+
+  return (
+    <div className="employee-name-fit-container" ref={containerRef}>
+      <h1
+        ref={textRef}
+        className="employee-name-heading dashboard-display-name"
+        title={name}
+      >
+        {name}
+      </h1>
+    </div>
+  );
+}
+
 export default function EmployeeDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [attendanceStatus, setAttendanceStatus] = useState(null);
@@ -1687,82 +1819,6 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
       data?.team_pending_attendance_mode_requests?.length || 0,
   };
 
-  const profileRows = [
-    {
-      field: 'Employee ID',
-      value:
-        employeeSummary.employee_id ||
-        employee.employee_id ||
-        employee.emp_code ||
-        '',
-    },
-    {
-      field: 'Employee Name',
-      value: displayName,
-    },
-    {
-      field: 'Dashboard Role',
-      value: dashboardRole,
-    },
-    {
-      field: 'Employee Capability',
-      value: mappedCapabilityLabel,
-    },
-    {
-      field: 'Project Permission',
-      value: canCreateOrAssignProjects
-        ? 'Can create projects, assign team members, and add collaborators'
-        : 'Can view scoped projects and update assigned/collaborator progress',
-    },
-    {
-      field: 'Department',
-      value: employeeSummary.department || employee.department || '',
-    },
-    {
-      field: 'Designation',
-      value: employeeSummary.designation || employee.designation || '',
-    },
-    {
-      field: 'State / Branch',
-      value:
-        employeeSummary.state ||
-        employee.state ||
-        employeeSummary.branch ||
-        employee.branch ||
-        '',
-    },
-    {
-      field: 'Shift',
-      value: employeeSummary.shift || employee.shift || '',
-    },
-    {
-      field: 'Joining Date',
-      value:
-        employeeSummary.joining_date ||
-        employee.joining_date ||
-        employee.doj ||
-        '',
-    },
-    {
-      field: 'Employment Status',
-      value:
-        employeeSummary.employment_status ||
-        employee.employment_status ||
-        employee.status ||
-        '',
-    },
-    {
-      field: 'Mapped Team Leader',
-      value: employeeSummary.team_leader_name || employee.team_leader_name || '',
-    },
-    {
-      field: 'Mapped Reporting Officer',
-      value:
-        employeeSummary.reporting_officer_name ||
-        employee.reporting_officer_name ||
-        '',
-    },
-  ];
 
   const leaveBalanceRows = leaveBalanceSource.map((row) => ({
     leave_type: leaveTypeLabel(row.leave_type_label || row.leave_type),
@@ -1812,47 +1868,9 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
     status: statusLabel(row.status),
   }));
 
-    const leaveRows = myLeaveRows.map((row) => ({
-      leave_type: leaveRequestTypeLabel(row),
-      leave_days: row.leave_days ?? '—',
-      deducted_from: deductedLeaveTypeLabel(row),
-      lwp_days: lwpDaysLabel(row),
-      from_date: formatDate(row.from_date),
-      upto_date: formatDate(row.to_date || row.upto_date),
-      reason: row.reason || '—',
-      task_handover_to: row.task_handover_to_name || '—',
-      project_handover: row.project_handover_name || '—',
-      current_status: leaveLiveStatus(row),
-      final_status: statusLabel(row.status),
-    }));
 
-  const notificationRows = (data?.notifications || []).map((row) => ({
-    title: row.title || '—',
-    body: row.body || '—',
-    status: statusLabel(row.status),
-    created_at: formatDateTime(row.created_at),
-  }));
 
-  const teamMemberRows = (data?.team_members || []).map((row) => ({
-    name: row.name || '—',
-    employee_id: row.employee_id || row.emp_code || '—',
-    email: row.email || '—',
-    department: row.department || '—',
-    designation: row.designation || '—',
-    state: row.state || row.branch || '—',
-    status: row.status || row.employment_status || '—',
-  }));
 
-  const reportingMemberRows = (data?.reporting_members || []).map((row) => ({
-    name: row.name || '—',
-    employee_id: row.employee_id || row.emp_code || '—',
-    email: row.email || '—',
-    department: row.department || '—',
-    designation: row.designation || '—',
-    is_team_leader: boolLabel(row.is_team_leader),
-    state: row.state || row.branch || '—',
-    status: row.status || row.employment_status || '—',
-  }));
 
   const teamPendingModeRows = (
     data?.team_pending_attendance_mode_requests || []
@@ -2535,7 +2553,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
 
         .employee-hero {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
+          grid-template-columns: minmax(460px, 1.18fr) minmax(380px, .82fr);
           gap: 22px;
           align-items: stretch;
         }
@@ -2896,6 +2914,400 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           font-size: 18px;
         }
 
+
+        /* ================================================================
+           YOURCOMATE EMPLOYEE DASHBOARD HERO
+           Visual-only redesign. Existing dashboard actions and workflows
+           remain unchanged.
+           ================================================================ */
+
+        .employee-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(22px, 3vw, 38px);
+          border-radius: 34px;
+          border: 1px solid rgba(99, 102, 241, .15);
+          background:
+            radial-gradient(circle at 13% 6%, rgba(147, 218, 246, .24), transparent 30%),
+            radial-gradient(circle at 90% 8%, rgba(122, 224, 211, .18), transparent 28%),
+            linear-gradient(145deg, rgba(255,255,255,.99), rgba(247,248,255,.98));
+          box-shadow:
+            0 24px 70px rgba(46, 48, 112, .10),
+            inset 0 1px 0 rgba(255,255,255,.96);
+        }
+
+        .employee-hero::before {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 330px;
+          height: 330px;
+          right: -160px;
+          bottom: -190px;
+          border-radius: 999px;
+          border: 44px solid rgba(96, 82, 232, .055);
+          pointer-events: none;
+        }
+
+        .employee-hero::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 150px;
+          height: 150px;
+          top: -74px;
+          left: 48%;
+          border-radius: 999px;
+          background: rgba(116, 221, 211, .08);
+          pointer-events: none;
+        }
+
+        .employee-identity {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        .employee-identity-head {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          align-items: center;
+          gap: clamp(16px, 2vw, 24px);
+          min-width: 0;
+        }
+
+        .employee-profile-avatar {
+          position: relative;
+          width: clamp(86px, 8vw, 116px);
+          height: clamp(86px, 8vw, 116px);
+          border-radius: 30px;
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          background:
+            radial-gradient(circle at 30% 18%, rgba(255,255,255,.9), transparent 36%),
+            linear-gradient(135deg, #eef2ff, #e7fbf8);
+          color: #4338ca;
+          font-size: 30px;
+          font-weight: 950;
+          border: 5px solid rgba(255,255,255,.96);
+          box-shadow:
+            0 20px 44px rgba(35, 42, 105, .16),
+            0 0 0 1px rgba(99, 102, 241, .10);
+          animation: employeeAvatarFloat 5.4s ease-in-out infinite;
+        }
+
+        .employee-profile-avatar::after {
+          content: "";
+          position: absolute;
+          width: 12px;
+          height: 12px;
+          right: 4px;
+          bottom: 5px;
+          border: 3px solid #fff;
+          border-radius: 999px;
+          background: #20b486;
+          box-shadow: 0 4px 12px rgba(32, 180, 134, .30);
+        }
+
+        .employee-profile-avatar img {
+          width: 100%;
+          height: 100%;
+          display: block;
+          object-fit: cover;
+        }
+
+        .employee-identity-copy {
+          min-width: 0;
+        }
+
+        .employee-identity-copy .kicker {
+          margin-bottom: 10px;
+          background: rgba(238, 242, 255, .94);
+          color: #5848df;
+          border: 1px solid rgba(99, 102, 241, .12);
+          box-shadow: 0 8px 20px rgba(79, 70, 229, .07);
+        }
+
+        .employee-name-heading.dashboard-display-name {
+          width: fit-content;
+          max-width: 100%;
+          margin: 0;
+          overflow: visible;
+          color: #111d48;
+          text-overflow: clip;
+          white-space: nowrap;
+          font-family:
+            "Segoe Script",
+            "Brush Script MT",
+            "Lucida Handwriting",
+            cursive;
+          font-style: normal;
+          font-size: clamp(34px, 4.3vw, 68px);
+          font-weight: 500;
+          line-height: 1.08;
+          letter-spacing: -.045em;
+          text-shadow: 0 8px 28px rgba(50, 47, 126, .08);
+          transform-origin: left center;
+        }
+
+        .employee-dashboard-subtitle {
+          max-width: 760px;
+          margin: 14px 0 0;
+          color: #657696;
+          font-size: clamp(14px, 1.15vw, 17px);
+          line-height: 1.68;
+        }
+
+        .employee-quick-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          margin-top: 26px;
+        }
+
+        .employee-quick-action {
+          --action-accent: #5f52e8;
+          --action-soft: rgba(95, 82, 232, .10);
+          position: relative;
+          isolation: isolate;
+          min-width: 0;
+          min-height: 78px;
+          padding: 12px;
+          display: grid;
+          grid-template-columns: 44px minmax(0, 1fr) 34px;
+          align-items: center;
+          gap: 11px;
+          overflow: hidden;
+          border: 1px solid rgba(99, 102, 241, .13);
+          border-radius: 20px;
+          color: #172554;
+          background:
+            radial-gradient(circle at 92% 12%, var(--action-soft), transparent 32%),
+            rgba(255,255,255,.88);
+          box-shadow:
+            0 12px 28px rgba(35, 42, 105, .07),
+            inset 0 1px 0 rgba(255,255,255,.96);
+          text-align: left;
+          transition:
+            transform .25s cubic-bezier(.22, 1, .36, 1),
+            box-shadow .25s ease,
+            border-color .25s ease;
+        }
+
+        .employee-quick-action::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 76px;
+          height: 76px;
+          right: -48px;
+          bottom: -50px;
+          border-radius: 999px;
+          background: var(--action-soft);
+          transition: transform .35s ease;
+        }
+
+        .employee-quick-action:hover {
+          border-color: color-mix(in srgb, var(--action-accent) 28%, transparent);
+          box-shadow:
+            0 18px 40px rgba(35, 42, 105, .13),
+            inset 0 1px 0 rgba(255,255,255,.98);
+          transform: translateY(-4px);
+        }
+
+        .employee-quick-action:hover::after {
+          transform: translate(-8px, -7px) scale(1.28);
+        }
+
+        .employee-quick-action:active {
+          transform: translateY(-1px) scale(.988);
+        }
+
+        .employee-quick-action.attendance {
+          --action-accent: #5f52e8;
+          --action-soft: rgba(95, 82, 232, .12);
+        }
+
+        .employee-quick-action.leave {
+          --action-accent: #1689d8;
+          --action-soft: rgba(22, 137, 216, .12);
+        }
+
+        .employee-quick-action.projects {
+          --action-accent: #6d4ee8;
+          --action-soft: rgba(109, 78, 232, .12);
+        }
+
+        .employee-quick-action.ticket {
+          --action-accent: #0da6ad;
+          --action-soft: rgba(13, 166, 173, .12);
+        }
+
+        .employee-quick-action.profile {
+          --action-accent: #9a43d7;
+          --action-soft: rgba(154, 67, 215, .11);
+        }
+
+        .employee-quick-action.refresh {
+          --action-accent: #2476d4;
+          --action-soft: rgba(36, 118, 212, .11);
+        }
+
+        .employee-quick-action-icon {
+          width: 44px;
+          height: 44px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid color-mix(in srgb, var(--action-accent) 18%, transparent);
+          border-radius: 15px;
+          color: var(--action-accent);
+          background:
+            radial-gradient(circle at 30% 20%, rgba(255,255,255,.98), transparent 36%),
+            linear-gradient(135deg, rgba(255,255,255,.94), var(--action-soft));
+          box-shadow:
+            0 9px 20px color-mix(in srgb, var(--action-accent) 13%, transparent),
+            inset 0 1px 0 rgba(255,255,255,.96);
+          transition:
+            color .24s ease,
+            background .24s ease,
+            transform .3s cubic-bezier(.22, 1, .36, 1);
+        }
+
+        .employee-quick-action:hover .employee-quick-action-icon {
+          color: #fff;
+          background: linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--action-accent) 88%, white),
+            var(--action-accent)
+          );
+          transform: translateY(-2px) rotate(-3deg) scale(1.04);
+        }
+
+        .employee-quick-action-copy {
+          min-width: 0;
+        }
+
+        .employee-quick-action-copy strong,
+        .employee-quick-action-copy small {
+          display: block;
+          min-width: 0;
+        }
+
+        .employee-quick-action-copy strong {
+          overflow: visible;
+          color: #172554;
+          text-overflow: clip;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          font-size: 13.5px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+
+        .employee-quick-action-copy small {
+          margin-top: 4px;
+          overflow: visible;
+          color: #71809c;
+          text-overflow: clip;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          font-size: 10px;
+          font-weight: 750;
+          line-height: 1.25;
+        }
+
+        .employee-quick-action-arrow {
+          width: 34px;
+          height: 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          justify-self: end;
+          border-radius: 12px;
+          color: var(--action-accent);
+          background: rgba(255,255,255,.78);
+          box-shadow: 0 7px 16px rgba(35, 42, 105, .07);
+          transition:
+            color .24s ease,
+            background .24s ease,
+            transform .28s cubic-bezier(.22, 1, .36, 1);
+        }
+
+        .employee-quick-action:hover .employee-quick-action-arrow {
+          color: #fff;
+          background: var(--action-accent);
+          transform: translate(2px, -2px);
+        }
+
+        .employee-quick-action.refresh:disabled {
+          opacity: .62;
+          cursor: wait;
+          transform: none;
+        }
+
+        .employee-quick-action.refresh:disabled .employee-quick-action-icon svg {
+          animation: employeeRefreshSpin 1s linear infinite;
+        }
+
+        @keyframes employeeAvatarFloat {
+          0%, 100% {
+            transform: translateY(0);
+          }
+
+          50% {
+            transform: translateY(-4px);
+          }
+        }
+
+        @keyframes employeeRefreshSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @media (max-width: 1380px) {
+          .employee-name-heading.dashboard-display-name {
+            font-size: clamp(32px, 4vw, 58px);
+          }
+        }
+
+        @media (max-width: 1220px) and (min-width: 1025px) {
+          .employee-hero {
+            grid-template-columns: minmax(420px, 1.08fr) minmax(360px, .92fr);
+          }
+
+          .employee-name-heading.dashboard-display-name {
+            font-size: clamp(30px, 3.55vw, 50px);
+            letter-spacing: -.035em;
+          }
+
+          .employee-dashboard-subtitle {
+            font-size: 13.5px;
+          }
+
+          .employee-quick-action {
+            min-height: 74px;
+            grid-template-columns: 40px minmax(0, 1fr) 30px;
+            gap: 9px;
+            padding: 10px;
+          }
+
+          .employee-quick-action-icon {
+            width: 40px;
+            height: 40px;
+          }
+
+          .employee-quick-action-arrow {
+            width: 30px;
+            height: 30px;
+          }
+        }
+
         @media (max-width: 1024px) {
           .emp-project-head-grid {
             grid-template-columns: 1fr;
@@ -2925,7 +3337,539 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           }
         }
 
+
+        /* ================================================================
+           YOURCOMATE EMPLOYEE DASHBOARD — COMPLETE PAGE DESIGN
+           Homepage/Login-inspired visual layer.
+           The Team Leader Root Map is intentionally not targeted.
+           ================================================================ */
+
+        .employee-dashboard-page {
+          --emp-page-ink: #111a3d;
+          --emp-page-copy: #657493;
+          --emp-page-primary: #5b4ee7;
+          --emp-page-primary-deep: #3f35bd;
+          --emp-page-cyan: #24b8c7;
+          --emp-page-teal: #35c6b5;
+          --emp-page-line: rgba(92, 88, 171, .13);
+          --emp-page-paper: rgba(255, 255, 255, .94);
+          gap: clamp(18px, 2vw, 28px);
+          padding-bottom: 30px;
+        }
+
+        .employee-dashboard-page > section:not(.employee-hero):not(.emp-root-map-panel) {
+          animation: employeeSectionReveal .46s cubic-bezier(.22, 1, .36, 1) both;
+        }
+
+        .employee-dashboard-page > section:nth-of-type(2) {
+          animation-delay: .04s;
+        }
+
+        .employee-dashboard-page > section:nth-of-type(3) {
+          animation-delay: .08s;
+        }
+
+        .employee-dashboard-page > section:nth-of-type(4) {
+          animation-delay: .12s;
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel),
+        .employee-dashboard-page .emp-performance-hero,
+        .employee-dashboard-page .emp-project-hero,
+        .employee-dashboard-page .capability-card {
+          border-color: var(--emp-page-line);
+          background:
+            radial-gradient(circle at 100% 0%, rgba(177, 231, 246, .13), transparent 27%),
+            radial-gradient(circle at 0% 100%, rgba(190, 241, 232, .11), transparent 30%),
+            var(--emp-page-paper);
+          box-shadow:
+            0 18px 52px rgba(35, 42, 99, .075),
+            inset 0 1px 0 rgba(255, 255, 255, .96);
+          backdrop-filter: blur(14px);
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+          border-radius: 26px;
+          padding: clamp(17px, 2vw, 24px);
+          transition:
+            transform .24s cubic-bezier(.22, 1, .36, 1),
+            border-color .22s ease,
+            box-shadow .24s ease;
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel):hover {
+          border-color: rgba(91, 78, 231, .20);
+          box-shadow:
+            0 23px 62px rgba(35, 42, 99, .105),
+            inset 0 1px 0 rgba(255, 255, 255, .98);
+          transform: translateY(-2px);
+        }
+
+        .employee-dashboard-page .toolbar {
+          align-items: flex-start;
+          gap: 16px;
+        }
+
+        .employee-dashboard-page .toolbar h3,
+        .employee-dashboard-page .panel > h3 {
+          margin: 3px 0 0;
+          color: var(--emp-page-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(21px, 2.2vw, 30px);
+          font-weight: 700;
+          line-height: 1.15;
+          letter-spacing: -.035em;
+        }
+
+        .employee-dashboard-page .toolbar p,
+        .employee-dashboard-page .panel > p {
+          margin-top: 7px;
+          color: var(--emp-page-copy);
+          line-height: 1.62;
+        }
+
+        .employee-dashboard-section-kicker {
+          display: inline-flex;
+          width: fit-content;
+          align-items: center;
+          gap: 7px;
+          border: 1px solid rgba(91, 78, 231, .12);
+          border-radius: 999px;
+          padding: 6px 10px;
+          color: var(--emp-page-primary);
+          background: rgba(241, 239, 255, .92);
+          font-size: 10px;
+          font-weight: 950;
+          text-transform: uppercase;
+          letter-spacing: .09em;
+          box-shadow: 0 7px 18px rgba(91, 78, 231, .06);
+        }
+
+        .employee-dashboard-section-kicker::before {
+          content: "";
+          width: 6px;
+          height: 6px;
+          border-radius: 999px;
+          background: var(--emp-page-teal);
+          box-shadow: 0 0 0 4px rgba(53, 198, 181, .10);
+        }
+
+        /* Overview stat cards */
+
+        .employee-dashboard-overview-grid {
+          grid-template-columns: repeat(7, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .employee-dashboard-overview-grid .stat-card {
+          position: relative;
+          isolation: isolate;
+          min-height: 126px;
+          overflow: hidden;
+          border: 1px solid var(--emp-page-line);
+          border-radius: 22px;
+          padding: 16px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(91, 78, 231, .10), transparent 34%),
+            rgba(255, 255, 255, .95);
+          box-shadow:
+            0 13px 34px rgba(35, 42, 99, .065),
+            inset 0 1px 0 rgba(255, 255, 255, .97);
+          transition:
+            transform .24s cubic-bezier(.22, 1, .36, 1),
+            box-shadow .24s ease,
+            border-color .22s ease;
+        }
+
+        .employee-dashboard-overview-grid .stat-card::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 82px;
+          height: 82px;
+          right: -48px;
+          bottom: -52px;
+          border-radius: 999px;
+          background: rgba(36, 184, 199, .10);
+          transition: transform .34s ease;
+        }
+
+        .employee-dashboard-overview-grid .stat-card:hover {
+          border-color: rgba(91, 78, 231, .20);
+          box-shadow: 0 19px 44px rgba(35, 42, 99, .11);
+          transform: translateY(-4px);
+        }
+
+        .employee-dashboard-overview-grid .stat-card:hover::after {
+          transform: translate(-8px, -8px) scale(1.25);
+        }
+
+        .employee-dashboard-overview-grid .stat-card span {
+          color: #687894;
+          font-size: 10.5px;
+          letter-spacing: .065em;
+          text-transform: uppercase;
+        }
+
+        .employee-dashboard-overview-grid .stat-card strong {
+          margin-top: 10px;
+          color: var(--emp-page-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(22px, 2vw, 30px);
+          line-height: 1.05;
+        }
+
+        /* Performance area */
+
+        .employee-dashboard-performance {
+          gap: 20px;
+        }
+
+        .employee-dashboard-performance .emp-performance-hero {
+          border-radius: 30px;
+          padding: clamp(20px, 2.3vw, 30px);
+          background:
+            radial-gradient(circle at 8% 0%, rgba(91, 78, 231, .15), transparent 30%),
+            radial-gradient(circle at 100% 0%, rgba(53, 198, 181, .14), transparent 30%),
+            linear-gradient(145deg, #ffffff, #f8f8ff);
+        }
+
+        .employee-dashboard-performance .emp-performance-stat-card,
+        .employee-dashboard-page .emp-leave-status-card {
+          position: relative;
+          overflow: hidden;
+          min-height: 122px;
+          border-color: var(--emp-page-line);
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(91, 78, 231, .09), transparent 32%),
+            #fff;
+          box-shadow: 0 12px 30px rgba(35, 42, 99, .065);
+          transition:
+            transform .22s ease,
+            box-shadow .22s ease,
+            border-color .22s ease;
+        }
+
+        .employee-dashboard-performance .emp-performance-stat-card:hover,
+        .employee-dashboard-page .emp-leave-status-card:hover {
+          border-color: rgba(91, 78, 231, .20);
+          box-shadow: 0 18px 40px rgba(35, 42, 99, .10);
+          transform: translateY(-3px);
+        }
+
+        .employee-dashboard-performance .emp-performance-note,
+        .employee-dashboard-page .emp-leave-note {
+          border: 1px solid rgba(91, 78, 231, .12);
+          border-radius: 18px;
+          color: #667593;
+          background:
+            linear-gradient(135deg, rgba(241, 239, 255, .84), rgba(236, 253, 250, .72));
+          box-shadow: none;
+        }
+
+        .employee-dashboard-performance .emp-performance-row {
+          border-color: var(--emp-page-line);
+          background: rgba(255, 255, 255, .94);
+        }
+
+        .employee-dashboard-performance .emp-performance-track,
+        .employee-dashboard-page .emp-rating-mini-progress-track {
+          background: #e8eaf3;
+        }
+
+        .employee-dashboard-performance .emp-performance-fill,
+        .employee-dashboard-page .emp-rating-mini-progress-fill {
+          background: linear-gradient(90deg, #5b4ee7, #24a8d0, #35c6b5);
+        }
+
+        /* Single feature section */
+
+        .employee-dashboard-single-panel {
+          display: grid;
+        }
+
+        .employee-dashboard-feature-panel {
+          position: relative;
+          overflow: hidden;
+        }
+
+        .employee-dashboard-feature-panel::after {
+          content: "";
+          position: absolute;
+          width: 180px;
+          height: 180px;
+          right: -96px;
+          top: -100px;
+          border-radius: 999px;
+          background: rgba(91, 78, 231, .055);
+          pointer-events: none;
+        }
+
+        /* Project section — Root Map excluded */
+
+        .employee-dashboard-page .emp-project-dashboard {
+          gap: 22px;
+        }
+
+        .employee-dashboard-page .emp-project-hero {
+          border-radius: 32px;
+          padding: clamp(20px, 2.4vw, 32px);
+          background:
+            radial-gradient(circle at 6% 0%, rgba(91, 78, 231, .15), transparent 32%),
+            radial-gradient(circle at 96% 8%, rgba(53, 198, 181, .14), transparent 32%),
+            linear-gradient(145deg, #ffffff, #f8faff);
+        }
+
+        .employee-dashboard-page .emp-project-access-card {
+          border: 1px solid rgba(91, 78, 231, .13);
+          border-radius: 20px;
+          color: var(--emp-page-copy);
+          background: linear-gradient(135deg, rgba(244, 242, 255, .90), rgba(239, 253, 250, .82));
+        }
+
+        .employee-dashboard-page .emp-project-access-card.can-create {
+          border-color: rgba(53, 198, 181, .22);
+          background: linear-gradient(135deg, rgba(236, 253, 250, .94), rgba(245, 243, 255, .90));
+        }
+
+        .employee-dashboard-page .emp-project-modern-stat,
+        .employee-dashboard-page .emp-project-card,
+        .employee-dashboard-page .emp-project-rank-card {
+          border-color: var(--emp-page-line);
+          background: rgba(255, 255, 255, .95);
+          box-shadow: 0 13px 34px rgba(35, 42, 99, .065);
+        }
+
+        .employee-dashboard-page .emp-project-modern-stat {
+          border-radius: 21px;
+        }
+
+        .employee-dashboard-page .emp-project-card {
+          border-radius: 24px;
+        }
+
+        .employee-dashboard-page .emp-project-rank-card {
+          border-radius: 18px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(91, 78, 231, .08), transparent 28%),
+            rgba(250, 251, 255, .96);
+        }
+
+        .employee-dashboard-page .emp-project-rank-no {
+          background: linear-gradient(135deg, #6758eb, #27abc7);
+          box-shadow: 0 9px 20px rgba(91, 78, 231, .18);
+        }
+
+        .employee-dashboard-page .emp-project-ring {
+          background: conic-gradient(#5b4ee7 var(--ringValue), #e7e9f3 0);
+          box-shadow: 0 18px 44px rgba(91, 78, 231, .18);
+        }
+
+        /* Attendance summary */
+
+        .employee-dashboard-attendance-status {
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 0% 0%, rgba(36, 184, 199, .12), transparent 30%),
+            radial-gradient(circle at 100% 0%, rgba(91, 78, 231, .10), transparent 30%),
+            rgba(255, 255, 255, .95) !important;
+        }
+
+        .employee-dashboard-page .attendance-summary {
+          gap: 12px;
+          margin-top: 18px;
+        }
+
+        .employee-dashboard-page .attendance-summary > div {
+          position: relative;
+          overflow: hidden;
+          min-height: 94px;
+          border-color: var(--emp-page-line);
+          border-radius: 18px;
+          padding: 15px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(91, 78, 231, .08), transparent 34%),
+            rgba(250, 251, 255, .96);
+          box-shadow: 0 10px 25px rgba(35, 42, 99, .05);
+        }
+
+        .employee-dashboard-page .attendance-summary span {
+          color: #71809a;
+          font-size: 10.5px;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .employee-dashboard-page .attendance-summary strong {
+          margin-top: 7px;
+          color: var(--emp-page-ink);
+          font-size: 18px;
+        }
+
+        /* Remaining dual-card sections */
+
+        .employee-dashboard-dual-section {
+          align-items: stretch;
+          gap: 18px;
+        }
+
+        .employee-dashboard-dual-section > .panel {
+          height: 100%;
+        }
+
+        .employee-dashboard-page .dynamic-form {
+          border: 1px solid rgba(91, 78, 231, .11);
+          border-radius: 20px;
+          padding: 14px;
+          background:
+            linear-gradient(145deg, rgba(249, 250, 255, .98), rgba(244, 253, 251, .92));
+        }
+
+        .employee-dashboard-page .dynamic-form input,
+        .employee-dashboard-page .dynamic-form select {
+          border-color: rgba(92, 88, 171, .16);
+          border-radius: 13px;
+          background: rgba(255, 255, 255, .96);
+        }
+
+        .employee-dashboard-page .table-wrap {
+          margin-top: 16px;
+          border-color: var(--emp-page-line);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 0 10px 28px rgba(35, 42, 99, .045);
+        }
+
+        .employee-dashboard-page th {
+          color: #536381;
+          background: linear-gradient(180deg, #f8f8ff, #f5f7fb);
+        }
+
+        .employee-dashboard-page tr:hover td {
+          background: #fafaff;
+        }
+
+        /* Buttons inside remaining sections */
+
+        .employee-dashboard-page .primary,
+        .employee-dashboard-page .secondary {
+          min-height: 42px;
+          border-radius: 14px;
+          font-weight: 900;
+          transition:
+            transform .22s cubic-bezier(.22, 1, .36, 1),
+            box-shadow .22s ease,
+            background .22s ease;
+        }
+
+        .employee-dashboard-page .primary {
+          background: linear-gradient(135deg, #6758eb, #4b42cf);
+          box-shadow: 0 11px 24px rgba(91, 78, 231, .20);
+        }
+
+        .employee-dashboard-page .secondary {
+          border-color: rgba(91, 78, 231, .18);
+          color: var(--emp-page-primary);
+          background: rgba(255, 255, 255, .92);
+          box-shadow: 0 9px 21px rgba(35, 42, 99, .055);
+        }
+
+        .employee-dashboard-page .primary:hover,
+        .employee-dashboard-page .secondary:hover {
+          transform: translateY(-2px);
+        }
+
+        /* CTA */
+
+        .employee-dashboard-performance-cta {
+          overflow: hidden;
+          border-color: rgba(91, 78, 231, .18) !important;
+          background:
+            radial-gradient(circle at 4% 0%, rgba(91, 78, 231, .16), transparent 32%),
+            radial-gradient(circle at 100% 100%, rgba(53, 198, 181, .13), transparent 32%),
+            linear-gradient(135deg, #ffffff, #f8f8ff) !important;
+        }
+
+        /* Capability cards */
+
+        .employee-dashboard-page .capability-panel {
+          gap: 14px;
+        }
+
+        .employee-dashboard-page .capability-card {
+          border-radius: 22px;
+          padding: 18px;
+        }
+
+        /* Reviews */
+
+        .employee-dashboard-review-section .panel {
+          min-width: 0;
+        }
+
+        @keyframes employeeSectionReveal {
+          from {
+            opacity: 0;
+            transform: translateY(12px);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @media (max-width: 1500px) {
+          .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 1180px) {
+          .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 820px) {
+          .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+            border-radius: 22px;
+          }
+        }
+
         @media (max-width: 640px) {
+          .employee-dashboard-page {
+            gap: 16px;
+          }
+
+          .employee-dashboard-overview-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-dashboard-overview-grid .stat-card {
+            min-height: 104px;
+          }
+
+          .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+            padding: 15px;
+            border-radius: 19px;
+          }
+
+          .employee-dashboard-page .toolbar {
+            align-items: stretch;
+          }
+
+          .employee-dashboard-page .toolbar > button,
+          .employee-dashboard-page .toolbar .primary,
+          .employee-dashboard-page .toolbar .secondary {
+            width: 100%;
+          }
+
           .emp-project-stats,
           .emp-project-modern-stat-grid,
           .emp-project-card-grid,
@@ -2937,13 +3881,51 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           }
 
           .employee-identity-head {
-            grid-template-columns: 1fr;
+            grid-template-columns: 68px minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
           }
 
           .employee-profile-avatar {
-            width: 78px;
-            height: 78px;
-            border-radius: 22px;
+            width: 68px;
+            height: 68px;
+            border-width: 3px;
+            border-radius: 20px;
+            font-size: 20px;
+          }
+
+          .employee-name-heading.dashboard-display-name {
+            font-size: clamp(24px, 7.8vw, 40px);
+            letter-spacing: -.03em;
+          }
+
+          .employee-dashboard-subtitle {
+            margin-top: 9px;
+            font-size: 12.5px;
+            line-height: 1.55;
+          }
+
+          .employee-quick-actions {
+            grid-template-columns: 1fr;
+            gap: 9px;
+            margin-top: 20px;
+          }
+
+          .employee-quick-action {
+            min-height: 68px;
+            grid-template-columns: 40px minmax(0, 1fr) 30px;
+            border-radius: 17px;
+          }
+
+          .employee-quick-action-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 13px;
+          }
+
+          .employee-quick-action-arrow {
+            width: 30px;
+            height: 30px;
           }
 
           .emp-root-branches::before {
@@ -2978,6 +3960,1815 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
             grid-column: 2;
           }
         }
+
+        /* ================================================================
+           FINAL EMPLOYEE DASHBOARD RESPONSIVE CORRECTION
+           - Identity and attendance begin at the top
+           - Full employee name remains visible on one line
+           - Attendance status remains one compact four-column row
+           - Decorative corner blobs removed from the dashboard
+           ================================================================ */
+
+        .employee-dashboard-page .employee-hero {
+          align-items: start;
+          grid-template-columns: minmax(0, 1.16fr) minmax(430px, .84fr);
+          min-height: 0;
+          padding: clamp(22px, 2.5vw, 34px);
+        }
+
+        .employee-dashboard-page .employee-identity {
+          justify-content: flex-start;
+          align-self: start;
+          padding-top: 4px;
+        }
+
+        .employee-dashboard-page .employee-identity-head {
+          align-items: center;
+        }
+
+        .employee-dashboard-page .employee-identity-copy {
+          overflow: visible;
+        }
+
+        .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+          width: 100%;
+          max-width: none;
+          overflow: visible;
+          text-overflow: clip;
+          white-space: nowrap;
+          font-size: clamp(34px, 4.05vw, 64px);
+          line-height: 1.08;
+          letter-spacing: -.045em;
+        }
+
+        .employee-dashboard-page .employee-dashboard-subtitle {
+          max-width: 760px;
+          margin-top: 12px;
+        }
+
+        .employee-dashboard-page .employee-quick-actions {
+          margin-top: 22px;
+        }
+
+        .employee-dashboard-page .attendance-card,
+        .employee-dashboard-page .attendance-pro-card {
+          align-self: start;
+          height: auto;
+          min-height: 0;
+        }
+
+        /* Compact the four attendance status values into one line. */
+
+        .employee-dashboard-page .attendance-card .attendance-summary,
+        .employee-dashboard-page .attendance-pro-card .attendance-summary {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+          gap: 9px;
+          margin-top: 14px;
+        }
+
+        .employee-dashboard-page .attendance-card .attendance-summary > div,
+        .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+          min-width: 0;
+          min-height: 76px;
+          padding: 11px 10px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          border-radius: 16px;
+        }
+
+        .employee-dashboard-page .attendance-card .attendance-summary span,
+        .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+          margin: 0 0 6px;
+          overflow: visible;
+          text-overflow: clip;
+          white-space: nowrap;
+          font-size: 9.5px;
+          line-height: 1.1;
+          letter-spacing: .025em;
+        }
+
+        .employee-dashboard-page .attendance-card .attendance-summary strong,
+        .employee-dashboard-page .attendance-pro-card .attendance-summary strong {
+          margin: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: clamp(14px, 1.25vw, 18px);
+          line-height: 1.15;
+        }
+
+        /* Remove decorative circles/corner shapes introduced in the previous design. */
+
+        .employee-dashboard-page .employee-hero::before,
+        .employee-dashboard-page .employee-hero::after,
+        .employee-dashboard-page .employee-quick-action::after,
+        .employee-dashboard-page .employee-dashboard-overview-grid .stat-card::after,
+        .employee-dashboard-page .employee-dashboard-feature-panel::after,
+        .employee-dashboard-page .emp-project-modern-stat::after,
+        .employee-dashboard-page .emp-project-hero::before,
+        .employee-dashboard-page .emp-project-hero::after,
+        .employee-dashboard-page .emp-performance-hero::before,
+        .employee-dashboard-page .emp-performance-hero::after,
+        .employee-dashboard-page .emp-performance-card::before,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel)::before,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel)::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .employee-quick-action,
+        .employee-dashboard-page .employee-dashboard-overview-grid .stat-card,
+        .employee-dashboard-page .emp-project-modern-stat,
+        .employee-dashboard-page .emp-project-card,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+          background: rgba(255, 255, 255, .96);
+        }
+
+        .employee-dashboard-page .employee-quick-action {
+          overflow: visible;
+        }
+
+        .employee-dashboard-page .employee-quick-action-copy strong,
+        .employee-dashboard-page .employee-quick-action-copy small {
+          overflow: visible;
+          text-overflow: clip;
+        }
+
+        /* Large monitors */
+
+        @media (min-width: 1700px) {
+          .employee-dashboard-page .employee-hero {
+            grid-template-columns: minmax(0, 1.2fr) minmax(470px, .8fr);
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(48px, 3.6vw, 72px);
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary > div,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+            min-height: 80px;
+          }
+        }
+
+        /* Standard and smaller laptops */
+
+        @media (max-width: 1380px) and (min-width: 1101px) {
+          .employee-dashboard-page .employee-hero {
+            grid-template-columns: minmax(0, 1.08fr) minmax(410px, .92fr);
+            gap: 18px;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(31px, 3.45vw, 50px);
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            font-size: 13.5px;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            min-height: 70px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary > div,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+            min-height: 70px;
+            padding: 9px 8px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary span,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+            font-size: 8.7px;
+          }
+        }
+
+        /* Tablet and compact laptop: stack complete hero blocks. */
+
+        @media (max-width: 1100px) {
+          .employee-dashboard-page .employee-hero {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 20px;
+          }
+
+          .employee-dashboard-page .employee-hero > .employee-identity,
+          .employee-dashboard-page .employee-hero > .attendance-card,
+          .employee-dashboard-page .employee-hero > .attendance-pro-card {
+            grid-column: 1;
+            width: 100%;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(36px, 7vw, 62px);
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+          }
+        }
+
+        /* Tablets */
+
+        @media (max-width: 820px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 82px minmax(0, 1fr);
+            gap: 14px;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 82px;
+            height: 82px;
+            border-radius: 23px;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(30px, 7.2vw, 50px);
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        /* Phones, iPhones and curved-screen devices */
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page .employee-hero {
+            width: 100%;
+            padding:
+              18px
+              max(14px, env(safe-area-inset-right))
+              18px
+              max(14px, env(safe-area-inset-left));
+            gap: 17px;
+            border-radius: 22px;
+          }
+
+          .employee-dashboard-page .employee-identity {
+            width: 100%;
+            min-width: 0;
+          }
+
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 62px minmax(0, 1fr);
+            gap: 11px;
+            align-items: center;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 62px;
+            height: 62px;
+            border-radius: 18px;
+            border-width: 3px;
+          }
+
+          .employee-dashboard-page .employee-identity-copy .kicker {
+            margin-bottom: 7px;
+            padding: 5px 8px;
+            font-size: 9px;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            width: 100%;
+            font-size: clamp(22px, 7.2vw, 35px);
+            line-height: 1.08;
+            letter-spacing: -.03em;
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            grid-template-columns: 1fr;
+            gap: 9px;
+            margin-top: 16px;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            min-height: 64px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 5px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary > div,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+            min-height: 62px;
+            padding: 8px 5px;
+            border-radius: 12px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary span,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+            margin-bottom: 4px;
+            font-size: 7.3px;
+            letter-spacing: 0;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary strong,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary strong {
+            font-size: 12px;
+          }
+        }
+
+        /* Very narrow phones */
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 54px minmax(0, 1fr);
+            gap: 9px;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 54px;
+            height: 54px;
+            border-radius: 16px;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(19px, 6.8vw, 28px);
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            font-size: 11px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary {
+            gap: 4px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary > div,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+            min-height: 58px;
+            padding: 7px 3px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary span,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+            font-size: 6.5px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary strong,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary strong {
+            font-size: 10.5px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .employee-dashboard-page *,
+          .employee-dashboard-page *::before,
+          .employee-dashboard-page *::after {
+            animation: none !important;
+            transition-duration: .01ms !important;
+          }
+        }
+
+
+        /* ================================================================
+           FINAL NARROW-MOBILE FIX
+           Prevent clipping and horizontal overflow on small Android/iPhone
+           and browser-emulated mobile widths.
+           ================================================================ */
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page {
+            width: 100%;
+            min-width: 0;
+            overflow-x: hidden;
+          }
+
+          .employee-dashboard-page .employee-hero,
+          .employee-dashboard-page .employee-identity,
+          .employee-dashboard-page .employee-identity-head,
+          .employee-dashboard-page .employee-identity-copy,
+          .employee-dashboard-page .attendance-card,
+          .employee-dashboard-page .attendance-pro-card {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+          }
+
+          .employee-dashboard-page .employee-hero {
+            padding: 14px;
+            border-radius: 18px;
+          }
+
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 48px minmax(0, 1fr);
+            gap: 9px;
+            align-items: center;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 48px;
+            height: 48px;
+            min-width: 48px;
+            border-width: 2px;
+            border-radius: 14px;
+            font-size: 16px;
+            animation: none;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar::after {
+            width: 8px;
+            height: 8px;
+            right: 1px;
+            bottom: 1px;
+            border-width: 2px;
+          }
+
+          .employee-dashboard-page .employee-identity-copy .kicker {
+            max-width: 100%;
+            margin: 0 0 5px;
+            padding: 4px 7px;
+            font-size: 7.5px;
+            line-height: 1;
+            letter-spacing: .055em;
+            white-space: nowrap;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            overflow: hidden;
+            text-overflow: clip;
+            white-space: nowrap;
+            font-size: clamp(17px, 7vw, 26px);
+            line-height: 1.08;
+            letter-spacing: -.035em;
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            margin: 7px 0 0;
+            font-size: 9.5px;
+            line-height: 1.45;
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            width: 100%;
+            grid-template-columns: 1fr;
+            gap: 7px;
+            margin-top: 13px;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            width: 100%;
+            min-width: 0;
+            min-height: 54px;
+            grid-template-columns: 34px minmax(0, 1fr) 26px;
+            gap: 8px;
+            padding: 7px 8px;
+            border-radius: 13px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 11px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon svg {
+            width: 15px;
+            height: 15px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy strong {
+            font-size: 11px;
+            line-height: 1.15;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy small {
+            margin-top: 2px;
+            font-size: 7.8px;
+            line-height: 1.25;
+          }
+
+          .employee-dashboard-page .employee-quick-action-arrow {
+            width: 26px;
+            height: 26px;
+            border-radius: 9px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-arrow svg {
+            width: 13px;
+            height: 13px;
+          }
+
+          .employee-dashboard-page .attendance-card,
+          .employee-dashboard-page .attendance-pro-card {
+            padding: 13px;
+            border-radius: 17px;
+          }
+
+          .employee-dashboard-page .attendance-head {
+            gap: 8px;
+          }
+
+          .employee-dashboard-page .attendance-head h3,
+          .employee-dashboard-page .attendance-head strong {
+            font-size: 15px;
+          }
+
+          .employee-dashboard-page .attendance-head p,
+          .employee-dashboard-page .attendance-subtext {
+            font-size: 9px;
+            line-height: 1.45;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary {
+            width: 100%;
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 4px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary > div,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary > div {
+            min-width: 0;
+            min-height: 52px;
+            padding: 6px 3px;
+            border-radius: 10px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary span,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+            font-size: 6px;
+            line-height: 1;
+            white-space: nowrap;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary strong,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary strong {
+            font-size: 9.5px;
+            line-height: 1.05;
+          }
+
+          .employee-dashboard-page .attendance-mode-row {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 3px;
+            padding: 4px;
+          }
+
+          .employee-dashboard-page .attendance-mode-row button {
+            width: 100%;
+            min-width: 0;
+            min-height: 36px;
+            padding: 5px 3px;
+            font-size: 8.5px;
+            line-height: 1.1;
+            white-space: normal;
+          }
+
+          .employee-dashboard-page .attendance-card textarea,
+          .employee-dashboard-page .attendance-pro-card textarea {
+            min-height: 78px;
+            padding: 10px;
+            font-size: 11px;
+          }
+
+          .employee-dashboard-page .attendance-hold-grid {
+            grid-template-columns: 1fr;
+            gap: 9px;
+          }
+
+          .employee-dashboard-page .hold-btn {
+            min-height: 104px;
+            border-radius: 17px;
+          }
+
+          .employee-dashboard-page .hold-ring {
+            width: 56px;
+            height: 56px;
+          }
+
+          .employee-dashboard-page .hold-ring-inner {
+            width: 44px;
+            height: 44px;
+          }
+        }
+
+        @media (max-width: 360px) {
+          .employee-dashboard-page .employee-hero {
+            padding: 11px;
+          }
+
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 42px minmax(0, 1fr);
+            gap: 7px;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 42px;
+            height: 42px;
+            min-width: 42px;
+            border-radius: 12px;
+          }
+
+          .employee-dashboard-page .employee-name-heading.dashboard-display-name {
+            font-size: clamp(15px, 6.5vw, 22px);
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            font-size: 8.5px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy strong {
+            font-size: 10px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy small {
+            font-size: 7px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary span,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary span {
+            font-size: 5.5px;
+          }
+
+          .employee-dashboard-page .attendance-card .attendance-summary strong,
+          .employee-dashboard-page .attendance-pro-card .attendance-summary strong {
+            font-size: 8.5px;
+          }
+        }
+
+
+        /* ================================================================
+           FINAL MOBILE EMPLOYEE NAME FIT
+           ================================================================ */
+
+        .employee-dashboard-page .employee-name-fit-container {
+          display: block;
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow: hidden;
+        }
+
+        .employee-dashboard-page
+        .employee-name-fit-container
+        .employee-name-heading.dashboard-display-name {
+          display: block;
+          width: max-content;
+          max-width: none;
+          margin: 0;
+          overflow: visible;
+          text-overflow: clip;
+          white-space: nowrap;
+          line-height: 1.08;
+          font-size: var(--employee-name-size, 48px);
+        }
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 44px minmax(0, 1fr) !important;
+            gap: 8px !important;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 44px !important;
+            height: 44px !important;
+            min-width: 44px !important;
+            border-radius: 13px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+          }
+
+          .employee-dashboard-page .employee-name-fit-container {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+          }
+
+          .employee-dashboard-page
+          .employee-name-fit-container
+          .employee-name-heading.dashboard-display-name {
+            width: max-content !important;
+            max-width: none !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            white-space: nowrap !important;
+            text-overflow: clip !important;
+            line-height: 1.06 !important;
+            letter-spacing: -.035em !important;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 38px minmax(0, 1fr) !important;
+            gap: 7px !important;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 38px !important;
+            height: 38px !important;
+            min-width: 38px !important;
+            border-radius: 11px !important;
+          }
+        }
+
+
+        /* ================================================================
+           FINAL DOM-MEASURED EMPLOYEE NAME FIT
+           ================================================================ */
+
+        .employee-dashboard-page .employee-name-fit-container {
+          position: relative;
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow: visible;
+        }
+
+        .employee-dashboard-page
+        .employee-name-fit-container
+        .employee-name-heading.dashboard-display-name {
+          display: block;
+          width: max-content !important;
+          max-width: none !important;
+          margin: 0 !important;
+          overflow: visible !important;
+          text-overflow: clip !important;
+          white-space: nowrap !important;
+          line-height: 1.08 !important;
+          transform-origin: left center;
+          will-change: font-size, transform;
+        }
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 40px minmax(0, 1fr) !important;
+            gap: 7px !important;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 40px !important;
+            height: 40px !important;
+            min-width: 40px !important;
+            border-radius: 12px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow: visible !important;
+          }
+
+          .employee-dashboard-page .employee-name-fit-container {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow: visible !important;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-identity-head {
+            grid-template-columns: 36px minmax(0, 1fr) !important;
+            gap: 6px !important;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 36px !important;
+            height: 36px !important;
+            min-width: 36px !important;
+            border-radius: 10px !important;
+          }
+        }
+
+
+        /* ================================================================
+           FINAL MOBILE HERO + QUICK ACTION ICON ANIMATION
+           Mobile-only layout changes:
+           - Profile image above the name on the right
+           - Compact, non-stretched quick-action buttons
+           Shared web/mobile:
+           - Continuous subtle icon animation
+           ================================================================ */
+
+        /* Continuous icon animation on web and mobile */
+        .employee-dashboard-page .employee-quick-action-icon {
+          animation: employeeQuickIconFloat 3.2s ease-in-out infinite;
+          transform-origin: center;
+          will-change: transform;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action:nth-child(2)
+        .employee-quick-action-icon {
+          animation-delay: -.55s;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action:nth-child(3)
+        .employee-quick-action-icon {
+          animation-delay: -1.1s;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action:nth-child(4)
+        .employee-quick-action-icon {
+          animation-delay: -1.65s;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action:nth-child(5)
+        .employee-quick-action-icon {
+          animation-delay: -2.2s;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action:nth-child(6)
+        .employee-quick-action-icon {
+          animation-delay: -2.75s;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action
+        .employee-quick-action-icon
+        svg {
+          animation: employeeQuickIconPulse 2.6s ease-in-out infinite;
+          transform-origin: center;
+          will-change: transform;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action.refresh
+        .employee-quick-action-icon
+        svg {
+          animation: employeeRefreshIdle 4s linear infinite;
+        }
+
+        .employee-dashboard-page
+        .employee-quick-action.refresh:disabled
+        .employee-quick-action-icon
+        svg {
+          animation: employeeRefreshSpin 1s linear infinite;
+        }
+
+        @keyframes employeeQuickIconFloat {
+          0%,
+          100% {
+            transform: translateY(0) rotate(0deg);
+          }
+
+          45% {
+            transform: translateY(-2px) rotate(-2deg);
+          }
+
+          70% {
+            transform: translateY(1px) rotate(1deg);
+          }
+        }
+
+        @keyframes employeeQuickIconPulse {
+          0%,
+          100% {
+            transform: scale(1);
+          }
+
+          50% {
+            transform: scale(1.08);
+          }
+        }
+
+        @keyframes employeeRefreshIdle {
+          0%,
+          82% {
+            transform: rotate(0deg);
+          }
+
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+
+        /* Mobile-specific identity placement and compact actions */
+        @media (max-width: 640px) {
+          .employee-dashboard-page .employee-identity {
+            position: relative;
+            padding-top: 0;
+          }
+
+          .employee-dashboard-page .employee-identity-head {
+            position: relative;
+            display: block !important;
+            width: 100%;
+            min-width: 0;
+            padding-top: 2px;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            position: absolute !important;
+            z-index: 3;
+            top: 0;
+            right: 0;
+            left: auto;
+            width: 42px !important;
+            height: 42px !important;
+            min-width: 42px !important;
+            margin: 0 !important;
+            border-radius: 13px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            padding-right: 50px;
+            overflow: visible !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy .kicker {
+            margin: 0 0 6px;
+          }
+
+          .employee-dashboard-page .employee-name-fit-container {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            padding-right: 0;
+            overflow: visible !important;
+          }
+
+          .employee-dashboard-page
+          .employee-name-fit-container
+          .employee-name-heading.dashboard-display-name {
+            width: max-content !important;
+            max-width: none !important;
+            transform-origin: left center;
+          }
+
+          .employee-dashboard-page .employee-dashboard-subtitle {
+            max-width: 100%;
+            padding-right: 0;
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 7px !important;
+            margin-top: 12px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            width: 100%;
+            min-width: 0;
+            min-height: 50px !important;
+            padding: 6px 7px !important;
+            grid-template-columns: 30px minmax(0, 1fr) 22px !important;
+            gap: 6px !important;
+            border-radius: 12px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon {
+            width: 30px !important;
+            height: 30px !important;
+            min-width: 30px;
+            border-radius: 10px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon svg {
+            width: 14px !important;
+            height: 14px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy strong {
+            font-size: 9.2px !important;
+            line-height: 1.12 !important;
+            white-space: nowrap !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy small {
+            margin-top: 2px !important;
+            font-size: 6.4px !important;
+            line-height: 1.18 !important;
+            display: -webkit-box !important;
+            overflow: hidden !important;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+          }
+
+          .employee-dashboard-page .employee-quick-action-arrow {
+            width: 22px !important;
+            height: 22px !important;
+            border-radius: 8px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-arrow svg {
+            width: 11px !important;
+            height: 11px !important;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 38px !important;
+            height: 38px !important;
+            min-width: 38px !important;
+            border-radius: 11px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            padding-right: 44px;
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            gap: 6px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            min-height: 48px !important;
+            grid-template-columns: 28px minmax(0, 1fr) 20px !important;
+            padding: 5px 6px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon {
+            width: 28px !important;
+            height: 28px !important;
+            min-width: 28px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy strong {
+            font-size: 8.4px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-copy small {
+            font-size: 5.9px !important;
+          }
+
+          .employee-dashboard-page .employee-quick-action-arrow {
+            width: 20px !important;
+            height: 20px !important;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .employee-dashboard-page .employee-quick-action-icon,
+          .employee-dashboard-page
+          .employee-quick-action
+          .employee-quick-action-icon
+          svg {
+            animation: none !important;
+          }
+        }
+
+
+        /* ================================================================
+           FINAL MOBILE PROFILE POSITION CORRECTION
+           Profile image moves to the top-left and becomes slightly larger.
+           Desktop/tablet layout remains unchanged.
+           ================================================================ */
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page .employee-identity-head {
+            position: relative;
+            display: block !important;
+            width: 100%;
+            min-width: 0;
+            padding-top: 0;
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            position: absolute !important;
+            z-index: 3;
+            top: 0;
+            left: 0 !important;
+            right: auto !important;
+            width: 50px !important;
+            height: 50px !important;
+            min-width: 50px !important;
+            margin: 0 !important;
+            border-radius: 15px !important;
+            border-width: 3px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            padding-left: 58px !important;
+            padding-right: 0 !important;
+            overflow: visible !important;
+          }
+
+          .employee-dashboard-page .employee-name-fit-container {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-profile-avatar {
+            width: 46px !important;
+            height: 46px !important;
+            min-width: 46px !important;
+            border-radius: 13px !important;
+          }
+
+          .employee-dashboard-page .employee-identity-copy {
+            padding-left: 53px !important;
+          }
+        }
+
+
+        /* ================================================================
+           YOURCOMATE EMPLOYEE DASHBOARD — EDITORIAL DESIGN SYSTEM
+           Visual-only final layer. All dashboard logic remains unchanged.
+           The Team Leader Root Map is deliberately excluded.
+           ================================================================ */
+
+        .employee-dashboard-page {
+          --ed-ink: #101a3a;
+          --ed-copy: #5d6d8d;
+          --ed-violet: #6658dc;
+          --ed-violet-deep: #40348d;
+          --ed-blue: #3766db;
+          --ed-cyan: #18b5c8;
+          --ed-teal: #34c9c4;
+          --ed-yellow: #d8ff43;
+          --ed-line: rgba(16, 26, 58, .14);
+          gap: clamp(18px, 2vw, 27px);
+          color: var(--ed-ink);
+        }
+
+        /* Main identity and attendance hero */
+
+        .employee-dashboard-page .employee-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          align-items: start;
+          min-height: 0;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background:
+            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .24), transparent 29%),
+            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .23), transparent 31%),
+            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          box-shadow:
+            12px 14px 0 #c6d8f7,
+            0 28px 48px rgba(34, 38, 110, .13);
+        }
+
+        .employee-dashboard-page .employee-hero::before,
+        .employee-dashboard-page .employee-hero::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .employee-profile-avatar {
+          border-color: #ffffff;
+          background: linear-gradient(145deg, #edf6ff, #eaf8f4);
+          box-shadow:
+            6px 7px 0 #b9d7ff,
+            0 18px 35px rgba(34, 38, 110, .15);
+        }
+
+        .employee-dashboard-page .employee-identity-copy .kicker {
+          display: inline-flex;
+          width: max-content;
+          max-width: 100%;
+          margin-bottom: 12px;
+          padding: 8px 12px;
+          border: 0;
+          border-radius: 999px;
+          color: #ffffff;
+          background: #342b78;
+          box-shadow: 4px 5px 0 #18b5c8;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .11em;
+          text-transform: uppercase;
+        }
+
+        .employee-dashboard-page
+        .employee-name-fit-container
+        .employee-name-heading.dashboard-display-name {
+          color: var(--ed-ink);
+          font-family:
+            "Segoe Script",
+            "Brush Script MT",
+            "Lucida Handwriting",
+            cursive;
+          font-weight: 500;
+          text-shadow: none;
+        }
+
+        .employee-dashboard-page .employee-dashboard-subtitle {
+          color: var(--ed-copy);
+          line-height: 1.66;
+        }
+
+        /* Quick actions */
+
+        .employee-dashboard-page .employee-quick-actions {
+          gap: 12px;
+        }
+
+        .employee-dashboard-page .employee-quick-action {
+          overflow: hidden;
+          min-height: 76px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 20px;
+          color: var(--ed-ink);
+          background: #ffffff;
+          box-shadow:
+            5px 6px 0 #c4ccff,
+            0 15px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page .employee-quick-action:nth-child(1),
+        .employee-dashboard-page .employee-quick-action:nth-child(4) {
+          background: #edf6ff;
+          box-shadow:
+            5px 6px 0 #b9d7ff,
+            0 15px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page .employee-quick-action:nth-child(2),
+        .employee-dashboard-page .employee-quick-action:nth-child(5) {
+          background: #eaf8f4;
+          box-shadow:
+            5px 6px 0 #aee6d9,
+            0 15px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page .employee-quick-action:nth-child(3),
+        .employee-dashboard-page .employee-quick-action:nth-child(6) {
+          background: #f1efff;
+          box-shadow:
+            5px 6px 0 #c9c0ff,
+            0 15px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page .employee-quick-action::before,
+        .employee-dashboard-page .employee-quick-action::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .employee-quick-action:hover {
+          border-color: rgba(102, 88, 220, .30);
+          transform: translateY(-4px);
+        }
+
+        .employee-dashboard-page .employee-quick-action-icon {
+          color: #ffffff;
+          border: 0;
+          background: linear-gradient(145deg, #6658dc, #18b5c8);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .18);
+        }
+
+        .employee-dashboard-page .employee-quick-action-copy strong {
+          color: var(--ed-ink);
+          font-weight: 900;
+        }
+
+        .employee-dashboard-page .employee-quick-action-copy small {
+          color: var(--ed-copy);
+        }
+
+        .employee-dashboard-page .employee-quick-action-arrow {
+          color: #40348d;
+          background: rgba(255, 255, 255, .88);
+          box-shadow: 2px 3px 0 rgba(52, 43, 120, .10);
+        }
+
+        /* Attendance widget in hero */
+
+        .employee-dashboard-page .attendance-card,
+        .employee-dashboard-page .attendance-pro-card {
+          border: 1px solid rgba(171, 181, 211, .72);
+          border-radius: 30px;
+          background:
+            linear-gradient(145deg, #f4fbff 0%, #f8f1ff 52%, #fff8e8 100%);
+          box-shadow:
+            10px 12px 0 #b9d7ff,
+            0 26px 45px rgba(34, 38, 110, .13);
+        }
+
+        /* Overview cards */
+
+        .employee-dashboard-page .employee-dashboard-overview-grid {
+          gap: 14px;
+        }
+
+        .employee-dashboard-page .employee-dashboard-overview-grid .stat-card {
+          min-height: 118px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow:
+            6px 8px 0 #b9d7ff,
+            0 16px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page
+        .employee-dashboard-overview-grid
+        .stat-card:nth-child(4n + 2) {
+          background: #eaf8f4;
+          box-shadow:
+            6px 8px 0 #aee6d9,
+            0 16px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page
+        .employee-dashboard-overview-grid
+        .stat-card:nth-child(4n + 3) {
+          background: #fff4d5;
+          box-shadow:
+            6px 8px 0 #ffe0a5,
+            0 16px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page
+        .employee-dashboard-overview-grid
+        .stat-card:nth-child(4n + 4) {
+          background: #f1efff;
+          box-shadow:
+            6px 8px 0 #c9c0ff,
+            0 16px 28px rgba(34, 38, 110, .09);
+        }
+
+        .employee-dashboard-page
+        .employee-dashboard-overview-grid
+        .stat-card::before,
+        .employee-dashboard-page
+        .employee-dashboard-overview-grid
+        .stat-card::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .employee-dashboard-overview-grid .stat-card span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+        }
+
+        .employee-dashboard-page .employee-dashboard-overview-grid .stat-card strong {
+          color: var(--ed-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(24px, 2.2vw, 34px);
+        }
+
+        /* All remaining panels except hierarchy map */
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel),
+        .employee-dashboard-page .emp-performance-hero,
+        .employee-dashboard-page .emp-project-hero,
+        .employee-dashboard-page .capability-card {
+          border: 1px solid rgba(171, 181, 211, .70);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+          padding: clamp(20px, 2vw, 28px);
+          border-radius: clamp(25px, 2.2vw, 35px);
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel)::before,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel)::after,
+        .employee-dashboard-page .emp-performance-hero::before,
+        .employee-dashboard-page .emp-performance-hero::after,
+        .employee-dashboard-page .emp-project-hero::before,
+        .employee-dashboard-page .emp-project-hero::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .panel:not(.emp-root-map-panel):hover {
+          border-color: rgba(102, 88, 220, .28);
+          transform: translateY(-3px);
+          box-shadow:
+            10px 12px 0 #c4ccff,
+            0 30px 50px rgba(34, 38, 110, .14);
+        }
+
+        .employee-dashboard-page .toolbar h3,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel) > h3,
+        .employee-dashboard-page .emp-performance-hero h3,
+        .employee-dashboard-page .emp-project-hero h3 {
+          color: var(--ed-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-weight: 760;
+          letter-spacing: -.045em;
+        }
+
+        .employee-dashboard-page .toolbar p,
+        .employee-dashboard-page .panel:not(.emp-root-map-panel) > p,
+        .employee-dashboard-page .emp-performance-hero p,
+        .employee-dashboard-page .emp-project-hero p {
+          color: var(--ed-copy);
+          line-height: 1.62;
+        }
+
+        .employee-dashboard-page .employee-dashboard-section-kicker,
+        .employee-dashboard-page .kicker {
+          display: inline-flex;
+          width: max-content;
+          max-width: 100%;
+          padding: 7px 10px;
+          border: 0;
+          border-radius: 999px;
+          color: #ffffff;
+          background: #342b78;
+          box-shadow: 3px 4px 0 #18b5c8;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .employee-dashboard-page .employee-dashboard-section-kicker::before {
+          display: none;
+          content: none;
+        }
+
+        /* Leave and performance metrics */
+
+        .employee-dashboard-page .emp-leave-status-card,
+        .employee-dashboard-page .emp-performance-stat-card,
+        .employee-dashboard-page .emp-project-modern-stat {
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 21px;
+          background: #edf6ff;
+          box-shadow: 5px 6px 0 #b9d7ff;
+        }
+
+        .employee-dashboard-page .emp-leave-status-card:nth-child(2),
+        .employee-dashboard-page .emp-performance-stat-card:nth-child(2),
+        .employee-dashboard-page .emp-project-modern-stat:nth-child(2) {
+          background: #eaf8f4;
+          box-shadow: 5px 6px 0 #aee6d9;
+        }
+
+        .employee-dashboard-page .emp-leave-status-card:nth-child(3),
+        .employee-dashboard-page .emp-performance-stat-card:nth-child(3),
+        .employee-dashboard-page .emp-project-modern-stat:nth-child(3) {
+          background: #fff4d5;
+          box-shadow: 5px 6px 0 #ffe0a5;
+        }
+
+        .employee-dashboard-page .emp-leave-status-card:nth-child(4),
+        .employee-dashboard-page .emp-performance-stat-card:nth-child(4),
+        .employee-dashboard-page .emp-project-modern-stat:nth-child(4) {
+          background: #f1efff;
+          box-shadow: 5px 6px 0 #c9c0ff;
+        }
+
+        .employee-dashboard-page .emp-project-modern-stat::before,
+        .employee-dashboard-page .emp-project-modern-stat::after {
+          display: none !important;
+          content: none !important;
+        }
+
+        .employee-dashboard-page .emp-leave-status-card span,
+        .employee-dashboard-page .emp-performance-stat-card span,
+        .employee-dashboard-page .emp-project-modern-stat span {
+          color: #5d6785;
+          font-size: 9px;
+          letter-spacing: .09em;
+        }
+
+        .employee-dashboard-page .emp-leave-status-card strong,
+        .employee-dashboard-page .emp-performance-stat-card strong,
+        .employee-dashboard-page .emp-project-modern-stat strong {
+          color: var(--ed-ink);
+          font-family: Georgia, "Times New Roman", serif;
+        }
+
+        .employee-dashboard-page .emp-leave-note,
+        .employee-dashboard-page .emp-performance-note {
+          border: 1px solid rgba(102, 88, 220, .20);
+          border-radius: 18px;
+          color: var(--ed-copy);
+          background: linear-gradient(145deg, #f1efff, #eef9ff);
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        /* Project cards and graphs */
+
+        .employee-dashboard-page .emp-project-card,
+        .employee-dashboard-page .emp-project-rank-card,
+        .employee-dashboard-page .emp-performance-row {
+          border: 1px solid rgba(171, 181, 211, .62);
+          background: #ffffff;
+          box-shadow: 5px 6px 0 rgba(52, 43, 120, .09);
+        }
+
+        .employee-dashboard-page .emp-project-card {
+          border-radius: 23px;
+        }
+
+        .employee-dashboard-page .emp-project-card:hover,
+        .employee-dashboard-page .emp-project-rank-card:hover {
+          border-color: rgba(102, 88, 220, .28);
+          transform: translateY(-3px);
+        }
+
+        .employee-dashboard-page .emp-project-ring {
+          background: conic-gradient(#6658dc var(--ringValue), #e6e8f2 0);
+          box-shadow:
+            7px 8px 0 #c9c0ff,
+            0 18px 42px rgba(102, 88, 220, .16);
+        }
+
+        .employee-dashboard-page .emp-project-access-card {
+          border: 1px solid rgba(102, 88, 220, .21);
+          border-radius: 20px;
+          color: var(--ed-copy);
+          background: linear-gradient(145deg, #f1efff, #eef9ff);
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        .employee-dashboard-page .emp-project-access-card.can-create {
+          border-color: rgba(52, 201, 196, .31);
+          background: linear-gradient(145deg, #eaf8f4, #f5fffc);
+          box-shadow: 4px 5px 0 #aee6d9;
+        }
+
+        .employee-dashboard-page .emp-project-trend-grid,
+        .employee-dashboard-page .emp-project-rank-card,
+        .employee-dashboard-page .emp-project-people-line {
+          border-color: rgba(171, 181, 211, .55);
+          background: rgba(248, 250, 252, .90);
+        }
+
+        .employee-dashboard-page .emp-project-mini-progress-fill,
+        .employee-dashboard-page .emp-rating-mini-progress-fill,
+        .employee-dashboard-page .emp-performance-fill,
+        .employee-dashboard-page .emp-project-rank-track div {
+          background: linear-gradient(90deg, #6658dc, #3766db, #34c9c4);
+        }
+
+        /* Attendance summary and forms */
+
+        .employee-dashboard-page .attendance-summary > div {
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 18px;
+          background: #edf6ff;
+          box-shadow: 4px 5px 0 #b9d7ff;
+        }
+
+        .employee-dashboard-page .attendance-summary > div:nth-child(2) {
+          background: #eaf8f4;
+          box-shadow: 4px 5px 0 #aee6d9;
+        }
+
+        .employee-dashboard-page .attendance-summary > div:nth-child(3) {
+          background: #fff4d5;
+          box-shadow: 4px 5px 0 #ffe0a5;
+        }
+
+        .employee-dashboard-page .attendance-summary > div:nth-child(4) {
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        .employee-dashboard-page .dynamic-form {
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 20px;
+          background: linear-gradient(145deg, #f8fbff, #f7f4ff);
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .09);
+        }
+
+        .employee-dashboard-page .dynamic-form input,
+        .employee-dashboard-page .dynamic-form select,
+        .employee-dashboard-page .dynamic-form textarea {
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 14px;
+          color: var(--ed-ink);
+          background: rgba(255, 255, 255, .94);
+        }
+
+        /* Tables */
+
+        .employee-dashboard-page .table-wrap {
+          border: 1px solid rgba(171, 181, 211, .56);
+          border-radius: 18px;
+          background: #ffffff;
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
+        }
+
+        .employee-dashboard-page th {
+          color: #536381;
+          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+        }
+
+        .employee-dashboard-page tr:hover td {
+          background: #fafaff;
+        }
+
+        /* Buttons */
+
+        .employee-dashboard-page .primary,
+        .employee-dashboard-page .secondary,
+        .employee-dashboard-page .danger {
+          border-radius: 15px;
+          font-weight: 900;
+          transition:
+            transform 190ms cubic-bezier(.22, 1, .36, 1),
+            box-shadow 190ms ease,
+            filter 190ms ease;
+        }
+
+        .employee-dashboard-page .primary {
+          color: #ffffff;
+          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+          box-shadow:
+            5px 6px 0 #a9d6f5,
+            0 14px 25px rgba(36, 74, 128, .16);
+        }
+
+        .employee-dashboard-page .secondary {
+          border-color: rgba(65, 55, 161, .18);
+          color: #40348d;
+          background: rgba(255, 255, 255, .90);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+        }
+
+        .employee-dashboard-page .primary:hover,
+        .employee-dashboard-page .secondary:hover,
+        .employee-dashboard-page .danger:hover {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        /* Keep Team Leader Root Map exactly outside this design override */
+
+        .employee-dashboard-page .emp-root-map-panel {
+          transform: none;
+        }
+
+        /* Responsive layout */
+
+        @media (max-width: 1500px) {
+          .employee-dashboard-page .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 1100px) {
+          .employee-dashboard-page .employee-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-dashboard-page .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 820px) {
+          .employee-dashboard-page .employee-dashboard-overview-grid,
+          .employee-dashboard-page .emp-project-modern-stat-grid,
+          .employee-dashboard-page .emp-performance-stat-grid,
+          .employee-dashboard-page .emp-leave-status-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .employee-dashboard-page .panel:not(.emp-root-map-panel) {
+            border-radius: 23px;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .employee-dashboard-page {
+            gap: 17px;
+            overflow-x: hidden;
+          }
+
+          .employee-dashboard-page .employee-hero {
+            padding: 15px;
+            border-radius: 22px;
+            box-shadow:
+              6px 7px 0 #c6d8f7,
+              0 18px 30px rgba(34, 38, 110, .10);
+          }
+
+          .employee-dashboard-page .employee-profile-avatar {
+            box-shadow:
+              4px 5px 0 #b9d7ff,
+              0 12px 24px rgba(34, 38, 110, .12);
+          }
+
+          .employee-dashboard-page .employee-quick-actions {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            min-height: 50px;
+            border-radius: 13px;
+            box-shadow: 3px 4px 0 #c4ccff;
+          }
+
+          .employee-dashboard-page .employee-dashboard-overview-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .employee-dashboard-page .employee-dashboard-overview-grid .stat-card {
+            min-height: 98px;
+            padding: 13px;
+            border-radius: 18px;
+            box-shadow: 4px 5px 0 #b9d7ff;
+          }
+
+          .employee-dashboard-page .panel:not(.emp-root-map-panel),
+          .employee-dashboard-page .emp-performance-hero,
+          .employee-dashboard-page .emp-project-hero {
+            padding: 16px;
+            border-radius: 21px;
+            box-shadow:
+              5px 6px 0 #c4ccff,
+              0 16px 27px rgba(34, 38, 110, .09);
+          }
+
+          .employee-dashboard-page .emp-project-modern-stat-grid,
+          .employee-dashboard-page .emp-performance-stat-grid,
+          .employee-dashboard-page .emp-leave-status-grid,
+          .employee-dashboard-page .emp-project-card-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-dashboard-page .toolbar {
+            align-items: stretch;
+          }
+
+          .employee-dashboard-page .toolbar > button,
+          .employee-dashboard-page .toolbar .primary,
+          .employee-dashboard-page .toolbar .secondary {
+            width: 100%;
+          }
+
+          .employee-dashboard-page .attendance-summary {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 4px;
+          }
+
+          .employee-dashboard-page .attendance-summary > div {
+            min-width: 0;
+            min-height: 56px;
+            padding: 7px 4px;
+            border-radius: 11px;
+            box-shadow: 2px 3px 0 #b9d7ff;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .employee-dashboard-page .employee-dashboard-overview-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-dashboard-page .employee-quick-action {
+            grid-template-columns: 28px minmax(0, 1fr) 20px;
+          }
+
+          .employee-dashboard-page .employee-quick-action-icon {
+            width: 28px;
+            height: 28px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .employee-dashboard-page *,
+          .employee-dashboard-page *::before,
+          .employee-dashboard-page *::after {
+            animation: none !important;
+            transition: none !important;
+          }
+        }
+
       `}</style>
 
       <section className="hero employee-hero">
@@ -2991,34 +5782,16 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
               )}
             </div>
 
-            <div>
+            <div className="employee-identity-copy">
               <span className="kicker">Employee Self Service</span>
 
-              <h1 className="employee-name-heading dashboard-display-name">
-                {displayName}
-              </h1>
+              <AutoFitEmployeeName name={displayName} />
 
               <p className="employee-dashboard-subtitle">
-                Employee dashboard for attendance, leave, profile, tickets,
-                notifications, assigned approval responsibilities, performance, and
-                project progress.
+                Manage attendance, leave, projects, approvals, support requests,
+                performance and workplace activities from one clear workspace.
               </p>
             </div>
-          </div>
-
-          <div className="employee-badges">
-            <span className="employee-badge primary-cap">
-              Dashboard: {dashboardRole}
-            </span>
-
-            <span className="employee-badge success-cap">
-              Capability: {mappedCapabilityLabel}
-            </span>
-
-            <span className="employee-badge neutral-cap">
-              Department:{' '}
-              {displayValue(employeeSummary.department || employee.department)}
-            </span>
           </div>
 
           {holiday?.is_holiday && (
@@ -3035,29 +5808,120 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
             </div>
           )}
 
-          <div className="hero-actions">
-            <button type="button" className="primary" onClick={() => goTo('attendance')}>
-              Attendance
+          <div className="employee-quick-actions" aria-label="Employee quick actions">
+            <button
+              type="button"
+              className="employee-quick-action attendance"
+              onClick={() => goTo('attendance')}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <Clock3 size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>Attendance</strong>
+                <small>Check in, check out and daily status</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
 
-            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
-              Apply Leave
+            <button
+              type="button"
+              className="employee-quick-action leave"
+              onClick={() => goTo('leave_requests')}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <CalendarDays size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>Apply Leave</strong>
+                <small>Submit and track leave requests</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
 
-            <button type="button" className="secondary" onClick={() => goTo('projects')}>
-              Projects
+            <button
+              type="button"
+              className="employee-quick-action projects"
+              onClick={() => goTo('projects')}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <BriefcaseBusiness size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>Projects</strong>
+                <small>Open assigned work and progress</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
 
-            <button type="button" className="secondary" onClick={() => goTo('tickets')}>
-              Raise Ticket
+            <button
+              type="button"
+              className="employee-quick-action ticket"
+              onClick={() => goTo('tickets')}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <LifeBuoy size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>Raise Ticket</strong>
+                <small>Request workplace support</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
 
-            <button type="button" className="secondary" onClick={() => goTo('profile')}>
-              My Profile
+            <button
+              type="button"
+              className="employee-quick-action profile"
+              onClick={() => goTo('profile')}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <UserRound size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>My Profile</strong>
+                <small>View employment and personal details</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
 
-            <button type="button" className="secondary" onClick={loadDashboard} disabled={loading}>
-              {loading ? 'Refreshing...' : 'Refresh'}
+            <button
+              type="button"
+              className="employee-quick-action refresh"
+              onClick={loadDashboard}
+              disabled={loading}
+            >
+              <span className="employee-quick-action-icon" aria-hidden="true">
+                <RefreshCw size={20} strokeWidth={1.9} />
+              </span>
+
+              <span className="employee-quick-action-copy">
+                <strong>{loading ? 'Refreshing...' : 'Refresh'}</strong>
+                <small>Load the latest dashboard information</small>
+              </span>
+
+              <span className="employee-quick-action-arrow" aria-hidden="true">
+                <ArrowUpRight size={17} strokeWidth={2.1} />
+              </span>
             </button>
           </div>
         </div>
@@ -3067,7 +5931,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
 
       {message && <div className="inline-message">{message}</div>}
 
-      <section className="stats-grid">
+      <section className="stats-grid employee-dashboard-overview-grid">
         <Stat label="Dashboard" value={dashboardRole} />
         <Stat label="Today Status" value={todayStatus} />
         <Stat label="Attendance Mode" value={modeLabel(todayAttendance?.mode || 'office')} />
@@ -3096,7 +5960,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         )}
       </section>
 
-      <section className="emp-performance-dashboard">
+      <section className="emp-performance-dashboard employee-dashboard-section employee-dashboard-performance">
         <div className="emp-performance-hero">
           <div className="toolbar">
             <div>
@@ -3199,8 +6063,8 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         )}
       </section>
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="employee-dashboard-single-panel">
+        <div className="panel employee-dashboard-feature-panel">
           <div className="toolbar">
             <div>
               <h3>My Leave Balance</h3>
@@ -3247,56 +6111,8 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           <Table rows={leaveBalanceRows} maxColumns={8} />
         </div>
 
-        <div className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>My Leave Request Status</h3>
-              <p>
-                Track live status: Pending with Team Leader, Pending with
-                Reporting Officer, Approved, or Rejected.
-              </p>
-            </div>
-
-            <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
-              Open Leave Management
-            </button>
-
-            {isMappedApprover && (
-              <button type="button" className="secondary" onClick={() => goTo('team_approvals')}>
-                Team Approvals
-              </button>
-            )}
-          </div>
-
-          <Table rows={leaveRows} maxColumns={8} />
-        </div>
       </section>
 
-      {isMappedApprover && (
-        <section className="panel">
-          <div className="toolbar">
-            <div>
-              <h3>Pending Leave Approvals</h3>
-              <p>
-                Shows leave requests currently waiting at your approval stage.
-                After Team Leader approval, the request moves to Reporting
-                Officer. After final approval, the employee receives notification
-                and leave balance is deducted.
-              </p>
-            </div>
-
-            <button type="button" className="secondary" onClick={() => goTo('team_approvals')}>
-              Open Team Approvals
-            </button>
-          </div>
-
-          <LeaveApprovalTable
-            rows={pendingApprovalLeaves}
-            saving={leaveDecisionSaving}
-            onDecision={decideLeave}
-          />
-        </section>
-      )}
 
       <section className="emp-project-dashboard">
         <div className="emp-project-hero">
@@ -3472,9 +6288,10 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         </section>
       )}
 
-      <section className="panel">
+      <section className="panel employee-dashboard-section-card employee-dashboard-attendance-status">
         <div className="toolbar">
           <div>
+            <span className="employee-dashboard-section-kicker">Daily Workspace</span>
             <h3>Today&apos;s Attendance & Holiday Status</h3>
             <p>
               This section reflects your current day attendance, approved mode,
@@ -3510,46 +6327,12 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         </div>
       </section>
 
-      <section className="panel">
-        <div className="toolbar">
-          <div>
-            <h3>My Employee Profile Summary</h3>
-            <p>Key employment details from Employee Master.</p>
-          </div>
 
-          <button type="button" className="secondary" onClick={() => goTo('profile')}>
-            View Full Profile
-          </button>
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <tbody>
-              {profileRows.map((row) => (
-                <tr key={row.field}>
-                  <th>{row.field}</th>
-                  <td>{displayValue(row.value)}</td>
-                </tr>
-              ))}
-
-              <tr>
-                <th>Is Team Leader</th>
-                <td>{boolLabel(employee.is_team_leader || data?.is_team_leader)}</td>
-              </tr>
-
-              <tr>
-                <th>Is Reporting Officer</th>
-                <td>{boolLabel(employee.is_reporting_officer || data?.is_reporting_officer)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="two-col">
-        <div className="panel">
+      <section className="two-col employee-dashboard-dual-section">
+        <div className="panel employee-dashboard-section-card">
           <div className="toolbar">
             <div>
+              <span className="employee-dashboard-section-kicker">Work Modes</span>
               <h3>WFH / Field Requests</h3>
               <p>
                 Approved requests unlock WFH or Field check-in on the selected
@@ -3565,9 +6348,10 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           <Table rows={modeRequestRows} maxColumns={8} />
         </div>
 
-        <div className="panel">
+        <div className="panel employee-dashboard-section-card">
           <div className="toolbar">
             <div>
+              <span className="employee-dashboard-section-kicker">Earned Benefits</span>
               <h3>My Comp-Off</h3>
               <p>
                 If you work on a holiday, one compensatory off is generated and
@@ -3641,7 +6425,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
       </section>
 
       {isMappedApprover && (
-        <section className="panel emp-performance-cta-panel">
+        <section className="panel emp-performance-cta-panel employee-dashboard-section-card employee-dashboard-performance-cta">
           <div className="toolbar">
             <div>
               <span className="kicker">Dedicated Performance Page</span>
@@ -3659,24 +6443,12 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         </section>
       )}
 
-      {isMappedApprover && (
-        <section className="two-col">
-          <div className="panel">
-            <h3>Employees Under My Team Leader Mapping</h3>
-            <Table rows={teamMemberRows} maxColumns={8} />
-          </div>
-
-          <div className="panel">
-            <h3>Employees Under My Reporting Officer Mapping</h3>
-            <Table rows={reportingMemberRows} maxColumns={8} />
-          </div>
-        </section>
-      )}
 
       {isMappedApprover && (
-        <section className="panel">
+        <section className="panel employee-dashboard-section-card">
           <div className="toolbar">
             <div>
+              <span className="employee-dashboard-section-kicker">Approvals</span>
               <h3>Pending WFH / Field Approvals</h3>
               <p>
                 Shows only WFH / Field requests currently pending at your
@@ -3693,31 +6465,22 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         </section>
       )}
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="two-col employee-dashboard-dual-section employee-dashboard-review-section">
+        <div className="panel employee-dashboard-section-card">
+          <span className="employee-dashboard-section-kicker">Performance History</span>
           <h3>My Performance Reviews</h3>
           <p>This is visible to the employee, HR, and Super Admin.</p>
           <Table rows={myReviewRows} maxColumns={9} />
         </div>
 
-        <div className="panel">
+        <div className="panel employee-dashboard-section-card">
+          <span className="employee-dashboard-section-kicker">Review Activity</span>
           <h3>Reviews Given By Me</h3>
           <p>Ratings submitted by you for mapped employees.</p>
           <Table rows={reviewsGivenRows} maxColumns={9} />
         </div>
       </section>
 
-      <section className="two-col">
-        <div className="panel">
-          <h3>My Tickets</h3>
-          <Table rows={data?.tickets || []} maxColumns={8} />
-        </div>
-
-        <div className="panel">
-          <h3>My Notifications</h3>
-          <Table rows={notificationRows} maxColumns={8} />
-        </div>
-      </section>
     </div>
   );
 }

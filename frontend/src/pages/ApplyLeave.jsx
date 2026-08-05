@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowUpRight,
   CalendarDays,
+  CheckCircle2,
   CreditCard,
   FileText,
   RefreshCcw,
   Send,
   ShieldCheck,
+  Sparkles,
   UserCheck,
 } from 'lucide-react';
 import {
@@ -295,6 +298,69 @@ function daysBetween(fromDate, toDate, dayType) {
   return diff > 0 ? diff : 1;
 }
 
+
+function normalizeLeaveCode(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ');
+}
+
+function findLeaveBalance(source, codes = []) {
+  const wanted = codes.map(normalizeLeaveCode);
+
+  const rows = Array.isArray(source)
+    ? source
+    : Array.isArray(source?.items)
+      ? source.items
+      : Array.isArray(source?.leave_balances)
+        ? source.leave_balances
+        : [];
+
+  const match = rows.find((row = {}) => {
+    const candidates = [
+      row.leave_type,
+      row.leave_type_code,
+      row.leave_code,
+      row.code,
+      row.type,
+      row.leave_type_label,
+      row.name,
+    ].map(normalizeLeaveCode);
+
+    return candidates.some((candidate) => wanted.includes(candidate));
+  });
+
+  if (!match) return 0;
+
+  const rawValue =
+    match.available ??
+    match.available_balance ??
+    match.balance ??
+    match.remaining ??
+    match.remaining_balance ??
+    match.current_balance ??
+    0;
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function extractLeaveBalances(data = {}) {
+  const source =
+    data.leave_balances ||
+    data.balances ||
+    data.employee_leave_balances ||
+    data.leave_balance ||
+    data;
+
+  return {
+    cl: findLeaveBalance(source, ['CL', 'CASUAL LEAVE']),
+    el: findLeaveBalance(source, ['EL', 'EARNED LEAVE']),
+  };
+}
+
 export default function ApplyLeave({ user = {}, setPage } = {}) {
   const alerts = useCustomAlert();
   const userRoles = useMemo(() => normalizeRoles(user), [user]);
@@ -316,6 +382,7 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [projects, setProjects] = useState([]);
   const [members, setMembers] = useState([]);
+  const [leaveBalances, setLeaveBalances] = useState({ cl: 0, el: 0 });
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -373,9 +440,11 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
 
       setProjects(data.projects || []);
       setMembers(data.task_handover_options || data.members || []);
+      setLeaveBalances(extractLeaveBalances(data));
         } catch (error) {
           setProjects([]);
           setMembers([]);
+          setLeaveBalances({ cl: 0, el: 0 });
           alerts.error(error.message || 'Unable to load leave options.');
         } finally {
       setLoadingOptions(false);
@@ -500,113 +569,267 @@ async function handleSubmit(event) {
       <style>
         {`
           .apply-leave-page {
+            --al-ink: #101a3a;
+            --al-ink-soft: #5b6f92;
+            --al-violet: #6658dc;
+            --al-violet-deep: #40348d;
+            --al-blue: #3766db;
+            --al-cyan: #18b5c8;
+            --al-teal: #34c9c4;
+            --al-paper: #fbfcff;
+            --al-line: rgba(16, 26, 58, 0.14);
             display: grid;
-            gap: 24px;
+            gap: clamp(18px, 2vw, 26px);
+            color: var(--al-ink);
           }
 
           .apply-leave-hero {
-            border: 1px solid #E2E8F0;
-            border-radius: 32px;
-            padding: 34px;
-            background:
-              radial-gradient(circle at top left, rgba(79, 70, 229, 0.12), transparent 34%),
-              radial-gradient(circle at top right, rgba(14, 165, 233, 0.10), transparent 32%),
-              linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
-            box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
-            display: flex;
-            justify-content: space-between;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
             gap: 24px;
-            align-items: flex-start;
+            align-items: center;
+            min-height: 245px;
+            padding: clamp(24px, 3vw, 42px);
+            border: 1px solid rgba(154, 164, 205, 0.58);
+            border-radius: clamp(28px, 2.6vw, 40px);
+            background:
+              radial-gradient(circle at 9% 8%, rgba(105, 217, 208, 0.24), transparent 29%),
+              radial-gradient(circle at 94% 10%, rgba(153, 164, 245, 0.24), transparent 31%),
+              linear-gradient(135deg, #edf8ff 0%, #f8f3ff 52%, #f0fbf8 100%);
+            box-shadow:
+              12px 14px 0 #c6d8f7,
+              0 28px 48px rgba(34, 38, 110, 0.13);
           }
 
-          .apply-leave-kicker {
-            display: inline-flex;
-            padding: 8px 13px;
-            border-radius: 999px;
-            background: #EEF2FF;
-            color: #4338CA;
-            font-size: 12px;
-            font-weight: 950;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            margin-bottom: 14px;
+          .apply-leave-hero::before {
+            content: "";
+            position: absolute;
+            z-index: -1;
+            width: 150px;
+            height: 150px;
+            right: 9%;
+            bottom: -84px;
+            border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
+            background: linear-gradient(145deg, rgba(105, 217, 208, .30), rgba(132, 181, 241, .28));
+            transform: rotate(-18deg);
           }
 
-          .apply-leave-hero h1 {
-            margin: 0;
-            color: #0F172A;
-            font-size: clamp(34px, 4vw, 52px);
-            line-height: 1;
-            letter-spacing: -0.06em;
-          }
-
-          .apply-leave-hero p {
-            margin: 16px 0 0;
-            max-width: 820px;
-            color: #64748B;
-            font-size: 15px;
-            line-height: 1.7;
-          }
-
-          .apply-leave-refresh {
-            min-height: 48px;
-            padding: 0 18px;
-            border-radius: 16px;
-            border: 1px solid #C7D2FE;
-            background: #FFFFFF;
-            color: #4338CA;
-            font-weight: 900;
-            cursor: pointer;
+          .apply-leave-kicker,
+          .apply-leave-section-kicker {
             display: inline-flex;
             align-items: center;
             gap: 8px;
+            width: max-content;
+            max-width: 100%;
+            border-radius: 999px;
+            color: #ffffff;
+            background: #342b78;
+            font-size: 9px;
+            font-weight: 950;
+            line-height: 1;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+          }
+
+          .apply-leave-kicker {
+            margin-bottom: 15px;
+            padding: 9px 13px;
+          }
+
+          .apply-leave-section-kicker {
+            margin-bottom: 10px;
+            padding: 7px 10px;
+          }
+
+          .apply-leave-hero h1 {
+            max-width: 780px;
+            margin: 0;
+            color: var(--al-ink);
+            font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+            font-size: clamp(42px, 5vw, 76px);
+            font-weight: 760;
+            line-height: .94;
+            letter-spacing: -.058em;
+          }
+
+          .apply-leave-hero h1 em {
+            display: inline;
+            color: var(--al-violet);
+            font-family: Georgia, "Times New Roman", serif;
+            font-weight: 500;
+          }
+
+          .apply-leave-hero p {
+            max-width: 760px;
+            margin: 17px 0 0;
+            color: var(--al-ink-soft);
+            font-size: clamp(13px, 1vw, 16px);
+            line-height: 1.68;
+          }
+
+          .apply-leave-refresh,
+          .apply-leave-upgrade-btn,
+          .apply-leave-submit {
+            border: 1px solid rgba(65, 55, 161, .18);
+            font-weight: 950;
+            cursor: pointer;
+            transition:
+              transform 190ms cubic-bezier(.22, 1, .36, 1),
+              box-shadow 190ms ease,
+              filter 190ms ease;
+          }
+
+          .apply-leave-refresh {
+            min-height: 54px;
+            padding: 0 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            border-radius: 18px;
+            color: #342b78;
+            background: rgba(255, 255, 255, .88);
+            box-shadow:
+              6px 7px 0 #b9d7ff,
+              0 14px 25px rgba(44, 75, 116, .10);
             white-space: nowrap;
+          }
+
+          .apply-leave-refresh svg {
+            animation: applyLeaveRefreshIdle 4.2s linear infinite;
+          }
+
+          .apply-leave-refresh:hover,
+          .apply-leave-upgrade-btn:hover,
+          .apply-leave-submit:hover {
+            transform: translateY(-3px);
+            filter: saturate(1.05);
+          }
+
+          .apply-leave-refresh:hover {
+            box-shadow:
+              8px 9px 0 #b9d7ff,
+              0 18px 30px rgba(44, 75, 116, .14);
+          }
+
+          .apply-leave-refresh:disabled svg {
+            animation: applyLeaveSpin 1s linear infinite;
           }
 
           .apply-leave-alert {
             padding: 14px 16px;
+            border: 1px solid #b9d7ff;
             border-radius: 18px;
-            border: 1px solid #BFDBFE;
-            background: #EFF6FF;
-            color: #1D4ED8;
-            font-weight: 750;
+            color: #244f9b;
+            background: #edf6ff;
+            box-shadow: 5px 6px 0 rgba(185, 215, 255, .9);
+            font-weight: 780;
+          }
+
+          .apply-leave-balance-strip {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+          }
+
+          .apply-leave-balance-card {
+            --balance-bg: #edf6ff;
+            --balance-shadow: #b9d7ff;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            display: grid;
+            grid-template-columns: 54px minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 15px;
+            min-height: 112px;
+            padding: 18px;
+            border: 1px solid rgba(178, 185, 210, .72);
+            border-radius: 25px;
+            background: var(--balance-bg);
+            box-shadow:
+              8px 10px 0 var(--balance-shadow),
+              0 18px 30px rgba(15, 20, 75, .11);
+            transition:
+              transform 210ms cubic-bezier(.22, 1, .36, 1),
+              box-shadow 210ms ease;
+          }
+
+          .apply-leave-balance-card.el {
+            --balance-bg: #eaf8f4;
+            --balance-shadow: #aee6d9;
+          }
+
+          .apply-leave-balance-card:hover {
+            transform: translateY(-4px);
+            box-shadow:
+              10px 12px 0 var(--balance-shadow),
+              0 23px 38px rgba(15, 20, 75, .14);
+          }
+
+          .apply-leave-balance-icon {
+            width: 54px;
+            height: 54px;
+            display: grid;
+            place-items: center;
+            border-radius: 17px;
+            color: #ffffff;
+            background: linear-gradient(145deg, #3f7ef0, #2ed1c1);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+            animation: applyLeaveIconFloat 3.4s ease-in-out infinite;
+          }
+
+          .apply-leave-balance-card.el .apply-leave-balance-icon {
+            background: linear-gradient(145deg, #6658dc, #34c9c4);
+            animation-delay: -.9s;
+          }
+
+          .apply-leave-balance-copy span {
+            display: block;
+            color: #566483;
+            font-size: 9px;
+            font-weight: 950;
+            letter-spacing: .11em;
+            text-transform: uppercase;
+          }
+
+          .apply-leave-balance-copy strong {
+            display: block;
+            margin-top: 6px;
+            color: var(--al-ink);
+            font-size: clamp(17px, 1.5vw, 23px);
+          }
+
+          .apply-leave-balance-value {
+            color: var(--al-violet-deep);
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: clamp(34px, 3vw, 48px);
+            font-weight: 760;
+            line-height: 1;
           }
 
           .apply-leave-saas-banner {
-            border-radius: 24px;
-            border: 1px solid #BFDBFE;
-            background:
-              radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 34%),
-              linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 100%);
-            padding: 20px;
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             gap: 18px;
-            box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08);
+            padding: 20px;
+            border: 1px solid rgba(178, 185, 210, .72);
+            border-radius: 26px;
+            background: linear-gradient(145deg, #edf6ff, #f5f3ff);
+            box-shadow:
+              7px 8px 0 #b9d7ff,
+              0 18px 30px rgba(44, 75, 116, .10);
           }
 
           .apply-leave-saas-banner.expired {
-            border-color: #FED7AA;
-            background:
-              radial-gradient(circle at top left, rgba(249, 115, 22, 0.16), transparent 34%),
-              linear-gradient(135deg, #FFF7ED 0%, #FFFFFF 100%);
-          }
-
-          .apply-leave-saas-icon {
-            width: 46px;
-            height: 46px;
-            border-radius: 16px;
-            display: grid;
-            place-items: center;
-            background: #DBEAFE;
-            color: #2563EB;
-            flex-shrink: 0;
-          }
-
-          .apply-leave-saas-banner.expired .apply-leave-saas-icon {
-            background: #FFEDD5;
-            color: #EA580C;
+            background: linear-gradient(145deg, #fff4d5, #fffaf0);
+            box-shadow:
+              7px 8px 0 #ffe0a5,
+              0 18px 30px rgba(116, 75, 44, .10);
           }
 
           .apply-leave-saas-content {
@@ -616,22 +839,39 @@ async function handleSubmit(event) {
             min-width: 0;
           }
 
+          .apply-leave-saas-icon {
+            width: 48px;
+            height: 48px;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            border-radius: 16px;
+            color: #ffffff;
+            background: #342b78;
+          }
+
+          .apply-leave-saas-banner.expired .apply-leave-saas-icon {
+            background: #d97706;
+          }
+
           .apply-leave-saas-content h3 {
             margin: 0;
-            color: #0F172A;
-            letter-spacing: -0.035em;
+            color: var(--al-ink);
+            font-family: var(--yc-display, Georgia, serif);
+            font-size: 23px;
+            letter-spacing: -.035em;
           }
 
           .apply-leave-saas-content p {
             margin: 7px 0 0;
-            color: #475569;
+            color: var(--al-ink-soft);
             line-height: 1.6;
           }
 
           .apply-leave-saas-meta {
             display: flex;
-            gap: 8px;
             flex-wrap: wrap;
+            gap: 8px;
             margin-top: 12px;
           }
 
@@ -640,113 +880,129 @@ async function handleSubmit(event) {
             align-items: center;
             gap: 6px;
             padding: 7px 10px;
+            border: 1px solid rgba(65, 55, 161, .13);
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.82);
-            border: 1px solid rgba(148, 163, 184, 0.22);
             color: #334155;
-            font-size: 12px;
-            font-weight: 850;
+            background: rgba(255,255,255,.78);
+            font-size: 11px;
+            font-weight: 820;
           }
 
           .apply-leave-upgrade-btn {
-            min-height: 44px;
+            min-height: 46px;
             padding: 0 15px;
-            border: 0;
-            border-radius: 15px;
-            background: linear-gradient(135deg, #2563EB, #4F46E5);
-            color: #FFFFFF;
-            font-weight: 950;
-            cursor: pointer;
             display: inline-flex;
             align-items: center;
             gap: 8px;
+            border-radius: 16px;
+            color: #ffffff;
+            background: #342b78;
+            box-shadow:
+              5px 6px 0 #18b5c8,
+              0 14px 25px rgba(52, 43, 120, .16);
             white-space: nowrap;
-            box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
           }
 
           .apply-leave-layout {
             display: grid;
-            grid-template-columns: minmax(340px, 0.75fr) minmax(0, 1.25fr);
+            grid-template-columns: minmax(310px, .72fr) minmax(0, 1.28fr);
             gap: 24px;
             align-items: start;
           }
 
           .apply-leave-panel {
-            border: 1px solid #E2E8F0;
-            border-radius: 28px;
-            background: #FFFFFF;
-            box-shadow: 0 14px 38px rgba(15, 23, 42, 0.07);
-            padding: 24px;
             min-width: 0;
+            padding: clamp(20px, 2vw, 28px);
+            border: 1px solid rgba(171, 181, 211, .72);
+            border-radius: clamp(28px, 2.3vw, 38px);
+            background: linear-gradient(145deg, #ffffff, #f7fbff);
+            box-shadow:
+              10px 12px 0 #c4ccff,
+              0 28px 48px rgba(34, 38, 110, .12);
+          }
+
+          .apply-leave-panel.form-panel {
+            background: linear-gradient(145deg, #f4fbff 0%, #f8f1ff 52%, #fff8e8 100%);
+            box-shadow:
+              12px 14px 0 #b9d7ff,
+              0 30px 50px rgba(34, 38, 110, .14);
           }
 
           .apply-leave-panel h2,
           .apply-leave-panel h3 {
             margin: 0;
-            color: #0F172A;
-            letter-spacing: -0.035em;
+            color: var(--al-ink);
+            font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+            font-size: clamp(27px, 2.5vw, 40px);
+            font-weight: 760;
+            line-height: .98;
+            letter-spacing: -.045em;
           }
 
-          .apply-leave-panel p {
-            color: #64748B;
-            line-height: 1.55;
+          .apply-leave-panel > p {
+            margin: 9px 0 0;
+            color: var(--al-ink-soft);
+            line-height: 1.58;
           }
 
           .apply-leave-profile-grid {
             display: grid;
-            gap: 12px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 18px;
           }
 
           .apply-leave-profile-grid div,
           .apply-leave-summary-card {
-            border: 1px solid #E2E8F0;
-            background: #F8FAFC;
-            border-radius: 18px;
-            padding: 14px;
+            min-width: 0;
+            padding: 13px;
+            border: 1px solid rgba(162, 169, 196, .48);
+            border-radius: 17px;
+            background: rgba(255,255,255,.80);
+            box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
           }
 
           .apply-leave-profile-grid span,
           .apply-leave-summary-card span {
             display: block;
-            color: #64748B;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
             margin-bottom: 6px;
+            color: #625f7f;
+            font-size: 8px;
+            font-weight: 950;
+            letter-spacing: .10em;
+            text-transform: uppercase;
           }
 
           .apply-leave-profile-grid strong,
           .apply-leave-summary-card strong {
-            color: #0F172A;
+            color: var(--al-ink);
+            font-size: 13px;
             overflow-wrap: anywhere;
           }
 
           .apply-leave-summary {
             display: grid;
-            gap: 12px;
-            margin-top: 18px;
+            gap: 11px;
+            margin-top: 16px;
           }
 
           .apply-leave-summary-card.info {
-            background: #EEF2FF;
-            border-color: #C7D2FE;
-            color: #4338CA;
-          }
-
-          .apply-leave-summary-card.info strong {
-            color: #312E81;
+            border-color: rgba(98, 84, 218, .25);
+            background: #f1efff;
+            box-shadow: 4px 5px 0 #c9c0ff;
           }
 
           .apply-leave-form {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 16px;
+            gap: 15px;
+            margin-top: 20px;
           }
 
           .apply-leave-field {
             display: grid;
             gap: 8px;
+            min-width: 0;
           }
 
           .apply-leave-field.full {
@@ -754,27 +1010,33 @@ async function handleSubmit(event) {
           }
 
           .apply-leave-field label {
-            color: #475569;
-            font-size: 13px;
+            color: #303b5b;
+            font-size: 11px;
             font-weight: 900;
+            letter-spacing: .025em;
           }
 
           .apply-leave-field input,
           .apply-leave-field select,
           .apply-leave-field textarea {
             width: 100%;
-            min-height: 48px;
-            border-radius: 16px;
-            border: 1px solid #CBD5E1;
-            background: #FFFFFF;
-            color: #0F172A;
+            min-width: 0;
+            min-height: 50px;
             padding: 0 14px;
+            border: 1px solid rgba(151, 161, 197, .58);
+            border-radius: 15px;
             outline: none;
-            font-size: 14px;
+            color: var(--al-ink);
+            background: rgba(255,255,255,.92);
+            font-size: 13px;
+            transition:
+              border-color 170ms ease,
+              box-shadow 170ms ease,
+              transform 170ms ease;
           }
 
           .apply-leave-field textarea {
-            min-height: 125px;
+            min-height: 128px;
             padding: 14px;
             resize: vertical;
           }
@@ -782,142 +1044,124 @@ async function handleSubmit(event) {
           .apply-leave-field input:focus,
           .apply-leave-field select:focus,
           .apply-leave-field textarea:focus {
-            border-color: #818CF8;
-            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+            border-color: rgba(98, 84, 218, .65);
+            box-shadow:
+              4px 5px 0 rgba(102, 88, 220, .15),
+              0 0 0 4px rgba(102, 88, 220, .09);
+            transform: translateY(-1px);
           }
 
           .apply-leave-submit {
             grid-column: 1 / -1;
-            min-height: 52px;
-            border: 0;
-            border-radius: 18px;
-            background: linear-gradient(135deg, #4F46E5, #2563EB);
-            color: #FFFFFF;
-            font-weight: 950;
-            cursor: pointer;
+            min-height: 56px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 9px;
-            box-shadow: 0 16px 32px rgba(37, 99, 235, 0.22);
+            gap: 10px;
+            border-radius: 18px;
+            color: #ffffff;
+            background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+            box-shadow:
+              7px 8px 0 #a9d6f5,
+              0 18px 30px rgba(36, 74, 128, .18);
+          }
+
+          .apply-leave-submit svg {
+            animation: applyLeaveSendFloat 2.8s ease-in-out infinite;
+          }
+
+          .apply-leave-submit:hover {
+            box-shadow:
+              9px 10px 0 #a9d6f5,
+              0 22px 34px rgba(36, 74, 128, .22);
           }
 
           .apply-leave-submit:disabled,
           .apply-leave-refresh:disabled {
-            opacity: 0.7;
+            opacity: .68;
             cursor: not-allowed;
+            transform: none;
           }
 
-          @media (max-width: 1050px) {
-            .apply-leave-saas-banner {
-            border-radius: 24px;
-            border: 1px solid #BFDBFE;
-            background:
-              radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 34%),
-              linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 100%);
-            padding: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 18px;
-            box-shadow: 0 12px 30px rgba(37, 99, 235, 0.08);
+          @keyframes applyLeaveIconFloat {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-4px) rotate(-3deg); }
           }
 
-          .apply-leave-saas-banner.expired {
-            border-color: #FED7AA;
-            background:
-              radial-gradient(circle at top left, rgba(249, 115, 22, 0.16), transparent 34%),
-              linear-gradient(135deg, #FFF7ED 0%, #FFFFFF 100%);
+          @keyframes applyLeaveSendFloat {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            50% { transform: translate(3px, -2px) rotate(4deg); }
           }
 
-          .apply-leave-saas-icon {
-            width: 46px;
-            height: 46px;
-            border-radius: 16px;
-            display: grid;
-            place-items: center;
-            background: #DBEAFE;
-            color: #2563EB;
-            flex-shrink: 0;
+          @keyframes applyLeaveRefreshIdle {
+            0%, 84% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
           }
 
-          .apply-leave-saas-banner.expired .apply-leave-saas-icon {
-            background: #FFEDD5;
-            color: #EA580C;
+          @keyframes applyLeaveSpin {
+            to { transform: rotate(360deg); }
           }
 
-          .apply-leave-saas-content {
-            display: flex;
-            gap: 14px;
-            align-items: flex-start;
-            min-width: 0;
-          }
-
-          .apply-leave-saas-content h3 {
-            margin: 0;
-            color: #0F172A;
-            letter-spacing: -0.035em;
-          }
-
-          .apply-leave-saas-content p {
-            margin: 7px 0 0;
-            color: #475569;
-            line-height: 1.6;
-          }
-
-          .apply-leave-saas-meta {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-top: 12px;
-          }
-
-          .apply-leave-saas-meta span {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 7px 10px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.82);
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            color: #334155;
-            font-size: 12px;
-            font-weight: 850;
-          }
-
-          .apply-leave-upgrade-btn {
-            min-height: 44px;
-            padding: 0 15px;
-            border: 0;
-            border-radius: 15px;
-            background: linear-gradient(135deg, #2563EB, #4F46E5);
-            color: #FFFFFF;
-            font-weight: 950;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-            box-shadow: 0 14px 26px rgba(37, 99, 235, 0.22);
-          }
-
-          .apply-leave-layout {
+          @media (max-width: 1100px) {
+            .apply-leave-layout {
               grid-template-columns: 1fr;
+            }
+
+            .apply-leave-profile-grid {
+              grid-template-columns: repeat(3, minmax(0, 1fr));
             }
           }
 
-          @media (max-width: 720px) {
+          @media (max-width: 760px) {
+            .apply-leave-page {
+              gap: 18px;
+            }
+
             .apply-leave-hero {
-              flex-direction: column;
+              grid-template-columns: 1fr;
+              min-height: 0;
               padding: 22px;
-              border-radius: 24px;
+              border-radius: 26px;
+              box-shadow:
+                6px 7px 0 #c6d8f7,
+                0 18px 30px rgba(34, 38, 110, .10);
+            }
+
+            .apply-leave-hero h1 {
+              font-size: clamp(36px, 10vw, 52px);
             }
 
             .apply-leave-refresh {
               width: 100%;
-              justify-content: center;
             }
 
+            .apply-leave-balance-strip {
+              gap: 12px;
+            }
+
+            .apply-leave-balance-card {
+              grid-template-columns: 42px minmax(0, 1fr);
+              min-height: 100px;
+              gap: 10px;
+              padding: 14px;
+              border-radius: 20px;
+              box-shadow:
+                5px 6px 0 var(--balance-shadow),
+                0 13px 22px rgba(15, 20, 75, .09);
+            }
+
+            .apply-leave-balance-icon {
+              width: 42px;
+              height: 42px;
+              border-radius: 13px;
+            }
+
+            .apply-leave-balance-value {
+              grid-column: 1 / -1;
+              justify-self: end;
+              margin-top: -34px;
+              font-size: 30px;
+            }
 
             .apply-leave-saas-banner {
               flex-direction: column;
@@ -930,8 +1174,21 @@ async function handleSubmit(event) {
             }
 
             .apply-leave-panel {
-              padding: 20px;
+              padding: 18px;
               border-radius: 24px;
+              box-shadow:
+                6px 7px 0 #c4ccff,
+                0 18px 30px rgba(34, 38, 110, .10);
+            }
+
+            .apply-leave-panel.form-panel {
+              box-shadow:
+                6px 7px 0 #b9d7ff,
+                0 18px 30px rgba(34, 38, 110, .11);
+            }
+
+            .apply-leave-profile-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             .apply-leave-form {
@@ -943,17 +1200,58 @@ async function handleSubmit(event) {
               grid-column: auto;
             }
           }
+
+          @media (max-width: 430px) {
+            .apply-leave-balance-strip,
+            .apply-leave-profile-grid {
+              grid-template-columns: 1fr;
+            }
+
+            .apply-leave-balance-card {
+              grid-template-columns: 42px minmax(0, 1fr) auto;
+            }
+
+            .apply-leave-balance-value {
+              grid-column: auto;
+              justify-self: end;
+              margin-top: 0;
+            }
+
+            .apply-leave-saas-content {
+              gap: 10px;
+            }
+
+            .apply-leave-saas-icon {
+              width: 40px;
+              height: 40px;
+              border-radius: 13px;
+            }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .apply-leave-page *,
+            .apply-leave-page *::before,
+            .apply-leave-page *::after {
+              animation: none !important;
+              transition: none !important;
+            }
+          }
         `}
       </style>
 
       <section className="apply-leave-hero">
         <div>
-          <span className="apply-leave-kicker">Apply Leave</span>
-          <h1>Submit Leave Request</h1>
+          <span className="apply-leave-kicker">
+            <Sparkles size={13} />
+            Employee Leave Workspace
+          </span>
+          <h1>
+            Plan your time off, <em>clearly.</em>
+          </h1>
           <p>
-            Apply leave using a clean form. Employee details are automatically
-            taken from your profile. HR/Admin users must mention their work or
-            project details before submitting leave.
+            Submit a leave request, review your available Casual Leave and
+            Earned Leave, confirm the approval path, and hand over work from
+            one connected YourComate workspace.
           </p>
         </div>
 
@@ -965,7 +1263,40 @@ async function handleSubmit(event) {
         >
           <RefreshCcw size={16} />
           {loadingOptions ? 'Refreshing...' : 'Refresh'}
+          <ArrowUpRight size={15} />
         </button>
+      </section>
+
+      <section className="apply-leave-balance-strip" aria-label="Available leave balance">
+        <article className="apply-leave-balance-card cl">
+          <div className="apply-leave-balance-icon" aria-hidden="true">
+            <CalendarDays size={23} />
+          </div>
+
+          <div className="apply-leave-balance-copy">
+            <span>Available CL</span>
+            <strong>Casual Leave</strong>
+          </div>
+
+          <div className="apply-leave-balance-value">
+            {loadingOptions ? '—' : leaveBalances.cl}
+          </div>
+        </article>
+
+        <article className="apply-leave-balance-card el">
+          <div className="apply-leave-balance-icon" aria-hidden="true">
+            <CheckCircle2 size={23} />
+          </div>
+
+          <div className="apply-leave-balance-copy">
+            <span>Available EL</span>
+            <strong>Earned Leave</strong>
+          </div>
+
+          <div className="apply-leave-balance-value">
+            {loadingOptions ? '—' : leaveBalances.el}
+          </div>
+        </article>
       </section>
 
       {showDemoAccessBanner ? (
@@ -1023,6 +1354,7 @@ async function handleSubmit(event) {
 
       <section className="apply-leave-layout">
         <aside className="apply-leave-panel">
+          <span className="apply-leave-section-kicker">Employee Context</span>
           <h2>Profile Summary</h2>
           <p>These details are auto-filled from your employee profile.</p>
 
@@ -1071,7 +1403,8 @@ async function handleSubmit(event) {
           </div>
         </aside>
 
-        <main className="apply-leave-panel">
+        <main className="apply-leave-panel form-panel">
+          <span className="apply-leave-section-kicker">Request Form</span>
           <h3>Leave Details</h3>
           <p>Fill the required leave details and submit for approval.</p>
 

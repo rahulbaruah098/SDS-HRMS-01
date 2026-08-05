@@ -3,6 +3,7 @@ import {
   Bell,
   CalendarClock,
   CheckCheck,
+  ChevronRight,
   CreditCard,
   LayoutDashboard,
   LogOut,
@@ -2680,48 +2681,110 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         ) : null}
 
-        <nav>
+        <nav className="sidebar-navigation" aria-label="Primary navigation">
           <button
             type="button"
-            className={page === 'dashboard' ? 'active' : ''}
+            className={`sidebar-nav-item sidebar-dashboard-item ${
+              page === 'dashboard' ? 'active' : ''
+            }`}
             onClick={() => goTo('dashboard')}
+            aria-current={page === 'dashboard' ? 'page' : undefined}
+            title="Dashboard"
           >
-            <LayoutDashboard size={18} /> Dashboard
+            <span className="sidebar-nav-icon" aria-hidden="true">
+              <LayoutDashboard size={19} strokeWidth={1.9} />
+            </span>
+
+            <span className="sidebar-nav-label">Dashboard</span>
+
+            <span className="sidebar-nav-arrow" aria-hidden="true">
+              <ChevronRight size={17} strokeWidth={2.2} />
+            </span>
           </button>
 
           {groupedModules.map(({ group, modules: groupModules }) => (
-            <div className="nav-group" key={group}>
-              <div className="nav-group-title">{group}</div>
+            <section
+              className="nav-group"
+              key={group}
+              aria-labelledby={`sidebar-group-${group
+                .toLowerCase()
+                .replaceAll(' ', '-')
+                .replaceAll('&', 'and')}`}
+            >
+              <div
+                className="nav-group-title"
+                id={`sidebar-group-${group
+                  .toLowerCase()
+                  .replaceAll(' ', '-')
+                  .replaceAll('&', 'and')}`}
+              >
+                <span>{group}</span>
+                <i aria-hidden="true" />
+              </div>
 
-                    {groupModules.map(([key, title, Icon]) => {
-                      const targetPage =
-                        key === 'team_field_attendance'
-                          ? 'my_visits'
-                          : key;
+              <div className="sidebar-nav-list">
+                {groupModules.map(([key, title, Icon]) => {
+                  const targetPage =
+                    key === 'team_field_attendance'
+                      ? 'my_visits'
+                      : key;
+                  const isActive = page === targetPage;
 
-                      return (
-                        <button
-                          type="button"
-                          key={key}
-                          className={page === targetPage ? 'active' : ''}
-                          onClick={() => goTo(targetPage)}
-                        >
-                          {Icon ? <Icon size={18} /> : null}
-                          {title}
-                        </button>
-                      );
-                    })}
-            </div>
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      className={`sidebar-nav-item ${
+                        isActive ? 'active' : ''
+                      }`}
+                      onClick={() => goTo(targetPage)}
+                      aria-current={isActive ? 'page' : undefined}
+                      title={title}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        {Icon ? (
+                          <Icon size={19} strokeWidth={1.9} />
+                        ) : (
+                          <span className="sidebar-nav-icon-fallback">
+                            {String(title || '?').charAt(0).toUpperCase()}
+                          </span>
+                        )}
+                      </span>
+
+                      <span className="sidebar-nav-label">{title}</span>
+
+                      <span className="sidebar-nav-arrow" aria-hidden="true">
+                        <ChevronRight size={17} strokeWidth={2.2} />
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           ))}
         </nav>
 
         <button
           type="button"
-          className="logout"
+          className="logout sidebar-logout-button"
           onClick={logout}
           aria-label="Logout"
+          title="Logout"
         >
-          <LogOut size={18} /> Logout
+          <span className="sidebar-nav-icon sidebar-logout-icon" aria-hidden="true">
+            <LogOut size={19} strokeWidth={1.9} />
+          </span>
+
+          <span className="sidebar-nav-label">Logout</span>
+
+          <span className="sidebar-logout-decoration" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
         </button>
       </aside>
 
