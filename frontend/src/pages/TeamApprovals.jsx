@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowUpRight,
   CheckCircle2,
   Clock3,
   FileText,
   RefreshCcw,
   Search,
   ShieldCheck,
+  Sparkles,
   UserCheck,
   XCircle,
 } from 'lucide-react';
@@ -935,131 +937,300 @@ async function rejectRequest(row) {
     <div className="page-grid team-approvals-page">
       <style>{`
         .team-approvals-page {
-          --ta-line: #e2e8f0;
-          --ta-muted: #64748b;
-          --ta-ink: #0f172a;
-          --ta-primary: #4f46e5;
-          --ta-success: #059669;
-          --ta-warning: #d97706;
-          --ta-danger: #e11d48;
-          --ta-info: #0284c7;
+          --ta-ink: #101a3a;
+          --ta-copy: #5d6d8d;
+          --ta-violet: #6658dc;
+          --ta-violet-deep: #40348d;
+          --ta-blue: #3766db;
+          --ta-cyan: #18b5c8;
+          --ta-teal: #34c9c4;
+          --ta-yellow: #d8ff43;
+          --ta-danger: #d84d68;
+          --ta-line: rgba(16, 26, 58, .14);
+          display: grid;
+          gap: clamp(18px, 2vw, 26px);
+          color: var(--ta-ink);
         }
 
         .ta-hero {
           position: relative;
+          isolation: isolate;
           overflow: hidden;
-          border: 1px solid var(--ta-line);
-          border-radius: 30px;
-          background:
-            radial-gradient(circle at 8% 0%, rgba(79, 70, 229, .15), transparent 34%),
-            radial-gradient(circle at 92% 4%, rgba(5, 150, 105, .13), transparent 34%),
-            #ffffff;
-          padding: 26px;
-          box-shadow: 0 18px 46px rgba(15, 23, 42, .08);
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
-          gap: 18px;
+          gap: clamp(22px, 3vw, 40px);
           align-items: center;
+          min-height: 270px;
+          padding: clamp(25px, 3vw, 42px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background:
+            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
+            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
+            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          box-shadow:
+            12px 14px 0 #c6d8f7,
+            0 28px 48px rgba(34, 38, 110, .13);
+        }
+
+        .ta-hero::before {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 175px;
+          height: 175px;
+          right: 8%;
+          bottom: -98px;
+          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
+          background: linear-gradient(
+            145deg,
+            rgba(105, 217, 208, .30),
+            rgba(132, 181, 241, .28)
+          );
+          transform: rotate(-18deg);
+        }
+
+        .ta-page-kicker,
+        .ta-section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: #342b78;
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .ta-page-kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 4px 5px 0 #18b5c8;
+        }
+
+        .ta-section-kicker {
+          margin-bottom: 10px;
+          padding: 7px 10px;
+          box-shadow: 3px 4px 0 #18b5c8;
         }
 
         .ta-hero h1 {
+          max-width: 900px;
           margin: 0;
           color: var(--ta-ink);
-          font-size: clamp(28px, 3vw, 42px);
-          letter-spacing: -.05em;
-          line-height: 1.05;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(43px, 5.1vw, 76px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
+        }
+
+        .ta-hero h1 em {
+          color: var(--ta-violet);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
         }
 
         .ta-hero p {
-          margin: 10px 0 0;
-          color: var(--ta-muted);
-          line-height: 1.65;
-          max-width: 880px;
+          max-width: 860px;
+          margin: 17px 0 0;
+          color: var(--ta-copy);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
         }
 
         .ta-hero-icon {
-          width: 84px;
-          height: 84px;
-          border-radius: 28px;
+          width: 92px;
+          height: 92px;
+          border-radius: 29px;
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, var(--ta-primary), var(--ta-info));
-          color: #ffffff;
-          box-shadow: 0 18px 42px rgba(79, 70, 229, .24);
+          color: #fff;
+          background: linear-gradient(145deg, #6658dc, #18b5c8);
+          box-shadow:
+            7px 8px 0 #c9c0ff,
+            0 19px 42px rgba(102, 88, 220, .20);
+          animation: taHeroIconFloat 3.4s ease-in-out infinite;
         }
 
         .ta-role-pill {
           display: inline-flex;
-          margin: 12px 0 0;
+          max-width: 100%;
+          margin: 16px 0 0;
+          padding: 9px 13px;
+          border: 1px solid rgba(102, 88, 220, .20);
           border-radius: 999px;
-          padding: 8px 12px;
-          background: #eef2ff;
-          color: #4338ca;
-          font-size: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+          font-size: 11px;
           font-weight: 900;
+          line-height: 1.4;
+        }
+
+        .team-approvals-page .hero-actions {
+          margin-top: 20px;
+        }
+
+        .team-approvals-page .primary,
+        .team-approvals-page .secondary,
+        .team-approvals-page .danger {
+          border-radius: 15px;
+          font-weight: 900;
+          transition:
+            transform 190ms cubic-bezier(.22, 1, .36, 1),
+            box-shadow 190ms ease,
+            filter 190ms ease;
+        }
+
+        .team-approvals-page .primary {
+          color: #fff;
+          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+          box-shadow:
+            5px 6px 0 #a9d6f5,
+            0 14px 25px rgba(36, 74, 128, .16);
+        }
+
+        .team-approvals-page .secondary {
+          border-color: rgba(65, 55, 161, .18);
+          color: #40348d;
+          background: rgba(255, 255, 255, .90);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+        }
+
+        .team-approvals-page .danger {
+          color: #9f2944;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .team-approvals-page .primary:hover,
+        .team-approvals-page .secondary:hover,
+        .team-approvals-page .danger:hover {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .team-approvals-page .hero-actions .primary svg:first-child {
+          animation: taRefreshIdle 4.2s linear infinite;
+        }
+
+        .team-approvals-page .hero-actions .primary:disabled svg:first-child {
+          animation: taSpin 1s linear infinite;
         }
 
         .ta-kpis {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
+          gap: 15px;
         }
 
         .ta-kpi {
-          border: 1px solid var(--ta-line);
+          min-height: 126px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
           border-radius: 22px;
-          background: #ffffff;
-          padding: 16px;
-          box-shadow: 0 12px 30px rgba(15, 23, 42, .06);
+          background: #edf6ff;
+          box-shadow:
+            7px 9px 0 #b9d7ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+          transition:
+            transform 210ms cubic-bezier(.22, 1, .36, 1),
+            box-shadow 210ms ease;
+        }
+
+        .ta-kpi:nth-child(2) {
+          background: #eaf8f4;
+          box-shadow:
+            7px 9px 0 #aee6d9,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .ta-kpi:nth-child(3) {
+          background: #fff0f2;
+          box-shadow:
+            7px 9px 0 #f2c2cc,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .ta-kpi:nth-child(4) {
+          background: #f1efff;
+          box-shadow:
+            7px 9px 0 #c9c0ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .ta-kpi:hover {
+          transform: translateY(-4px);
         }
 
         .ta-kpi span {
           display: block;
-          color: var(--ta-muted);
-          font-size: 12px;
-          font-weight: 900;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
           text-transform: uppercase;
-          letter-spacing: .07em;
+          letter-spacing: .10em;
         }
 
         .ta-kpi strong {
           display: block;
-          margin-top: 8px;
+          margin-top: 9px;
           color: var(--ta-ink);
-          font-size: 32px;
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(32px, 3vw, 46px);
           line-height: 1;
         }
 
         .ta-kpi small {
           display: block;
-          margin-top: 7px;
-          color: var(--ta-muted);
+          margin-top: 8px;
+          color: var(--ta-copy);
           font-weight: 750;
+          line-height: 1.4;
+        }
+
+        .ta-toolbar,
+        .team-approvals-page .panel,
+        .ta-card,
+        .ta-field-card {
+          border: 1px solid rgba(171, 181, 211, .70);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
         }
 
         .ta-toolbar {
-          border: 1px solid var(--ta-line);
-          border-radius: 24px;
-          background: #ffffff;
-          padding: 14px;
-          box-shadow: 0 12px 30px rgba(15, 23, 42, .05);
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 14px;
           flex-wrap: wrap;
+          padding: 15px;
+          border-radius: 24px;
         }
 
         .ta-search {
-          min-width: min(420px, 100%);
+          min-width: min(430px, 100%);
           flex: 1;
           display: flex;
           align-items: center;
           gap: 10px;
-          border: 1px solid var(--ta-line);
-          border-radius: 999px;
-          background: #f8fafc;
           padding: 0 14px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 999px;
+          background: rgba(255, 255, 255, .94);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
+        }
+
+        .ta-search svg {
+          color: var(--ta-violet);
         }
 
         .ta-search input {
@@ -1079,34 +1250,138 @@ async function rejectRequest(row) {
         }
 
         .ta-filter button {
-          border: 1px solid var(--ta-line);
-          border-radius: 999px;
-          background: #ffffff;
-          color: var(--ta-muted);
+          min-height: 42px;
           padding: 10px 14px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 999px;
+          color: var(--ta-copy);
+          background: #fff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
           font-weight: 900;
           cursor: pointer;
+          transition:
+            transform 180ms ease,
+            box-shadow 180ms ease,
+            background 180ms ease;
         }
 
         .ta-filter button.active {
-          border-color: rgba(79, 70, 229, .25);
-          background: #eef2ff;
-          color: var(--ta-primary);
+          border-color: rgba(102, 88, 220, .28);
+          color: #fff;
+          background: #342b78;
+          box-shadow:
+            4px 5px 0 #18b5c8,
+            0 12px 22px rgba(52, 43, 120, .14);
+        }
+
+        .ta-filter button:hover {
+          transform: translateY(-2px);
+        }
+
+        .team-approvals-page .panel {
+          padding: clamp(20px, 2vw, 28px);
+          border-radius: clamp(26px, 2.2vw, 36px);
+        }
+
+        .team-approvals-page .panel h3,
+        .ta-card h3 {
+          color: var(--ta-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-weight: 760;
+          letter-spacing: -.04em;
+        }
+
+        .team-approvals-page .panel p {
+          color: var(--ta-copy);
+          line-height: 1.6;
+        }
+
+        .ta-field-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 15px;
+          margin-top: 18px;
+        }
+
+        .ta-field-card {
+          padding: 15px;
+          border-radius: 23px;
+          transition:
+            transform 210ms cubic-bezier(.22, 1, .36, 1),
+            box-shadow 210ms ease;
+        }
+
+        .ta-field-card:hover,
+        .ta-card:hover {
+          border-color: rgba(102, 88, 220, .28);
+          transform: translateY(-3px);
+          box-shadow:
+            10px 12px 0 #c4ccff,
+            0 30px 50px rgba(34, 38, 110, .14);
+        }
+
+        .ta-field-card h3 {
+          margin: 0;
+          font-size: 20px;
+        }
+
+        .ta-field-card p {
+          margin: 7px 0 0;
+          color: var(--ta-copy);
+          font-size: 13px;
+          line-height: 1.5;
+          font-weight: 700;
+        }
+
+        .ta-field-photo {
+          width: 100%;
+          height: 180px;
+          margin-top: 12px;
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 18px;
+          background: #f8fafc;
+          box-shadow: 4px 5px 0 #b9d7ff;
+        }
+
+        .ta-field-photo img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .ta-field-actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+        }
+
+        .ta-field-actions a {
+          padding: 8px 11px;
+          border: 1px solid rgba(102, 88, 220, .20);
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 12px;
+          font-weight: 900;
+          text-decoration: none;
         }
 
         .ta-list {
           display: grid;
-          gap: 16px;
+          gap: 18px;
         }
 
         .ta-card {
-          border: 1px solid var(--ta-line);
-          border-radius: 26px;
-          background:
-            radial-gradient(circle at 0 0, rgba(79, 70, 229, .06), transparent 32%),
-            #ffffff;
-          padding: 18px;
-          box-shadow: 0 14px 36px rgba(15, 23, 42, .07);
+          padding: clamp(17px, 2vw, 24px);
+          border-radius: 27px;
+          transition:
+            transform 210ms cubic-bezier(.22, 1, .36, 1),
+            box-shadow 210ms ease,
+            border-color 210ms ease;
         }
 
         .ta-card-top {
@@ -1120,24 +1395,26 @@ async function rejectRequest(row) {
         .ta-person {
           display: grid;
           grid-template-columns: auto minmax(0, 1fr);
-          gap: 12px;
+          gap: 13px;
           align-items: center;
           min-width: 0;
         }
 
         .ta-avatar {
-          width: 58px;
-          height: 58px;
-          border-radius: 20px;
+          width: 60px;
+          height: 60px;
           overflow: hidden;
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
-          color: var(--ta-primary);
-          border: 3px solid #ffffff;
-          box-shadow: 0 12px 26px rgba(15, 23, 42, .12);
-          font-weight: 900;
           flex: 0 0 auto;
+          border: 3px solid #fff;
+          border-radius: 20px;
+          color: #40348d;
+          background: linear-gradient(145deg, #edf6ff, #eaf8f4);
+          box-shadow:
+            5px 6px 0 #b9d7ff,
+            0 13px 26px rgba(34, 38, 110, .12);
+          font-weight: 900;
         }
 
         .ta-avatar img {
@@ -1156,93 +1433,121 @@ async function rejectRequest(row) {
         .ta-person span,
         .ta-person small {
           display: block;
-          color: var(--ta-muted);
           margin-top: 3px;
+          color: var(--ta-copy);
           font-size: 12px;
           font-weight: 750;
         }
 
         .ta-stage-pill {
-          border-radius: 999px;
           padding: 9px 13px;
-          font-size: 12px;
-          font-weight: 900;
-          border: 1px solid var(--ta-line);
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 999px;
+          color: var(--ta-copy);
           background: #f8fafc;
-          color: var(--ta-muted);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
+          font-size: 11px;
+          font-weight: 900;
         }
 
         .ta-stage-pill.team {
-          border-color: rgba(79, 70, 229, .24);
-          background: #eef2ff;
-          color: var(--ta-primary);
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .ta-stage-pill.reporting {
-          border-color: rgba(2, 132, 199, .24);
-          background: #e0f2fe;
-          color: var(--ta-info);
+          color: #245da8;
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .ta-stage-pill.hr {
-          border-color: rgba(217, 119, 6, .24);
-          background: #fffbeb;
-          color: var(--ta-warning);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
         }
 
         .ta-stage-pill.approved {
-          border-color: rgba(5, 150, 105, .24);
-          background: #ecfdf5;
-          color: var(--ta-success);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .ta-stage-pill.rejected {
-          border-color: rgba(225, 29, 72, .24);
-          background: #fff1f2;
-          color: var(--ta-danger);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
         }
 
         .ta-details-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 10px;
-          margin-top: 16px;
+          margin-top: 17px;
         }
 
         .ta-details-grid > div {
-          border: 1px solid var(--ta-line);
-          border-radius: 16px;
-          background: #f8fafc;
-          padding: 11px;
           min-width: 0;
+          padding: 12px;
+          border: 1px solid rgba(162, 169, 196, .46);
+          border-radius: 16px;
+          background: rgba(255, 255, 255, .84);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+        }
+
+        .ta-details-grid > div:nth-child(4n + 1) {
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #b9d7ff;
+        }
+
+        .ta-details-grid > div:nth-child(4n + 2) {
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .ta-details-grid > div:nth-child(4n + 3) {
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .ta-details-grid > div:nth-child(4n + 4) {
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .ta-details-grid span,
         .ta-reason span {
           display: block;
-          color: var(--ta-muted);
-          font-size: 11px;
-          font-weight: 900;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
           text-transform: uppercase;
-          letter-spacing: .06em;
+          letter-spacing: .08em;
         }
 
         .ta-details-grid strong {
           display: block;
-          margin-top: 6px;
-          color: var(--ta-ink);
-          font-size: 13px;
+          margin-top: 7px;
           overflow: hidden;
+          color: var(--ta-ink);
           text-overflow: ellipsis;
           white-space: nowrap;
+          font-size: 13px;
+        }
+
+        .ta-reason,
+        .ta-timeline,
+        .ta-empty-line {
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: linear-gradient(145deg, #f8fbff, #f7f4ff);
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
         }
 
         .ta-reason {
-          border: 1px solid var(--ta-line);
-          border-radius: 18px;
-          background: #ffffff;
-          padding: 13px;
-          margin-top: 12px;
+          padding: 14px;
+          margin-top: 13px;
         }
 
         .ta-reason p {
@@ -1251,42 +1556,49 @@ async function rejectRequest(row) {
           line-height: 1.6;
         }
 
+        .ta-reason a {
+          color: var(--ta-violet);
+          font-weight: 900;
+        }
+
         .ta-approval-flags {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 10px;
-          margin-top: 12px;
+          margin-top: 13px;
         }
 
         .ta-approval-flags > div {
-          border: 1px solid var(--ta-line);
-          border-radius: 16px;
-          background: #f8fafc;
-          padding: 11px;
           display: grid;
           grid-template-columns: auto minmax(0, 1fr);
           gap: 9px;
           align-items: start;
-          color: var(--ta-muted);
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 16px;
+          color: var(--ta-copy);
+          background: #f8fafc;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
         }
 
         .ta-approval-flags > div.done {
-          border-color: rgba(5, 150, 105, .24);
-          background: #ecfdf5;
-          color: var(--ta-success);
+          border-color: rgba(52, 201, 196, .36);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .ta-approval-flags span {
           display: block;
           color: var(--ta-ink);
-          font-weight: 900;
           font-size: 13px;
+          font-weight: 900;
         }
 
         .ta-approval-flags small {
           display: block;
           margin-top: 3px;
-          color: var(--ta-muted);
+          color: var(--ta-copy);
           font-weight: 700;
           line-height: 1.35;
         }
@@ -1296,10 +1608,7 @@ async function rejectRequest(row) {
           display: grid;
           gap: 10px;
           margin-top: 13px;
-          padding: 12px;
-          border: 1px solid var(--ta-line);
-          border-radius: 18px;
-          background: #f8fafc;
+          padding: 13px;
         }
 
         .ta-timeline-item {
@@ -1311,10 +1620,10 @@ async function rejectRequest(row) {
         .ta-timeline-dot {
           width: 12px;
           height: 12px;
-          border-radius: 999px;
           margin-top: 4px;
-          background: linear-gradient(135deg, var(--ta-primary), var(--ta-success));
-          box-shadow: 0 0 0 4px rgba(79, 70, 229, .10);
+          border-radius: 999px;
+          background: linear-gradient(135deg, #6658dc, #34c9c4);
+          box-shadow: 0 0 0 4px rgba(102, 88, 220, .10);
         }
 
         .ta-timeline-item strong {
@@ -1327,18 +1636,15 @@ async function rejectRequest(row) {
         .ta-timeline-item small {
           display: block;
           margin-top: 3px;
-          color: var(--ta-muted);
+          color: var(--ta-copy);
           font-size: 12px;
           line-height: 1.4;
         }
 
         .ta-empty-line {
           margin-top: 13px;
-          border: 1px dashed var(--ta-line);
-          border-radius: 16px;
           padding: 12px;
-          color: var(--ta-muted);
-          background: #f8fafc;
+          color: var(--ta-copy);
           font-weight: 800;
         }
 
@@ -1347,7 +1653,7 @@ async function rejectRequest(row) {
           justify-content: flex-end;
           gap: 10px;
           flex-wrap: wrap;
-          margin-top: 14px;
+          margin-top: 15px;
         }
 
         .ta-actions button {
@@ -1358,83 +1664,34 @@ async function rejectRequest(row) {
         }
 
         .ta-closed-note {
-          color: var(--ta-muted);
+          color: var(--ta-copy);
           font-weight: 800;
         }
 
         .ta-empty {
-          border: 1px dashed var(--ta-line);
-          border-radius: 24px;
-          background: #ffffff;
           padding: 28px;
+          border: 1px dashed rgba(102, 88, 220, .34);
+          border-radius: 24px;
+          color: var(--ta-copy);
+          background: linear-gradient(145deg, #f8f7ff, #effbf8);
           text-align: center;
-          color: var(--ta-muted);
           font-weight: 800;
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .07);
         }
 
-        .ta-field-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 14px;
+        @keyframes taHeroIconFloat {
+          0%, 100% { transform: translateY(0) rotate(0deg); }
+          50% { transform: translateY(-5px) rotate(-3deg); }
         }
 
-        .ta-field-card {
-          border: 1px solid var(--ta-line);
-          border-radius: 22px;
-          background: #ffffff;
-          padding: 14px;
-          box-shadow: 0 12px 30px rgba(15, 23, 42, .06);
+        @keyframes taRefreshIdle {
+          0%, 84% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
 
-        .ta-field-card h3 {
-          margin: 0;
-          color: var(--ta-ink);
-          font-size: 16px;
+        @keyframes taSpin {
+          to { transform: rotate(360deg); }
         }
-
-        .ta-field-card p {
-          margin: 6px 0 0;
-          color: var(--ta-muted);
-          font-size: 13px;
-          line-height: 1.5;
-          font-weight: 700;
-        }
-
-        .ta-field-photo {
-          margin-top: 12px;
-          width: 100%;
-          height: 180px;
-          border-radius: 18px;
-          overflow: hidden;
-          border: 1px solid var(--ta-line);
-          background: #f8fafc;
-        }
-
-        .ta-field-photo img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
-
-        .ta-field-actions {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-          margin-top: 12px;
-        }
-
-        .ta-field-actions a {
-          border: 1px solid var(--ta-line);
-          border-radius: 999px;
-          padding: 8px 11px;
-          color: var(--ta-primary);
-          background: #eef2ff;
-          font-weight: 900;
-          font-size: 12px;
-          text-decoration: none;
-        }
-
 
         @media (max-width: 1180px) {
           .ta-kpis {
@@ -1444,28 +1701,53 @@ async function rejectRequest(row) {
           .ta-details-grid {
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }
+
+          .ta-field-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 760px) {
+          .team-approvals-page {
+            gap: 18px;
+          }
+
           .ta-hero {
             grid-template-columns: 1fr;
-            border-radius: 22px;
-            padding: 18px;
-        .ta-field-grid {
-            grid-template-columns: 1fr;
-            }   
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow:
+              6px 7px 0 #c6d8f7,
+              0 18px 30px rgba(34, 38, 110, .10);
+          }
+
+          .ta-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
           }
 
           .ta-hero-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 20px;
+            width: 68px;
+            height: 68px;
+            border-radius: 21px;
           }
 
           .ta-kpis,
           .ta-details-grid,
-          .ta-approval-flags {
+          .ta-approval-flags,
+          .ta-field-grid {
             grid-template-columns: 1fr;
+          }
+
+          .ta-kpi,
+          .ta-toolbar,
+          .team-approvals-page .panel,
+          .ta-card,
+          .ta-field-card {
+            border-radius: 22px;
+            box-shadow:
+              5px 6px 0 #c4ccff,
+              0 17px 28px rgba(34, 38, 110, .09);
           }
 
           .ta-toolbar {
@@ -1481,8 +1763,7 @@ async function rejectRequest(row) {
           }
 
           .ta-card {
-            border-radius: 22px;
-            padding: 14px;
+            padding: 15px;
           }
 
           .ta-actions {
@@ -1492,17 +1773,87 @@ async function rejectRequest(row) {
           .ta-actions button {
             width: 100%;
           }
+
+          .team-approvals-page .toolbar {
+            align-items: stretch;
+          }
+
+          .team-approvals-page .toolbar > button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .ta-hero {
+            padding: 16px;
+          }
+
+          .ta-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .ta-kpis {
+            gap: 12px;
+          }
+
+          .ta-kpi {
+            min-height: 106px;
+            padding: 15px;
+          }
+
+          .ta-filter {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .ta-filter button {
+            width: 100%;
+          }
+
+          .ta-card-top {
+            align-items: stretch;
+          }
+
+          .ta-stage-pill {
+            align-self: flex-start;
+          }
+
+          .ta-details-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .ta-role-pill {
+            border-radius: 18px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .team-approvals-page *,
+          .team-approvals-page *::before,
+          .team-approvals-page *::after {
+            animation: none !important;
+            transition: none !important;
+          }
         }
       `}</style>
 
       <section className="ta-hero">
         <div>
-          <span className="kicker">
+          <span className="ta-page-kicker">
+            <Sparkles size={13} />
             {isHrPanel ? 'HR Leave Records' : 'Team Approvals'}
           </span>
 
           <h1>
-            {isHrPanel ? 'Leave Record & Approval Panel' : 'Leave Approval Inbox'}
+            {isHrPanel ? (
+              <>
+                Leave records, <em>clearly.</em>
+              </>
+            ) : (
+              <>
+                Approval decisions, <em>connected.</em>
+              </>
+            )}
           </h1>
 
           <p>
@@ -1530,6 +1881,7 @@ async function rejectRequest(row) {
               >
                 <RefreshCcw size={16} />
                 {loading || loadingTeamField ? 'Refreshing...' : 'Refresh'}
+                <ArrowUpRight size={15} />
               </button>
 
             <button
@@ -1610,9 +1962,10 @@ async function rejectRequest(row) {
         </div>
       </section>
 
-<section className="panel">
+<section className="panel ta-section-panel">
   <div className="toolbar">
     <div>
+      <span className="ta-section-kicker">Field Operations</span>
       <h3>Team Field Attendance</h3>
       <p>
         Shows field check-ins from your mapped team members with visit place,

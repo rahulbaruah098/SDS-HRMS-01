@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowUpRight,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  MapPin,
+  RefreshCcw,
+  Send,
+  Sparkles,
+  UserCheck,
+  XCircle,
+} from 'lucide-react';
+import {
   api,
   buildQuery,
   createHolidayWorkRequest,
@@ -293,6 +305,7 @@ function RequestCard({ row, canManage, decidingId, onDecision }) {
             disabled={decidingId === row._id}
             onClick={() => onDecision(row, 'approved')}
           >
+            <CheckCircle2 size={15} />
             {decidingId === row._id ? 'Updating...' : 'Approve'}
           </button>
 
@@ -302,6 +315,7 @@ function RequestCard({ row, canManage, decidingId, onDecision }) {
             disabled={decidingId === row._id}
             onClick={() => onDecision(row, 'rejected')}
           >
+            <XCircle size={15} />
             Reject
           </button>
         </div>
@@ -496,90 +510,200 @@ export default function HolidayWorkRequests({ user }) {
       <style>
         {`
           .hwr-page {
+            --hwr-ink: #101a3a;
+            --hwr-copy: #5d6d8d;
+            --hwr-violet: #6658dc;
+            --hwr-violet-deep: #40348d;
+            --hwr-blue: #3766db;
+            --hwr-cyan: #18b5c8;
+            --hwr-teal: #34c9c4;
+            --hwr-yellow: #d8ff43;
+            --hwr-danger: #d84d68;
+            --hwr-line: rgba(16, 26, 58, .14);
             display: grid;
-            gap: 26px;
+            gap: clamp(18px, 2vw, 26px);
+            color: var(--hwr-ink);
           }
 
           .hwr-hero {
             position: relative;
+            isolation: isolate;
             overflow: hidden;
-            border: 1px solid #E2E8F0;
-            border-radius: 32px;
-            padding: 34px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: clamp(22px, 3vw, 40px);
+            align-items: center;
+            min-height: 275px;
+            padding: clamp(25px, 3vw, 42px);
+            border: 1px solid rgba(154, 164, 205, .58);
+            border-radius: clamp(28px, 2.7vw, 40px);
             background:
-              radial-gradient(circle at top left, rgba(79, 70, 229, 0.12), transparent 34%),
-              radial-gradient(circle at top right, rgba(14, 165, 233, 0.10), transparent 32%),
-              linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
-            box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
-            display: flex;
-            justify-content: space-between;
-            gap: 24px;
+              radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
+              radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
+              linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+            box-shadow:
+              12px 14px 0 #c6d8f7,
+              0 28px 48px rgba(34, 38, 110, .13);
+          }
+
+          .hwr-hero::before {
+            content: "";
+            position: absolute;
+            z-index: -1;
+            width: 175px;
+            height: 175px;
+            right: 8%;
+            bottom: -98px;
+            border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
+            background: linear-gradient(
+              145deg,
+              rgba(105, 217, 208, .30),
+              rgba(132, 181, 241, .28)
+            );
+            transform: rotate(-18deg);
+          }
+
+          .hwr-eyebrow,
+          .hwr-section-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            width: max-content;
+            max-width: 100%;
+            border-radius: 999px;
+            color: #fff;
+            background: #342b78;
+            font-size: 9px;
+            font-weight: 950;
+            line-height: 1;
+            letter-spacing: .12em;
+            text-transform: uppercase;
           }
 
           .hwr-eyebrow {
-            display: inline-flex;
-            padding: 8px 13px;
-            border-radius: 999px;
-            background: #EEF2FF;
-            color: #4338CA;
-            font-size: 12px;
-            font-weight: 950;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            margin-bottom: 14px;
+            margin-bottom: 15px;
+            padding: 9px 13px;
+            box-shadow: 4px 5px 0 #18b5c8;
+          }
+
+          .hwr-section-kicker {
+            margin-bottom: 10px;
+            padding: 7px 10px;
+            box-shadow: 3px 4px 0 #18b5c8;
           }
 
           .hwr-hero h1 {
+            max-width: 900px;
             margin: 0;
-            color: #0F172A;
-            font-size: clamp(34px, 4vw, 52px);
-            line-height: 1;
-            letter-spacing: -0.06em;
+            color: var(--hwr-ink);
+            font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+            font-size: clamp(44px, 5.2vw, 77px);
+            font-weight: 760;
+            line-height: .94;
+            letter-spacing: -.058em;
+          }
+
+          .hwr-hero h1 em {
+            color: var(--hwr-violet);
+            font-family: Georgia, "Times New Roman", serif;
+            font-weight: 500;
           }
 
           .hwr-hero p {
-            margin: 16px 0 0;
-            max-width: 820px;
-            color: #64748B;
-            font-size: 15px;
-            line-height: 1.7;
+            max-width: 830px;
+            margin: 17px 0 0;
+            color: var(--hwr-copy);
+            font-size: clamp(13px, 1vw, 16px);
+            line-height: 1.68;
           }
 
           .hwr-refresh {
-            height: 48px;
-            padding: 0 20px;
-            border-radius: 16px;
-            border: 1px solid #C7D2FE;
-            background: #FFFFFF;
-            color: #4338CA;
+            min-height: 54px;
+            padding: 0 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            border: 1px solid rgba(65, 55, 161, .18);
+            border-radius: 18px;
+            color: #40348d;
+            background: rgba(255, 255, 255, .90);
+            box-shadow:
+              6px 7px 0 #b9d7ff,
+              0 14px 25px rgba(44, 75, 116, .10);
             font-weight: 900;
             cursor: pointer;
             white-space: nowrap;
+            transition:
+              transform 190ms cubic-bezier(.22,1,.36,1),
+              box-shadow 190ms ease;
+          }
+
+          .hwr-refresh svg:first-child {
+            animation: hwrRefreshIdle 4.2s linear infinite;
+          }
+
+          .hwr-refresh:disabled svg:first-child {
+            animation: hwrSpin 1s linear infinite;
+          }
+
+          .hwr-refresh:hover {
+            transform: translateY(-3px);
+            box-shadow:
+              8px 9px 0 #b9d7ff,
+              0 18px 30px rgba(44, 75, 116, .14);
           }
 
           .hwr-alert {
             padding: 14px 16px;
+            border: 1px solid rgba(55, 102, 219, .24);
             border-radius: 18px;
-            border: 1px solid #BFDBFE;
-            background: #EFF6FF;
-            color: #1D4ED8;
-            font-weight: 750;
+            color: #245da8;
+            background: #edf6ff;
+            box-shadow: 4px 5px 0 #b9d7ff;
+            font-weight: 800;
           }
 
           .hwr-layout {
             display: grid;
-            grid-template-columns: minmax(360px, 0.82fr) minmax(0, 1.18fr);
+            grid-template-columns: minmax(350px, .82fr) minmax(0, 1.18fr);
             gap: 24px;
             align-items: start;
           }
 
+          .hwr-panel,
+          .hwr-request-card {
+            border: 1px solid rgba(171, 181, 211, .70);
+            background: linear-gradient(145deg, #ffffff, #f7fbff);
+            box-shadow:
+              8px 10px 0 #c4ccff,
+              0 24px 42px rgba(34, 38, 110, .10);
+            transition:
+              transform 210ms cubic-bezier(.22,1,.36,1),
+              box-shadow 210ms ease,
+              border-color 210ms ease;
+          }
+
           .hwr-panel {
-            border: 1px solid #E2E8F0;
-            border-radius: 28px;
-            background: #FFFFFF;
-            box-shadow: 0 14px 38px rgba(15, 23, 42, 0.07);
-            padding: 24px;
             min-width: 0;
+            padding: clamp(20px, 2vw, 28px);
+            border-radius: clamp(26px, 2.2vw, 36px);
+          }
+
+          .hwr-panel:first-child {
+            background:
+              radial-gradient(circle at 0% 0%, rgba(105, 217, 208, .14), transparent 28%),
+              radial-gradient(circle at 100% 0%, rgba(102, 88, 220, .12), transparent 30%),
+              linear-gradient(145deg, #ffffff, #f7fbff);
+          }
+
+          .hwr-panel:hover,
+          .hwr-request-card:hover {
+            border-color: rgba(102, 88, 220, .28);
+            transform: translateY(-3px);
+            box-shadow:
+              10px 12px 0 #c4ccff,
+              0 30px 50px rgba(34, 38, 110, .14);
           }
 
           .hwr-panel-head {
@@ -593,41 +717,59 @@ export default function HolidayWorkRequests({ user }) {
           .hwr-panel-head h2,
           .hwr-panel-head h3 {
             margin: 0;
-            color: #0F172A;
-            font-size: 24px;
-            letter-spacing: -0.035em;
+            color: var(--hwr-ink);
+            font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+            font-size: clamp(25px, 2.3vw, 37px);
+            font-weight: 760;
+            line-height: 1;
+            letter-spacing: -.045em;
           }
 
           .hwr-panel-head p {
             margin: 7px 0 0;
-            color: #64748B;
-            line-height: 1.55;
+            color: var(--hwr-copy);
+            line-height: 1.58;
           }
 
           .hwr-chip {
             padding: 8px 12px;
+            border: 1px solid rgba(102, 88, 220, .20);
             border-radius: 999px;
-            background: #F8FAFC;
-            color: #475569;
-            border: 1px solid #E2E8F0;
-            font-size: 12px;
-            font-weight: 850;
+            color: #40348d;
+            background: #f1efff;
+            box-shadow: 3px 4px 0 #c9c0ff;
+            font-size: 11px;
+            font-weight: 900;
             white-space: nowrap;
           }
 
           .hwr-profile-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
+            gap: 11px;
             margin-bottom: 18px;
           }
 
-          .hwr-profile-grid div {
-            border: 1px solid #E2E8F0;
-            background: #F8FAFC;
-            border-radius: 18px;
-            padding: 13px;
+          .hwr-profile-grid div,
+          .hwr-request-grid div {
             min-width: 0;
+            padding: 13px;
+            border: 1px solid rgba(162, 169, 196, .46);
+            border-radius: 17px;
+            background: #edf6ff;
+            box-shadow: 3px 4px 0 #b9d7ff;
+          }
+
+          .hwr-profile-grid div:nth-child(2n),
+          .hwr-request-grid div:nth-child(2n) {
+            background: #eaf8f4;
+            box-shadow: 3px 4px 0 #aee6d9;
+          }
+
+          .hwr-profile-grid div:nth-child(3n),
+          .hwr-request-grid div:nth-child(3n) {
+            background: #fff4d5;
+            box-shadow: 3px 4px 0 #ffe0a5;
           }
 
           .hwr-profile-grid span,
@@ -635,19 +777,19 @@ export default function HolidayWorkRequests({ user }) {
           .hwr-reason-box span,
           .hwr-location-box span {
             display: block;
-            color: #64748B;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
             margin-bottom: 6px;
+            color: #5d6785;
+            font-size: 9px;
+            font-weight: 950;
+            letter-spacing: .08em;
+            text-transform: uppercase;
           }
 
           .hwr-profile-grid strong,
           .hwr-request-grid strong {
             display: block;
-            color: #0F172A;
-            font-size: 14px;
+            color: var(--hwr-ink);
+            font-size: 13px;
             overflow-wrap: anywhere;
           }
 
@@ -659,8 +801,8 @@ export default function HolidayWorkRequests({ user }) {
           .hwr-field label {
             display: block;
             margin-bottom: 8px;
-            color: #475569;
-            font-size: 13px;
+            color: #303b5b;
+            font-size: 11px;
             font-weight: 900;
           }
 
@@ -668,14 +810,18 @@ export default function HolidayWorkRequests({ user }) {
           .hwr-field input,
           .hwr-field textarea {
             width: 100%;
-            min-height: 48px;
-            border-radius: 16px;
-            border: 1px solid #CBD5E1;
-            background: #FFFFFF;
-            color: #0F172A;
+            min-height: 49px;
             padding: 0 14px;
-            outline: none;
-            font-size: 14px;
+            border: 1px solid rgba(151, 161, 197, .58);
+            border-radius: 15px;
+            outline: 0;
+            color: var(--hwr-ink);
+            background: rgba(255, 255, 255, .94);
+            font-size: 13px;
+            transition:
+              border-color 170ms ease,
+              box-shadow 170ms ease,
+              transform 170ms ease;
           }
 
           .hwr-field textarea {
@@ -687,83 +833,110 @@ export default function HolidayWorkRequests({ user }) {
           .hwr-field select:focus,
           .hwr-field input:focus,
           .hwr-field textarea:focus {
-            border-color: #818CF8;
-            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+            border-color: rgba(102, 88, 220, .65);
+            box-shadow:
+              4px 5px 0 rgba(102, 88, 220, .14),
+              0 0 0 4px rgba(102, 88, 220, .08);
+            transform: translateY(-1px);
           }
 
           .hwr-selected-holiday {
-            border: 1px solid #C7D2FE;
-            background: #EEF2FF;
-            color: #4338CA;
-            border-radius: 18px;
             padding: 14px;
-            line-height: 1.45;
+            border: 1px solid rgba(102, 88, 220, .22);
+            border-radius: 18px;
+            color: #40348d;
+            background: linear-gradient(145deg, #f1efff, #eef9ff);
+            box-shadow: 4px 5px 0 #c9c0ff;
+            line-height: 1.48;
           }
 
           .hwr-selected-holiday strong {
             display: block;
-            color: #312E81;
             margin-bottom: 4px;
+            color: #312e81;
+          }
+
+          .hwr-submit,
+          .hwr-filter-form button,
+          .hwr-actions button {
+            border: 0;
+            cursor: pointer;
+            border-radius: 15px;
+            font-weight: 900;
+            transition:
+              transform 190ms cubic-bezier(.22,1,.36,1),
+              box-shadow 190ms ease,
+              filter 190ms ease;
           }
 
           .hwr-submit {
-            min-height: 50px;
-            border: 0;
-            border-radius: 17px;
-            background: linear-gradient(135deg, #4F46E5, #2563EB);
-            color: #FFFFFF;
-            font-weight: 950;
-            cursor: pointer;
-            box-shadow: 0 16px 32px rgba(37, 99, 235, 0.22);
+            min-height: 52px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            color: #fff;
+            background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+            box-shadow:
+              5px 6px 0 #a9d6f5,
+              0 14px 25px rgba(36, 74, 128, .16);
+          }
+
+          .hwr-submit svg {
+            animation: hwrSendFloat 2.8s ease-in-out infinite;
+          }
+
+          .hwr-submit:hover,
+          .hwr-filter-form button:hover,
+          .hwr-actions button:hover {
+            transform: translateY(-2px);
+            filter: saturate(1.04);
           }
 
           .hwr-submit:disabled,
-          .hwr-refresh:disabled {
-            opacity: 0.7;
+          .hwr-refresh:disabled,
+          .hwr-actions button:disabled {
+            opacity: .68;
             cursor: not-allowed;
+            transform: none;
           }
 
           .hwr-filter-form {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 10px;
-            padding: 12px;
-            border-radius: 20px;
-            border: 1px solid #E2E8F0;
-            background: #F8FAFC;
             margin-bottom: 18px;
+            padding: 12px;
+            border: 1px solid rgba(171, 181, 211, .55);
+            border-radius: 20px;
+            background: linear-gradient(145deg, #f8fbff, #f7f4ff);
+            box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
           }
 
           .hwr-filter-form select,
           .hwr-filter-form input {
             min-height: 44px;
-            border-radius: 14px;
-            border: 1px solid #CBD5E1;
-            background: #FFFFFF;
-            color: #0F172A;
             padding: 0 12px;
+            border: 1px solid rgba(151, 161, 197, .58);
+            border-radius: 14px;
+            color: var(--hwr-ink);
+            background: #fff;
           }
 
           .hwr-filter-form button {
-            border: 0;
-            border-radius: 14px;
-            background: #0F172A;
-            color: #FFFFFF;
-            font-weight: 900;
-            cursor: pointer;
+            color: #fff;
+            background: #342b78;
+            box-shadow: 4px 5px 0 #18b5c8;
           }
 
           .hwr-list {
             display: grid;
-            gap: 14px;
+            gap: 16px;
           }
 
           .hwr-request-card {
-            border: 1px solid #E2E8F0;
-            border-radius: 24px;
-            background: #FFFFFF;
             padding: 18px;
-            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.055);
+            border-radius: 25px;
           }
 
           .hwr-request-top {
@@ -776,57 +949,62 @@ export default function HolidayWorkRequests({ user }) {
 
           .hwr-request-id {
             display: inline-flex;
+            margin-bottom: 8px;
             padding: 6px 9px;
             border-radius: 999px;
-            background: #EEF2FF;
-            color: #4338CA;
-            font-size: 10px;
+            color: #40348d;
+            background: #f1efff;
+            box-shadow: 2px 3px 0 #c9c0ff;
+            font-size: 9px;
             font-weight: 950;
-            letter-spacing: 0.08em;
+            letter-spacing: .08em;
             text-transform: uppercase;
-            margin-bottom: 8px;
           }
 
           .hwr-request-card h3 {
             margin: 0;
-            color: #0F172A;
-            font-size: 20px;
+            color: var(--hwr-ink);
+            font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+            font-size: clamp(20px, 2vw, 28px);
+            font-weight: 760;
+            letter-spacing: -.035em;
           }
 
           .hwr-request-card p {
             margin: 5px 0 0;
-            color: #64748B;
+            color: var(--hwr-copy);
             line-height: 1.55;
           }
 
           .hwr-status {
             padding: 8px 11px;
+            border: 1px solid rgba(171, 181, 211, .62);
             border-radius: 999px;
-            font-size: 12px;
+            color: var(--hwr-copy);
+            background: #f8fafc;
+            box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
+            font-size: 11px;
             font-weight: 950;
             text-transform: capitalize;
-            border: 1px solid #E2E8F0;
-            background: #F8FAFC;
-            color: #475569;
             white-space: nowrap;
           }
 
           .hwr-status.pending {
-            background: #FFFBEB;
-            color: #B45309;
-            border-color: #FDE68A;
+            color: #9a6817;
+            background: #fff4d5;
+            box-shadow: 3px 4px 0 #ffe0a5;
           }
 
           .hwr-status.approved {
-            background: #ECFDF5;
             color: #047857;
-            border-color: #A7F3D0;
+            background: #eaf8f4;
+            box-shadow: 3px 4px 0 #aee6d9;
           }
 
           .hwr-status.rejected {
-            background: #FFF1F2;
-            color: #BE123C;
-            border-color: #FECDD3;
+            color: #a2344d;
+            background: #fff0f2;
+            box-shadow: 3px 4px 0 #f2c2cc;
           }
 
           .hwr-request-grid {
@@ -836,44 +1014,53 @@ export default function HolidayWorkRequests({ user }) {
             margin-bottom: 12px;
           }
 
-          .hwr-request-grid div {
-            border-radius: 16px;
-            border: 1px solid #E2E8F0;
-            background: #F8FAFC;
-            padding: 12px;
-            min-width: 0;
-          }
-
           .hwr-reason-box,
           .hwr-location-box {
             margin-top: 10px;
-            border-radius: 16px;
-            border: 1px solid #E2E8F0;
-            background: #FFFFFF;
             padding: 12px;
+            border: 1px solid rgba(171, 181, 211, .55);
+            border-radius: 16px;
+            background: linear-gradient(145deg, #f8fbff, #f7f4ff);
+            box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
           }
 
           .hwr-reason-box p,
           .hwr-location-box p {
             margin: 0;
-            color: #334155;
+            color: var(--hwr-ink);
             overflow-wrap: anywhere;
           }
 
+          .hwr-location-box {
+            position: relative;
+          }
+
+          .hwr-location-box::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            margin-right: 7px;
+            border-radius: 999px;
+            background: var(--hwr-teal);
+            box-shadow: 0 0 0 4px rgba(52, 201, 196, .10);
+          }
+
           .hwr-meta-line {
-            margin-top: 12px;
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            margin-top: 12px;
           }
 
           .hwr-meta-line span {
-            border-radius: 999px;
-            background: #F8FAFC;
-            border: 1px solid #E2E8F0;
-            color: #64748B;
             padding: 7px 10px;
-            font-size: 12px;
+            border: 1px solid rgba(171, 181, 211, .55);
+            border-radius: 999px;
+            color: var(--hwr-copy);
+            background: #fff;
+            box-shadow: 2px 3px 0 rgba(52, 43, 120, .07);
+            font-size: 11px;
             font-weight: 800;
           }
 
@@ -885,31 +1072,48 @@ export default function HolidayWorkRequests({ user }) {
 
           .hwr-actions button {
             min-height: 42px;
-            border: 0;
-            border-radius: 14px;
             padding: 0 16px;
-            font-weight: 950;
-            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
           }
 
           .hwr-approve {
-            background: #DCFCE7;
-            color: #166534;
+            color: #047857;
+            background: #eaf8f4;
+            box-shadow: 3px 4px 0 #aee6d9;
           }
 
           .hwr-reject {
-            background: #FFE4E6;
-            color: #BE123C;
+            color: #a2344d;
+            background: #fff0f2;
+            box-shadow: 3px 4px 0 #f2c2cc;
           }
 
           .hwr-empty {
-            border: 1px dashed #CBD5E1;
-            background: #F8FAFC;
-            color: #64748B;
-            border-radius: 20px;
             padding: 24px;
+            border: 1px dashed rgba(102, 88, 220, .34);
+            border-radius: 20px;
+            color: var(--hwr-copy);
+            background: linear-gradient(145deg, #f8f7ff, #effbf8);
             text-align: center;
             font-weight: 800;
+            box-shadow: 4px 5px 0 rgba(52, 43, 120, .07);
+          }
+
+          @keyframes hwrRefreshIdle {
+            0%, 84% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+
+          @keyframes hwrSpin {
+            to { transform: rotate(360deg); }
+          }
+
+          @keyframes hwrSendFloat {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            50% { transform: translate(3px, -2px) rotate(4deg); }
           }
 
           @media (max-width: 1180px) {
@@ -927,17 +1131,33 @@ export default function HolidayWorkRequests({ user }) {
               gap: 18px;
             }
 
-            .hwr-hero,
+            .hwr-hero {
+              grid-template-columns: 1fr;
+              min-height: 0;
+              padding: 20px;
+              border-radius: 26px;
+              box-shadow:
+                6px 7px 0 #c6d8f7,
+                0 18px 30px rgba(34, 38, 110, .10);
+            }
+
+            .hwr-hero h1 {
+              font-size: clamp(36px, 10vw, 52px);
+            }
+
             .hwr-panel-head,
             .hwr-request-top {
               flex-direction: column;
               align-items: stretch;
             }
 
-            .hwr-hero,
-            .hwr-panel {
-              padding: 20px;
-              border-radius: 24px;
+            .hwr-panel,
+            .hwr-request-card {
+              padding: 18px;
+              border-radius: 22px;
+              box-shadow:
+                5px 6px 0 #c4ccff,
+                0 17px 28px rgba(34, 38, 110, .09);
             }
 
             .hwr-refresh,
@@ -956,18 +1176,56 @@ export default function HolidayWorkRequests({ user }) {
               display: grid;
               grid-template-columns: 1fr;
             }
+
+            .hwr-actions button {
+              width: 100%;
+            }
+          }
+
+          @media (max-width: 430px) {
+            .hwr-hero {
+              padding: 16px;
+            }
+
+            .hwr-hero h1 {
+              font-size: clamp(32px, 11vw, 44px);
+            }
+
+            .hwr-panel,
+            .hwr-request-card {
+              padding: 15px;
+            }
+
+            .hwr-chip,
+            .hwr-status {
+              align-self: flex-start;
+            }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .hwr-page *,
+            .hwr-page *::before,
+            .hwr-page *::after {
+              animation: none !important;
+              transition: none !important;
+            }
           }
         `}
       </style>
 
       <section className="hwr-hero">
         <div>
-          <span className="hwr-eyebrow">Holiday Work</span>
-          <h1>Holiday Work Requests</h1>
+          <span className="hwr-eyebrow">
+            <Sparkles size={13} />
+            Holiday Work
+          </span>
+          <h1>
+            Holiday work, <em>clearly managed.</em>
+          </h1>
           <p>
-            Apply for holiday work using upcoming holiday dates only. Employee
-            details, team leader and reporting officer information are taken from
-            your profile automatically, so no internal ID entry is required.
+            Apply using upcoming holidays only. Your employee profile, Team
+            Leader and Reporting Officer details remain auto-filled, while
+            approvals and status stay connected in one YourComate workspace.
           </p>
         </div>
 
@@ -977,7 +1235,9 @@ export default function HolidayWorkRequests({ user }) {
           disabled={loadingPage}
           onClick={refreshPage}
         >
+          <RefreshCcw size={16} />
           {loadingPage ? 'Refreshing...' : 'Refresh'}
+          <ArrowUpRight size={15} />
         </button>
       </section>
 
@@ -987,6 +1247,10 @@ export default function HolidayWorkRequests({ user }) {
         <div className="hwr-panel">
           <div className="hwr-panel-head">
             <div>
+              <span className="hwr-section-kicker">
+                <CalendarDays size={12} />
+                New Request
+              </span>
               <h2>Request Holiday Work</h2>
               <p>Select an upcoming holiday and submit a short reason.</p>
             </div>
@@ -1091,6 +1355,7 @@ export default function HolidayWorkRequests({ user }) {
               className="hwr-submit"
               disabled={submitting || !holidayOptions.length}
             >
+              <Send size={16} />
               {submitting ? 'Submitting...' : 'Submit Holiday Work Request'}
             </button>
           </form>
@@ -1099,6 +1364,10 @@ export default function HolidayWorkRequests({ user }) {
         <div className="hwr-panel">
           <div className="hwr-panel-head">
             <div>
+              <span className="hwr-section-kicker">
+                <UserCheck size={12} />
+                {canManage ? 'Approval Queue' : 'Request History'}
+              </span>
               <h3>{canManage ? 'Requests & Approvals' : 'My Requests'}</h3>
               <p>
                 {canManage

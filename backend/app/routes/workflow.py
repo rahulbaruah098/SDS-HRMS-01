@@ -5076,10 +5076,22 @@ def leave_request_options():
         .limit(500)
     )
 
+    leave_balances = list(
+        db.leave_balances
+        .find({
+            "tenant_id": tenant_id,
+            "employee_id": str(employee["_id"]),
+            "leave_type": {"$in": ["CL", "EL"]},
+            "is_deleted": {"$ne": True},
+        })
+        .sort("leave_type", 1)
+    )
+
     return jsonify({
         "members": clean_doc(members),
         "task_handover_options": clean_doc(members),
         "projects": clean_doc(projects),
+        "leave_balances": clean_doc(leave_balances),
     })
 
 

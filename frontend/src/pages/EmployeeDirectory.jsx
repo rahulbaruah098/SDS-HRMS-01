@@ -217,57 +217,76 @@ const employeeOrganisation = String(
     <div className="employee-directory-page">
       <style>{`
         .employee-directory-page {
+          --directory-ink: #101a3a;
+          --directory-ink-soft: #596483;
+          --directory-violet: #6254da;
+          --directory-violet-deep: #342b78;
+          --directory-blue: #3766db;
+          --directory-teal: #18aaa8;
+          --directory-sky: #edf8ff;
+          --directory-lilac: #f1efff;
+          --directory-flat-blue: #b9d7ff;
+          --directory-flat-violet: #c9c0ff;
+          --directory-flat-teal: #aee6d9;
+
           position: relative;
           min-height: 100%;
-          color: #10231d;
+          width: 100%;
+          color: var(--directory-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
         .employee-directory-hero {
           position: relative;
+          isolation: isolate;
           overflow: hidden;
-          border-radius: 30px;
-          padding: 26px;
-          background:
-            radial-gradient(circle at top left, rgba(24, 139, 96, 0.28), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(10, 83, 61, 0.24), transparent 36%),
-            linear-gradient(135deg, #f7fffb 0%, #e7f7ee 48%, #ffffff 100%);
-          border: 1px solid rgba(13, 94, 67, 0.12);
-          box-shadow: 0 24px 70px rgba(12, 70, 51, 0.13);
           margin-bottom: 22px;
-        }
-
-        .employee-directory-hero::before,
-        .employee-directory-hero::after {
-          content: "";
-          position: absolute;
-          border-radius: 999px;
-          pointer-events: none;
+          padding: clamp(24px, 2.8vw, 36px);
+          border: 1px solid rgba(171, 181, 211, 0.72);
+          border-radius: clamp(28px, 2.5vw, 40px);
+          background:
+            radial-gradient(circle at 8% 8%, rgba(121, 219, 238, 0.34), transparent 31%),
+            radial-gradient(circle at 92% 12%, rgba(191, 190, 249, 0.3), transparent 34%),
+            linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%);
+          box-shadow:
+            12px 14px 0 var(--directory-flat-blue),
+            0 28px 48px rgba(34, 38, 110, 0.13);
         }
 
         .employee-directory-hero::before {
-          width: 230px;
-          height: 230px;
-          top: -90px;
-          right: 9%;
-          background: rgba(255, 255, 255, 0.68);
-          filter: blur(2px);
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -2;
+          pointer-events: none;
+          opacity: 0.42;
+          background-image:
+            linear-gradient(rgba(65, 55, 161, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(65, 55, 161, 0.035) 1px, transparent 1px);
+          background-size: 42px 42px;
         }
 
         .employee-directory-hero::after {
-          width: 150px;
-          height: 150px;
-          bottom: -70px;
-          left: 18%;
-          background: rgba(9, 92, 65, 0.12);
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: clamp(165px, 20vw, 290px);
+          aspect-ratio: 1;
+          right: clamp(-110px, -7vw, -55px);
+          top: clamp(-118px, -8vw, -60px);
+          border: 1px solid rgba(65, 55, 161, 0.12);
+          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
+          background: linear-gradient(145deg, rgba(105, 217, 208, 0.72), rgba(121, 189, 242, 0.72));
+          transform: rotate(18deg);
         }
 
         .employee-directory-hero-content {
           position: relative;
-          z-index: 1;
+          z-index: 2;
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
-          gap: 18px;
           align-items: center;
+          gap: 26px;
         }
 
         .employee-directory-kicker {
@@ -275,159 +294,213 @@ const employeeOrganisation = String(
           align-items: center;
           gap: 8px;
           width: fit-content;
-          padding: 8px 12px;
+          max-width: 100%;
+          padding: 9px 13px;
           border-radius: 999px;
-          background: rgba(255, 255, 255, 0.78);
-          color: #0b4d3a;
-          font-weight: 800;
-          font-size: 12px;
-          letter-spacing: 0.08em;
+          color: #ffffff;
+          background: var(--directory-violet-deep);
+          font-size: clamp(8px, 0.7vw, 10px);
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          border: 1px solid rgba(13, 94, 67, 0.12);
         }
 
         .employee-directory-title {
-          margin: 14px 0 8px;
-          font-size: clamp(28px, 4vw, 46px);
-          line-height: 1.02;
-          letter-spacing: -0.05em;
-          color: #092f24;
-          font-weight: 950;
+          max-width: 820px;
+          margin: 15px 0 9px;
+          color: var(--directory-ink);
+          font-family: var(--yc-display, var(--heading), inherit);
+          font-size: clamp(34px, 4.4vw, 66px);
+          font-weight: 760;
+          line-height: 0.94;
+          letter-spacing: -0.055em;
         }
 
         .employee-directory-subtitle {
-          max-width: 760px;
+          max-width: 780px;
           margin: 0;
-          color: #45665a;
-          font-size: 15px;
-          line-height: 1.65;
+          color: var(--directory-ink-soft);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
         }
 
         .employee-directory-stat-card {
           min-width: 210px;
-          padding: 18px;
-          border-radius: 24px;
-          background: rgba(255, 255, 255, 0.78);
-          border: 1px solid rgba(13, 94, 67, 0.12);
-          box-shadow: 0 18px 45px rgba(9, 70, 49, 0.12);
-          backdrop-filter: blur(16px);
+          padding: 20px;
+          border: 1px solid rgba(159, 169, 205, 0.58);
+          border-radius: 22px;
+          color: var(--directory-ink);
+          background: rgba(255, 255, 255, 0.86);
+          box-shadow:
+            7px 9px 0 var(--directory-flat-violet),
+            0 18px 30px rgba(15, 20, 75, 0.09);
         }
 
         .employee-directory-stat-icon {
-          width: 46px;
-          height: 46px;
           display: grid;
           place-items: center;
-          border-radius: 18px;
-          background: #0b4d3a;
-          color: #ffffff;
+          width: 46px;
+          height: 46px;
           margin-bottom: 14px;
+          border: 1px solid rgba(52, 43, 120, 0.15);
+          border-radius: 15px;
+          color: #ffffff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, 0.76);
         }
 
         .employee-directory-stat-value {
-          font-size: 34px;
+          color: var(--directory-ink);
+          font-family: var(--yc-display, var(--heading), inherit);
+          font-size: clamp(32px, 3vw, 46px);
+          font-weight: 800;
           line-height: 1;
-          font-weight: 950;
-          color: #092f24;
+          letter-spacing: -0.04em;
         }
 
         .employee-directory-stat-label {
-          margin-top: 5px;
-          font-size: 13px;
-          color: #5c756b;
-          font-weight: 700;
+          margin-top: 6px;
+          color: var(--directory-ink-soft);
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
         }
 
         .employee-directory-toolbar {
-          border-radius: 28px;
-          background: rgba(255, 255, 255, 0.86);
-          border: 1px solid rgba(13, 94, 67, 0.1);
-          box-shadow: 0 18px 50px rgba(13, 64, 47, 0.08);
-          padding: 18px;
           margin-bottom: 22px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, 0.72);
+          border-radius: 24px;
+          background:
+            linear-gradient(145deg, rgba(255, 255, 255, 0.99), rgba(244, 249, 255, 0.98));
+          box-shadow:
+            8px 10px 0 #d1dcfa,
+            0 22px 38px rgba(34, 38, 110, 0.09);
         }
 
         .employee-directory-filter-grid {
           display: grid;
-          grid-template-columns: minmax(220px, 1.4fr) minmax(160px, 0.85fr) minmax(150px, 0.75fr) minmax(140px, 0.7fr) minmax(180px, 0.9fr) auto auto;
-          gap: 12px;
+          grid-template-columns:
+            minmax(220px, 1.4fr)
+            minmax(160px, 0.85fr)
+            minmax(150px, 0.75fr)
+            minmax(140px, 0.7fr)
+            minmax(180px, 0.9fr)
+            auto
+            auto;
           align-items: center;
+          gap: 12px;
         }
 
         .employee-directory-field {
           position: relative;
+          min-width: 0;
         }
 
         .employee-directory-field svg {
           position: absolute;
           left: 13px;
           top: 50%;
+          z-index: 1;
           transform: translateY(-50%);
-          color: #789186;
+          color: var(--directory-violet);
           pointer-events: none;
         }
 
         .employee-directory-input,
         .employee-directory-select {
           width: 100%;
-          border: 1px solid rgba(13, 94, 67, 0.12);
-          background: #f7fbf8;
-          color: #14382c;
-          border-radius: 16px;
+          min-width: 0;
           min-height: 46px;
           padding: 0 14px 0 40px;
-          font-size: 14px;
+          border: 1px solid rgba(159, 169, 205, 0.62);
+          border-radius: 14px;
           outline: none;
-          transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+          color: var(--directory-ink);
+          background: rgba(255, 255, 255, 0.86);
+          font: inherit;
+          font-size: 13px;
+          transition:
+            border-color 180ms ease,
+            box-shadow 180ms ease,
+            background 180ms ease;
         }
 
         .employee-directory-select {
-          appearance: none;
           cursor: pointer;
+        }
+
+        .employee-directory-input:hover,
+        .employee-directory-select:hover {
+          border-color: rgba(98, 84, 218, 0.34);
         }
 
         .employee-directory-input:focus,
         .employee-directory-select:focus {
+          border-color: var(--directory-violet);
           background: #ffffff;
-          border-color: rgba(11, 77, 58, 0.42);
-          box-shadow: 0 0 0 4px rgba(11, 77, 58, 0.09);
+          box-shadow: 0 0 0 4px rgba(98, 84, 218, 0.11);
         }
 
         .employee-directory-button {
-          border: 0;
-          min-height: 46px;
-          padding: 0 16px;
-          border-radius: 16px;
-          font-weight: 850;
+          appearance: none;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
+          min-height: 46px;
+          padding: 0 16px;
+          border: 1px solid transparent;
+          border-radius: 14px;
           cursor: pointer;
+          font: inherit;
+          font-weight: 900;
+          line-height: 1;
           white-space: nowrap;
-          transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+          transition:
+            transform 180ms ease,
+            box-shadow 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease;
         }
 
         .employee-directory-button:hover {
-          transform: translateY(-1px);
+          transform: translateY(-2px);
+          filter: saturate(1.04);
         }
 
         .employee-directory-button-primary {
-          background: #0b4d3a;
+          border-color: rgba(52, 43, 120, 0.16);
           color: #ffffff;
-          box-shadow: 0 14px 26px rgba(11, 77, 58, 0.2);
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow:
+            5px 6px 0 rgba(52, 43, 120, 0.8),
+            0 12px 22px rgba(55, 102, 219, 0.16);
         }
 
         .employee-directory-button-soft {
-          background: #eef7f2;
-          color: #0b4d3a;
-          border: 1px solid rgba(11, 77, 58, 0.12);
+          border-color: rgba(98, 84, 218, 0.18);
+          color: var(--directory-violet-deep);
+          background: #f1efff;
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, 0.14);
         }
 
         .employee-directory-button:disabled {
-          opacity: 0.6;
           cursor: not-allowed;
+          opacity: 0.62;
           transform: none;
+          box-shadow: none;
+          filter: none;
+        }
+
+        .employee-directory-button:focus-visible,
+        .employee-directory-input:focus-visible,
+        .employee-directory-select:focus-visible,
+        .employee-directory-pill:focus-visible {
+          outline: 3px solid rgba(98, 84, 218, 0.2);
+          outline-offset: 2px;
         }
 
         .employee-directory-content-head {
@@ -435,7 +508,7 @@ const employeeOrganisation = String(
           align-items: center;
           justify-content: space-between;
           gap: 14px;
-          margin-bottom: 14px;
+          margin-bottom: 16px;
         }
 
         .employee-directory-section-title {
@@ -443,60 +516,111 @@ const employeeOrganisation = String(
           align-items: center;
           gap: 10px;
           margin: 0;
-          color: #102f25;
-          font-size: 18px;
-          font-weight: 950;
+          color: var(--directory-ink);
+          font-family: var(--yc-display, var(--heading), inherit);
+          font-size: clamp(22px, 2vw, 30px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -0.03em;
+        }
+
+        .employee-directory-section-title svg {
+          color: var(--directory-violet);
         }
 
         .employee-directory-count-chip {
-          padding: 7px 12px;
+          display: inline-flex;
+          align-items: center;
+          padding: 8px 11px;
           border-radius: 999px;
-          background: #ecf8f2;
-          color: #0b4d3a;
-          font-size: 12px;
-          font-weight: 850;
-          border: 1px solid rgba(11, 77, 58, 0.1);
+          color: #13736f;
+          background: #dff8f3;
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1;
+          white-space: nowrap;
         }
 
         .employee-directory-grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
+          gap: 18px;
         }
 
         .employee-directory-card {
           position: relative;
-          overflow: hidden;
-          border-radius: 26px;
-          background:
-            linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 255, 252, 0.96));
-          border: 1px solid rgba(13, 94, 67, 0.1);
-          box-shadow: 0 18px 48px rgba(10, 56, 41, 0.08);
-          padding: 18px;
           isolation: isolate;
+          overflow: hidden;
+          min-width: 0;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, 0.68);
+          border-radius: 24px;
+          color: var(--directory-ink);
+          background:
+            linear-gradient(145deg, rgba(255, 255, 255, 0.99), rgba(244, 249, 255, 0.98));
+          box-shadow:
+            7px 9px 0 var(--directory-flat-blue),
+            0 18px 30px rgba(15, 20, 75, 0.09);
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .employee-directory-card:nth-child(3n + 2) {
+          background:
+            linear-gradient(145deg, #ffffff, #f4f1ff);
+          box-shadow:
+            7px 9px 0 var(--directory-flat-violet),
+            0 18px 30px rgba(15, 20, 75, 0.09);
+        }
+
+        .employee-directory-card:nth-child(3n + 3) {
+          background:
+            linear-gradient(145deg, #ffffff, #eefaf7);
+          box-shadow:
+            7px 9px 0 var(--directory-flat-teal),
+            0 18px 30px rgba(15, 20, 75, 0.09);
         }
 
         .employee-directory-card::before {
           content: "";
           position: absolute;
-          inset: 0;
-          background:
-            radial-gradient(circle at 20% 0%, rgba(39, 174, 96, 0.12), transparent 34%),
-            radial-gradient(circle at 100% 100%, rgba(11, 77, 58, 0.1), transparent 38%);
-          opacity: 0;
-          transition: opacity 0.22s ease;
           z-index: -1;
+          width: 120px;
+          aspect-ratio: 1;
+          top: -54px;
+          right: -45px;
+          border-radius: 46% 54% 58% 42% / 53% 44% 56% 47%;
+          background: linear-gradient(145deg, rgba(105, 217, 208, 0.24), rgba(121, 189, 242, 0.24));
+          transform: rotate(18deg);
         }
 
-        .employee-directory-card:hover::before {
-          opacity: 1;
+        .employee-directory-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, 0.34);
+          box-shadow:
+            10px 12px 0 var(--directory-flat-blue),
+            0 24px 38px rgba(15, 20, 75, 0.13);
+        }
+
+        .employee-directory-card:nth-child(3n + 2):hover {
+          box-shadow:
+            10px 12px 0 var(--directory-flat-violet),
+            0 24px 38px rgba(15, 20, 75, 0.13);
+        }
+
+        .employee-directory-card:nth-child(3n + 3):hover {
+          box-shadow:
+            10px 12px 0 var(--directory-flat-teal),
+            0 24px 38px rgba(15, 20, 75, 0.13);
         }
 
         .employee-directory-card-main {
           display: flex;
           align-items: center;
           gap: 14px;
-          margin-bottom: 15px;
+          margin-bottom: 16px;
         }
 
         .employee-directory-avatar {
@@ -505,60 +629,75 @@ const employeeOrganisation = String(
 
         .employee-directory-avatar-img,
         .employee-directory-avatar-fallback {
-          width: 58px;
-          height: 58px;
-          border-radius: 22px;
-          object-fit: cover;
-          box-shadow: 0 12px 26px rgba(8, 58, 41, 0.14);
+          width: 62px;
+          height: 62px;
           border: 3px solid #ffffff;
+          border-radius: 20px;
+          object-fit: cover;
+          box-shadow:
+            4px 5px 0 rgba(98, 84, 218, 0.16),
+            0 12px 24px rgba(34, 38, 110, 0.12);
         }
 
         .employee-directory-avatar-fallback {
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, #0b4d3a, #169b69);
           color: #ffffff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          font-size: 16px;
           font-weight: 950;
           letter-spacing: -0.03em;
         }
 
+        .employee-directory-card-main > div:last-child {
+          min-width: 0;
+        }
+
         .employee-directory-name {
           margin: 0;
+          color: var(--directory-ink);
           font-size: 17px;
-          line-height: 1.2;
-          color: #102f25;
           font-weight: 950;
+          line-height: 1.2;
+          overflow-wrap: anywhere;
         }
 
         .employee-directory-designation {
           display: flex;
           align-items: center;
           gap: 6px;
-          margin-top: 6px;
-          color: #58766b;
-          font-size: 13px;
-          font-weight: 750;
+          margin-top: 7px;
+          color: var(--directory-ink-soft);
+          font-size: 12px;
+          font-weight: 800;
         }
+
+        .employee-directory-designation svg {
+          flex: 0 0 auto;
+          color: var(--directory-violet);
+        }
+
         .employee-directory-entity,
         .employee-directory-department {
-          margin-top: 6px;
           width: fit-content;
           max-width: 100%;
-          padding: 5px 10px;
+          margin-top: 7px;
+          padding: 6px 10px;
           border-radius: 999px;
-          font-size: 12px;
-          font-weight: 850;
+          font-size: 10px;
+          font-weight: 900;
           line-height: 1.25;
+          overflow-wrap: anywhere;
         }
 
         .employee-directory-entity {
-          background: rgba(37, 99, 235, 0.09);
-          color: #1d4ed8;
+          color: #3657b5;
+          background: #e5e9ff;
         }
 
         .employee-directory-department {
-          background: rgba(11, 77, 58, 0.08);
-          color: #0b4d3a;
+          color: #13736f;
+          background: #dff8f3;
         }
 
         .employee-directory-contact-list {
@@ -567,87 +706,146 @@ const employeeOrganisation = String(
         }
 
         .employee-directory-pill {
-          min-width: 0;
           display: inline-flex;
           align-items: center;
           gap: 9px;
           width: 100%;
+          min-width: 0;
           padding: 10px 11px;
-          border-radius: 15px;
-          background: #f5fbf7;
-          border: 1px solid rgba(13, 94, 67, 0.08);
-          color: #173a2f;
+          border: 1px solid rgba(98, 84, 218, 0.12);
+          border-radius: 14px;
+          color: #334164;
+          background: rgba(255, 255, 255, 0.74);
+          font-size: 12px;
+          font-weight: 800;
+          line-height: 1.4;
           text-decoration: none;
-          font-size: 13px;
-          font-weight: 750;
           overflow-wrap: anywhere;
+          transition:
+            transform 160ms ease,
+            border-color 160ms ease,
+            background 160ms ease;
+        }
+
+        a.employee-directory-pill:hover {
+          transform: translateX(2px);
+          border-color: rgba(98, 84, 218, 0.3);
+          background: #ffffff;
         }
 
         .employee-directory-pill svg {
           flex: 0 0 auto;
-          color: #0b4d3a;
+          color: var(--directory-violet);
         }
 
         .employee-directory-pill-muted {
-          color: #8a9c95;
+          color: #8a93aa;
+          background: rgba(241, 239, 255, 0.54);
         }
 
         .employee-directory-empty,
         .employee-directory-error {
-          border-radius: 26px;
-          background: #ffffff;
-          border: 1px solid rgba(13, 94, 67, 0.1);
-          box-shadow: 0 18px 48px rgba(10, 56, 41, 0.08);
-          padding: 34px;
+          padding: 36px;
+          border: 1px solid rgba(171, 181, 211, 0.68);
+          border-radius: 24px;
+          color: var(--directory-ink-soft);
+          background:
+            linear-gradient(145deg, rgba(237, 248, 255, 0.82), rgba(248, 241, 255, 0.76));
+          box-shadow:
+            7px 9px 0 var(--directory-flat-blue),
+            0 18px 30px rgba(15, 20, 75, 0.09);
           text-align: center;
-          color: #58766b;
         }
 
         .employee-directory-empty-icon,
         .employee-directory-loading-icon {
-          width: 58px;
-          height: 58px;
           display: grid;
           place-items: center;
+          width: 58px;
+          height: 58px;
           margin: 0 auto 14px;
-          border-radius: 22px;
-          background: #eef8f3;
-          color: #0b4d3a;
+          border: 1px solid rgba(52, 43, 120, 0.15);
+          border-radius: 18px;
+          color: #ffffff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, 0.76);
+        }
+
+        .employee-directory-empty h3 {
+          margin: 0 0 7px;
+          color: var(--directory-ink);
+          font-size: 18px;
+          font-weight: 900;
+        }
+
+        .employee-directory-empty p {
+          margin: 0;
+          font-size: 13px;
+          line-height: 1.55;
         }
 
         .employee-directory-error {
-          color: #8d2424;
-          background: #fff7f7;
-          border-color: rgba(185, 28, 28, 0.16);
+          color: #a33b5c;
+          border-color: rgba(190, 47, 85, 0.2);
+          background: #fff1f5;
+          box-shadow:
+            7px 9px 0 #ffd1df,
+            0 18px 30px rgba(190, 47, 85, 0.08);
         }
 
         .employee-directory-loading-grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
+          gap: 18px;
         }
 
         .employee-directory-skeleton {
-          height: 210px;
-          border-radius: 26px;
+          height: 230px;
+          border: 1px solid rgba(171, 181, 211, 0.56);
+          border-radius: 24px;
           background:
-            linear-gradient(90deg, #f2f8f4 25%, #ffffff 37%, #f2f8f4 63%);
+            linear-gradient(
+              90deg,
+              #edf6ff 25%,
+              #ffffff 37%,
+              #f1efff 50%,
+              #ffffff 63%,
+              #edf6ff 75%
+            );
           background-size: 400% 100%;
+          box-shadow:
+            7px 9px 0 rgba(185, 215, 255, 0.72),
+            0 18px 30px rgba(15, 20, 75, 0.06);
           animation: employeeDirectorySkeleton 1.35s ease infinite;
-          border: 1px solid rgba(13, 94, 67, 0.08);
         }
 
         @keyframes employeeDirectorySkeleton {
           0% {
             background-position: 100% 50%;
           }
+
           100% {
             background-position: 0 50%;
           }
         }
 
+        @media (hover: hover) and (pointer: fine) {
+          .employee-directory-button-primary:hover {
+            box-shadow:
+              7px 8px 0 rgba(52, 43, 120, 0.8),
+              0 16px 25px rgba(55, 102, 219, 0.2);
+          }
+
+          .employee-directory-button-soft:hover {
+            box-shadow: 6px 7px 0 rgba(98, 84, 218, 0.17);
+          }
+        }
+
         @media (max-width: 1180px) {
-          .employee-directory-filter-grid,
+          .employee-directory-filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .employee-directory-grid,
           .employee-directory-loading-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -662,14 +860,29 @@ const employeeOrganisation = String(
           .employee-directory-hero {
             padding: 20px;
             border-radius: 24px;
+            box-shadow:
+              7px 8px 0 var(--directory-flat-blue),
+              0 18px 30px rgba(34, 38, 110, 0.1);
           }
 
           .employee-directory-hero-content {
             grid-template-columns: 1fr;
           }
 
+          .employee-directory-title {
+            font-size: clamp(31px, 9.2vw, 43px);
+          }
+
           .employee-directory-stat-card {
             min-width: 0;
+          }
+
+          .employee-directory-toolbar {
+            padding: 15px;
+            border-radius: 22px;
+            box-shadow:
+              6px 7px 0 #d1dcfa,
+              0 16px 28px rgba(34, 38, 110, 0.08);
           }
 
           .employee-directory-filter-grid,
@@ -683,9 +896,44 @@ const employeeOrganisation = String(
             flex-direction: column;
           }
 
-          .employee-directory-toolbar {
-            padding: 14px;
-            border-radius: 22px;
+          .employee-directory-count-chip {
+            width: 100%;
+            justify-content: center;
+          }
+
+          .employee-directory-card {
+            box-shadow:
+              6px 7px 0 var(--directory-flat-blue),
+              0 16px 28px rgba(34, 38, 110, 0.08);
+          }
+        }
+
+        @media (max-width: 430px) {
+          .employee-directory-card-main {
+            align-items: flex-start;
+          }
+
+          .employee-directory-avatar-img,
+          .employee-directory-avatar-fallback {
+            width: 56px;
+            height: 56px;
+            border-radius: 18px;
+          }
+
+          .employee-directory-entity,
+          .employee-directory-department {
+            border-radius: 11px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .employee-directory-page *,
+          .employee-directory-page *::before,
+          .employee-directory-page *::after {
+            scroll-behavior: auto !important;
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
           }
         }
       `}</style>

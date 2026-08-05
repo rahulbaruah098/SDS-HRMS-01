@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowUpRight,
   CheckCircle2,
   Clock3,
   FileText,
   RefreshCcw,
   ShieldCheck,
+  Sparkles,
   XCircle,
 } from 'lucide-react';
 import {
@@ -658,29 +660,277 @@ export default function ApplicationStatus() {
     <div className="page-grid application-status-page">
       <style>{`
         .application-status-page {
-          --as-line: #e2e8f0;
-          --as-muted: #64748b;
-          --as-ink: #0f172a;
-          --as-primary: #4f46e5;
-          --as-success: #059669;
-          --as-warning: #d97706;
-          --as-danger: #e11d48;
-          --as-info: #0284c7;
+          --as-ink: #101a3a;
+          --as-copy: #5d6d8d;
+          --as-violet: #6658dc;
+          --as-violet-deep: #40348d;
+          --as-blue: #3766db;
+          --as-cyan: #18b5c8;
+          --as-teal: #34c9c4;
+          --as-yellow: #d8ff43;
+          --as-danger: #d84d68;
+          --as-line: rgba(16, 26, 58, .14);
+          display: grid;
+          gap: clamp(18px, 2vw, 26px);
+          color: var(--as-ink);
+        }
+
+        .application-status-page .as-page-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: clamp(22px, 3vw, 40px);
+          align-items: center;
+          min-height: 260px;
+          padding: clamp(25px, 3vw, 42px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background:
+            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
+            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
+            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          box-shadow:
+            12px 14px 0 #c6d8f7,
+            0 28px 48px rgba(34, 38, 110, .13);
+        }
+
+        .application-status-page .as-page-hero::before {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 175px;
+          height: 175px;
+          right: 8%;
+          bottom: -98px;
+          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
+          background: linear-gradient(
+            145deg,
+            rgba(105, 217, 208, .30),
+            rgba(132, 181, 241, .28)
+          );
+          transform: rotate(-18deg);
+        }
+
+        .as-page-kicker,
+        .as-section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: #342b78;
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .as-page-kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 4px 5px 0 #18b5c8;
+        }
+
+        .as-section-kicker {
+          margin-bottom: 10px;
+          padding: 7px 10px;
+          box-shadow: 3px 4px 0 #18b5c8;
+        }
+
+        .application-status-page .as-page-hero h1 {
+          max-width: 900px;
+          margin: 0;
+          color: var(--as-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 77px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
+        }
+
+        .application-status-page .as-page-hero h1 em {
+          color: var(--as-violet);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
+        }
+
+        .application-status-page .as-page-hero p {
+          max-width: 820px;
+          margin: 17px 0 0;
+          color: var(--as-copy);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .application-status-page .as-page-hero .secondary {
+          min-height: 54px;
+          padding-inline: 18px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          border: 1px solid rgba(65, 55, 161, .18);
+          border-radius: 18px;
+          color: #40348d;
+          background: rgba(255, 255, 255, .90);
+          box-shadow:
+            6px 7px 0 #b9d7ff,
+            0 14px 25px rgba(44, 75, 116, .10);
+          font-weight: 900;
+          white-space: nowrap;
+          transition:
+            transform 190ms cubic-bezier(.22,1,.36,1),
+            box-shadow 190ms ease;
+        }
+
+        .application-status-page .as-page-hero .secondary svg:first-child {
+          animation: asRefreshIdle 4.2s linear infinite;
+        }
+
+        .application-status-page .as-page-hero .secondary:disabled svg:first-child {
+          animation: asSpin 1s linear infinite;
+        }
+
+        .application-status-page .as-page-hero .secondary:hover {
+          transform: translateY(-3px);
+          box-shadow:
+            8px 9px 0 #b9d7ff,
+            0 18px 30px rgba(44, 75, 116, .14);
+        }
+
+        .application-status-page .stats-grid {
+          gap: 15px;
+        }
+
+        .application-status-page .stats-grid .stat-card {
+          min-height: 122px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow:
+            7px 9px 0 #b9d7ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+          transition:
+            transform 210ms cubic-bezier(.22,1,.36,1),
+            box-shadow 210ms ease;
+        }
+
+        .application-status-page .stats-grid .stat-card:nth-child(4n + 2) {
+          background: #eaf8f4;
+          box-shadow:
+            7px 9px 0 #aee6d9,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .application-status-page .stats-grid .stat-card:nth-child(4n + 3) {
+          background: #fff0f2;
+          box-shadow:
+            7px 9px 0 #f2c2cc,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .application-status-page .stats-grid .stat-card:nth-child(4n + 4) {
+          background: #f1efff;
+          box-shadow:
+            7px 9px 0 #c9c0ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .application-status-page .stats-grid .stat-card:hover {
+          transform: translateY(-4px);
+        }
+
+        .application-status-page .stats-grid .stat-card span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .10em;
+          text-transform: uppercase;
+        }
+
+        .application-status-page .stats-grid .stat-card strong {
+          margin-top: 9px;
+          color: var(--as-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(31px, 3vw, 46px);
+        }
+
+        .application-status-page .panel {
+          min-width: 0;
+          padding: clamp(20px, 2vw, 28px);
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
+          transition:
+            transform 210ms cubic-bezier(.22,1,.36,1),
+            box-shadow 210ms ease,
+            border-color 210ms ease;
+        }
+
+        .application-status-page .panel:hover {
+          border-color: rgba(102, 88, 220, .28);
+          transform: translateY(-3px);
+          box-shadow:
+            10px 12px 0 #c4ccff,
+            0 30px 50px rgba(34, 38, 110, .14);
+        }
+
+        .application-status-page .toolbar {
+          align-items: flex-start;
+          gap: 16px;
+        }
+
+        .application-status-page .toolbar h3 {
+          margin: 0;
+          color: var(--as-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(26px, 2.4vw, 39px);
+          font-weight: 760;
+          line-height: .98;
+          letter-spacing: -.045em;
+        }
+
+        .application-status-page .toolbar p {
+          margin-top: 8px;
+          color: var(--as-copy);
+          line-height: 1.62;
         }
 
         .as-live-grid {
           display: grid;
-          gap: 16px;
+          gap: 18px;
+          margin-top: 18px;
         }
 
         .as-leave-card {
-          border: 1px solid var(--as-line);
-          border-radius: 26px;
-          background:
-            radial-gradient(circle at 0 0, rgba(79, 70, 229, .06), transparent 32%),
-            #ffffff;
-          padding: 18px;
-          box-shadow: 0 14px 36px rgba(15, 23, 42, .07);
+          padding: clamp(17px, 2vw, 24px);
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: 27px;
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            7px 9px 0 #c4ccff,
+            0 21px 38px rgba(34, 38, 110, .09);
+          transition:
+            transform 210ms cubic-bezier(.22,1,.36,1),
+            box-shadow 210ms ease,
+            border-color 210ms ease;
+        }
+
+        .as-leave-card:hover {
+          border-color: rgba(102, 88, 220, .28);
+          transform: translateY(-3px);
+          box-shadow:
+            9px 11px 0 #c4ccff,
+            0 28px 46px rgba(34, 38, 110, .13);
         }
 
         .as-leave-card-head {
@@ -694,24 +944,26 @@ export default function ApplicationStatus() {
         .as-person {
           display: grid;
           grid-template-columns: auto minmax(0, 1fr);
-          gap: 12px;
+          gap: 13px;
           align-items: center;
           min-width: 0;
         }
 
         .as-avatar {
-          width: 58px;
-          height: 58px;
-          border-radius: 20px;
+          width: 60px;
+          height: 60px;
           overflow: hidden;
           display: grid;
           place-items: center;
-          background: linear-gradient(135deg, #eef2ff, #ecfdf5);
-          color: var(--as-primary);
-          border: 3px solid #ffffff;
-          box-shadow: 0 12px 26px rgba(15, 23, 42, .12);
-          font-weight: 900;
           flex: 0 0 auto;
+          border: 3px solid #fff;
+          border-radius: 20px;
+          color: #40348d;
+          background: linear-gradient(145deg, #edf6ff, #eaf8f4);
+          box-shadow:
+            5px 6px 0 #b9d7ff,
+            0 13px 26px rgba(34, 38, 110, .12);
+          font-weight: 900;
         }
 
         .as-avatar img {
@@ -730,93 +982,116 @@ export default function ApplicationStatus() {
         .as-person span,
         .as-person small {
           display: block;
-          color: var(--as-muted);
           margin-top: 3px;
+          color: var(--as-copy);
           font-size: 12px;
           font-weight: 750;
         }
 
         .as-stage-pill {
-          border-radius: 999px;
           padding: 9px 13px;
-          font-size: 12px;
-          font-weight: 900;
-          border: 1px solid var(--as-line);
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 999px;
+          color: var(--as-copy);
           background: #f8fafc;
-          color: var(--as-muted);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
+          font-size: 11px;
+          font-weight: 900;
         }
 
         .as-stage-pill.team {
-          border-color: rgba(79, 70, 229, .24);
-          background: #eef2ff;
-          color: var(--as-primary);
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .as-stage-pill.reporting {
-          border-color: rgba(2, 132, 199, .24);
-          background: #e0f2fe;
-          color: var(--as-info);
+          color: #245da8;
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .as-stage-pill.hr {
-          border-color: rgba(217, 119, 6, .24);
-          background: #fffbeb;
-          color: var(--as-warning);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
         }
 
         .as-stage-pill.approved {
-          border-color: rgba(5, 150, 105, .24);
-          background: #ecfdf5;
-          color: var(--as-success);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .as-stage-pill.rejected {
-          border-color: rgba(225, 29, 72, .24);
-          background: #fff1f2;
-          color: var(--as-danger);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
         }
 
         .as-leave-meta-grid {
           display: grid;
-          grid-template-columns: repeat(6, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 10px;
-          margin-top: 16px;
+          margin-top: 17px;
         }
 
         .as-leave-meta-grid > div {
-          border: 1px solid var(--as-line);
-          border-radius: 16px;
-          background: #f8fafc;
-          padding: 11px;
           min-width: 0;
+          padding: 12px;
+          border: 1px solid rgba(162, 169, 196, .46);
+          border-radius: 16px;
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #b9d7ff;
+        }
+
+        .as-leave-meta-grid > div:nth-child(4n + 2) {
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .as-leave-meta-grid > div:nth-child(4n + 3) {
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .as-leave-meta-grid > div:nth-child(4n + 4) {
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .as-leave-meta-grid span,
         .as-reason span {
           display: block;
-          color: var(--as-muted);
-          font-size: 11px;
-          font-weight: 900;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
           text-transform: uppercase;
-          letter-spacing: .06em;
+          letter-spacing: .08em;
         }
 
         .as-leave-meta-grid strong {
           display: block;
-          margin-top: 6px;
-          color: var(--as-ink);
-          font-size: 13px;
+          margin-top: 7px;
           overflow: hidden;
+          color: var(--as-ink);
           text-overflow: ellipsis;
           white-space: nowrap;
+          font-size: 13px;
+        }
+
+        .as-reason,
+        .as-timeline,
+        .as-empty-line {
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: linear-gradient(145deg, #f8fbff, #f7f4ff);
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
         }
 
         .as-reason {
-          border: 1px solid var(--as-line);
-          border-radius: 18px;
-          background: #ffffff;
-          padding: 13px;
-          margin-top: 12px;
+          padding: 14px;
+          margin-top: 13px;
         }
 
         .as-reason p {
@@ -829,52 +1104,55 @@ export default function ApplicationStatus() {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 10px;
-          margin-top: 12px;
+          margin-top: 13px;
         }
 
         .as-stage-grid > div {
-          border: 1px solid var(--as-line);
-          border-radius: 16px;
-          background: #f8fafc;
-          padding: 11px;
           display: grid;
           grid-template-columns: auto minmax(0, 1fr);
           gap: 9px;
           align-items: start;
-          color: var(--as-muted);
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 16px;
+          color: var(--as-copy);
+          background: #f8fafc;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
         }
 
         .as-stage-grid > div.done {
-          border-color: rgba(5, 150, 105, .24);
-          background: #ecfdf5;
-          color: var(--as-success);
+          border-color: rgba(52, 201, 196, .36);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .as-stage-grid span {
           display: block;
           color: var(--as-ink);
-          font-weight: 900;
           font-size: 13px;
+          font-weight: 900;
         }
 
         .as-stage-grid small {
           display: block;
           margin-top: 3px;
-          color: var(--as-muted);
+          color: var(--as-copy);
           font-weight: 700;
           line-height: 1.35;
         }
 
         .as-rejected-note {
-          margin-top: 12px;
-          border: 1px solid rgba(225, 29, 72, .24);
-          background: #fff1f2;
-          color: var(--as-danger);
-          border-radius: 16px;
-          padding: 11px;
           display: flex;
-          gap: 9px;
           align-items: center;
+          gap: 9px;
+          margin-top: 13px;
+          padding: 12px;
+          border: 1px solid rgba(216, 77, 104, .28);
+          border-radius: 16px;
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
           font-weight: 850;
         }
 
@@ -883,10 +1161,7 @@ export default function ApplicationStatus() {
           display: grid;
           gap: 10px;
           margin-top: 13px;
-          padding: 12px;
-          border: 1px solid var(--as-line);
-          border-radius: 18px;
-          background: #f8fafc;
+          padding: 13px;
         }
 
         .as-timeline-item {
@@ -898,10 +1173,10 @@ export default function ApplicationStatus() {
         .as-timeline-dot {
           width: 12px;
           height: 12px;
-          border-radius: 999px;
           margin-top: 4px;
-          background: linear-gradient(135deg, var(--as-primary), var(--as-success));
-          box-shadow: 0 0 0 4px rgba(79, 70, 229, .10);
+          border-radius: 999px;
+          background: linear-gradient(135deg, #6658dc, #34c9c4);
+          box-shadow: 0 0 0 4px rgba(102, 88, 220, .10);
         }
 
         .as-timeline-item strong {
@@ -914,29 +1189,78 @@ export default function ApplicationStatus() {
         .as-timeline-item small {
           display: block;
           margin-top: 3px;
-          color: var(--as-muted);
+          color: var(--as-copy);
           font-size: 12px;
           line-height: 1.4;
         }
 
         .as-empty-line {
           margin-top: 13px;
-          border: 1px dashed var(--as-line);
-          border-radius: 16px;
           padding: 12px;
-          color: var(--as-muted);
-          background: #f8fafc;
+          color: var(--as-copy);
           font-weight: 800;
         }
 
         .as-empty {
-          border: 1px dashed var(--as-line);
+          padding: 24px;
+          border: 1px dashed rgba(102, 88, 220, .34);
           border-radius: 22px;
-          padding: 22px;
-          color: var(--as-muted);
-          background: #ffffff;
+          color: var(--as-copy);
+          background: linear-gradient(145deg, #f8f7ff, #effbf8);
           text-align: center;
           font-weight: 800;
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .07);
+        }
+
+        .application-status-page .table-wrap {
+          margin-top: 16px;
+          border: 1px solid rgba(171, 181, 211, .56);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
+        }
+
+        .application-status-page th {
+          color: #536381;
+          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+        }
+
+        .application-status-page tr:hover td {
+          background: #fafaff;
+        }
+
+        .application-status-page .secondary {
+          border-radius: 15px;
+          border-color: rgba(65, 55, 161, .18);
+          color: #40348d;
+          background: rgba(255, 255, 255, .90);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+          font-weight: 900;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease;
+        }
+
+        .application-status-page .secondary:hover {
+          transform: translateY(-2px);
+        }
+
+        .as-dual-section {
+          gap: 24px;
+          align-items: stretch;
+        }
+
+        .as-dual-section > .panel {
+          height: 100%;
+        }
+
+        @keyframes asRefreshIdle {
+          0%, 84% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes asSpin {
+          to { transform: rotate(360deg); }
         }
 
         @media (max-width: 1180px) {
@@ -946,28 +1270,111 @@ export default function ApplicationStatus() {
         }
 
         @media (max-width: 760px) {
+          .application-status-page {
+            gap: 18px;
+          }
+
+          .application-status-page .as-page-hero {
+            grid-template-columns: 1fr;
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow:
+              6px 7px 0 #c6d8f7,
+              0 18px 30px rgba(34, 38, 110, .10);
+          }
+
+          .application-status-page .as-page-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .application-status-page .as-page-hero .secondary {
+            width: 100%;
+          }
+
+          .application-status-page .stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .application-status-page .stats-grid .stat-card,
+          .application-status-page .panel,
           .as-leave-card {
             border-radius: 22px;
-            padding: 14px;
+            box-shadow:
+              5px 6px 0 #c4ccff,
+              0 17px 28px rgba(34, 38, 110, .09);
+          }
+
+          .as-leave-card {
+            padding: 15px;
           }
 
           .as-leave-meta-grid,
           .as-stage-grid {
             grid-template-columns: 1fr;
           }
+
+          .application-status-page .toolbar {
+            align-items: stretch;
+          }
+
+          .application-status-page .toolbar > button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .application-status-page .as-page-hero {
+            padding: 16px;
+          }
+
+          .application-status-page .as-page-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .application-status-page .stats-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .application-status-page .stats-grid .stat-card {
+            min-height: 106px;
+            padding: 15px;
+          }
+
+          .as-leave-card-head {
+            align-items: stretch;
+          }
+
+          .as-stage-pill {
+            align-self: flex-start;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .application-status-page *,
+          .application-status-page *::before,
+          .application-status-page *::after {
+            animation: none !important;
+            transition: none !important;
+          }
         }
       `}</style>
 
-      <section className="hero compact">
+      <section className="hero compact as-page-hero">
         <div>
-          <span className="kicker">Live Status</span>
+          <span className="as-page-kicker">
+            <Sparkles size={13} />
+            Live Status
+          </span>
 
-          <h1>Application Status</h1>
+          <h1>
+            Every request, <em>in view.</em>
+          </h1>
 
-            <p>
-              Track all your submitted requests in one place, including leave,
-              holiday work approvals, tickets, grievances, and comp-off status.
-            </p>
+          <p>
+            Track leave, holiday work approvals, tickets, grievances, comp-off
+            records and notifications from one connected YourComate workspace.
+          </p>
         </div>
 
           <button
@@ -978,6 +1385,7 @@ export default function ApplicationStatus() {
           >
             <RefreshCcw size={16} />
             {loading || loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
+            <ArrowUpRight size={15} />
           </button>
       </section>
 
@@ -995,9 +1403,10 @@ export default function ApplicationStatus() {
         <Stat label="HR Notified Leave Records" value={hrNotifiedLeaves} />
       </section>
 
-      <section className="panel">
+      <section className="panel as-section-panel">
         <div className="toolbar">
           <div>
+            <span className="as-section-kicker">Approval Journey</span>
             <h3>Leave Approval Live Tracker</h3>
             <p>
               Shows Team Leader approval, Reporting Officer approval, final
@@ -1020,9 +1429,10 @@ export default function ApplicationStatus() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel as-section-panel">
         <div className="toolbar">
           <div>
+            <span className="as-section-kicker">Unified Overview</span>
             <h3>All Application Status</h3>
             <p>
               This table shows the latest live status across all request types.
@@ -1033,9 +1443,10 @@ export default function ApplicationStatus() {
         <Table rows={mainRows} maxColumns={8} />
       </section>
 
-      <section className="panel">
+      <section className="panel as-section-panel">
         <div className="toolbar">
           <div>
+            <span className="as-section-kicker">Leave Records</span>
             <h3>Leave Requests Table</h3>
             <p>
               Shows whether leave is pending with Team Leader, approved by Team
@@ -1048,9 +1459,10 @@ export default function ApplicationStatus() {
         <Table rows={leaveRows} maxColumns={14} />
       </section>
 
-<section className="panel">
+<section className="panel as-section-panel">
   <div className="toolbar">
     <div>
+      <span className="as-section-kicker">Holiday Attendance</span>
       <h3>Holiday Work Requests</h3>
       <p>
         Shows holiday work approval status before marking attendance on
@@ -1071,9 +1483,10 @@ export default function ApplicationStatus() {
   <Table rows={holidayWorkRows} maxColumns={10} />
 </section>
 
-      <section className="panel">
+      <section className="panel as-section-panel">
         <div className="toolbar">
           <div>
+            <span className="as-section-kicker">Support Tracking</span>
             <h3>Tickets / Grievances</h3>
             <p>Shows the current status of your raised tickets and grievances.</p>
           </div>
@@ -1082,10 +1495,11 @@ export default function ApplicationStatus() {
         <Table rows={ticketRows} maxColumns={8} />
       </section>
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="two-col as-dual-section">
+        <div className="panel as-section-panel">
           <div className="toolbar">
             <div>
+              <span className="as-section-kicker">Earned Benefits</span>
               <h3>Comp-Off Status</h3>
               <p>
                 Shows available, claimed, used, and expired comp-off records with claim
@@ -1097,9 +1511,10 @@ export default function ApplicationStatus() {
           <Table rows={compOffRows} maxColumns={8} />
         </div>
 
-        <div className="panel">
+        <div className="panel as-section-panel">
           <div className="toolbar">
             <div>
+              <span className="as-section-kicker">Recent Activity</span>
               <h3>Recent Notifications</h3>
               <p>Shows recent notifications related to your requests.</p>
             </div>
