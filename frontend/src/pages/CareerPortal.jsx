@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import '../career-portal.css';
 import {
   AlertCircle,
@@ -177,10 +178,7 @@ function parseRoute(props = {}) {
     typeof window === 'undefined' ? '' : window.location.pathname.replace(/\/+$/, '');
   const parts = pathname.split('/').filter(Boolean);
 
-  if (
-    props.mode === 'offer' ||
-    (['career', 'careers'].includes(parts[0]) && parts[1] === 'offers')
-  ) {
+  if (props.mode === 'offer' || parts[0] === 'careers' && parts[1] === 'offers') {
     return {
       mode: 'offer',
       responseToken: props.responseToken || parts[2] || '',
@@ -190,10 +188,7 @@ function parseRoute(props = {}) {
     };
   }
 
-  if (
-    props.mode === 'joining' ||
-    (['career', 'careers'].includes(parts[0]) && parts[1] === 'joining')
-  ) {
+  if (props.mode === 'joining' || parts[0] === 'careers' && parts[1] === 'joining') {
     return {
       mode: 'joining',
       accessToken: props.accessToken || parts[2] || '',
@@ -494,7 +489,7 @@ function CompanyBrand({ company, onNavigate }) {
         const slug = company?.career_slug;
         if (!slug) return;
 
-        const path = `/career/${encodeURIComponent(slug)}`;
+        const path = `/careers/${encodeURIComponent(slug)}`;
         if (onNavigate) onNavigate(path, 'Returning to open positions…');
         else navigateTo(path);
       }}
@@ -527,7 +522,6 @@ function PublicLayout({
 }) {
   return (
     <div className="yc-career-page">
-      <style>{CAREER_PORTAL_VISUAL_STYLES}</style>
       {transitioning ? <div className="yc-career-route-progress" /> : null}
 
       {transitioning && transitionMessage ? (
@@ -557,16 +551,22 @@ function PublicLayout({
         {children}
       </div>
 
-      <footer className="yc-career-footer">
-        <div className="yc-career-shell yc-career-footer-inner">
-          <span>
-            © {new Date().getFullYear()}{' '}
-            {company?.company_name || 'Company'}. Recruitment records are
-            handled privately.
-          </span>
-          <span>Powered and developed by Sayanant Group IT CELL</span>
-        </div>
-      </footer>
+<footer className="yc-career-footer">
+  <div className="yc-career-shell yc-career-footer-inner">
+    <span className="yc-career-footer-left">
+      Recruitment records are handled privately.
+    </span>
+
+    <span className="yc-career-footer-center">
+      Powered and developed by Sayanant Group IT CELL
+    </span>
+
+    <span className="yc-career-footer-right">
+      © {new Date().getFullYear()}{' '}
+      {company?.company_name || 'Company'}
+    </span>
+  </div>
+</footer>
     </div>
   );
 }
@@ -619,6 +619,121 @@ function JobMeta({ job }) {
   );
 }
 
+
+function lockCareerPortalBackgroundScroll() {
+  const root = document.documentElement;
+  const body = document.body;
+  const page = document.querySelector('.yc-career-page');
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const lockedElements = new Set([root, body]);
+
+  let ancestor = page?.parentElement || null;
+  while (ancestor) {
+    const styles = window.getComputedStyle(ancestor);
+    const canScroll =
+      ancestor.scrollHeight > ancestor.clientHeight &&
+      ['auto', 'scroll', 'overlay'].includes(styles.overflowY);
+
+    if (canScroll) lockedElements.add(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+
+  [
+    '.app-main',
+    '.app-content',
+    '.main-content',
+    '.dashboard-content',
+    '.content-wrapper',
+    '.page-content',
+    '.layout-content',
+    '.layout-main',
+    '[data-scroll-container]',
+  ].forEach((selector) => {
+    document.querySelectorAll(selector).forEach((element) => {
+      if (element instanceof HTMLElement) lockedElements.add(element);
+    });
+  });
+
+  const previousStyles = new Map();
+
+  lockedElements.forEach((element) => {
+    previousStyles.set(element, {
+      overflow: element.style.overflow,
+      overflowX: element.style.overflowX,
+      overflowY: element.style.overflowY,
+      overscrollBehavior: element.style.overscrollBehavior,
+      touchAction: element.style.touchAction,
+    });
+
+    element.style.overflow = 'hidden';
+    element.style.overflowX = 'hidden';
+    element.style.overflowY = 'hidden';
+    element.style.overscrollBehavior = 'none';
+    element.style.touchAction = 'none';
+  });
+
+  const previousBodyPosition = {
+    position: body.style.position,
+    top: body.style.top,
+    left: body.style.left,
+    right: body.style.right,
+    width: body.style.width,
+  };
+
+  body.style.position = 'fixed';
+  body.style.top = `-${scrollY}px`;
+  body.style.left = `-${scrollX}px`;
+  body.style.right = '0';
+  body.style.width = '100%';
+
+  const isPopupScrollTarget = (target) =>
+    target instanceof Element &&
+    Boolean(target.closest('.yc-career-modal-body'));
+
+  const preventBackgroundScroll = (event) => {
+    if (isPopupScrollTarget(event.target)) return;
+    event.preventDefault();
+  };
+
+  window.addEventListener('wheel', preventBackgroundScroll, {
+    passive: false,
+    capture: true,
+  });
+  window.addEventListener('touchmove', preventBackgroundScroll, {
+    passive: false,
+    capture: true,
+  });
+
+  return () => {
+    window.removeEventListener('wheel', preventBackgroundScroll, {
+      capture: true,
+    });
+    window.removeEventListener('touchmove', preventBackgroundScroll, {
+      capture: true,
+    });
+
+    lockedElements.forEach((element) => {
+      const previous = previousStyles.get(element);
+      if (!previous) return;
+
+      element.style.overflow = previous.overflow;
+      element.style.overflowX = previous.overflowX;
+      element.style.overflowY = previous.overflowY;
+      element.style.overscrollBehavior = previous.overscrollBehavior;
+      element.style.touchAction = previous.touchAction;
+    });
+
+    body.style.position = previousBodyPosition.position;
+    body.style.top = previousBodyPosition.top;
+    body.style.left = previousBodyPosition.left;
+    body.style.right = previousBodyPosition.right;
+    body.style.width = previousBodyPosition.width;
+
+    window.scrollTo(scrollX, scrollY);
+  };
+}
+
 function ApplicationModal({
   companyKey,
   job,
@@ -634,25 +749,28 @@ function ApplicationModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [parserError, setParserError] = useState('');
+  const busyRef = useRef(busy);
+  const parsingRef = useRef(parsing);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    parsingRef.current = parsing;
+  }, [parsing]);
 
   const dynamicFields = Array.isArray(job.application_form_fields)
     ? job.application_form_fields
     : [];
 
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockBackgroundScroll = lockCareerPortalBackgroundScroll();
 
-    const closeOnEscape = (event) => {
-      if (event.key === 'Escape' && !busy && !parsing) onClose();
-    };
-
-    document.addEventListener('keydown', closeOnEscape);
     return () => {
-      document.body.style.overflow = previous;
-      document.removeEventListener('keydown', closeOnEscape);
+      unlockBackgroundScroll();
     };
-  }, [busy, onClose, parsing]);
+  }, []);
 
   const update = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -870,11 +988,12 @@ function ApplicationModal({
     return value !== undefined && value !== null && String(value).trim();
   }).length;
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
       className="yc-career-modal-backdrop"
       role="presentation"
-      onMouseDown={() => !busy && !parsing && onClose()}
     >
       <section
         className="yc-career-modal"
@@ -1255,6 +1374,8 @@ function ApplicationModal({
         </form>
       </section>
     </div>
+    ,
+    document.body,
   );
 }
 
@@ -1358,7 +1479,7 @@ function CareerJobsView({ companyKey, jobSlug }) {
     else loadJobs();
   }, [jobSlug, loadJob, loadJobs]);
 
-  const careerPath = `/career/${encodeURIComponent(
+  const careerPath = `/careers/${encodeURIComponent(
     company?.career_slug || companyKey,
   )}`;
 
@@ -1438,49 +1559,51 @@ function CareerJobsView({ companyKey, jobSlug }) {
                   <JobMeta job={job} />
                 </div>
 
-                <section className="yc-career-section">
-                  <h3>About the role</h3>
-                  <p>
-                    {job.description ||
-                      'Role description is not available.'}
-                  </p>
-                </section>
-
-                {Array.isArray(job.responsibilities) &&
-                job.responsibilities.length ? (
+                <div className="yc-career-detail-content-grid">
                   <section className="yc-career-section">
-                    <h3>Responsibilities</h3>
-                    <ul className="yc-career-list">
-                      {job.responsibilities.map((item) => (
-                        <li key={String(item)}>{item}</li>
-                      ))}
-                    </ul>
+                    <h3>About the role</h3>
+                    <p>
+                      {job.description ||
+                        'Role description is not available.'}
+                    </p>
                   </section>
-                ) : null}
 
-                {job.qualification ? (
-                  <section className="yc-career-section">
-                    <h3>Qualification</h3>
-                    <p>{job.qualification}</p>
-                  </section>
-                ) : null}
+                  {Array.isArray(job.responsibilities) &&
+                  job.responsibilities.length ? (
+                    <section className="yc-career-section">
+                      <h3>Responsibilities</h3>
+                      <ul className="yc-career-list">
+                        {job.responsibilities.map((item) => (
+                          <li key={String(item)}>{item}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
 
-                {Array.isArray(job.required_skills) &&
-                job.required_skills.length ? (
-                  <section className="yc-career-section">
-                    <h3>Required skills</h3>
-                    <div className="yc-career-chip-list">
-                      {job.required_skills.map((skill) => (
-                        <span
-                          className="yc-career-chip"
-                          key={String(skill)}
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
+                  {job.qualification ? (
+                    <section className="yc-career-section">
+                      <h3>Qualification</h3>
+                      <p>{job.qualification}</p>
+                    </section>
+                  ) : null}
+
+                  {Array.isArray(job.required_skills) &&
+                  job.required_skills.length ? (
+                    <section className="yc-career-section">
+                      <h3>Required skills</h3>
+                      <div className="yc-career-chip-list">
+                        {job.required_skills.map((skill) => (
+                          <span
+                            className="yc-career-chip"
+                            key={String(skill)}
+                          >
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </div>
               </article>
 
               <aside className="yc-career-panel yc-career-panel-sticky">
@@ -1489,76 +1612,71 @@ function CareerJobsView({ companyKey, jobSlug }) {
                   <p>Review the main details before applying.</p>
                 </div>
 
-                <dl
-                  className="yc-career-summary-list"
-                  style={{ marginTop: 12 }}
-                >
-                  <div className="yc-career-summary-row">
-                    <dt>Department</dt>
-                    <dd>{job.department || 'Not specified'}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Employment</dt>
-                    <dd>{displayLabel(job.employment_type)}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Work mode</dt>
-                    <dd>{displayLabel(job.work_mode)}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Location</dt>
-                    <dd>{job.work_location || 'Not specified'}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Experience</dt>
-                    <dd>{job.required_experience || 'Not specified'}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Vacancies</dt>
-                    <dd>{job.vacancies || 1}</dd>
-                  </div>
-                  <div className="yc-career-summary-row">
-                    <dt>Apply by</dt>
-                    <dd>{dateText(job.closing_date)}</dd>
-                  </div>
-                  {job.salary_visible ? (
+                <div className="yc-career-summary-content">
+                  <dl className="yc-career-summary-list">
                     <div className="yc-career-summary-row">
-                      <dt>Salary range</dt>
-                      <dd>
-                        {currencyText(job.salary_min, job.currency)} –{' '}
-                        {currencyText(job.salary_max, job.currency)}
-                      </dd>
+                      <dt>Department</dt>
+                      <dd>{job.department || 'Not specified'}</dd>
                     </div>
-                  ) : null}
-                </dl>
+                    <div className="yc-career-summary-row">
+                      <dt>Employment</dt>
+                      <dd>{displayLabel(job.employment_type)}</dd>
+                    </div>
+                    <div className="yc-career-summary-row">
+                      <dt>Work mode</dt>
+                      <dd>{displayLabel(job.work_mode)}</dd>
+                    </div>
+                    <div className="yc-career-summary-row">
+                      <dt>Location</dt>
+                      <dd>{job.work_location || 'Not specified'}</dd>
+                    </div>
+                    <div className="yc-career-summary-row">
+                      <dt>Experience</dt>
+                      <dd>{job.required_experience || 'Not specified'}</dd>
+                    </div>
+                    <div className="yc-career-summary-row">
+                      <dt>Vacancies</dt>
+                      <dd>{job.vacancies || 1}</dd>
+                    </div>
+                    <div className="yc-career-summary-row">
+                      <dt>Apply by</dt>
+                      <dd>{dateText(job.closing_date)}</dd>
+                    </div>
+                    {job.salary_visible ? (
+                      <div className="yc-career-summary-row">
+                        <dt>Salary range</dt>
+                        <dd>
+                          {currencyText(job.salary_min, job.currency)} –{' '}
+                          {currencyText(job.salary_max, job.currency)}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
 
-                <button
-                  type="button"
-                  className="yc-career-btn yc-career-btn-primary yc-career-btn-block"
-                  style={{ marginTop: 18 }}
-                  onClick={() => {
-                    setShowApplication(true);
-                    showNotice(
-                      'info',
-                      'Application form opened',
-                      'Upload your resume first. Detected details will fill the form and remain editable.',
-                      5200,
-                    );
-                  }}
-                >
-                  Apply for this position
-                  <ArrowRight size={15} />
-                </button>
+                  <button
+                    type="button"
+                    className="yc-career-btn yc-career-btn-primary yc-career-summary-apply"
+                    onClick={() => {
+                      setShowApplication(true);
+                      showNotice(
+                        'info',
+                        'Application form opened',
+                        'Upload your resume first. Detected details will fill the form and remain editable.',
+                        5200,
+                      );
+                    }}
+                  >
+                    Apply for this position
+                    <ArrowRight size={15} />
+                  </button>
 
-                <div
-                  className="yc-career-alert"
-                  style={{ marginTop: 12 }}
-                >
-                  <ShieldCheck size={16} />
-                  <span>
-                    Resume extraction and the match score support human review.
-                    They do not automatically decide your application.
-                  </span>
+                  <div className="yc-career-alert yc-career-summary-alert">
+                    <ShieldCheck size={16} />
+                    <span>
+                      Resume extraction and the match score support human review.
+                      They do not automatically decide your application.
+                    </span>
+                  </div>
                 </div>
               </aside>
             </div>
@@ -1683,48 +1801,54 @@ function CareerJobsView({ companyKey, jobSlug }) {
       <main className="yc-career-main">
         <div className="yc-career-shell">
           <section className="yc-career-hero">
-            <div className="yc-career-hero-main">
+            <div className="yc-career-hero-content">
               <span className="yc-career-eyebrow">
-                <UserRound size={14} />
+                <span aria-hidden="true">👋</span>
                 Join our team
               </span>
+
               <h1>
-                Build thoughtful work with{' '}
+                Build meaningful work with{' '}
                 {company.company_name || 'us'}.
               </h1>
-              <p>
-                Explore open roles, understand the work clearly and send your
-                application directly to the people responsible for hiring.
+
+              <p className="yc-career-hero-description">
+                Discover open opportunities, understand each role clearly and
+                apply directly to the team responsible for hiring.
               </p>
-            </div>
 
-            <aside className="yc-career-hero-side">
-              <div>
-                <div className="yc-career-side-icon">
-                  <FileCheck2 size={23} />
+              <div className="yc-career-hero-highlights">
+                <div className="yc-career-hero-highlight">
+                  <span aria-hidden="true">📄</span>
+                  <div>
+                    <strong>Resume-assisted application</strong>
+                    <p>
+                      Upload your resume to prefill editable application details.
+                    </p>
+                  </div>
                 </div>
-                <h2>A considered application journey</h2>
-                <p>
-                  Your resume can fill the application form and provide an
-                  explainable role-match preview before you submit.
-                </p>
-              </div>
 
-              <ul className="yc-career-check-list">
-                <li>
-                  <Check size={14} />
-                  One application reference for follow-up
-                </li>
-                <li>
-                  <Check size={14} />
-                  Editable resume extraction before submission
-                </li>
-                <li>
-                  <Check size={14} />
-                  Human review for every hiring decision
-                </li>
-              </ul>
-            </aside>
+                <div className="yc-career-hero-highlight">
+                  <span aria-hidden="true">✨</span>
+                  <div>
+                    <strong>Clear role-match preview</strong>
+                    <p>
+                      Review an explainable match summary before submitting.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="yc-career-hero-highlight">
+                  <span aria-hidden="true">🤝</span>
+                  <div>
+                    <strong>Human-led hiring</strong>
+                    <p>
+                      Every application and hiring decision is reviewed by people.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <div className="yc-career-toolbar">
@@ -2367,654 +2491,7 @@ function JoiningDocumentItem({ document, busy, onUpload }) {
 }
 
 
-const CAREER_PORTAL_VISUAL_STYLES = `
-  .yc-career-page {
-    --yc-career-ink: #101a3a;
-    --yc-career-soft: #596483;
-    --yc-career-violet: #6254da;
-    --yc-career-deep: #342b78;
-    --yc-career-blue: #3766db;
-    --yc-career-teal: #18aaa8;
-    --yc-career-flat-blue: #b9d7ff;
-    --yc-career-flat-violet: #c9c0ff;
-    --yc-career-flat-teal: #aee6d9;
-    --yc-career-ease: cubic-bezier(.22, 1, .36, 1);
 
-    min-height: 100dvh;
-    color: var(--yc-career-ink);
-    background:
-      radial-gradient(circle at 8% 4%, rgba(121, 219, 238, .14), transparent 24%),
-      radial-gradient(circle at 92% 7%, rgba(191, 190, 249, .14), transparent 24%),
-      linear-gradient(180deg, #f8fcff 0%, #fbfdff 38%, #f8f6ff 100%);
-    font-family: var(--yc-ui, var(--body), inherit);
-    overflow-x: clip;
-  }
-
-  .yc-career-shell {
-    width: min(1480px, calc(100% - clamp(28px, 5vw, 80px))) !important;
-    margin-inline: auto;
-  }
-
-  .yc-career-topbar {
-    position: sticky;
-    top: 0;
-    z-index: 70;
-    border-bottom: 1px solid rgba(171, 181, 211, .42) !important;
-    background: rgba(255, 255, 255, .86) !important;
-    backdrop-filter: blur(18px);
-    box-shadow: 0 10px 28px rgba(34, 38, 110, .07);
-  }
-
-  .yc-career-topbar-inner {
-    min-height: 78px;
-  }
-
-  .yc-career-brand,
-  .yc-career-btn,
-  .yc-career-back,
-  .yc-career-job-card,
-  .yc-career-panel,
-  .yc-career-document,
-  .yc-career-state-card,
-  .yc-career-toast,
-  .yc-career-upload {
-    transition:
-      transform 280ms var(--yc-career-ease),
-      border-color 220ms ease,
-      box-shadow 280ms var(--yc-career-ease),
-      background 220ms ease,
-      filter 220ms ease,
-      opacity 220ms ease !important;
-  }
-
-  .yc-career-brand:hover {
-    transform: translateY(-2px);
-  }
-
-  .yc-career-logo {
-    border-radius: 16px !important;
-    box-shadow:
-      4px 5px 0 rgba(98, 84, 218, .16),
-      0 10px 22px rgba(34, 38, 110, .1) !important;
-  }
-
-  .yc-career-powered {
-    color: #3657b5 !important;
-    background: #e5e9ff !important;
-    border: 1px solid rgba(98, 84, 218, .12) !important;
-    border-radius: 999px !important;
-    font-weight: 900 !important;
-  }
-
-  .yc-career-main {
-    padding-block: clamp(24px, 4vw, 54px) !important;
-  }
-
-  .yc-career-hero {
-    position: relative;
-    isolation: isolate;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
-    gap: clamp(22px, 3vw, 42px);
-    align-items: stretch;
-    margin-bottom: clamp(26px, 4vw, 48px);
-    padding: clamp(24px, 3vw, 40px);
-    border: 1px solid rgba(171, 181, 211, .72) !important;
-    border-radius: clamp(28px, 2.5vw, 40px) !important;
-    background:
-      radial-gradient(circle at 8% 8%, rgba(121, 219, 238, .34), transparent 31%),
-      radial-gradient(circle at 92% 12%, rgba(191, 190, 249, .3), transparent 34%),
-      linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%) !important;
-    box-shadow:
-      12px 14px 0 var(--yc-career-flat-blue),
-      0 28px 48px rgba(34, 38, 110, .13) !important;
-  }
-
-  .yc-career-hero::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -2;
-    opacity: .42;
-    pointer-events: none;
-    background-image:
-      linear-gradient(rgba(65, 55, 161, .035) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(65, 55, 161, .035) 1px, transparent 1px);
-    background-size: 42px 42px;
-  }
-
-  .yc-career-hero::after {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    width: clamp(170px, 20vw, 300px);
-    aspect-ratio: 1;
-    right: clamp(-115px, -7vw, -60px);
-    top: clamp(-120px, -8vw, -65px);
-    border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
-    background: linear-gradient(145deg, rgba(105, 217, 208, .72), rgba(121, 189, 242, .72));
-    transform: rotate(18deg);
-  }
-
-  .yc-career-eyebrow {
-    color: #fff !important;
-    background: var(--yc-career-deep) !important;
-    border-radius: 999px !important;
-    font-size: 9px !important;
-    font-weight: 950 !important;
-    letter-spacing: .12em !important;
-  }
-
-  .yc-career-hero h1,
-  .yc-career-detail-title,
-  .yc-career-state-card h1,
-  .yc-career-state-card h2 {
-    color: var(--yc-career-ink) !important;
-    font-family: var(--yc-display, var(--heading), inherit);
-    letter-spacing: -.05em !important;
-  }
-
-  .yc-career-hero h1 {
-    font-size: clamp(38px, 5vw, 76px) !important;
-    line-height: .93 !important;
-  }
-
-  .yc-career-hero p,
-  .yc-career-panel p,
-  .yc-career-state-card p,
-  .yc-career-empty p,
-  .yc-career-heading p {
-    color: var(--yc-career-soft) !important;
-  }
-
-  .yc-career-hero-side {
-    border: 1px solid rgba(159, 169, 205, .58) !important;
-    border-radius: 24px !important;
-    background: rgba(255, 255, 255, .84) !important;
-    box-shadow:
-      8px 10px 0 var(--yc-career-flat-violet),
-      0 20px 34px rgba(15, 20, 75, .09) !important;
-  }
-
-  .yc-career-toolbar {
-    gap: 18px !important;
-    margin-bottom: 18px !important;
-    padding: 18px 20px !important;
-    border: 1px solid rgba(171, 181, 211, .62) !important;
-    border-radius: 22px !important;
-    background: rgba(255, 255, 255, .82) !important;
-    box-shadow:
-      7px 9px 0 #d1dcfa,
-      0 18px 30px rgba(34, 38, 110, .08) !important;
-  }
-
-  .yc-career-search {
-    border-color: rgba(159, 169, 205, .62) !important;
-    border-radius: 14px !important;
-    background: rgba(255, 255, 255, .9) !important;
-    transition:
-      border-color 180ms ease,
-      box-shadow 180ms ease,
-      background 180ms ease !important;
-  }
-
-  .yc-career-search:focus-within {
-    border-color: var(--yc-career-violet) !important;
-    box-shadow: 0 0 0 4px rgba(98, 84, 218, .11) !important;
-    background: #fff !important;
-  }
-
-  .yc-career-jobs {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 20px !important;
-  }
-
-  .yc-career-job-card,
-  .yc-career-panel,
-  .yc-career-document,
-  .yc-career-state-card,
-  .yc-career-match {
-    border: 1px solid rgba(171, 181, 211, .68) !important;
-    border-radius: 24px !important;
-    background:
-      linear-gradient(145deg, rgba(255,255,255,.99), rgba(244,249,255,.98)) !important;
-    box-shadow:
-      7px 9px 0 var(--yc-career-flat-blue),
-      0 18px 30px rgba(15, 20, 75, .08) !important;
-  }
-
-  .yc-career-job-card:nth-child(3n + 2) {
-    background: linear-gradient(145deg, #fff, #f4f1ff) !important;
-    box-shadow: 7px 9px 0 var(--yc-career-flat-violet), 0 18px 30px rgba(15,20,75,.08) !important;
-  }
-
-  .yc-career-job-card:nth-child(3n + 3) {
-    background: linear-gradient(145deg, #fff, #eefaf7) !important;
-    box-shadow: 7px 9px 0 var(--yc-career-flat-teal), 0 18px 30px rgba(15,20,75,.08) !important;
-  }
-
-  .yc-career-job-card:hover {
-    transform: translateY(-5px);
-    border-color: rgba(98, 84, 218, .3) !important;
-    box-shadow:
-      11px 13px 0 var(--yc-career-flat-blue),
-      0 26px 42px rgba(15, 20, 75, .13) !important;
-  }
-
-  .yc-career-job-card:nth-child(3n + 2):hover {
-    box-shadow: 11px 13px 0 var(--yc-career-flat-violet), 0 26px 42px rgba(15,20,75,.13) !important;
-  }
-
-  .yc-career-job-card:nth-child(3n + 3):hover {
-    box-shadow: 11px 13px 0 var(--yc-career-flat-teal), 0 26px 42px rgba(15,20,75,.13) !important;
-  }
-
-  .yc-career-detail-layout {
-    grid-template-columns: minmax(0, 1.25fr) minmax(330px, .75fr) !important;
-    gap: clamp(20px, 3vw, 34px) !important;
-  }
-
-  .yc-career-panel {
-    padding: clamp(20px, 2.4vw, 30px) !important;
-  }
-
-  .yc-career-panel-sticky {
-    top: 98px !important;
-  }
-
-  .yc-career-btn,
-  .yc-career-back,
-  .yc-career-icon-btn {
-    border-radius: 14px !important;
-    font-weight: 900 !important;
-  }
-
-  .yc-career-btn:hover:not(:disabled),
-  .yc-career-back:hover,
-  .yc-career-icon-btn:hover:not(:disabled) {
-    transform: translateY(-2px);
-    filter: saturate(1.04);
-  }
-
-  .yc-career-btn-primary {
-    color: #fff !important;
-    background: linear-gradient(145deg, #4f72df, #2bb9b5) !important;
-    box-shadow: 5px 6px 0 rgba(52, 43, 120, .8) !important;
-  }
-
-  .yc-career-btn-neutral {
-    color: var(--yc-career-deep) !important;
-    background: #f1efff !important;
-    border-color: rgba(98, 84, 218, .18) !important;
-    box-shadow: 4px 5px 0 rgba(98, 84, 218, .14) !important;
-  }
-
-  .yc-career-btn-success {
-    color: #fff !important;
-    background: linear-gradient(145deg, #2bb9b5, #2f8f88) !important;
-    box-shadow: 5px 6px 0 rgba(19, 115, 111, .72) !important;
-  }
-
-  .yc-career-btn-danger {
-    color: #b62f55 !important;
-    background: #ffe4ec !important;
-  }
-
-  .yc-career-input,
-  .yc-career-field input,
-  .yc-career-field select,
-  .yc-career-field textarea {
-    border-color: rgba(159, 169, 205, .62) !important;
-    border-radius: 14px !important;
-    color: var(--yc-career-ink) !important;
-    background: rgba(255, 255, 255, .9) !important;
-    transition:
-      border-color 180ms ease,
-      box-shadow 180ms ease,
-      background 180ms ease !important;
-  }
-
-  .yc-career-input:focus,
-  .yc-career-field input:focus,
-  .yc-career-field select:focus,
-  .yc-career-field textarea:focus {
-    border-color: var(--yc-career-violet) !important;
-    background: #fff !important;
-    box-shadow: 0 0 0 4px rgba(98, 84, 218, .11) !important;
-  }
-
-  .yc-career-upload:hover {
-    transform: translateY(-2px);
-    border-color: rgba(98, 84, 218, .34) !important;
-    background: #fff !important;
-  }
-
-  .yc-career-modal-backdrop {
-    animation: ycCareerBackdropIn 260ms ease both;
-    backdrop-filter: blur(9px);
-  }
-
-  .yc-career-modal {
-    width: min(920px, calc(100% - 32px)) !important;
-    max-height: calc(100dvh - 32px) !important;
-    border: 1px solid rgba(171, 181, 211, .72) !important;
-    border-radius: 26px !important;
-    background:
-      linear-gradient(145deg, #fff 0%, #f4fbff 52%, #f8f1ff 100%) !important;
-    box-shadow:
-      0 34px 90px rgba(34, 38, 110, .25),
-      10px 12px 0 rgba(185, 215, 255, .5) !important;
-    animation: ycCareerModalIn 440ms var(--yc-career-ease) both;
-    transform-origin: 50% 12%;
-  }
-
-  .yc-career-modal-head,
-  .yc-career-modal-foot {
-    border-color: rgba(65, 55, 161, .11) !important;
-    background: rgba(255, 255, 255, .76) !important;
-  }
-
-  @keyframes ycCareerBackdropIn {
-    from { opacity: 0; backdrop-filter: blur(0); }
-    to { opacity: 1; backdrop-filter: blur(9px); }
-  }
-
-  @keyframes ycCareerModalIn {
-    from {
-      opacity: 0;
-      transform: translateY(24px) scale(.965);
-      filter: blur(4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-      filter: blur(0);
-    }
-  }
-
-  .yc-career-route-stage {
-    transform-origin: 50% 15%;
-    animation: ycCareerRouteIn 520ms var(--yc-career-ease) both;
-    transition:
-      opacity 220ms ease,
-      transform 280ms var(--yc-career-ease),
-      filter 220ms ease !important;
-  }
-
-  .yc-career-route-stage.is-leaving {
-    opacity: 0;
-    transform: translateY(12px) scale(.992);
-    filter: blur(3px);
-    pointer-events: none;
-  }
-
-  @keyframes ycCareerRouteIn {
-    from {
-      opacity: 0;
-      transform: translateY(18px) scale(.992);
-      filter: blur(3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-      filter: blur(0);
-    }
-  }
-
-  .yc-career-route-progress {
-    position: fixed !important;
-    z-index: 9999 !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100% !important;
-    height: 3px !important;
-    transform-origin: left;
-    background: linear-gradient(90deg, #6254da, #3766db, #18aaa8) !important;
-    box-shadow: 0 2px 10px rgba(98, 84, 218, .3);
-    animation: ycCareerProgress 560ms ease both;
-  }
-
-  @keyframes ycCareerProgress {
-    from { transform: scaleX(.04); opacity: .55; }
-    72% { transform: scaleX(.84); opacity: 1; }
-    to { transform: scaleX(1); opacity: 0; }
-  }
-
-  .yc-career-transition-note {
-    position: fixed !important;
-    z-index: 9998 !important;
-    top: 18px !important;
-    left: 50% !important;
-    transform: translateX(-50%);
-    border: 1px solid rgba(98, 84, 218, .16) !important;
-    border-radius: 999px !important;
-    color: var(--yc-career-deep) !important;
-    background: rgba(255, 255, 255, .94) !important;
-    box-shadow: 0 12px 28px rgba(34, 38, 110, .14) !important;
-    animation: ycCareerNoteIn 240ms var(--yc-career-ease) both;
-    backdrop-filter: blur(14px);
-  }
-
-  @keyframes ycCareerNoteIn {
-    from { opacity: 0; transform: translate(-50%, -8px); }
-    to { opacity: 1; transform: translate(-50%, 0); }
-  }
-
-  .yc-career-toast {
-    animation: ycCareerToastIn 420ms var(--yc-career-ease) both;
-  }
-
-  @keyframes ycCareerToastIn {
-    from { opacity: 0; transform: translateX(22px) scale(.97); }
-    to { opacity: 1; transform: translateX(0) scale(1); }
-  }
-
-  .yc-career-document:hover {
-    transform: translateY(-2px);
-    border-color: rgba(98, 84, 218, .28) !important;
-  }
-
-  .yc-career-state-wrap {
-    min-height: calc(100dvh - 160px);
-    display: grid;
-    align-items: center;
-    padding-block: 32px;
-  }
-
-  .yc-career-state-card {
-    width: min(760px, 100%);
-    margin-inline: auto;
-  }
-
-  .yc-career-footer {
-    border-top: 1px solid rgba(171, 181, 211, .42) !important;
-    background: rgba(255, 255, 255, .74) !important;
-  }
-
-  @media (min-width: 1600px) {
-    .yc-career-shell {
-      width: min(1560px, calc(100% - 96px)) !important;
-    }
-
-    .yc-career-jobs {
-      grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-    }
-  }
-
-  @media (max-width: 1180px) {
-    .yc-career-jobs {
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    }
-
-    .yc-career-detail-layout {
-      grid-template-columns: minmax(0, 1fr) minmax(300px, .72fr) !important;
-    }
-  }
-
-  @media (max-width: 900px) {
-    .yc-career-shell {
-      width: min(100% - 28px, 760px) !important;
-    }
-
-    .yc-career-hero,
-    .yc-career-detail-layout {
-      grid-template-columns: 1fr !important;
-    }
-
-    .yc-career-panel-sticky {
-      position: static !important;
-    }
-
-    .yc-career-toolbar {
-      align-items: stretch !important;
-      flex-direction: column !important;
-    }
-
-    .yc-career-search {
-      width: 100% !important;
-      max-width: none !important;
-    }
-  }
-
-  @media (max-width: 640px) {
-    .yc-career-shell {
-      width: calc(100% - 22px) !important;
-    }
-
-    .yc-career-topbar-inner {
-      min-height: 68px;
-      gap: 10px;
-    }
-
-    .yc-career-powered {
-      display: none !important;
-    }
-
-    .yc-career-main {
-      padding-block: 18px 30px !important;
-    }
-
-    .yc-career-hero {
-      padding: 20px;
-      border-radius: 24px !important;
-      box-shadow:
-        7px 8px 0 var(--yc-career-flat-blue),
-        0 18px 30px rgba(34, 38, 110, .1) !important;
-    }
-
-    .yc-career-hero h1 {
-      font-size: clamp(34px, 10.5vw, 46px) !important;
-    }
-
-    .yc-career-jobs {
-      grid-template-columns: 1fr !important;
-      gap: 15px !important;
-    }
-
-    .yc-career-job-card,
-    .yc-career-panel,
-    .yc-career-document,
-    .yc-career-state-card {
-      border-radius: 21px !important;
-      box-shadow:
-        6px 7px 0 var(--yc-career-flat-blue),
-        0 16px 28px rgba(34, 38, 110, .08) !important;
-    }
-
-    .yc-career-card-foot,
-    .yc-career-document {
-      align-items: stretch !important;
-      flex-direction: column !important;
-    }
-
-    .yc-career-card-foot .yc-career-btn,
-    .yc-career-document .yc-career-btn {
-      width: 100%;
-    }
-
-    .yc-career-modal {
-      width: calc(100% - 16px) !important;
-      max-height: calc(100dvh - 16px) !important;
-      border-radius: 22px !important;
-    }
-
-    .yc-career-modal-head,
-    .yc-career-modal-body,
-    .yc-career-modal-foot {
-      padding-inline: 16px !important;
-    }
-
-    .yc-career-modal-foot {
-      display: grid !important;
-      grid-template-columns: 1fr !important;
-    }
-
-    .yc-career-modal-foot .yc-career-btn {
-      width: 100%;
-    }
-
-    .yc-career-form-grid {
-      grid-template-columns: 1fr !important;
-    }
-
-    .yc-career-field-full {
-      grid-column: auto !important;
-    }
-
-    .yc-career-transition-note {
-      top: 10px !important;
-      max-width: calc(100% - 24px);
-      text-align: center;
-    }
-
-    .yc-career-toast-region {
-      inset: auto 10px 10px 10px !important;
-    }
-
-    .yc-career-toast {
-      width: 100% !important;
-    }
-
-    .yc-career-footer-inner {
-      align-items: flex-start !important;
-      flex-direction: column !important;
-      gap: 7px !important;
-      text-align: left !important;
-    }
-  }
-
-  @media (max-width: 390px) {
-    .yc-career-shell {
-      width: calc(100% - 16px) !important;
-    }
-
-    .yc-career-hero,
-    .yc-career-panel,
-    .yc-career-job-card,
-    .yc-career-state-card {
-      padding: 16px !important;
-    }
-
-    .yc-career-brand-copy strong {
-      max-width: 190px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .yc-career-page *,
-    .yc-career-page *::before,
-    .yc-career-page *::after {
-      scroll-behavior: auto !important;
-      animation-duration: .01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: .01ms !important;
-    }
-  }
-`;
 
 export default function CareerPortal(props) {
   const route = useMemo(
