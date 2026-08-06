@@ -20,6 +20,7 @@ from app.services.recruitment_service import (
     JOB_OPENINGS,
     OFFERS,
     ONBOARDING_TASKS,
+    SETTINGS,
     RecruitmentService,
     RecruitmentServiceError,
 )
@@ -283,6 +284,7 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         self.db.tenants.insert_one({
             "tenant_id": self.TENANT_A,
             "company_name": "Sayanant Development Services",
+            "tenant_code": "SDS",
             "recruitment_email": "careers@example.com",
         })
         self.db.tenants.insert_one({
@@ -445,6 +447,45 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         ready_application = self.db[APPLICATIONS].find_one({"_id": application["_id"]})
         self.assertEqual(ready_application["status"], "ready_to_join")
         return candidate, job, ready_application
+
+    # ------------------------------------------------------------------
+    # Tenant career portal settings
+    # ------------------------------------------------------------------
+    def test_recruitment_settings_generate_slug_from_tenant_code(self):
+        settings = self.hr.get_settings()
+
+        self.assertEqual(settings["public_career_slug"], "sds")
+        self.assertIsNone(
+            self.db[SETTINGS].find_one({"tenant_id": self.TENANT_A})
+        )
+
+    def test_recruitment_settings_normalise_custom_career_slug(self):
+        settings = self.hr.update_settings({
+            "public_career_slug": "  SDS Careers & Jobs  ",
+        })
+
+        self.assertEqual(settings["public_career_slug"], "sds-careers-jobs")
+        stored = self.db[SETTINGS].find_one({"tenant_id": self.TENANT_A})
+        self.assertEqual(stored["public_career_slug"], "sds-careers-jobs")
+
+    def test_blank_career_slug_falls_back_to_tenant_slug(self):
+        settings = self.hr.update_settings({"public_career_slug": "   "})
+
+        self.assertEqual(settings["public_career_slug"], "sds")
+
+    def test_duplicate_career_slug_is_rejected_across_tenants(self):
+        other = self.other_hr.update_settings({
+            "public_career_slug": "shared-careers",
+        })
+        self.assertEqual(other["public_career_slug"], "shared-careers")
+
+        with self.assertRaises(RecruitmentServiceError) as context:
+            self.hr.update_settings({
+                "public_career_slug": "Shared Careers",
+            })
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.code, "career_slug_already_exists")
 
     # ------------------------------------------------------------------
     # Permission, tenant and status controls

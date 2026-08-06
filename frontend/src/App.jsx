@@ -800,7 +800,12 @@ function isCareerPortalPath(pathname) {
     .toLowerCase()
     .replace(/\/+$/, '');
 
-  return path === '/careers' || path.startsWith('/careers/');
+  return (
+    path === '/career' ||
+    path.startsWith('/career/') ||
+    path === '/careers' ||
+    path.startsWith('/careers/')
+  );
 }
 
 function isApplyDemoRegistrationPath(pathname) {

@@ -26,6 +26,13 @@ const HRMS_PUBLIC_ROUTES = [
   "/apply-demo-registration",
   "/demo-registration",
   "/register-demo",
+
+  // Tenant-specific public career portal:
+  // /career/sds
+  // /career/another-tenant
+  "/career",
+
+  // Preserved for existing recruitment URLs and backward compatibility.
   "/careers",
 ];
 

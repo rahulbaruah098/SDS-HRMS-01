@@ -3,7 +3,7 @@ import {
   Activity, AlertCircle, BadgeCheck, BriefcaseBusiness, CalendarClock, Check,
   CheckCircle2, ChevronRight, ClipboardCheck, Clock3, Download, FileCheck2,
   FileSearch, FileText, Filter, Gauge, Inbox, LayoutDashboard, Loader2, Mail,
-  MapPin, Paperclip, PauseCircle, Plus, RefreshCw, Search, Send, Settings2,
+  Copy, ExternalLink, Link2, MapPin, Paperclip, PauseCircle, Plus, RefreshCw, Search, Send, Settings2,
   ShieldCheck, Sparkles, Star, UploadCloud, UserCheck, UserPlus, Users,
   UserSearch, X, XCircle,
 } from 'lucide-react';
@@ -126,6 +126,7 @@ const DEFAULT_SETTINGS = {
 
 const idOf = (item) => String(item?._id || item?.id || '').trim();
 const keyOf = (value) => String(value || '').trim().toLowerCase().replaceAll('-', '_').replace(/\s+/g, '_');
+const slugOf = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const labelOf = (value) => {
   const key = keyOf(value);
   const aliases = {
@@ -1672,6 +1673,7 @@ export default function Recruitment() {
   const [confirm, setConfirm] = useState(null);
   const [dashboard, setDashboard] = useState({});
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [publishedCareerUrl, setPublishedCareerUrl] = useState('');
   const [requests, setRequests] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [candidates, setCandidates] = useState([]);
@@ -1796,6 +1798,39 @@ export default function Recruitment() {
     } finally { setBusy(''); }
   }, [flash, load, tab]);
 
+  const careerPortalUrl = useMemo(() => {
+    const slug = slugOf(settings.public_career_slug);
+    if (!slug || typeof window === 'undefined') return '';
+    return `${window.location.origin}/career/${encodeURIComponent(slug)}`;
+  }, [settings.public_career_slug]);
+
+  const copyCareerPortalLink = useCallback(async (url = careerPortalUrl) => {
+    if (!url) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
+      else {
+        const input = document.createElement('textarea'); input.value = url; input.setAttribute('readonly', '');
+        input.style.position = 'fixed'; input.style.opacity = '0'; document.body.appendChild(input);
+        input.select(); document.execCommand('copy'); document.body.removeChild(input);
+      }
+      flash('success', 'Career portal link copied to the clipboard.');
+    } catch { flash('danger', 'Unable to copy the career portal link. Please copy it manually.'); }
+  }, [careerPortalUrl, flash]);
+
+  const publishJobOpening = useCallback(async (job) => {
+    const jobId = idOf(job); setBusy(`open-job:${jobId}`);
+    try {
+      await changeRecruitmentJobOpeningStatus(jobId, { status: 'open', channels: ['career_page'] });
+      const nextSettings = { ...DEFAULT_SETTINGS, ...itemOf(await getRecruitmentSettings()) };
+      setSettings(nextSettings);
+      const slug = slugOf(nextSettings.public_career_slug);
+      const url = slug ? `${window.location.origin}/career/${encodeURIComponent(slug)}` : '';
+      setPublishedCareerUrl(url); setConfirm(null);
+      flash('success', url ? `Job opening published. Public career portal: ${url}` : 'Job opening published.');
+      await load('jobs', true);
+    } catch (error) { flash('danger', messageOf(error)); } finally { setBusy(''); }
+  }, [flash, load]);
+
   const approvedRequests = useMemo(() => requests.filter((request) => {
     const finalApproved = request.final_approval_completed === true || keyOf(request.final_approval_status) === 'approved';
     return keyOf(request.status) === 'approved' && finalApproved && !jobs.some((job) => String(job.hiring_request_id) === idOf(request) && ['draft', 'open', 'paused'].includes(keyOf(job.status)));
@@ -1873,9 +1908,10 @@ export default function Recruitment() {
   function jobsPage() {
     return <section className="recruitment-panel"><SectionHead title="Job openings" description="Prepare, publish, pause and close approved vacancies">{canHrPublish ? <button type="button" className="recruitment-btn recruitment-btn-primary" disabled={!approvedRequests.length} onClick={() => setModal({ type: 'job' })}><Plus size={15} />Create job opening</button> : null}</SectionHead>
       {isTeamLeader ? <div className="recruitment-scope-note"><BriefcaseBusiness size={17} /><div><strong>Assigned hiring work</strong>You can view job openings and candidates only where you are the hiring manager, interview panel member or assigned interviewer. HR controls publishing and closure.</div></div> : null}
+      {publishedCareerUrl && canHrPublish ? <div className="recruitment-career-link-card is-published"><span className="recruitment-career-link-icon"><Link2 size={18} /></span><div className="recruitment-career-link-copy"><strong>Job published successfully</strong><span>Your tenant career portal is ready to share.</span><a href={publishedCareerUrl} target="_blank" rel="noreferrer">{publishedCareerUrl}</a></div><div className="recruitment-career-link-actions"><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => copyCareerPortalLink(publishedCareerUrl)}><Copy size={13} />Copy link</button><a className="recruitment-btn recruitment-btn-primary recruitment-btn-sm" href={publishedCareerUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} />Open portal</a></div></div> : null}
       <Toolbar search={filters.jobSearch} setSearch={(value) => setFilters((state) => ({ ...state, jobSearch: value }))} status={filters.jobStatus} setStatus={(value) => setFilters((state) => ({ ...state, jobStatus: value }))} statuses={['draft', 'open', 'paused', 'closed', 'cancelled']} onApply={() => load('jobs')} placeholder="Search job, reference or department" />
       {jobs.length ? <Table headers={['Job opening', 'Department', 'Location', 'Vacancies', 'Applications', 'Closing', 'Status', 'Channels', '']} wide>{jobs.map((job) => { const status = keyOf(job.status); return <tr key={idOf(job)}><td><b className="recruitment-table-primary">{job.job_title || 'Untitled job'}</b><small className="recruitment-table-secondary">{job.reference_no || job.public_slug || '—'}</small></td><td>{job.department || '—'}</td><td>{job.work_location || '—'}<small className="recruitment-table-secondary">{labelOf(job.work_mode)}</small></td><td>{job.filled_vacancies || 0}/{job.vacancies || 1}</td><td>{job.application_count || 0}</td><td>{formatDate(job.closing_date)}</td><td><Status value={status} /></td><td>{job.published_channels?.length ? job.published_channels.map(labelOf).join(', ') : 'Not published'}</td><td><div className="recruitment-table-actions">
-        {canHrPublish && status === 'draft' ? <button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => setConfirm({ title: 'Publish job opening', message: 'The vacancy will become available on the career page.', label: 'Publish', tone: 'success', action: () => act(`open-job:${idOf(job)}`, () => changeRecruitmentJobOpeningStatus(idOf(job), { status: 'open', channels: ['career_page'] }), 'Job opening published.', 'jobs') })}><Send size={13} />Publish</button> : null}
+        {canHrPublish && status === 'draft' ? <button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => setConfirm({ title: 'Publish job opening', message: 'The vacancy will become available on this tenant’s public career portal.', label: 'Publish', tone: 'success', action: () => publishJobOpening(job) })}><Send size={13} />Publish</button> : null}
         {canHrPublish && status === 'open' ? <button type="button" className="recruitment-btn recruitment-btn-warning recruitment-btn-sm" onClick={() => setConfirm({ title: 'Pause job opening', message: 'Applications will pause until reopened.', label: 'Pause', tone: 'warning', reason: true, action: (text) => act(`pause-job:${idOf(job)}`, () => changeRecruitmentJobOpeningStatus(idOf(job), { status: 'paused', reason: text }), 'Job opening paused.', 'jobs') })}><PauseCircle size={13} />Pause</button> : null}
         {canHrPublish && status === 'paused' ? <button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => act(`reopen-job:${idOf(job)}`, () => changeRecruitmentJobOpeningStatus(idOf(job), { status: 'open' }), 'Job opening reopened.', 'jobs')}><CheckCircle2 size={13} />Reopen</button> : null}
         {canHrPublish && ['open', 'paused'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => setConfirm({ title: 'Close job opening', message: 'Enter the closure reason.', label: 'Close', reason: true, action: (text) => act(`close-job:${idOf(job)}`, () => changeRecruitmentJobOpeningStatus(idOf(job), { status: 'closed', reason: text }), 'Job opening closed.', 'jobs') })}><XCircle size={13} />Close</button> : null}
@@ -1946,10 +1982,11 @@ export default function Recruitment() {
   function settingsPage() {
     return <section className="recruitment-panel"><SectionHead title="Recruitment settings" description="Company-specific workflow and communication controls" />
       <form className="recruitment-form" onSubmit={(event) => { event.preventDefault(); act('settings', () => updateRecruitmentSettings(settings), 'Recruitment settings updated.', 'settings'); }}>
+        <div className="recruitment-career-link-card"><span className="recruitment-career-link-icon"><Link2 size={18} /></span><div className="recruitment-career-link-copy"><strong>Public career portal link</strong><span>This direct link automatically uses the active YourComate domain and this tenant’s career slug.</span>{careerPortalUrl ? <a href={careerPortalUrl} target="_blank" rel="noreferrer">{careerPortalUrl}</a> : <em>Save a valid career page slug to generate the public link.</em>}</div><div className="recruitment-career-link-actions"><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" disabled={!careerPortalUrl} onClick={() => copyCareerPortalLink()}><Copy size={13} />Copy link</button><a className={`recruitment-btn recruitment-btn-primary recruitment-btn-sm${careerPortalUrl ? '' : ' is-disabled'}`} href={careerPortalUrl || undefined} target="_blank" rel="noreferrer" aria-disabled={!careerPortalUrl} onClick={(event) => { if (!careerPortalUrl) event.preventDefault(); }}><ExternalLink size={13} />Open portal</a></div></div>
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Workflow controls</h3><div className="recruitment-form-grid">{[
           ['module_enabled', 'Recruitment module enabled'], ['career_page_enabled', 'Public career page enabled'], ['allow_employee_referrals', 'Allow employee referrals'], ['require_hiring_request_approval', 'Require hiring request approval'], ['require_salary_approval', 'Require salary and offer approval'],
         ].map(([key, label]) => <label className="recruitment-checkbox-row" key={key}><input type="checkbox" checked={Boolean(settings[key])} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, [key]: event.target.checked }))} /><span>{label}</span></label>)}</div></div>
-        <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">General defaults</h3><div className="recruitment-form-grid recruitment-form-grid-3"><Field label="Default currency"><select value={settings.default_currency || 'INR'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_currency: event.target.value }))}>{['INR', 'USD', 'BDT', 'EUR', 'GBP'].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Default application source"><select value={settings.default_application_source || 'career_page'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_application_source: event.target.value }))}>{['career_page', 'manual', 'employee_referral', 'job_portal', 'social_media', 'agency'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field><Field label="Employee code prefix"><input value={settings.employee_code_prefix || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, employee_code_prefix: event.target.value.toUpperCase() }))} /></Field><Field label="Candidate retention days"><input type="number" min="30" value={settings.candidate_retention_days || 730} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, candidate_retention_days: Number(event.target.value) }))} /></Field><Field label="Maximum resume size (MB)"><input type="number" min="1" max="25" value={settings.resume_max_size_mb || 8} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, resume_max_size_mb: Number(event.target.value) }))} /></Field><Field label="Career page slug"><input value={settings.public_career_slug || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, public_career_slug: keyOf(event.target.value) }))} /></Field></div></div>
+        <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">General defaults</h3><div className="recruitment-form-grid recruitment-form-grid-3"><Field label="Default currency"><select value={settings.default_currency || 'INR'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_currency: event.target.value }))}>{['INR', 'USD', 'BDT', 'EUR', 'GBP'].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Default application source"><select value={settings.default_application_source || 'career_page'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_application_source: event.target.value }))}>{['career_page', 'manual', 'employee_referral', 'job_portal', 'social_media', 'agency'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field><Field label="Employee code prefix"><input value={settings.employee_code_prefix || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, employee_code_prefix: event.target.value.toUpperCase() }))} /></Field><Field label="Candidate retention days"><input type="number" min="30" value={settings.candidate_retention_days || 730} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, candidate_retention_days: Number(event.target.value) }))} /></Field><Field label="Maximum resume size (MB)"><input type="number" min="1" max="25" value={settings.resume_max_size_mb || 8} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, resume_max_size_mb: Number(event.target.value) }))} /></Field><Field label="Career page slug"><input value={settings.public_career_slug || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, public_career_slug: slugOf(event.target.value) }))} /></Field></div></div>
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Candidate emails</h3><div className="recruitment-form-grid">{[
           ['email_candidate_on_application', 'Application received confirmation'], ['email_candidate_on_interview', 'Interview invitations and changes'], ['email_candidate_on_offer', 'Approved offer communication'], ['email_candidate_on_rejection', 'Respectful rejection communication'],
         ].map(([key, label]) => <label className="recruitment-checkbox-row" key={key}><input type="checkbox" checked={Boolean(settings[key])} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, [key]: event.target.checked }))} /><span>{label}</span></label>)}</div></div>

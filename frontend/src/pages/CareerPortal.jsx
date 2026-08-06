@@ -177,7 +177,10 @@ function parseRoute(props = {}) {
     typeof window === 'undefined' ? '' : window.location.pathname.replace(/\/+$/, '');
   const parts = pathname.split('/').filter(Boolean);
 
-  if (props.mode === 'offer' || parts[0] === 'careers' && parts[1] === 'offers') {
+  if (
+    props.mode === 'offer' ||
+    (['career', 'careers'].includes(parts[0]) && parts[1] === 'offers')
+  ) {
     return {
       mode: 'offer',
       responseToken: props.responseToken || parts[2] || '',
@@ -187,7 +190,10 @@ function parseRoute(props = {}) {
     };
   }
 
-  if (props.mode === 'joining' || parts[0] === 'careers' && parts[1] === 'joining') {
+  if (
+    props.mode === 'joining' ||
+    (['career', 'careers'].includes(parts[0]) && parts[1] === 'joining')
+  ) {
     return {
       mode: 'joining',
       accessToken: props.accessToken || parts[2] || '',
@@ -488,7 +494,7 @@ function CompanyBrand({ company, onNavigate }) {
         const slug = company?.career_slug;
         if (!slug) return;
 
-        const path = `/careers/${encodeURIComponent(slug)}`;
+        const path = `/career/${encodeURIComponent(slug)}`;
         if (onNavigate) onNavigate(path, 'Returning to open positions…');
         else navigateTo(path);
       }}
@@ -1352,7 +1358,7 @@ function CareerJobsView({ companyKey, jobSlug }) {
     else loadJobs();
   }, [jobSlug, loadJob, loadJobs]);
 
-  const careerPath = `/careers/${encodeURIComponent(
+  const careerPath = `/career/${encodeURIComponent(
     company?.career_slug || companyKey,
   )}`;
 

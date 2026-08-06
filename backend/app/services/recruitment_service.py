@@ -627,14 +627,108 @@ class RecruitmentService:
         items=list(self._c(collection).find(query).sort(list(sort or [("updated_at",DESCENDING),("created_at",DESCENDING)])).skip((page-1)*page_size).limit(page_size))
         return {"items":items,"pagination":{"page":page,"page_size":page_size,"total":total,"total_pages":(total+page_size-1)//page_size}}
 
-    def _settings(self): return deep_merge(DEFAULT_RECRUITMENT_SETTINGS, self._c(SETTINGS).find_one(self._q()) or {})
-    def get_settings(self): self._require_reader(); return self._settings()
+    def _tenant_career_slug(self):
+        tenant = self.db.tenants.find_one(
+            {"tenant_id": self.tenant_id, "is_deleted": {"$ne": True}}
+        ) or {}
+        raw_slug = (
+            tenant.get("public_career_slug")
+            or tenant.get("tenant_slug")
+            or tenant.get("slug")
+            or tenant.get("tenant_code")
+            or tenant.get("tenant_id")
+            or self.tenant_id
+        )
+        slug = re.sub(r"[^a-z0-9]+", "-", safe_str(raw_slug).lower()).strip("-")
+        if not slug:
+            raise RecruitmentServiceError(
+                "A public career slug could not be generated for this company.",
+                code="career_slug_unavailable",
+                status_code=409,
+            )
+        return slug[:90]
+
+    def _settings(self):
+        settings = deep_merge(
+            DEFAULT_RECRUITMENT_SETTINGS,
+            self._c(SETTINGS).find_one(self._q()) or {},
+        )
+        if not safe_str(settings.get("public_career_slug")):
+            settings["public_career_slug"] = self._tenant_career_slug()
+        return settings
+
+    def get_settings(self):
+        self._require_reader()
+        return self._settings()
+
     def update_settings(self, updates):
-        self._require_admin(); allowed=set(DEFAULT_RECRUITMENT_SETTINGS); payload={k:deepcopy(v) for k,v in dict(updates or {}).items() if k in allowed}
-        if not payload: raise RecruitmentServiceError("No supported recruitment setting was provided.", code="recruitment_settings_empty")
-        now=utcnow(); payload.update({"tenant_id":self.tenant_id,"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False})
-        self._c(SETTINGS).update_one({"tenant_id":self.tenant_id},{"$set":payload,"$setOnInsert":{"created_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name}},upsert=True)
-        saved=self._c(SETTINGS).find_one({"tenant_id":self.tenant_id}); self._activity("settings_updated","settings",saved.get("_id"),message="Recruitment settings were updated.")
+        self._require_admin()
+        allowed = set(DEFAULT_RECRUITMENT_SETTINGS)
+        payload = {
+            key: deepcopy(value)
+            for key, value in dict(updates or {}).items()
+            if key in allowed
+        }
+        if not payload:
+            raise RecruitmentServiceError(
+                "No supported recruitment setting was provided.",
+                code="recruitment_settings_empty",
+            )
+
+        if "public_career_slug" in payload:
+            requested_slug = re.sub(
+                r"[^a-z0-9]+",
+                "-",
+                safe_str(payload.get("public_career_slug")).lower(),
+            ).strip("-")[:90]
+            payload["public_career_slug"] = requested_slug or self._tenant_career_slug()
+
+            duplicate = self._c(SETTINGS).find_one(
+                {
+                    "tenant_id": {"$ne": self.tenant_id},
+                    "public_career_slug": {
+                        "$regex": f"^{re.escape(payload['public_career_slug'])}$",
+                        "$options": "i",
+                    },
+                    "is_deleted": {"$ne": True},
+                }
+            )
+            if duplicate:
+                raise RecruitmentServiceError(
+                    "This career page slug is already used by another company.",
+                    code="career_slug_already_exists",
+                    status_code=409,
+                )
+
+        now = utcnow()
+        payload.update(
+            {
+                "tenant_id": self.tenant_id,
+                "updated_at": now,
+                "updated_by": self.actor_id,
+                "updated_by_name": self.actor_name,
+                "is_deleted": False,
+            }
+        )
+        self._c(SETTINGS).update_one(
+            {"tenant_id": self.tenant_id},
+            {
+                "$set": payload,
+                "$setOnInsert": {
+                    "created_at": now,
+                    "created_by": self.actor_id,
+                    "created_by_name": self.actor_name,
+                },
+            },
+            upsert=True,
+        )
+        saved = self._c(SETTINGS).find_one({"tenant_id": self.tenant_id})
+        self._activity(
+            "settings_updated",
+            "settings",
+            saved.get("_id"),
+            message="Recruitment settings were updated.",
+        )
         return self._settings()
 
     def create_hiring_request(self, payload):
