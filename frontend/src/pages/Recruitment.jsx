@@ -227,23 +227,155 @@ function Empty({ icon: Icon = Inbox, title, message, action, onAction }) {
 function Loading() {
   return <div className="recruitment-loading"><div><div className="recruitment-spinner" />Loading recruitment data…</div></div>;
 }
+
+function lockRecruitmentBackgroundScroll() {
+  const root = document.documentElement;
+  const body = document.body;
+  const page = document.querySelector('.recruitment-page');
+
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+
+  const lockedElements = new Set([root, body]);
+
+  let ancestor = page?.parentElement || null;
+  while (ancestor) {
+    const styles = window.getComputedStyle(ancestor);
+    const overflowY = styles.overflowY;
+    const canScroll =
+      ancestor.scrollHeight > ancestor.clientHeight &&
+      ['auto', 'scroll', 'overlay'].includes(overflowY);
+
+    if (canScroll) lockedElements.add(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+
+  [
+    '.app-main',
+    '.app-content',
+    '.main-content',
+    '.dashboard-content',
+    '.content-wrapper',
+    '.page-content',
+    '.layout-content',
+    '.layout-main',
+    '[data-scroll-container]',
+  ].forEach((selector) => {
+    document.querySelectorAll(selector).forEach((element) => {
+      if (element instanceof HTMLElement) {
+        lockedElements.add(element);
+      }
+    });
+  });
+
+  const previousStyles = new Map();
+
+  lockedElements.forEach((element) => {
+    previousStyles.set(element, {
+      overflow: element.style.overflow,
+      overflowX: element.style.overflowX,
+      overflowY: element.style.overflowY,
+      overscrollBehavior: element.style.overscrollBehavior,
+      touchAction: element.style.touchAction,
+    });
+
+    element.style.overflow = 'hidden';
+    element.style.overflowX = 'hidden';
+    element.style.overflowY = 'hidden';
+    element.style.overscrollBehavior = 'none';
+    element.style.touchAction = 'none';
+  });
+
+  const previousBodyPosition = {
+    position: body.style.position,
+    top: body.style.top,
+    left: body.style.left,
+    right: body.style.right,
+    width: body.style.width,
+  };
+
+  body.style.position = 'fixed';
+  body.style.top = `-${scrollY}px`;
+  body.style.left = `-${scrollX}px`;
+  body.style.right = '0';
+  body.style.width = '100%';
+
+  const isPopupScrollTarget = (target) =>
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        '.recruitment-modal-body, .recruitment-drawer-body',
+      ),
+    );
+
+  const preventBackgroundScroll = (event) => {
+    if (isPopupScrollTarget(event.target)) return;
+    event.preventDefault();
+  };
+
+  window.addEventListener('wheel', preventBackgroundScroll, {
+    passive: false,
+    capture: true,
+  });
+  window.addEventListener('touchmove', preventBackgroundScroll, {
+    passive: false,
+    capture: true,
+  });
+
+  return () => {
+    window.removeEventListener('wheel', preventBackgroundScroll, {
+      capture: true,
+    });
+    window.removeEventListener('touchmove', preventBackgroundScroll, {
+      capture: true,
+    });
+
+    lockedElements.forEach((element) => {
+      const previous = previousStyles.get(element);
+      if (!previous) return;
+
+      element.style.overflow = previous.overflow;
+      element.style.overflowX = previous.overflowX;
+      element.style.overflowY = previous.overflowY;
+      element.style.overscrollBehavior = previous.overscrollBehavior;
+      element.style.touchAction = previous.touchAction;
+    });
+
+    body.style.position = previousBodyPosition.position;
+    body.style.top = previousBodyPosition.top;
+    body.style.left = previousBodyPosition.left;
+    body.style.right = previousBodyPosition.right;
+    body.style.width = previousBodyPosition.width;
+
+    window.scrollTo(scrollX, scrollY);
+  };
+}
+
 function Modal({ title, subtitle, children, onClose, footer, large }) {
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockBackgroundScroll = lockRecruitmentBackgroundScroll();
     const escape = (event) => event.key === 'Escape' && onClose();
+
     document.addEventListener('keydown', escape);
-    return () => { document.body.style.overflow = previous; document.removeEventListener('keydown', escape); };
+
+    return () => {
+      document.removeEventListener('keydown', escape);
+      unlockBackgroundScroll();
+    };
   }, [onClose]);
   return <div className="recruitment-modal-backdrop" onMouseDown={onClose}><section className={`recruitment-modal${large ? ' recruitment-modal-lg' : ''}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header className="recruitment-modal-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-icon" onClick={onClose}><X size={17} /></button></header><div className="recruitment-modal-body">{children}</div>{footer ? <footer className="recruitment-modal-foot">{footer}</footer> : null}</section></div>;
 }
 function Drawer({ title, children, onClose, footer }) {
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockBackgroundScroll = lockRecruitmentBackgroundScroll();
     const escape = (event) => event.key === 'Escape' && onClose();
+
     document.addEventListener('keydown', escape);
-    return () => { document.body.style.overflow = previous; document.removeEventListener('keydown', escape); };
+
+    return () => {
+      document.removeEventListener('keydown', escape);
+      unlockBackgroundScroll();
+    };
   }, [onClose]);
   return <div className="recruitment-drawer-backdrop" onMouseDown={onClose}><aside className="recruitment-drawer" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header className="recruitment-drawer-head"><h2>{title}</h2><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-icon" onClick={onClose}><X size={17} /></button></header><div className="recruitment-drawer-body">{children}</div>{footer ? <footer className="recruitment-drawer-foot">{footer}</footer> : null}</aside></div>;
 }
