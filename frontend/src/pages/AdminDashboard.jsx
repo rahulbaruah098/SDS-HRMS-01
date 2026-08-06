@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowUpRight,
+  Bell,
+  BriefcaseBusiness,
+  CalendarDays,
+  Clock3,
+  RefreshCw,
+  Scale,
+  Users,
+} from 'lucide-react';
+import {
   api,
   getInitials,
   getProfilePhotoUrl,
@@ -2093,12 +2103,1237 @@ export default function AdminDashboard({ setPage }) {
             flex-direction: column;
           }
         }
+
+        /* YourComate reference-design override layer */
+        .admin-dashboard-page {
+          --dash-ink: #101a3a;
+          --dash-soft: #596483;
+          --dash-violet: #6254da;
+          --dash-deep: #342b78;
+          --dash-blue: #3766db;
+          --dash-teal: #18aaa8;
+          --dash-sky: #edf8ff;
+          --dash-lilac: #f1efff;
+          --dash-flat-blue: #b9d7ff;
+          --dash-flat-violet: #c9c0ff;
+          --dash-flat-teal: #aee6d9;
+          --dash-ease: cubic-bezier(.22, 1, .36, 1);
+
+          min-width: 0;
+          width: 100%;
+          gap: 22px;
+          padding-bottom: max(20px, env(safe-area-inset-bottom));
+          color: var(--dash-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
+        }
+
+        .admin-dashboard-page *,
+        .admin-dashboard-page *::before,
+        .admin-dashboard-page *::after {
+          box-sizing: border-box;
+        }
+
+        .admin-dashboard-page > * {
+          min-width: 0;
+          animation: adminDashboardEnter 520ms var(--dash-ease) both;
+        }
+
+        .admin-dashboard-page > *:nth-child(3) { animation-delay: 40ms; }
+        .admin-dashboard-page > *:nth-child(4) { animation-delay: 80ms; }
+        .admin-dashboard-page > *:nth-child(5) { animation-delay: 120ms; }
+        .admin-dashboard-page > *:nth-child(6) { animation-delay: 160ms; }
+
+        @keyframes adminDashboardEnter {
+          from {
+            opacity: 0;
+            transform: translateY(16px) scale(.992);
+            filter: blur(3px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            filter: blur(0);
+          }
+        }
+
+        .admin-dashboard-page .hero.admin-dashboard-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(22px, 2.8vw, 36px);
+          border: 1px solid rgba(171, 181, 211, .72);
+          border-radius: clamp(28px, 2.5vw, 40px);
+          background:
+            radial-gradient(circle at 8% 8%, rgba(121, 219, 238, .34), transparent 31%),
+            radial-gradient(circle at 92% 12%, rgba(191, 190, 249, .3), transparent 34%),
+            linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%);
+          box-shadow:
+            12px 14px 0 var(--dash-flat-blue),
+            0 28px 48px rgba(34, 38, 110, .13);
+        }
+
+        .admin-dashboard-page .hero.admin-dashboard-hero::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -2;
+          opacity: .42;
+          pointer-events: none;
+          background-image:
+            linear-gradient(rgba(65, 55, 161, .035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(65, 55, 161, .035) 1px, transparent 1px);
+          background-size: 42px 42px;
+        }
+
+        .admin-dashboard-page .hero.admin-dashboard-hero::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: clamp(170px, 20vw, 300px);
+          aspect-ratio: 1;
+          right: clamp(-115px, -7vw, -60px);
+          top: clamp(-120px, -8vw, -65px);
+          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
+          background: linear-gradient(145deg, rgba(105, 217, 208, .72), rgba(121, 189, 242, .72));
+          transform: rotate(18deg);
+        }
+
+        .admin-dashboard-page .kicker {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          padding: 9px 13px;
+          border-radius: 999px;
+          color: #fff;
+          background: var(--dash-deep);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .admin-dashboard-page .admin-dashboard-name {
+          margin: 15px 0 9px;
+          color: var(--dash-ink);
+          font-family: var(--yc-display, var(--heading), inherit);
+          font-size: clamp(34px, 4.6vw, 68px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.055em;
+        }
+
+        .admin-dashboard-page .admin-dashboard-subtitle {
+          max-width: 820px;
+          color: var(--dash-soft);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .admin-dashboard-page .admin-dashboard-avatar {
+          width: clamp(76px, 8vw, 102px);
+          height: clamp(76px, 8vw, 102px);
+          border: 4px solid #fff;
+          border-radius: 28px;
+          color: #fff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow:
+            6px 8px 0 rgba(98, 84, 218, .18),
+            0 18px 34px rgba(34, 38, 110, .14);
+        }
+
+        .admin-dashboard-page .admin-dashboard-badge {
+          min-height: 34px;
+          border-color: rgba(98, 84, 218, .14);
+          color: #3657b5;
+          background: #e5e9ff;
+          box-shadow: 3px 4px 0 rgba(98, 84, 218, .1);
+        }
+
+        .admin-dashboard-page .admin-dashboard-badge.success {
+          color: #13736f;
+          background: #dff8f3;
+          border-color: rgba(19, 115, 111, .14);
+        }
+
+        .admin-dashboard-page .admin-dashboard-badge.neutral {
+          color: #5f6983;
+          background: #edf0f6;
+          border-color: rgba(95, 105, 131, .14);
+        }
+
+        .admin-dashboard-page .attendance-card,
+        .admin-dashboard-page .attendance-pro-card {
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 24px !important;
+          background: rgba(255, 255, 255, .86) !important;
+          box-shadow:
+            8px 10px 0 var(--dash-flat-violet),
+            0 20px 34px rgba(15, 20, 75, .09) !important;
+          transition:
+            transform 280ms var(--dash-ease),
+            box-shadow 280ms var(--dash-ease),
+            border-color 220ms ease !important;
+        }
+
+        .admin-dashboard-page .attendance-card:hover,
+        .admin-dashboard-page .attendance-pro-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, .3) !important;
+          box-shadow:
+            11px 13px 0 var(--dash-flat-violet),
+            0 26px 42px rgba(15, 20, 75, .12) !important;
+        }
+
+        .admin-dashboard-page .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 16px;
+        }
+
+        .admin-dashboard-page .stats-grid > * {
+          min-width: 0;
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 21px !important;
+          background: #f8fbff !important;
+          box-shadow:
+            7px 9px 0 var(--dash-flat-blue),
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+          transition:
+            transform 260ms var(--dash-ease),
+            box-shadow 260ms var(--dash-ease),
+            border-color 220ms ease !important;
+        }
+
+        .admin-dashboard-page .stats-grid > *:nth-child(4n + 2) {
+          background: #f1efff !important;
+          box-shadow: 7px 9px 0 var(--dash-flat-violet), 0 18px 30px rgba(15,20,75,.08) !important;
+        }
+
+        .admin-dashboard-page .stats-grid > *:nth-child(4n + 3) {
+          background: #eaf8f4 !important;
+          box-shadow: 7px 9px 0 var(--dash-flat-teal), 0 18px 30px rgba(15,20,75,.08) !important;
+        }
+
+        .admin-dashboard-page .stats-grid > *:nth-child(4n + 4) {
+          background: #fff4d5 !important;
+          box-shadow: 7px 9px 0 #ffe0a5, 0 18px 30px rgba(15,20,75,.08) !important;
+        }
+
+        .admin-dashboard-page .stats-grid > *:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, .28) !important;
+        }
+
+        .admin-dashboard-page .panel,
+        .admin-dashboard-page .admin-modern-panel,
+        .admin-dashboard-page .admin-project-hero,
+        .admin-dashboard-page .admin-root-card,
+        .admin-dashboard-page .admin-rank-card,
+        .admin-dashboard-page .admin-notification-summary,
+        .admin-dashboard-page .admin-notification-grid > * {
+          min-width: 0;
+          border: 1px solid rgba(171, 181, 211, .7) !important;
+          border-radius: clamp(22px, 2vw, 30px) !important;
+          background:
+            linear-gradient(145deg, rgba(255,255,255,.99), rgba(244,249,255,.98)) !important;
+          box-shadow:
+            9px 11px 0 #d1dcfa,
+            0 24px 42px rgba(34, 38, 110, .1) !important;
+          transition:
+            transform 280ms var(--dash-ease),
+            border-color 220ms ease,
+            box-shadow 280ms var(--dash-ease),
+            background 220ms ease !important;
+        }
+
+        .admin-dashboard-page .panel:hover,
+        .admin-dashboard-page .admin-modern-panel:hover,
+        .admin-dashboard-page .admin-project-hero:hover,
+        .admin-dashboard-page .admin-root-card:hover,
+        .admin-dashboard-page .admin-rank-card:hover,
+        .admin-dashboard-page .admin-notification-grid > *:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, .28) !important;
+          box-shadow:
+            11px 13px 0 #d1dcfa,
+            0 28px 46px rgba(34, 38, 110, .13) !important;
+        }
+
+        .admin-dashboard-page .admin-modern-panel:nth-child(even),
+        .admin-dashboard-page .two-col > .panel:nth-child(even) {
+          background: linear-gradient(145deg, #f4fbff 0%, #f8f1ff 56%, #fffaf0 100%) !important;
+          box-shadow: 9px 11px 0 #c9ddf5, 0 24px 42px rgba(34,38,110,.1) !important;
+        }
+
+        .admin-dashboard-page .toolbar {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .admin-dashboard-page .toolbar > div {
+          min-width: 0;
+        }
+
+        .admin-dashboard-page .toolbar h2,
+        .admin-dashboard-page .toolbar h3,
+        .admin-dashboard-page .panel h2,
+        .admin-dashboard-page .panel h3,
+        .admin-dashboard-page .admin-project-hero h2,
+        .admin-dashboard-page .admin-modern-panel h3 {
+          color: var(--dash-ink) !important;
+          font-family: var(--yc-display, var(--heading), inherit);
+          letter-spacing: -.035em;
+        }
+
+        .admin-dashboard-page .toolbar p,
+        .admin-dashboard-page .panel p,
+        .admin-dashboard-page .admin-project-hero p,
+        .admin-dashboard-page .admin-modern-panel p {
+          color: var(--dash-soft) !important;
+          line-height: 1.6;
+        }
+
+        .admin-dashboard-page button,
+        .admin-dashboard-page a {
+          touch-action: manipulation;
+        }
+
+        .admin-dashboard-page button.primary,
+        .admin-dashboard-page button.secondary,
+        .admin-dashboard-page button.danger,
+        .admin-dashboard-page .primary,
+        .admin-dashboard-page .secondary {
+          border-radius: 14px !important;
+          font-weight: 900 !important;
+          transition:
+            transform 240ms var(--dash-ease),
+            box-shadow 240ms var(--dash-ease),
+            filter 200ms ease,
+            background 200ms ease !important;
+        }
+
+        .admin-dashboard-page button.primary,
+        .admin-dashboard-page .primary {
+          color: #fff !important;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5) !important;
+          border-color: rgba(52, 43, 120, .16) !important;
+          box-shadow: 5px 6px 0 rgba(52, 43, 120, .8) !important;
+        }
+
+        .admin-dashboard-page button.secondary,
+        .admin-dashboard-page .secondary {
+          color: var(--dash-deep) !important;
+          background: #f1efff !important;
+          border-color: rgba(98, 84, 218, .18) !important;
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .14) !important;
+        }
+
+        .admin-dashboard-page button.danger,
+        .admin-dashboard-page .danger {
+          color: #b62f55 !important;
+          background: #ffe4ec !important;
+          border-color: rgba(182, 47, 85, .16) !important;
+        }
+
+        .admin-dashboard-page button:hover:not(:disabled),
+        .admin-dashboard-page a:hover {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .admin-dashboard-page button:active:not(:disabled),
+        .admin-dashboard-page a:active {
+          transform: translateY(0) scale(.985);
+        }
+
+        .admin-dashboard-page .admin-project-metric-grid {
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 15px;
+        }
+
+        .admin-dashboard-page .admin-project-metric {
+          border-color: rgba(171, 181, 211, .68);
+          border-radius: 21px;
+          background: #f8fbff;
+          box-shadow: 7px 9px 0 var(--dash-flat-blue), 0 18px 30px rgba(15,20,75,.08);
+          transition: transform 260ms var(--dash-ease), box-shadow 260ms var(--dash-ease);
+        }
+
+        .admin-dashboard-page .admin-project-metric:nth-child(2) {
+          background: #f1efff;
+          box-shadow: 7px 9px 0 var(--dash-flat-violet), 0 18px 30px rgba(15,20,75,.08);
+        }
+
+        .admin-dashboard-page .admin-project-metric:nth-child(3) {
+          background: #eaf8f4;
+          box-shadow: 7px 9px 0 var(--dash-flat-teal), 0 18px 30px rgba(15,20,75,.08);
+        }
+
+        .admin-dashboard-page .admin-project-metric:nth-child(4) {
+          background: #fff4d5;
+          box-shadow: 7px 9px 0 #ffe0a5, 0 18px 30px rgba(15,20,75,.08);
+        }
+
+        .admin-dashboard-page .admin-project-metric:hover {
+          transform: translateY(-3px);
+        }
+
+        .admin-dashboard-page .admin-modern-bar,
+        .admin-dashboard-page .admin-status-legend div,
+        .admin-dashboard-page .admin-person-mini,
+        .admin-dashboard-page .admin-root-branch,
+        .admin-dashboard-page .admin-document-row,
+        .admin-dashboard-page .admin-notification-meta {
+          border-color: rgba(171, 181, 211, .58) !important;
+          border-radius: 16px !important;
+          background: rgba(255, 255, 255, .76) !important;
+          transition:
+            transform 220ms var(--dash-ease),
+            border-color 180ms ease,
+            box-shadow 220ms var(--dash-ease),
+            background 180ms ease !important;
+        }
+
+        .admin-dashboard-page .admin-modern-bar:hover,
+        .admin-dashboard-page .admin-person-mini:hover,
+        .admin-dashboard-page .admin-root-branch:hover {
+          transform: translateY(-2px);
+          border-color: rgba(98, 84, 218, .25) !important;
+          box-shadow: 5px 6px 0 rgba(185, 215, 255, .55) !important;
+        }
+
+        .admin-dashboard-page .admin-modern-fill,
+        .admin-dashboard-page .admin-rank-track div,
+        .admin-dashboard-page .admin-daily-column-bar span {
+          background: linear-gradient(90deg, var(--dash-violet), var(--dash-blue), var(--dash-teal)) !important;
+          transition: width 680ms var(--dash-ease), height 680ms var(--dash-ease);
+        }
+
+        .admin-dashboard-page .admin-project-ring {
+          background: conic-gradient(var(--dash-violet) var(--ringValue), #e5e9f4 0) !important;
+          box-shadow: 0 18px 42px rgba(98, 84, 218, .18) !important;
+        }
+
+        .admin-dashboard-page .admin-status-donut {
+          box-shadow: 0 18px 42px rgba(98, 84, 218, .14);
+        }
+
+        .admin-dashboard-page .admin-avatar,
+        .admin-dashboard-page .admin-rank-number {
+          background: linear-gradient(145deg, #4f72df, #2bb9b5) !important;
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .14) !important;
+        }
+
+        .admin-dashboard-page .admin-notification-pill {
+          border-radius: 999px;
+          font-weight: 900;
+        }
+
+        .admin-dashboard-page .admin-daily-trend {
+          border-color: rgba(171, 181, 211, .58);
+          border-radius: 20px;
+          background: linear-gradient(145deg, rgba(237,248,255,.72), rgba(248,241,255,.68));
+          overflow-x: auto;
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .admin-dashboard-page .two-col,
+        .admin-dashboard-page .admin-modern-grid,
+        .admin-dashboard-page .admin-root-grid,
+        .admin-dashboard-page .admin-notification-grid {
+          gap: 20px;
+        }
+
+        .admin-dashboard-page table {
+          min-width: 0;
+        }
+
+        .admin-dashboard-page .table-wrap,
+        .admin-dashboard-page .table-scroll,
+        .admin-dashboard-page .responsive-table {
+          overflow-x: auto;
+          overscroll-behavior-x: contain;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(98, 84, 218, .35) transparent;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .admin-dashboard-page .table-wrap::-webkit-scrollbar,
+        .admin-dashboard-page .table-scroll::-webkit-scrollbar,
+        .admin-dashboard-page .responsive-table::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .admin-dashboard-page .table-wrap::-webkit-scrollbar-thumb,
+        .admin-dashboard-page .table-scroll::-webkit-scrollbar-thumb,
+        .admin-dashboard-page .responsive-table::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(98, 84, 218, .35);
+        }
+
+        .admin-dashboard-page .row-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .admin-dashboard-page .empty {
+          padding: 30px 22px;
+          border: 1px dashed rgba(98, 84, 218, .35);
+          border-radius: 20px;
+          color: var(--dash-soft);
+          background: linear-gradient(145deg, rgba(237,248,255,.76), rgba(248,241,255,.72));
+          font-weight: 900;
+          text-align: center;
+        }
+
+        @media (min-width: 1600px) {
+          .admin-dashboard-page {
+            gap: 26px;
+          }
+
+          .admin-dashboard-page .stats-grid {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .admin-project-metric-grid {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .two-col,
+          .admin-dashboard-page .admin-modern-grid {
+            gap: 24px;
+          }
+        }
+
+        @media (max-width: 1280px) {
+          .admin-dashboard-page .admin-dashboard-hero {
+            grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+          }
+
+          .admin-dashboard-page .stats-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .admin-project-metric-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .admin-rank-people {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 1024px) {
+          .admin-dashboard-page .admin-dashboard-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-dashboard-hero > .admin-dashboard-identity,
+          .admin-dashboard-page .admin-dashboard-hero > .attendance-card,
+          .admin-dashboard-page .admin-dashboard-hero > .attendance-pro-card {
+            grid-column: 1;
+          }
+
+          .admin-dashboard-page .stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .admin-project-metric-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .admin-dashboard-page .admin-modern-grid,
+          .admin-dashboard-page .two-col,
+          .admin-dashboard-page .admin-root-grid,
+          .admin-dashboard-page .admin-notification-grid {
+            grid-template-columns: 1fr !important;
+          }
+
+          .admin-dashboard-page .admin-project-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-project-ring {
+            justify-self: start;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .admin-dashboard-page {
+            gap: 16px;
+          }
+
+          .admin-dashboard-page .hero.admin-dashboard-hero {
+            padding: 20px;
+            border-radius: 24px;
+            box-shadow:
+              7px 8px 0 var(--dash-flat-blue),
+              0 18px 30px rgba(34, 38, 110, .1);
+          }
+
+          .admin-dashboard-page .admin-dashboard-identity-head {
+            grid-template-columns: 1fr;
+            justify-items: start;
+          }
+
+          .admin-dashboard-page .admin-dashboard-name {
+            font-size: clamp(31px, 9.5vw, 44px);
+          }
+
+          .admin-dashboard-page .hero-actions,
+          .admin-dashboard-page .toolbar,
+          .admin-dashboard-page .admin-project-hero {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .admin-dashboard-page .hero-actions button,
+          .admin-dashboard-page .toolbar button {
+            width: 100%;
+          }
+
+          .admin-dashboard-page .stats-grid,
+          .admin-dashboard-page .admin-project-metric-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+
+          .admin-dashboard-page .stats-grid > *,
+          .admin-dashboard-page .admin-project-metric {
+            border-radius: 17px !important;
+            box-shadow:
+              4px 5px 0 var(--dash-flat-blue),
+              0 12px 20px rgba(15, 20, 75, .07) !important;
+          }
+
+          .admin-dashboard-page .panel,
+          .admin-dashboard-page .admin-modern-panel,
+          .admin-dashboard-page .admin-project-hero,
+          .admin-dashboard-page .admin-root-card,
+          .admin-dashboard-page .admin-rank-card {
+            border-radius: 22px !important;
+            box-shadow:
+              6px 7px 0 #d1dcfa,
+              0 16px 28px rgba(34, 38, 110, .08) !important;
+          }
+
+          .admin-dashboard-page .admin-status-donut-card {
+            grid-template-columns: 1fr;
+            justify-items: center;
+          }
+
+          .admin-dashboard-page .admin-rank-card {
+            grid-template-columns: 38px minmax(0, 1fr);
+          }
+
+          .admin-dashboard-page .admin-rank-score {
+            grid-column: 1 / -1;
+            justify-self: end;
+          }
+
+          .admin-dashboard-page .admin-rank-people {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-root-map,
+          .admin-dashboard-page .admin-root-branches {
+            min-width: 0;
+          }
+
+          .admin-dashboard-page .admin-daily-trend {
+            min-width: 620px;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .admin-dashboard-page .stats-grid,
+          .admin-dashboard-page .admin-project-metric-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-dashboard-avatar {
+            width: 74px;
+            height: 74px;
+            border-radius: 22px;
+          }
+
+          .admin-dashboard-page .admin-dashboard-badges {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-dashboard-badge {
+            justify-content: center;
+            text-align: center;
+          }
+
+          .admin-dashboard-page .row-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .row-actions button {
+            width: 100%;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .admin-dashboard-page *,
+          .admin-dashboard-page *::before,
+          .admin-dashboard-page *::after {
+            scroll-behavior: auto !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
+          }
+        }
+
+        /* ================================================================
+           YOURCOMATE EMPLOYEE DASHBOARD HERO
+           Visual-only redesign. Existing dashboard actions and workflows
+           remain unchanged.
+           ================================================================ */
+
+        .employee-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(22px, 3vw, 38px);
+          border-radius: 34px;
+          border: 1px solid rgba(99, 102, 241, .15);
+          background:
+            radial-gradient(circle at 13% 6%, rgba(147, 218, 246, .24), transparent 30%),
+            radial-gradient(circle at 90% 8%, rgba(122, 224, 211, .18), transparent 28%),
+            linear-gradient(145deg, rgba(255,255,255,.99), rgba(247,248,255,.98));
+          box-shadow:
+            0 24px 70px rgba(46, 48, 112, .10),
+            inset 0 1px 0 rgba(255,255,255,.96);
+        }
+
+        .employee-hero::before {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 330px;
+          height: 330px;
+          right: -160px;
+          bottom: -190px;
+          border-radius: 999px;
+          border: 44px solid rgba(96, 82, 232, .055);
+          pointer-events: none;
+        }
+
+        .employee-hero::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 150px;
+          height: 150px;
+          top: -74px;
+          left: 48%;
+          border-radius: 999px;
+          background: rgba(116, 221, 211, .08);
+          pointer-events: none;
+        }
+
+        .employee-identity {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        .employee-identity-head {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          align-items: center;
+          gap: clamp(16px, 2vw, 24px);
+          min-width: 0;
+        }
+
+        .employee-profile-avatar {
+          position: relative;
+          width: clamp(86px, 8vw, 116px);
+          height: clamp(86px, 8vw, 116px);
+          border-radius: 30px;
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          background:
+            radial-gradient(circle at 30% 18%, rgba(255,255,255,.9), transparent 36%),
+            linear-gradient(135deg, #eef2ff, #e7fbf8);
+          color: #4338ca;
+          font-size: 30px;
+          font-weight: 950;
+          border: 5px solid rgba(255,255,255,.96);
+          box-shadow:
+            0 20px 44px rgba(35, 42, 105, .16),
+            0 0 0 1px rgba(99, 102, 241, .10);
+          animation: employeeAvatarFloat 5.4s ease-in-out infinite;
+        }
+
+        .employee-profile-avatar::after {
+          content: "";
+          position: absolute;
+          width: 12px;
+          height: 12px;
+          right: 4px;
+          bottom: 5px;
+          border: 3px solid #fff;
+          border-radius: 999px;
+          background: #20b486;
+          box-shadow: 0 4px 12px rgba(32, 180, 134, .30);
+        }
+
+        .employee-profile-avatar img {
+          width: 100%;
+          height: 100%;
+          display: block;
+          object-fit: cover;
+        }
+
+        .employee-identity-copy {
+          min-width: 0;
+        }
+
+        .employee-identity-copy .kicker {
+          margin-bottom: 10px;
+          background: rgba(238, 242, 255, .94);
+          color: #5848df;
+          border: 1px solid rgba(99, 102, 241, .12);
+          box-shadow: 0 8px 20px rgba(79, 70, 229, .07);
+        }
+
+        .employee-name-heading.dashboard-display-name {
+          width: fit-content;
+          max-width: 100%;
+          margin: 0;
+          overflow: visible;
+          color: #111d48;
+          text-overflow: clip;
+          white-space: nowrap;
+          font-family:
+            "Segoe Script",
+            "Brush Script MT",
+            "Lucida Handwriting",
+            cursive;
+          font-style: normal;
+          font-size: clamp(34px, 4.3vw, 68px);
+          font-weight: 500;
+          line-height: 1.08;
+          letter-spacing: -.045em;
+          text-shadow: 0 8px 28px rgba(50, 47, 126, .08);
+          transform-origin: left center;
+        }
+
+        .employee-dashboard-subtitle {
+          max-width: 760px;
+          margin: 14px 0 0;
+          color: #657696;
+          font-size: clamp(14px, 1.15vw, 17px);
+          line-height: 1.68;
+        }
+
+        .employee-quick-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          margin-top: 26px;
+        }
+
+        .employee-quick-action {
+          --action-accent: #5f52e8;
+          --action-soft: rgba(95, 82, 232, .10);
+          position: relative;
+          isolation: isolate;
+          min-width: 0;
+          min-height: 78px;
+          padding: 12px;
+          display: grid;
+          grid-template-columns: 44px minmax(0, 1fr) 34px;
+          align-items: center;
+          gap: 11px;
+          overflow: hidden;
+          border: 1px solid rgba(99, 102, 241, .13);
+          border-radius: 20px;
+          color: #172554;
+          background:
+            radial-gradient(circle at 92% 12%, var(--action-soft), transparent 32%),
+            rgba(255,255,255,.88);
+          box-shadow:
+            0 12px 28px rgba(35, 42, 105, .07),
+            inset 0 1px 0 rgba(255,255,255,.96);
+          text-align: left;
+          transition:
+            transform .25s cubic-bezier(.22, 1, .36, 1),
+            box-shadow .25s ease,
+            border-color .25s ease;
+        }
+
+        .employee-quick-action::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: 76px;
+          height: 76px;
+          right: -48px;
+          bottom: -50px;
+          border-radius: 999px;
+          background: var(--action-soft);
+          transition: transform .35s ease;
+        }
+
+        .employee-quick-action:hover {
+          border-color: color-mix(in srgb, var(--action-accent) 28%, transparent);
+          box-shadow:
+            0 18px 40px rgba(35, 42, 105, .13),
+            inset 0 1px 0 rgba(255,255,255,.98);
+          transform: translateY(-4px);
+        }
+
+        .employee-quick-action:hover::after {
+          transform: translate(-8px, -7px) scale(1.28);
+        }
+
+        .employee-quick-action:active {
+          transform: translateY(-1px) scale(.988);
+        }
+
+        .employee-quick-action.attendance {
+          --action-accent: #5f52e8;
+          --action-soft: rgba(95, 82, 232, .12);
+        }
+
+        .employee-quick-action.leave {
+          --action-accent: #1689d8;
+          --action-soft: rgba(22, 137, 216, .12);
+        }
+
+        .employee-quick-action.projects {
+          --action-accent: #6d4ee8;
+          --action-soft: rgba(109, 78, 232, .12);
+        }
+
+        .employee-quick-action.ticket {
+          --action-accent: #0da6ad;
+          --action-soft: rgba(13, 166, 173, .12);
+        }
+
+        .employee-quick-action.profile {
+          --action-accent: #9a43d7;
+          --action-soft: rgba(154, 67, 215, .11);
+        }
+
+        .employee-quick-action.refresh {
+          --action-accent: #2476d4;
+          --action-soft: rgba(36, 118, 212, .11);
+        }
+
+        .employee-quick-action-icon {
+          width: 44px;
+          height: 44px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid color-mix(in srgb, var(--action-accent) 18%, transparent);
+          border-radius: 15px;
+          color: var(--action-accent);
+          background:
+            radial-gradient(circle at 30% 20%, rgba(255,255,255,.98), transparent 36%),
+            linear-gradient(135deg, rgba(255,255,255,.94), var(--action-soft));
+          box-shadow:
+            0 9px 20px color-mix(in srgb, var(--action-accent) 13%, transparent),
+            inset 0 1px 0 rgba(255,255,255,.96);
+          transition:
+            color .24s ease,
+            background .24s ease,
+            transform .3s cubic-bezier(.22, 1, .36, 1);
+        }
+
+        .employee-quick-action:hover .employee-quick-action-icon {
+          color: #fff;
+          background: linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--action-accent) 88%, white),
+            var(--action-accent)
+          );
+          transform: translateY(-2px) rotate(-3deg) scale(1.04);
+        }
+
+        .employee-quick-action-copy {
+          min-width: 0;
+        }
+
+        .employee-quick-action-copy strong,
+        .employee-quick-action-copy small {
+          display: block;
+          min-width: 0;
+        }
+
+        .employee-quick-action-copy strong {
+          overflow: visible;
+          color: #172554;
+          text-overflow: clip;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          font-size: 13.5px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+
+        .employee-quick-action-copy small {
+          margin-top: 4px;
+          overflow: visible;
+          color: #71809c;
+          text-overflow: clip;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          font-size: 10px;
+          font-weight: 750;
+          line-height: 1.25;
+        }
+
+        .employee-quick-action-arrow {
+          width: 34px;
+          height: 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          justify-self: end;
+          border-radius: 12px;
+          color: var(--action-accent);
+          background: rgba(255,255,255,.78);
+          box-shadow: 0 7px 16px rgba(35, 42, 105, .07);
+          transition:
+            color .24s ease,
+            background .24s ease,
+            transform .28s cubic-bezier(.22, 1, .36, 1);
+        }
+
+        .employee-quick-action:hover .employee-quick-action-arrow {
+          color: #fff;
+          background: var(--action-accent);
+          transform: translate(2px, -2px);
+        }
+
+        .employee-quick-action.refresh:disabled {
+          opacity: .62;
+          cursor: wait;
+          transform: none;
+        }
+
+        .employee-quick-action.refresh:disabled .employee-quick-action-icon svg {
+          animation: employeeRefreshSpin 1s linear infinite;
+        }
+
+        @keyframes employeeAvatarFloat {
+          0%, 100% {
+            transform: translateY(0);
+          }
+
+          50% {
+            transform: translateY(-4px);
+          }
+        }
+
+        @keyframes employeeRefreshSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @media (max-width: 1380px) {
+          .employee-name-heading.dashboard-display-name {
+            font-size: clamp(32px, 4vw, 58px);
+          }
+        }
+
+        @media (max-width: 1220px) and (min-width: 1025px) {
+          .employee-hero {
+            grid-template-columns: minmax(420px, 1.08fr) minmax(360px, .92fr);
+          }
+
+          .employee-name-heading.dashboard-display-name {
+            font-size: clamp(30px, 3.55vw, 50px);
+            letter-spacing: -.035em;
+          }
+
+          .employee-dashboard-subtitle {
+            font-size: 13.5px;
+          }
+
+          .employee-quick-action {
+            min-height: 74px;
+            grid-template-columns: 40px minmax(0, 1fr) 30px;
+            gap: 9px;
+            padding: 10px;
+          }
+
+          .employee-quick-action-icon {
+            width: 40px;
+            height: 40px;
+          }
+
+          .employee-quick-action-arrow {
+            width: 30px;
+            height: 30px;
+          }
+        }
+
+        @media (max-width: 1024px) {
+          .emp-project-head-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .emp-project-ring {
+            justify-self: start;
+          }
+
+          .employee-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .employee-hero > .employee-identity,
+          .employee-hero > .attendance-card,
+          .employee-hero > .attendance-pro-card {
+            grid-column: 1;
+          }
+
+          .emp-project-stats,
+          .emp-project-modern-stat-grid,
+          .emp-project-card-grid,
+          .emp-leave-status-grid,
+          .emp-performance-stat-grid,
+          .emp-project-people-line {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+
+
+
+        /* Admin dashboard top section now mirrors the Employee Dashboard hero. */
+        .admin-dashboard-page .employee-hero {
+          display: grid;
+          grid-template-columns: minmax(460px, 1.18fr) minmax(380px, .82fr);
+          gap: 22px;
+          align-items: stretch;
+        }
+
+        .admin-dashboard-page .employee-hero > .employee-identity {
+          grid-column: 1;
+          min-width: 0;
+        }
+
+        .admin-dashboard-page .employee-hero > .attendance-card,
+        .admin-dashboard-page .employee-hero > .attendance-pro-card,
+        .admin-dashboard-page .employee-hero > .panel {
+          grid-column: 2;
+          width: 100%;
+          min-width: 0;
+          align-self: stretch;
+        }
+
+        .admin-dashboard-page .admin-employee-badges {
+          margin-top: 22px;
+        }
+
+        .admin-dashboard-page .admin-quick-actions {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .admin-dashboard-page .employee-quick-action.balances {
+          --action-accent: #d68b1d;
+          --action-soft: rgba(214, 139, 29, .12);
+        }
+
+        .admin-dashboard-page .employee-quick-action.employees {
+          --action-accent: #0da6ad;
+          --action-soft: rgba(13, 166, 173, .12);
+        }
+
+        .admin-dashboard-page .employee-quick-action.reports {
+          --action-accent: #9a43d7;
+          --action-soft: rgba(154, 67, 215, .11);
+        }
+
+        .admin-dashboard-page .employee-quick-action.notifications {
+          --action-accent: #e0567b;
+          --action-soft: rgba(224, 86, 123, .11);
+        }
+
+        @media (max-width: 1024px) {
+          .admin-dashboard-page .employee-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .employee-hero > .employee-identity,
+          .admin-dashboard-page .employee-hero > .attendance-card,
+          .admin-dashboard-page .employee-hero > .attendance-pro-card,
+          .admin-dashboard-page .employee-hero > .panel {
+            grid-column: 1;
+          }
+        }
+
+        @media (max-width: 680px) {
+          .admin-dashboard-page .employee-hero {
+            padding: 18px;
+            border-radius: 24px;
+          }
+
+          .admin-dashboard-page .employee-identity-head {
+            grid-template-columns: 1fr;
+            align-items: start;
+          }
+
+          .admin-dashboard-page .employee-profile-avatar {
+            width: 82px;
+            height: 82px;
+            border-radius: 24px;
+          }
+
+          .admin-dashboard-page .employee-name-heading.dashboard-display-name {
+            white-space: normal;
+            font-size: clamp(34px, 11vw, 48px);
+          }
+
+          .admin-dashboard-page .admin-employee-badges {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .admin-dashboard-page .admin-dashboard-badge {
+            width: 100%;
+            justify-content: center;
+            text-align: center;
+          }
+
+          .admin-dashboard-page .admin-quick-actions {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .admin-dashboard-page .employee-quick-action {
+            grid-template-columns: 42px minmax(0, 1fr) 32px;
+            min-height: 72px;
+            padding: 10px;
+          }
+        }
+
       `}</style>
 
-        <section className="hero admin-dashboard-hero">
-          <div className="admin-dashboard-identity">
-            <div className="admin-dashboard-identity-head">
-              <div className="admin-dashboard-avatar">
+        <section className="hero employee-hero admin-employee-hero">
+          <div className="employee-identity admin-employee-identity">
+            <div className="employee-identity-head">
+              <div className="employee-profile-avatar">
                 {adminProfilePhotoUrl ? (
                   <img src={adminProfilePhotoUrl} alt={adminDisplayName} />
                 ) : (
@@ -2106,14 +3341,14 @@ export default function AdminDashboard({ setPage }) {
                 )}
               </div>
 
-              <div>
+              <div className="employee-identity-copy">
                 <span className="kicker">Admin Dashboard</span>
 
-                <h1 className="admin-dashboard-name dashboard-display-name">
+                <h1 className="employee-name-heading dashboard-display-name">
                   {adminDisplayName}
                 </h1>
 
-                <p className="admin-dashboard-subtitle">
+                <p className="employee-dashboard-subtitle">
                   Monitor attendance, WFH/Field requests, holidays, leave approvals,
                   employee mappings, comp-off credits, tickets, expenses, projects,
                   department progress and reports from one administrative workspace.
@@ -2121,7 +3356,7 @@ export default function AdminDashboard({ setPage }) {
               </div>
             </div>
 
-            <div className="admin-dashboard-badges">
+            <div className="admin-dashboard-badges admin-employee-badges">
               <span className="admin-dashboard-badge">
                 Dashboard: Admin
               </span>
@@ -2135,45 +3370,161 @@ export default function AdminDashboard({ setPage }) {
               </span>
             </div>
 
-            <div className="hero-actions">
-              <button type="button" className="primary" onClick={() => goTo('attendance')}>
-                Attendance
-              </button>
+            <div className="employee-quick-actions admin-quick-actions" aria-label="Admin quick actions">
+              <button
+                type="button"
+                className="employee-quick-action attendance"
+                onClick={() => goTo('attendance')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <Clock3 size={20} strokeWidth={1.9} />
+                </span>
 
-              <button type="button" className="secondary" onClick={() => goTo('projects')}>
-                Projects
-              </button>
+                <span className="employee-quick-action-copy">
+                  <strong>Attendance</strong>
+                  <small>Open attendance records and daily status</small>
+                </span>
 
-              <button type="button" className="secondary" onClick={() => goTo('leave_requests')}>
-                Leave Management
-              </button>
-
-              <button type="button" className="secondary" onClick={() => goTo('leave_balances')}>
-                Leave Balances
-              </button>
-
-              <button type="button" className="secondary" onClick={() => goTo('employees')}>
-                Employee Master
-              </button>
-
-              <button type="button" className="secondary" onClick={() => goTo('reports')}>
-                Reports
-              </button>
-
-              <button type="button" className="secondary" onClick={() => goTo('notifications')}>
-                Notifications
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
               </button>
 
               <button
                 type="button"
-                className="secondary"
+                className="employee-quick-action projects"
+                onClick={() => goTo('projects')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <BriefcaseBusiness size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Projects</strong>
+                  <small>Review projects, teams and progress</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action leave"
+                onClick={() => goTo('leave_requests')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <CalendarDays size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Leave Management</strong>
+                  <small>Review and manage leave requests</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action balances"
+                onClick={() => goTo('leave_balances')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <Scale size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Leave Balances</strong>
+                  <small>View employee leave allocations</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action employees"
+                onClick={() => goTo('employees')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <Users size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Employee Master</strong>
+                  <small>Open employee records and mappings</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action reports"
+                onClick={() => goTo('reports')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <BriefcaseBusiness size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Reports</strong>
+                  <small>Open workforce and project reports</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action notifications"
+                onClick={() => goTo('notifications')}
+              >
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <Bell size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>Notifications</strong>
+                  <small>Open the notification centre</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="employee-quick-action refresh"
                 onClick={() => {
                   loadDashboard();
                   loadDashboardNotifications();
                 }}
                 disabled={loading}
               >
-                {loading ? 'Refreshing...' : 'Refresh'}
+                <span className="employee-quick-action-icon" aria-hidden="true">
+                  <RefreshCw size={20} strokeWidth={1.9} />
+                </span>
+
+                <span className="employee-quick-action-copy">
+                  <strong>{loading ? 'Refreshing...' : 'Refresh'}</strong>
+                  <small>Load the latest dashboard information</small>
+                </span>
+
+                <span className="employee-quick-action-arrow" aria-hidden="true">
+                  <ArrowUpRight size={17} strokeWidth={2.1} />
+                </span>
               </button>
             </div>
           </div>

@@ -403,7 +403,7 @@ function goToPath(path, fallbackPage) {
 
 function InfoCard({ icon: Icon, label, value, tone = '#2563eb' }) {
   return (
-    <div className="stat-card" style={{ padding: 18 }}>
+    <div className="stat-card subscription-info-card" style={{ padding: 18 }}>
       <div
         style={{
           width: 42,
@@ -454,6 +454,7 @@ function PlanPreview({ plan, premiumQuotation }) {
 
   return (
     <div
+      className={`subscription-plan-card ${isRecommended ? 'recommended' : ''}`}
       style={{
         borderRadius: 20,
         padding: 18,
@@ -646,7 +647,338 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
 
   if (redirecting || (!loading && summary.shouldHideRenewalScreen)) {
     return (
-      <section className="panel" style={{ maxWidth: 760, margin: '0 auto' }}>
+      <section className="panel subscription-expired-page subscription-active-state" style={{ maxWidth: 760, margin: '0 auto' }}>
+
+      <style>{`
+        .subscription-expired-page {
+          --sub-ink: #101a3a;
+          --sub-muted: #596483;
+          --sub-primary: #6254da;
+          --sub-deep: #342b78;
+          --sub-blue: #3766db;
+          --sub-teal: #18aaa8;
+          --sub-orange: #d96517;
+          --sub-green: #13736f;
+          --sub-red: #b62f55;
+          --sub-flat-blue: #b9d7ff;
+          --sub-flat-violet: #c9c0ff;
+          --sub-ease: cubic-bezier(.22, 1, .36, 1);
+
+          width: min(1120px, 100%);
+          overflow: visible;
+          border: 0 !important;
+          background: transparent !important;
+          box-shadow: none !important;
+          color: var(--sub-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
+        }
+
+        .subscription-expired-page > div {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(22px, 3vw, 36px) !important;
+          border: 1px solid rgba(171, 181, 211, .72) !important;
+          border-radius: clamp(26px, 2.5vw, 38px) !important;
+          background:
+            radial-gradient(circle at 8% 4%, rgba(255, 207, 146, .38), transparent 30%),
+            radial-gradient(circle at 94% 2%, rgba(191, 190, 249, .32), transparent 35%),
+            linear-gradient(135deg, #fff8ed 0%, #fffdf8 48%, #f7f2ff 100%) !important;
+          box-shadow:
+            12px 14px 0 var(--sub-flat-blue),
+            0 28px 48px rgba(34, 38, 110, .13) !important;
+        }
+
+        .subscription-expired-page > div::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -2;
+          opacity: .42;
+          pointer-events: none;
+          background-image:
+            linear-gradient(rgba(65, 55, 161, .035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(65, 55, 161, .035) 1px, transparent 1px);
+          background-size: 42px 42px;
+        }
+
+        .subscription-expired-page > div::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: clamp(170px, 22vw, 300px);
+          aspect-ratio: 1;
+          right: clamp(-120px, -8vw, -65px);
+          top: clamp(-125px, -8vw, -70px);
+          border: 1px solid rgba(65, 55, 161, .12);
+          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
+          background: linear-gradient(
+            145deg,
+            rgba(255, 202, 139, .74),
+            rgba(193, 179, 255, .72)
+          );
+          transform: rotate(18deg);
+        }
+
+        .subscription-expired-page button {
+          touch-action: manipulation;
+          font-weight: 900;
+          transition:
+            transform 240ms var(--sub-ease),
+            box-shadow 240ms var(--sub-ease),
+            border-color 200ms ease,
+            background 200ms ease,
+            color 200ms ease,
+            filter 200ms ease;
+        }
+
+        .subscription-expired-page button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .subscription-expired-page button:active:not(:disabled) {
+          transform: translateY(0) scale(.985);
+        }
+
+        .subscription-expired-page button:disabled {
+          cursor: not-allowed;
+          opacity: .56;
+          transform: none;
+          filter: none;
+        }
+
+        .subscription-expired-page .primary,
+        .subscription-expired-page .ghost {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          min-height: 46px;
+          padding: 0 17px;
+          border-radius: 14px;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        .subscription-expired-page .primary {
+          border: 1px solid rgba(52, 43, 120, .16);
+          color: #fff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow:
+            5px 6px 0 rgba(52, 43, 120, .8),
+            0 12px 22px rgba(55, 102, 219, .16);
+        }
+
+        .subscription-expired-page .ghost {
+          border: 1px solid rgba(98, 84, 218, .18);
+          color: var(--sub-deep);
+          background: #f1efff;
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .14);
+        }
+
+        .subscription-expired-page h1,
+        .subscription-expired-page h2,
+        .subscription-expired-page h3 {
+          color: var(--sub-ink) !important;
+          font-family: var(--yc-display, var(--heading), inherit);
+        }
+
+        .subscription-expired-page h1 {
+          font-size: clamp(31px, 4.5vw, 56px) !important;
+          font-weight: 760 !important;
+          line-height: .98 !important;
+          letter-spacing: -.055em !important;
+        }
+
+        .subscription-expired-page p,
+        .subscription-expired-page li {
+          color: var(--sub-muted);
+        }
+
+        .subscription-expired-page .subscription-info-card {
+          min-width: 0;
+          min-height: 124px;
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 21px !important;
+          background: #f8fbff !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-blue),
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+          transition:
+            transform 260ms var(--sub-ease),
+            border-color 220ms ease !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(2) {
+          background: #fff4d5 !important;
+          box-shadow:
+            7px 9px 0 #ffe0a5,
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(3) {
+          background: #ffe8ef !important;
+          box-shadow:
+            7px 9px 0 #ffc4d5,
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(4) {
+          background: #f1efff !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-violet),
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, .3) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card > div:first-child {
+          color: #fff !important;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5) !important;
+          border: 1px solid rgba(52, 43, 120, .15);
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .16);
+        }
+
+        .subscription-expired-page .subscription-info-card span {
+          display: block;
+          color: var(--sub-muted);
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .subscription-expired-page .subscription-info-card strong {
+          display: block;
+          margin-top: 7px;
+          color: var(--sub-ink);
+          font-size: 18px;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+        }
+
+        .subscription-expired-page .subscription-plan-card {
+          min-width: 0;
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 22px !important;
+          background: linear-gradient(145deg, #fff, #f7fbff) !important;
+          box-shadow:
+            6px 8px 0 rgba(185, 215, 255, .76),
+            0 18px 28px rgba(34, 38, 110, .08) !important;
+          transition:
+            transform 260ms var(--sub-ease),
+            border-color 220ms ease !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card:nth-child(2n) {
+          box-shadow:
+            6px 8px 0 rgba(174, 230, 217, .76),
+            0 18px 28px rgba(34, 38, 110, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card.recommended {
+          border-color: rgba(98, 84, 218, .42) !important;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(105, 217, 208, .18), transparent 36%),
+            linear-gradient(145deg, #f1efff, #f7fbff) !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-violet),
+            0 20px 34px rgba(34, 38, 110, .12) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card:hover {
+          transform: translateY(-4px);
+          border-color: rgba(98, 84, 218, .35) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card h3 {
+          font-size: 20px;
+          font-weight: 950;
+        }
+
+        .subscription-expired-page ul {
+          padding-left: 20px !important;
+        }
+
+        .subscription-expired-page li {
+          margin-bottom: 6px;
+          line-height: 1.7 !important;
+        }
+
+        .subscription-expired-page .spin {
+          animation: subscriptionSpin .8s linear infinite;
+        }
+
+        @keyframes subscriptionSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .subscription-active-state {
+          width: min(760px, 100%);
+        }
+
+        .subscription-active-state > div {
+          border-color: rgba(19, 115, 111, .24) !important;
+          background:
+            radial-gradient(circle at 12% 8%, rgba(174, 230, 217, .52), transparent 34%),
+            linear-gradient(145deg, #eaf8f4, #fff) !important;
+          box-shadow:
+            10px 12px 0 var(--sub-flat-teal),
+            0 24px 42px rgba(34, 38, 110, .1) !important;
+        }
+
+        @media (max-width: 760px) {
+          .subscription-expired-page > div {
+            padding: 20px !important;
+            border-radius: 24px !important;
+            box-shadow:
+              7px 8px 0 var(--sub-flat-blue),
+              0 18px 30px rgba(34, 38, 110, .1) !important;
+          }
+
+          .subscription-expired-page h1 {
+            font-size: clamp(30px, 9vw, 42px) !important;
+          }
+
+          .subscription-expired-page .subscription-info-card,
+          .subscription-expired-page .subscription-plan-card {
+            border-radius: 18px !important;
+          }
+
+          .subscription-expired-page .primary,
+          .subscription-expired-page .ghost {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .subscription-expired-page > div {
+            padding: 17px !important;
+          }
+
+          .subscription-expired-page .subscription-info-card {
+            min-height: auto;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .subscription-expired-page *,
+          .subscription-expired-page *::before,
+          .subscription-expired-page *::after {
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
+            scroll-behavior: auto !important;
+          }
+        }
+      `}</style>
+
         <div
           style={{
             minHeight: 280,
@@ -674,7 +1006,338 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
   }
 
   return (
-    <section className="panel" style={{ maxWidth: 1120, margin: '0 auto' }}>
+    <section className="panel subscription-expired-page" style={{ maxWidth: 1120, margin: '0 auto' }}>
+
+      <style>{`
+        .subscription-expired-page {
+          --sub-ink: #101a3a;
+          --sub-muted: #596483;
+          --sub-primary: #6254da;
+          --sub-deep: #342b78;
+          --sub-blue: #3766db;
+          --sub-teal: #18aaa8;
+          --sub-orange: #d96517;
+          --sub-green: #13736f;
+          --sub-red: #b62f55;
+          --sub-flat-blue: #b9d7ff;
+          --sub-flat-violet: #c9c0ff;
+          --sub-ease: cubic-bezier(.22, 1, .36, 1);
+
+          width: min(1120px, 100%);
+          overflow: visible;
+          border: 0 !important;
+          background: transparent !important;
+          box-shadow: none !important;
+          color: var(--sub-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
+        }
+
+        .subscription-expired-page > div {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          padding: clamp(22px, 3vw, 36px) !important;
+          border: 1px solid rgba(171, 181, 211, .72) !important;
+          border-radius: clamp(26px, 2.5vw, 38px) !important;
+          background:
+            radial-gradient(circle at 8% 4%, rgba(255, 207, 146, .38), transparent 30%),
+            radial-gradient(circle at 94% 2%, rgba(191, 190, 249, .32), transparent 35%),
+            linear-gradient(135deg, #fff8ed 0%, #fffdf8 48%, #f7f2ff 100%) !important;
+          box-shadow:
+            12px 14px 0 var(--sub-flat-blue),
+            0 28px 48px rgba(34, 38, 110, .13) !important;
+        }
+
+        .subscription-expired-page > div::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -2;
+          opacity: .42;
+          pointer-events: none;
+          background-image:
+            linear-gradient(rgba(65, 55, 161, .035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(65, 55, 161, .035) 1px, transparent 1px);
+          background-size: 42px 42px;
+        }
+
+        .subscription-expired-page > div::after {
+          content: "";
+          position: absolute;
+          z-index: -1;
+          width: clamp(170px, 22vw, 300px);
+          aspect-ratio: 1;
+          right: clamp(-120px, -8vw, -65px);
+          top: clamp(-125px, -8vw, -70px);
+          border: 1px solid rgba(65, 55, 161, .12);
+          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
+          background: linear-gradient(
+            145deg,
+            rgba(255, 202, 139, .74),
+            rgba(193, 179, 255, .72)
+          );
+          transform: rotate(18deg);
+        }
+
+        .subscription-expired-page button {
+          touch-action: manipulation;
+          font-weight: 900;
+          transition:
+            transform 240ms var(--sub-ease),
+            box-shadow 240ms var(--sub-ease),
+            border-color 200ms ease,
+            background 200ms ease,
+            color 200ms ease,
+            filter 200ms ease;
+        }
+
+        .subscription-expired-page button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .subscription-expired-page button:active:not(:disabled) {
+          transform: translateY(0) scale(.985);
+        }
+
+        .subscription-expired-page button:disabled {
+          cursor: not-allowed;
+          opacity: .56;
+          transform: none;
+          filter: none;
+        }
+
+        .subscription-expired-page .primary,
+        .subscription-expired-page .ghost {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          min-height: 46px;
+          padding: 0 17px;
+          border-radius: 14px;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        .subscription-expired-page .primary {
+          border: 1px solid rgba(52, 43, 120, .16);
+          color: #fff;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5);
+          box-shadow:
+            5px 6px 0 rgba(52, 43, 120, .8),
+            0 12px 22px rgba(55, 102, 219, .16);
+        }
+
+        .subscription-expired-page .ghost {
+          border: 1px solid rgba(98, 84, 218, .18);
+          color: var(--sub-deep);
+          background: #f1efff;
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .14);
+        }
+
+        .subscription-expired-page h1,
+        .subscription-expired-page h2,
+        .subscription-expired-page h3 {
+          color: var(--sub-ink) !important;
+          font-family: var(--yc-display, var(--heading), inherit);
+        }
+
+        .subscription-expired-page h1 {
+          font-size: clamp(31px, 4.5vw, 56px) !important;
+          font-weight: 760 !important;
+          line-height: .98 !important;
+          letter-spacing: -.055em !important;
+        }
+
+        .subscription-expired-page p,
+        .subscription-expired-page li {
+          color: var(--sub-muted);
+        }
+
+        .subscription-expired-page .subscription-info-card {
+          min-width: 0;
+          min-height: 124px;
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 21px !important;
+          background: #f8fbff !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-blue),
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+          transition:
+            transform 260ms var(--sub-ease),
+            border-color 220ms ease !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(2) {
+          background: #fff4d5 !important;
+          box-shadow:
+            7px 9px 0 #ffe0a5,
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(3) {
+          background: #ffe8ef !important;
+          box-shadow:
+            7px 9px 0 #ffc4d5,
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:nth-child(4) {
+          background: #f1efff !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-violet),
+            0 18px 30px rgba(15, 20, 75, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(98, 84, 218, .3) !important;
+        }
+
+        .subscription-expired-page .subscription-info-card > div:first-child {
+          color: #fff !important;
+          background: linear-gradient(145deg, #4f72df, #2bb9b5) !important;
+          border: 1px solid rgba(52, 43, 120, .15);
+          box-shadow: 4px 5px 0 rgba(98, 84, 218, .16);
+        }
+
+        .subscription-expired-page .subscription-info-card span {
+          display: block;
+          color: var(--sub-muted);
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .subscription-expired-page .subscription-info-card strong {
+          display: block;
+          margin-top: 7px;
+          color: var(--sub-ink);
+          font-size: 18px;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+        }
+
+        .subscription-expired-page .subscription-plan-card {
+          min-width: 0;
+          border: 1px solid rgba(171, 181, 211, .68) !important;
+          border-radius: 22px !important;
+          background: linear-gradient(145deg, #fff, #f7fbff) !important;
+          box-shadow:
+            6px 8px 0 rgba(185, 215, 255, .76),
+            0 18px 28px rgba(34, 38, 110, .08) !important;
+          transition:
+            transform 260ms var(--sub-ease),
+            border-color 220ms ease !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card:nth-child(2n) {
+          box-shadow:
+            6px 8px 0 rgba(174, 230, 217, .76),
+            0 18px 28px rgba(34, 38, 110, .08) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card.recommended {
+          border-color: rgba(98, 84, 218, .42) !important;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(105, 217, 208, .18), transparent 36%),
+            linear-gradient(145deg, #f1efff, #f7fbff) !important;
+          box-shadow:
+            7px 9px 0 var(--sub-flat-violet),
+            0 20px 34px rgba(34, 38, 110, .12) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card:hover {
+          transform: translateY(-4px);
+          border-color: rgba(98, 84, 218, .35) !important;
+        }
+
+        .subscription-expired-page .subscription-plan-card h3 {
+          font-size: 20px;
+          font-weight: 950;
+        }
+
+        .subscription-expired-page ul {
+          padding-left: 20px !important;
+        }
+
+        .subscription-expired-page li {
+          margin-bottom: 6px;
+          line-height: 1.7 !important;
+        }
+
+        .subscription-expired-page .spin {
+          animation: subscriptionSpin .8s linear infinite;
+        }
+
+        @keyframes subscriptionSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .subscription-active-state {
+          width: min(760px, 100%);
+        }
+
+        .subscription-active-state > div {
+          border-color: rgba(19, 115, 111, .24) !important;
+          background:
+            radial-gradient(circle at 12% 8%, rgba(174, 230, 217, .52), transparent 34%),
+            linear-gradient(145deg, #eaf8f4, #fff) !important;
+          box-shadow:
+            10px 12px 0 var(--sub-flat-teal),
+            0 24px 42px rgba(34, 38, 110, .1) !important;
+        }
+
+        @media (max-width: 760px) {
+          .subscription-expired-page > div {
+            padding: 20px !important;
+            border-radius: 24px !important;
+            box-shadow:
+              7px 8px 0 var(--sub-flat-blue),
+              0 18px 30px rgba(34, 38, 110, .1) !important;
+          }
+
+          .subscription-expired-page h1 {
+            font-size: clamp(30px, 9vw, 42px) !important;
+          }
+
+          .subscription-expired-page .subscription-info-card,
+          .subscription-expired-page .subscription-plan-card {
+            border-radius: 18px !important;
+          }
+
+          .subscription-expired-page .primary,
+          .subscription-expired-page .ghost {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .subscription-expired-page > div {
+            padding: 17px !important;
+          }
+
+          .subscription-expired-page .subscription-info-card {
+            min-height: auto;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .subscription-expired-page *,
+          .subscription-expired-page *::before,
+          .subscription-expired-page *::after {
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
+            scroll-behavior: auto !important;
+          }
+        }
+      `}</style>
+
       <div
         style={{
           borderRadius: 28,

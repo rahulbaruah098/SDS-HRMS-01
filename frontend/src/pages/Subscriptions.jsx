@@ -450,7 +450,7 @@ function BillingAlertCenter({ alerts = [], hiddenCount = 0 }) {
 function SummaryCard({ icon: Icon, label, value, tone = '#2563eb' }) {
   return (
     <div
-      className="stat-card"
+      className="stat-card billing-summary-card"
       style={{
         padding: 18,
         minHeight: 118,
@@ -480,6 +480,7 @@ function SummaryCard({ icon: Icon, label, value, tone = '#2563eb' }) {
 function DataTable({ title, description, columns, rows, loading, emptyText }) {
   return (
     <div
+      className="billing-data-table"
       style={{
         borderRadius: 24,
         background: '#ffffff',
@@ -696,6 +697,7 @@ function PricingPlansPanel({
 }) {
   return (
     <div
+      className="billing-pricing-panel"
       style={{
         borderRadius: 24,
         background: '#ffffff',
@@ -750,6 +752,7 @@ function PricingPlansPanel({
             return (
               <div
                 key={code}
+                className={`billing-plan-editor ${plan.is_recommended ? 'recommended' : ''}`}
                 style={{
                   borderRadius: 22,
                   border: plan.is_recommended
@@ -1612,7 +1615,347 @@ export default function Subscriptions({ setPage }) {
   ];
 
   return (
-    <section className="panel">
+    <section className="panel subscriptions-admin-page">
+
+      <style>{`
+        .subscriptions-admin-page{
+          --bill-ink:#101a3a;
+          --bill-muted:#596483;
+          --bill-primary:#6254da;
+          --bill-deep:#342b78;
+          --bill-blue:#3766db;
+          --bill-teal:#18aaa8;
+          --bill-green:#13736f;
+          --bill-red:#b62f55;
+          --bill-amber:#996400;
+          --bill-flat-blue:#b9d7ff;
+          --bill-flat-violet:#c9c0ff;
+          --bill-flat-teal:#aee6d9;
+          --bill-ease:cubic-bezier(.22,1,.36,1);
+
+          width:100%;
+          min-width:0;
+          overflow:visible;
+          padding:clamp(22px,2.4vw,30px);
+          border:1px solid rgba(171,181,211,.72);
+          border-radius:clamp(26px,2.5vw,38px);
+          background:
+            radial-gradient(circle at 8% 0%,rgba(121,219,238,.24),transparent 26%),
+            radial-gradient(circle at 95% 0%,rgba(191,190,249,.24),transparent 30%),
+            linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
+          box-shadow:12px 14px 0 var(--bill-flat-blue),0 28px 48px rgba(34,38,110,.13);
+          color:var(--bill-ink);
+          font-family:var(--yc-ui,var(--body),inherit);
+        }
+
+        .subscriptions-admin-page h1,
+        .subscriptions-admin-page h2,
+        .subscriptions-admin-page h3{
+          color:var(--bill-ink)!important;
+          font-family:var(--yc-display,var(--heading),inherit);
+        }
+
+        .subscriptions-admin-page>div:first-of-type{
+          position:relative;
+          isolation:isolate;
+          overflow:hidden;
+          margin:-2px -2px 24px!important;
+          padding:clamp(22px,2.6vw,34px);
+          border:1px solid rgba(171,181,211,.58);
+          border-radius:clamp(24px,2vw,32px);
+          background:
+            radial-gradient(circle at 8% 4%,rgba(121,219,238,.28),transparent 31%),
+            radial-gradient(circle at 92% 5%,rgba(191,190,249,.27),transparent 34%),
+            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
+          box-shadow:7px 9px 0 rgba(185,215,255,.72),0 18px 30px rgba(34,38,110,.08);
+        }
+
+        .subscriptions-admin-page>div:first-of-type::after{
+          content:"";
+          position:absolute;
+          z-index:-1;
+          width:220px;
+          aspect-ratio:1;
+          right:-92px;
+          top:-115px;
+          border-radius:34% 66% 58% 42% / 44% 38% 62% 56%;
+          background:linear-gradient(145deg,rgba(105,217,208,.55),rgba(121,189,242,.55));
+          transform:rotate(18deg);
+        }
+
+        .subscriptions-admin-page>div:first-of-type h2{
+          margin-top:4px!important;
+          font-size:clamp(29px,3.8vw,48px);
+          font-weight:760;
+          line-height:1;
+          letter-spacing:-.045em;
+        }
+
+        .subscriptions-admin-page>div:first-of-type p{
+          color:var(--bill-muted)!important;
+          line-height:1.65;
+        }
+
+        .subscriptions-admin-page button{
+          touch-action:manipulation;
+          font-weight:900;
+          transition:transform 240ms var(--bill-ease),box-shadow 240ms var(--bill-ease),filter 200ms ease;
+        }
+        .subscriptions-admin-page button:hover:not(:disabled){transform:translateY(-2px);filter:saturate(1.04)}
+        .subscriptions-admin-page button:active:not(:disabled){transform:translateY(0) scale(.985)}
+        .subscriptions-admin-page button:disabled{opacity:.56;cursor:not-allowed;transform:none;filter:none}
+
+        .subscriptions-admin-page .primary,
+        .subscriptions-admin-page .ghost{
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          gap:8px;
+          min-height:43px;
+          padding:0 14px;
+          border-radius:13px;
+          line-height:1;
+          white-space:nowrap;
+        }
+
+        .subscriptions-admin-page .primary{
+          border:1px solid rgba(52,43,120,.16);
+          color:#fff;
+          background:linear-gradient(145deg,#4f72df,#2bb9b5);
+          box-shadow:5px 6px 0 rgba(52,43,120,.8),0 12px 22px rgba(55,102,219,.16);
+        }
+
+        .subscriptions-admin-page .ghost{
+          border:1px solid rgba(98,84,218,.18);
+          color:var(--bill-deep);
+          background:#f1efff;
+          box-shadow:3px 4px 0 rgba(98,84,218,.12);
+        }
+
+        .subscriptions-admin-page .billing-summary-card{
+          min-width:0;
+          min-height:120px!important;
+          border:1px solid rgba(171,181,211,.68)!important;
+          border-radius:21px!important;
+          background:#f8fbff!important;
+          box-shadow:7px 9px 0 var(--bill-flat-blue),0 18px 30px rgba(15,20,75,.08)!important;
+          transition:transform 260ms var(--bill-ease),border-color 220ms ease!important;
+        }
+
+        .subscriptions-admin-page .billing-summary-card:nth-child(2n){
+          background:#eaf8f4!important;
+          box-shadow:7px 9px 0 var(--bill-flat-teal),0 18px 30px rgba(15,20,75,.08)!important;
+        }
+
+        .subscriptions-admin-page .billing-summary-card:nth-child(3n){
+          background:#f1efff!important;
+          box-shadow:7px 9px 0 var(--bill-flat-violet),0 18px 30px rgba(15,20,75,.08)!important;
+        }
+
+        .subscriptions-admin-page .billing-summary-card:nth-child(5n){
+          background:#fff4d5!important;
+          box-shadow:7px 9px 0 #ffe0a5,0 18px 30px rgba(15,20,75,.08)!important;
+        }
+
+        .subscriptions-admin-page .billing-summary-card:hover{
+          transform:translateY(-3px);
+          border-color:rgba(98,84,218,.3)!important;
+        }
+
+        .subscriptions-admin-page .billing-summary-card>div:first-child{
+          color:#fff!important;
+          background:linear-gradient(145deg,#4f72df,#2bb9b5)!important;
+          border:1px solid rgba(52,43,120,.15);
+          box-shadow:4px 5px 0 rgba(98,84,218,.16);
+        }
+
+        .subscriptions-admin-page .billing-summary-card span{
+          color:var(--bill-muted);
+          font-size:10px;
+          font-weight:900;
+          letter-spacing:.06em;
+          text-transform:uppercase;
+        }
+
+        .subscriptions-admin-page .billing-summary-card strong{
+          color:var(--bill-ink);
+          font-size:25px;
+          line-height:1.1;
+          letter-spacing:-.035em;
+        }
+
+        .subscriptions-admin-page input,
+        .subscriptions-admin-page select,
+        .subscriptions-admin-page textarea{
+          border:1px solid rgba(159,169,205,.62)!important;
+          border-radius:14px!important;
+          outline:none!important;
+          color:var(--bill-ink)!important;
+          background:rgba(255,255,255,.92)!important;
+          transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease;
+        }
+
+        .subscriptions-admin-page input:hover,
+        .subscriptions-admin-page select:hover,
+        .subscriptions-admin-page textarea:hover{
+          border-color:rgba(98,84,218,.34)!important;
+        }
+
+        .subscriptions-admin-page input:focus,
+        .subscriptions-admin-page select:focus,
+        .subscriptions-admin-page textarea:focus{
+          border-color:var(--bill-primary)!important;
+          background:#fff!important;
+          box-shadow:0 0 0 4px rgba(98,84,218,.11)!important;
+        }
+
+        .subscriptions-admin-page input[type="checkbox"]{
+          width:17px!important;
+          height:17px!important;
+          min-height:auto!important;
+          accent-color:var(--bill-primary);
+        }
+
+        .subscriptions-admin-page .billing-data-table,
+        .subscriptions-admin-page .billing-pricing-panel{
+          border:1px solid rgba(171,181,211,.7)!important;
+          border-radius:24px!important;
+          background:linear-gradient(145deg,#fff,#f7fbff)!important;
+          box-shadow:8px 10px 0 #d1dcfa,0 22px 38px rgba(34,38,110,.09)!important;
+        }
+
+        .subscriptions-admin-page .billing-data-table>div:first-child,
+        .subscriptions-admin-page .billing-pricing-panel>div:first-child{
+          padding:20px 22px!important;
+          border-bottom:1px solid rgba(65,55,161,.09)!important;
+          background:linear-gradient(145deg,rgba(241,239,255,.62),rgba(237,248,255,.52))!important;
+        }
+
+        .subscriptions-admin-page .billing-data-table h3,
+        .subscriptions-admin-page .billing-pricing-panel h3{
+          font-size:22px;
+          font-weight:760;
+          letter-spacing:-.03em;
+        }
+
+        .subscriptions-admin-page table{
+          border-collapse:separate!important;
+          border-spacing:0!important;
+        }
+
+        .subscriptions-admin-page th{
+          position:sticky;
+          top:0;
+          z-index:2;
+          padding:14px 16px!important;
+          border-bottom:1px solid rgba(65,55,161,.11)!important;
+          color:#4f5e7f!important;
+          background:rgba(241,239,255,.96)!important;
+          backdrop-filter:blur(12px);
+          font-size:10px!important;
+          font-weight:900!important;
+        }
+
+        .subscriptions-admin-page td{
+          padding:16px!important;
+          border-bottom:1px solid rgba(65,55,161,.09)!important;
+          color:#334164!important;
+          background:rgba(255,255,255,.68);
+        }
+
+        .subscriptions-admin-page tbody tr:hover td{
+          background:rgba(237,246,255,.84);
+        }
+
+        .subscriptions-admin-page .billing-plan-editor{
+          border:1px solid rgba(171,181,211,.68)!important;
+          border-radius:22px!important;
+          background:linear-gradient(145deg,#fff,#f7fbff)!important;
+          box-shadow:6px 8px 0 rgba(185,215,255,.74),0 18px 28px rgba(34,38,110,.08)!important;
+          transition:transform 260ms var(--bill-ease),border-color 220ms ease!important;
+        }
+
+        .subscriptions-admin-page .billing-plan-editor:hover{
+          transform:translateY(-3px);
+          border-color:rgba(98,84,218,.32)!important;
+        }
+
+        .subscriptions-admin-page .billing-plan-editor.recommended{
+          border-color:rgba(98,84,218,.42)!important;
+          background:
+            radial-gradient(circle at 100% 0%,rgba(105,217,208,.18),transparent 36%),
+            linear-gradient(145deg,#f1efff,#f7fbff)!important;
+          box-shadow:7px 9px 0 var(--bill-flat-violet),0 20px 34px rgba(34,38,110,.12)!important;
+        }
+
+        .subscriptions-admin-page .spin{
+          animation:billingSpin .8s linear infinite;
+        }
+
+        @keyframes billingSpin{
+          to{transform:rotate(360deg)}
+        }
+
+        @media (max-width:760px){
+          .subscriptions-admin-page{
+            padding:16px;
+            border-radius:24px;
+            box-shadow:7px 8px 0 var(--bill-flat-blue),0 18px 30px rgba(34,38,110,.1);
+          }
+
+          .subscriptions-admin-page>div:first-of-type{
+            align-items:flex-start!important;
+            flex-direction:column;
+            padding:20px;
+            border-radius:22px;
+          }
+
+          .subscriptions-admin-page>div:first-of-type>div:last-child{
+            width:100%;
+          }
+
+          .subscriptions-admin-page>div:first-of-type button{
+            width:100%;
+          }
+
+          .subscriptions-admin-page .billing-summary-card{
+            min-height:108px!important;
+          }
+
+          .subscriptions-admin-page .billing-data-table,
+          .subscriptions-admin-page .billing-pricing-panel{
+            border-radius:20px!important;
+            box-shadow:5px 6px 0 #d1dcfa,0 14px 24px rgba(34,38,110,.08)!important;
+          }
+
+          .subscriptions-admin-page .billing-plan-editor{
+            border-radius:18px!important;
+          }
+        }
+
+        @media (max-width:430px){
+          .subscriptions-admin-page{
+            padding:13px;
+          }
+
+          .subscriptions-admin-page .primary,
+          .subscriptions-admin-page .ghost{
+            width:100%;
+          }
+        }
+
+        @media (prefers-reduced-motion:reduce){
+          .subscriptions-admin-page *,
+          .subscriptions-admin-page *::before,
+          .subscriptions-admin-page *::after{
+            animation-duration:.01ms!important;
+            animation-iteration-count:1!important;
+            transition-duration:.01ms!important;
+            scroll-behavior:auto!important;
+          }
+        }
+      `}</style>
+
       <div
         style={{
           display: 'flex',
