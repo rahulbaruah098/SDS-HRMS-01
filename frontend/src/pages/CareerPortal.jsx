@@ -689,7 +689,11 @@ function lockCareerPortalBackgroundScroll() {
 
   const isPopupScrollTarget = (target) =>
     target instanceof Element &&
-    Boolean(target.closest('.yc-career-modal-body'));
+    Boolean(
+      target.closest(
+        '.yc-career-modal-body, .yc-career-submission-scroll',
+      ),
+    );
 
   const preventBackgroundScroll = (event) => {
     if (isPopupScrollTarget(event.target)) return;
@@ -1032,13 +1036,6 @@ function ApplicationModal({
                 </span>
               </div>
 
-              {error ? (
-                <div className="yc-career-alert yc-career-alert-danger">
-                  <AlertCircle size={17} />
-                  <span>{error}</span>
-                </div>
-              ) : null}
-
               <section
                 className={`yc-career-resume-workbench${
                   parsing ? ' is-parsing' : ''
@@ -1353,6 +1350,15 @@ function ApplicationModal({
             </div>
           </div>
 
+          {error ? (
+            <div className="yc-career-form-action-error">
+              <div className="yc-career-alert yc-career-alert-danger">
+                <AlertCircle size={17} />
+                <span>{error}</span>
+              </div>
+            </div>
+          ) : null}
+
           <footer className="yc-career-modal-foot">
             <button
               type="button"
@@ -1364,17 +1370,168 @@ function ApplicationModal({
             </button>
             <button
               type="submit"
-              className="yc-career-btn yc-career-btn-primary"
+              className={`yc-career-btn yc-career-btn-primary${
+                busy ? ' is-submitting' : ''
+              }`}
               disabled={busy || parsing}
+              aria-busy={busy ? 'true' : undefined}
             >
-              {busy ? <Loader2 size={15} /> : <ArrowRight size={15} />}
-              {parsing ? 'Reading resume…' : 'Submit application'}
+              {busy ? (
+                <Loader2
+                  size={15}
+                  className="yc-career-submit-spinner"
+                  aria-hidden="true"
+                />
+              ) : (
+                <ArrowRight size={15} />
+              )}
+              {parsing
+                ? 'Reading resume…'
+                : busy
+                  ? 'Submission in progress…'
+                  : 'Submit application'}
             </button>
           </footer>
         </form>
       </section>
     </div>
     ,
+    document.body,
+  );
+}
+
+function ApplicationSuccessModal({
+  applicationResult,
+  job,
+  submittedMatch,
+  notice,
+  onDismissNotice,
+  onViewPositions,
+}) {
+  useEffect(() => {
+    const unlockBackgroundScroll = lockCareerPortalBackgroundScroll();
+    document.body.classList.add('yc-career-submission-open');
+
+    return () => {
+      document.body.classList.remove('yc-career-submission-open');
+      unlockBackgroundScroll();
+    };
+  }, []);
+
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      className="yc-career-submission-backdrop"
+      role="presentation"
+    >
+      <section
+        className="yc-career-submission-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Application submitted"
+      >
+        <div className="yc-career-submission-scroll">
+          <div className="yc-career-state-card yc-career-submission-card">
+            <div
+              className="yc-career-state-icon"
+              style={{
+                borderColor: '#b9dac9',
+                background: '#e7f1ed',
+                color: '#285a4a',
+              }}
+            >
+              <CheckCircle2 size={25} />
+            </div>
+
+            <h2>Application submitted</h2>
+
+            <p>
+              Your application for{' '}
+              <strong>
+                {applicationResult?.application?.job_title ||
+                  job.job_title}
+              </strong>{' '}
+              has been recorded successfully.
+            </p>
+
+            <div className="yc-career-offer-details">
+              <div className="yc-career-offer-row">
+                <span>Application reference</span>
+                <strong>
+                  {applicationResult?.application?.reference_no ||
+                    'Reference will be shared by email'}
+                </strong>
+              </div>
+
+              <div className="yc-career-offer-row">
+                <span>Current status</span>
+                <strong>
+                  {displayLabel(
+                    applicationResult?.application?.status ||
+                      'applied',
+                  )}
+                </strong>
+              </div>
+
+              {applicationResult?.application
+                ?.resume_match_score !== undefined ? (
+                <div className="yc-career-offer-row">
+                  <span>Indicative role match</span>
+                  <strong>
+                    {applicationResult.application.resume_match_score}%
+                  </strong>
+                </div>
+              ) : null}
+            </div>
+
+            <ResumeMatchCard match={submittedMatch} />
+
+            <div className="yc-career-alert yc-career-alert-success yc-career-submission-alert">
+              <BadgeCheck size={17} />
+              <span>
+                {applicationResult?.candidate_message ||
+                  'The recruitment team will review the complete application and contact you about the next step.'}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className="yc-career-btn yc-career-btn-primary yc-career-submission-action"
+              onClick={onViewPositions}
+            >
+              View other positions
+            </button>
+
+            {notice ? (
+              <div
+                className={`yc-career-submission-notice is-${normalizeKey(
+                  notice.type || 'success',
+                )}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="yc-career-submission-notice-icon">
+                  <CheckCircle2 size={16} />
+                </span>
+                <span className="yc-career-submission-notice-copy">
+                  <strong>{notice.title}</strong>
+                  {notice.message ? <small>{notice.message}</small> : null}
+                </span>
+                <button
+                  type="button"
+                  className="yc-career-submission-notice-close"
+                  onClick={onDismissNotice}
+                  aria-label="Dismiss notification"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>,
     document.body,
   );
 }
@@ -1478,6 +1635,29 @@ function CareerJobsView({ companyKey, jobSlug }) {
     if (jobSlug) loadJob();
     else loadJobs();
   }, [jobSlug, loadJob, loadJobs]);
+
+  useEffect(() => {
+    if (
+      loading ||
+      jobSlug ||
+      typeof window === 'undefined' ||
+      window.location.hash !== '#open-positions'
+    ) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById('open-positions');
+      if (!target) return;
+
+      target.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, jobSlug, jobs.length]);
 
   const careerPath = `/careers/${encodeURIComponent(
     company?.career_slug || companyKey,
@@ -1697,100 +1877,20 @@ function CareerJobsView({ companyKey, jobSlug }) {
         ) : null}
 
         {applicationResult ? (
-          <div className="yc-career-modal-backdrop">
-            <section
-              className="yc-career-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Application submitted"
-            >
-              <div className="yc-career-modal-body">
-                <div
-                  className="yc-career-state-card"
-                  style={{
-                    boxShadow: 'none',
-                    border: 0,
-                    width: '100%',
-                  }}
-                >
-                  <div
-                    className="yc-career-state-icon"
-                    style={{
-                      borderColor: '#b9dac9',
-                      background: '#e7f1ed',
-                      color: '#285a4a',
-                    }}
-                  >
-                    <CheckCircle2 size={25} />
-                  </div>
-                  <h2>Application submitted</h2>
-                  <p>
-                    Your application for{' '}
-                    <strong>
-                      {applicationResult?.application?.job_title ||
-                        job.job_title}
-                    </strong>{' '}
-                    has been recorded successfully.
-                  </p>
-
-                  <div className="yc-career-offer-details">
-                    <div className="yc-career-offer-row">
-                      <span>Application reference</span>
-                      <strong>
-                        {applicationResult?.application?.reference_no ||
-                          'Reference will be shared by email'}
-                      </strong>
-                    </div>
-                    <div className="yc-career-offer-row">
-                      <span>Current status</span>
-                      <strong>
-                        {displayLabel(
-                          applicationResult?.application?.status ||
-                            'applied',
-                        )}
-                      </strong>
-                    </div>
-                    {applicationResult?.application
-                      ?.resume_match_score !== undefined ? (
-                      <div className="yc-career-offer-row">
-                        <span>Indicative role match</span>
-                        <strong>
-                          {applicationResult.application.resume_match_score}%
-                        </strong>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <ResumeMatchCard match={submittedMatch} />
-
-                  <div
-                    className="yc-career-alert yc-career-alert-success"
-                    style={{ marginTop: 16, textAlign: 'left' }}
-                  >
-                    <BadgeCheck size={17} />
-                    <span>
-                      {applicationResult?.candidate_message ||
-                        'The recruitment team will review the complete application and contact you about the next step.'}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="yc-career-btn yc-career-btn-primary"
-                    onClick={() => {
-                      setApplicationResult(null);
-                      goTo(
-                        careerPath,
-                        'Returning to other open positions…',
-                      );
-                    }}
-                  >
-                    View other positions
-                  </button>
-                </div>
-              </div>
-            </section>
-          </div>
+          <ApplicationSuccessModal
+            applicationResult={applicationResult}
+            job={job}
+            submittedMatch={submittedMatch}
+            notice={notice}
+            onDismissNotice={clearNotice}
+            onViewPositions={() => {
+              setApplicationResult(null);
+              goTo(
+                `${careerPath}#open-positions`,
+                'Returning to other open positions…',
+              );
+            }}
+          />
         ) : null}
       </PublicLayout>
     );
@@ -1851,7 +1951,10 @@ function CareerJobsView({ companyKey, jobSlug }) {
             </div>
           </section>
 
-          <div className="yc-career-toolbar">
+          <div
+            className="yc-career-toolbar"
+            id="open-positions"
+          >
             <div className="yc-career-heading">
               <h2>Open positions</h2>
               <p>

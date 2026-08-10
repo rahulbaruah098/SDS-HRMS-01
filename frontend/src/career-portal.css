@@ -108,6 +108,27 @@
   width: 100%;
 }
 
+.yc-career-submit-spinner {
+  flex: 0 0 auto;
+  animation: yc-career-submit-spin .8s linear infinite;
+}
+
+.yc-career-btn.is-submitting {
+  cursor: wait;
+}
+
+@keyframes yc-career-submit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yc-career-submit-spinner {
+    animation-duration: 1.6s;
+  }
+}
+
 .yc-career-state-card h1 {
   font-size: clamp(28px, 4vw, 42px);
 }
@@ -1326,21 +1347,23 @@
 
 .yc-career-summary-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
- gap: 12px 22px;
-  margin: 0;
+  width: min(100%, 1180px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 16px;
+  justify-self: center;
+  margin: 0 auto;
 }
 
 .yc-career-summary-row {
-  display: grid;
-  grid-template-columns: minmax(96px, .72fr) minmax(0, 1.28fr);
-  gap: 10px;
-  align-items: center;
+  display: flex;
   min-width: 0;
-  min-height: 58px;
-  padding: 12px 14px;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
   border: 1px solid rgba(171, 181, 211, .48);
-  border-radius: 15px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, .76);
 }
 
@@ -1356,12 +1379,15 @@
 }
 
 .yc-career-summary-row dt {
+  flex: 0 1 auto;
+  min-width: 0;
   color: #69738e;
   font-size: 11px;
   font-weight: 800;
 }
 
 .yc-career-summary-row dd {
+  flex: 0 1 auto;
   min-width: 0;
   margin: 0;
   color: #101a3a;
@@ -1374,6 +1400,15 @@
 .yc-career-form {
   display: grid;
   gap: 18px;
+}
+
+.yc-career-form-action-error {
+  padding: 12px 20px 0;
+  background: #f8f9ff;
+}
+
+.yc-career-form-action-error .yc-career-alert {
+  margin: 0;
 }
 
 .yc-career-form-grid {
@@ -1703,6 +1738,7 @@
 .yc-career-toolbar {
   display: grid !important;
   align-items: center !important;
+  scroll-margin-top: clamp(18px, 4vw, 46px);
   gap: clamp(18px, 2.5vw, 34px) !important;
   min-width: 0;
   margin-bottom: clamp(22px, 2.5vw, 32px) !important;
@@ -1829,6 +1865,396 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Application submitted: viewport-centred, locked and responsive. */
+body.yc-career-submission-open .yc-career-toast-region {
+  display: none;
+}
+
+.yc-career-submission-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  padding:
+    max(18px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
+  background: rgba(16, 26, 58, .80);
+  backdrop-filter: blur(18px) saturate(.8);
+  -webkit-backdrop-filter: blur(18px) saturate(.8);
+}
+
+.yc-career-submission-modal {
+  display: grid;
+  width: min(980px, 100%);
+  max-width: 100%;
+  max-height: calc(
+    100dvh -
+    max(36px, env(safe-area-inset-top) + env(safe-area-inset-bottom) + 24px)
+  );
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid rgba(171, 181, 211, .68);
+  border-radius: clamp(20px, 2vw, 28px);
+  background: #ffffff;
+  box-shadow: 0 30px 80px rgba(16, 26, 58, .28);
+}
+
+.yc-career-submission-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: inherit;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.yc-career-submission-card {
+  display: flex !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: clamp(24px, 3vw, 36px) !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-align: center;
+}
+
+.yc-career-submission-card > .yc-career-state-icon {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 14px;
+  border-radius: 16px;
+}
+
+.yc-career-submission-card > h2 {
+  margin: 0;
+  color: #101a3a;
+  font-size: clamp(25px, 2.8vw, 34px);
+  line-height: 1.05;
+}
+
+.yc-career-submission-card > p {
+  max-width: 680px;
+  margin: 9px auto 0;
+  color: #69738e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.yc-career-submission-card > p strong {
+  color: #101a3a;
+}
+
+.yc-career-submission-card .yc-career-offer-details {
+  width: 100%;
+  max-width: 820px;
+  margin: clamp(20px, 2.5vw, 28px) auto 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border: 0;
+  background: transparent;
+}
+
+.yc-career-submission-card .yc-career-offer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 82px;
+  padding: 14px 16px;
+  border: 1px solid rgba(171, 181, 211, .58);
+  border-radius: 15px;
+  background: #f9fbff;
+  text-align: left;
+}
+
+.yc-career-submission-card .yc-career-offer-row:last-child {
+  border-bottom: 1px solid rgba(171, 181, 211, .58);
+}
+
+.yc-career-submission-card .yc-career-offer-row span {
+  color: #74809b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.yc-career-submission-card .yc-career-offer-row strong {
+  color: #101a3a;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.yc-career-submission-card .yc-career-match {
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  margin: 18px auto 0;
+  padding: clamp(18px, 2vw, 24px);
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 22px;
+  align-items: center;
+  border-color: rgba(171, 181, 211, .58);
+  border-radius: 18px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.yc-career-submission-card .yc-career-match-score {
+  width: 112px;
+  height: 112px;
+  justify-self: center;
+}
+
+.yc-career-submission-card .yc-career-match-score strong {
+  font-size: 27px;
+}
+
+.yc-career-submission-card .yc-career-match-copy h4 {
+  font-size: 20px;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.yc-career-submission-card .yc-career-match-copy > p {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.yc-career-submission-card .yc-career-match-breakdown {
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.yc-career-submission-card .yc-career-skill-groups {
+  gap: 10px;
+  margin-top: 13px !important;
+}
+
+.yc-career-submission-card .yc-career-skill-group {
+  min-height: 82px;
+  padding: 12px;
+  background: #fbfcff;
+}
+
+.yc-career-submission-card .yc-career-human-review {
+  margin-top: 12px !important;
+  border-radius: 10px;
+}
+
+.yc-career-submission-alert {
+  width: 100%;
+  max-width: 820px;
+  margin: 16px auto 0;
+  text-align: left;
+  border-radius: 12px;
+}
+
+.yc-career-submission-action {
+  width: fit-content;
+  max-width: 100%;
+  min-width: min(230px, 100%);
+  min-height: 46px;
+  margin: 18px auto 0;
+  padding-inline: 24px;
+}
+
+.yc-career-submission-notice {
+  display: grid;
+  width: min(620px, 100%);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  margin: 14px auto 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(40, 90, 74, .20);
+  border-radius: 12px;
+  background: #f1fbf6;
+  color: #285a4a;
+  text-align: left;
+}
+
+.yc-career-submission-notice-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  background: #e2f3ea;
+  color: #285a4a;
+}
+
+.yc-career-submission-notice-copy {
+  min-width: 0;
+}
+
+.yc-career-submission-notice-copy strong,
+.yc-career-submission-notice-copy small {
+  display: block;
+}
+
+.yc-career-submission-notice-copy strong {
+  color: #1f4f40;
+  font-size: 10.5px;
+  font-weight: 900;
+}
+
+.yc-career-submission-notice-copy small {
+  margin-top: 2px;
+  color: #4d7466;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.yc-career-submission-notice-close {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #557b6d;
+}
+
+.yc-career-submission-notice-close:hover {
+  background: #e5f2eb;
+}
+
+@media (max-width: 760px) {
+  .yc-career-submission-backdrop {
+    padding:
+      max(9px, env(safe-area-inset-top))
+      max(9px, env(safe-area-inset-right))
+      max(9px, env(safe-area-inset-bottom))
+      max(9px, env(safe-area-inset-left));
+  }
+
+  .yc-career-submission-modal {
+    width: 100%;
+    max-height: calc(
+      100dvh -
+      max(18px, env(safe-area-inset-top) + env(safe-area-inset-bottom) + 10px)
+    );
+    border-radius: 20px;
+  }
+
+  .yc-career-submission-card {
+    padding: 22px 16px 20px !important;
+  }
+
+  .yc-career-submission-card .yc-career-offer-details {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .yc-career-submission-card .yc-career-offer-row {
+    min-height: 0;
+    padding: 12px 13px;
+  }
+
+  .yc-career-submission-card .yc-career-match {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 16px 14px;
+  }
+
+  .yc-career-submission-card .yc-career-match-score {
+    justify-self: center;
+  }
+
+  .yc-career-submission-card .yc-career-match-copy h4,
+  .yc-career-submission-card .yc-career-match-copy > p {
+    text-align: center;
+  }
+
+  .yc-career-submission-card .yc-career-skill-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .yc-career-submission-action {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .yc-career-submission-notice {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .yc-career-form-action-error {
+    padding: 10px 12px 0;
+  }
+
+  .yc-career-submission-card {
+    padding: 18px 12px 18px !important;
+  }
+
+  .yc-career-submission-card > .yc-career-state-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+  }
+
+  .yc-career-submission-card > h2 {
+    font-size: 25px;
+  }
+
+  .yc-career-submission-card .yc-career-match-row {
+    grid-template-columns: 72px minmax(0, 1fr) 32px;
+    gap: 6px;
+  }
+
+  .yc-career-submission-card .yc-career-match-copy h4 {
+    font-size: 18px;
+  }
+
+  .yc-career-submission-alert {
+    font-size: 9.5px;
+  }
+
+  .yc-career-submission-notice {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .yc-career-submission-notice-close {
+    display: none;
+  }
+}
+
+@supports (-webkit-touch-callout: none) {
+  .yc-career-submission-backdrop {
+    height: -webkit-fill-available;
+  }
+}
+
 @media (max-width: 900px) {
   .yc-career-shell {
 
@@ -1866,7 +2292,7 @@
 
   .yc-career-hero-highlights {
 
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
 
     }
 
@@ -1875,6 +2301,30 @@
       grid-template-columns: minmax(0, 1fr);
 
     }
+}
+
+@media (max-width: 1180px) {
+  .yc-career-summary-list {
+    width: min(100%, 900px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .yc-career-summary-list {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .yc-career-summary-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .yc-career-summary-row dd {
+    text-align: left;
+  }
 }
 
 @media (max-width: 720px) {
