@@ -802,7 +802,7 @@ def create_auth_session(db, user, login_data=None):
         "created_at": current_time,
         "updated_at": current_time,
         "last_used_at": current_time,
-        "expires_at": None,
+        "expires_at": refresh_session_expiry(),
         "revoked_at": None,
     })
 
@@ -877,7 +877,7 @@ def login():
         "refresh_token": refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": None,
+        "refresh_expires_in": 180 * 60,
         "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
         "tenant": tenant_payload["tenant"],
@@ -915,6 +915,24 @@ def refresh_access_token():
     if not session:
         return jsonify({
             "message": "Invalid or revoked refresh token"
+        }), 401
+
+    session_expires_at = session.get("expires_at")
+
+    if session_expires_at and session_expires_at <= current_time:
+        db.auth_sessions.update_one(
+            {"_id": session["_id"]},
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": current_time,
+                    "updated_at": current_time,
+                }
+            },
+        )
+        return jsonify({
+            "message": "Session expired. Please log in again.",
+            "code": "session_expired",
         }), 401
 
     user_obj_id = safe_object_id(session.get("user_id"))
@@ -999,7 +1017,7 @@ def refresh_access_token():
                 "refresh_token_hash": new_refresh_hash,
                 "last_used_at": current_time,
                 "updated_at": current_time,
-                "expires_at": None,
+                "expires_at": session_expires_at,
             }
         },
         return_document=ReturnDocument.AFTER,
@@ -1017,7 +1035,7 @@ def refresh_access_token():
         "refresh_token": new_refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": None,
+        "refresh_expires_in": max(0, int((session_expires_at - current_time).total_seconds())) if session_expires_at else 0,
     }), 200
 
 

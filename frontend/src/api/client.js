@@ -37,6 +37,10 @@ export function getToken() {
   return localStorage.getItem('sds_hrms_token');
 }
 
+export function getRefreshToken() {
+  return localStorage.getItem('sds_hrms_refresh_token');
+}
+
 export function firstNonEmpty(...values) {
   for (const value of values) {
     const normalized = String(value || '').trim();
@@ -1321,8 +1325,27 @@ export function setSession(data = {}) {
   const user = withProfilePhotoAliases(data.user || {});
   const employee = withProfilePhotoAliases(data.employee || {});
 
-  if (data.token) {
-    safeSetLocalStorage('sds_hrms_token', data.token);
+  const accessToken =
+    data.access_token ||
+    data.token ||
+    '';
+
+  const refreshToken =
+    data.refresh_token ||
+    '';
+
+  if (accessToken) {
+    safeSetLocalStorage(
+      'sds_hrms_token',
+      accessToken,
+    );
+  }
+
+  if (refreshToken) {
+    safeSetLocalStorage(
+      'sds_hrms_refresh_token',
+      refreshToken,
+    );
   }
 
   safeSetLocalStorage(
@@ -1344,6 +1367,7 @@ export function setSession(data = {}) {
 
 export function clearSession() {
   localStorage.removeItem('sds_hrms_token');
+  localStorage.removeItem('sds_hrms_refresh_token');
   localStorage.removeItem('sds_hrms_user');
   localStorage.removeItem('sds_hrms_employee');
 }
@@ -1696,7 +1720,88 @@ function getBrowserAttendanceLocation(options = {}) {
   });
 }
 
-export async function api(path, options = {}) {
+let refreshPromise = null;
+
+function isAuthRefreshPath(path = '') {
+  return String(path || '')
+    .toLowerCase()
+    .includes('/auth/refresh');
+}
+
+async function refreshAccessToken() {
+  const refreshToken = getRefreshToken();
+
+  if (!refreshToken) {
+    throw new Error('Refresh token is missing.');
+  }
+
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const response = await fetch(
+        buildUrl('/auth/refresh'),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            refresh_token: refreshToken,
+          }),
+        },
+      );
+
+      const data = normalizeApiPayload(
+        await parseResponse(response),
+      );
+
+      if (!response.ok) {
+        throw buildApiError(
+          data,
+          response.status,
+          'Session expired. Please login again.',
+        );
+      }
+
+      const newAccessToken =
+        data.access_token ||
+        data.token ||
+        '';
+
+      const newRefreshToken =
+        data.refresh_token ||
+        '';
+
+      if (!newAccessToken || !newRefreshToken) {
+        throw new Error(
+          'Invalid refresh response.',
+        );
+      }
+
+      safeSetLocalStorage(
+        'sds_hrms_token',
+        newAccessToken,
+      );
+
+      safeSetLocalStorage(
+        'sds_hrms_refresh_token',
+        newRefreshToken,
+      );
+
+      return newAccessToken;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+
+  return refreshPromise;
+}
+
+export async function api(
+  path,
+  options = {},
+  authRetry = false,
+) {
   const token = getToken();
   const isFormData = options.body instanceof FormData;
   const timeoutMs = options.timeoutMs || 30000;
@@ -1736,14 +1841,36 @@ export async function api(path, options = {}) {
 
   const data = normalizeApiPayload(await parseResponse(response));
 
-  if (response.status === 401) {
-    clearSession();
-    throw buildApiError(
-      data,
-      response.status,
-      'Session expired. Please login again.',
-    );
+if (response.status === 401) {
+  const refreshToken = getRefreshToken();
+
+  if (
+    !authRetry &&
+    refreshToken &&
+    !isAuthRefreshPath(path)
+  ) {
+    try {
+      await refreshAccessToken();
+
+      return api(
+        path,
+        options,
+        true,
+      );
+    } catch (refreshError) {
+      clearSession();
+      throw refreshError;
+    }
   }
+
+  clearSession();
+
+  throw buildApiError(
+    data,
+    response.status,
+    'Session expired. Please login again.',
+  );
+}
 
   if (response.status === 402) {
     redirectForSaasRestriction(path, data, response.status);
@@ -1896,10 +2023,19 @@ async function downloadRecruitmentFile(path, fallbackFilename) {
     throw new Error(getConnectionErrorMessage());
   }
 
-  if (response.status === 401) {
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
+
+    return downloadRecruitmentFile(
+      path,
+      fallbackFilename,
+    );
+  } catch (refreshError) {
     clearSession();
-    throw new Error('Session expired. Please login again.');
+    throw refreshError;
   }
+}
 
   if (response.status === 403) {
     throw new Error(
@@ -3226,10 +3362,19 @@ export async function downloadPolicy(policyId, filename = '') {
     headers,
   });
 
-  if (response.status === 401) {
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
+
+    return downloadPolicy(
+      policyId,
+      filename,
+    );
+  } catch (refreshError) {
     clearSession();
-    throw new Error('Session expired. Please login again.');
+    throw refreshError;
   }
+}
 
   if (response.status === 403) {
     throw new Error('You do not have permission to download this policy.');
@@ -4645,10 +4790,16 @@ export async function downloadAttendanceRegisterExcel(params = {}) {
     headers,
   });
 
-  if (response.status === 401) {
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
+
+    return downloadAttendanceRegisterExcel(params);
+  } catch (refreshError) {
     clearSession();
-    throw new Error('Session expired. Please login again.');
+    throw refreshError;
   }
+}
 
   if (response.status === 403) {
     throw new Error('You do not have permission to download this attendance Excel report.');
@@ -5944,10 +6095,20 @@ export async function askAiAssistant(message, history = [], options = {}) {
     data = {};
   }
 
-  if (response.status === 401) {
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
+
+    return askAiAssistant(
+      message,
+      history,
+      options,
+    );
+  } catch (refreshError) {
     clearSession();
-    throw new Error('Your login session expired. Please logout and login again.');
+    throw refreshError;
   }
+}
 
   if (response.status === 403) {
     throw new Error('You do not have permission to use AI Assistant.');
@@ -6037,10 +6198,19 @@ export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
     data = {};
   }
 
-  if (response.status === 401) {
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
+
+    return transcribeAiAssistantAudio(
+      audioBlob,
+      options,
+    );
+  } catch (refreshError) {
     clearSession();
-    throw new Error('Session expired. Please login again.');
+    throw refreshError;
   }
+}
 
   if (response.status === 403) {
     throw new Error('You do not have permission to use Saya voice.');
@@ -6115,11 +6285,19 @@ export async function speakAiAssistantText(text, options = {}) {
     clearTimeout(timeout);
   }
 
-  if (response.status === 401) {
-    clearSession();
-    throw new Error('Session expired. Please login again.');
-  }
+if (response.status === 401) {
+  try {
+    await refreshAccessToken();
 
+    return speakAiAssistantText(
+      text,
+      options,
+    );
+  } catch (refreshError) {
+    clearSession();
+    throw refreshError;
+  }
+}
   if (response.status === 403) {
     throw new Error('You do not have permission to use Saya voice.');
   }

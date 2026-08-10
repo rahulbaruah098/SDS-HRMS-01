@@ -31,9 +31,16 @@ EMPLOYEE_CAPABILITY_ROLES = {
 
 ACCESS_TOKEN_MINUTES = 30
 
-# Refresh sessions remain valid until the user explicitly logs out,
-# the account is disabled/deleted, or an administrator revokes the session.
+# Absolute authenticated session lifetime.
+# Access tokens remain short-lived and may be silently refreshed during this
+# window, but the refresh session itself must not continue beyond 180 minutes
+# from the original login.
+SESSION_MAX_MINUTES = 180
+
+# Backward-compatible export retained because existing route modules import it.
+# The active session lifetime is now minute-based via SESSION_MAX_MINUTES.
 REFRESH_SESSION_DAYS = None
+
 
 def safe_object_id(value):
     try:
@@ -142,6 +149,7 @@ def sync_effective_roles(db, user):
 
     return user
 
+
 def generate_refresh_token():
     """
     Generates the raw refresh token returned to the mobile app.
@@ -162,12 +170,14 @@ def hash_refresh_token(token):
 
 def refresh_session_expiry():
     """
-    Persistent mobile sessions do not expire automatically.
+    Returns the absolute expiry time for the authenticated refresh session.
 
-    The session remains valid until logout, account deactivation/deletion,
-    or explicit administrative revocation.
+    The session is valid for 180 minutes from login. Refreshing the access
+    token must not extend this deadline; the route layer must preserve the
+    original expires_at value when rotating refresh tokens.
     """
-    return None
+    return now_utc() + timedelta(minutes=SESSION_MAX_MINUTES)
+
 
 def issue_access_token(user):
     """
@@ -229,7 +239,7 @@ def current_user_required(fn):
             return jsonify({"message": "Token expired"}), 401
         except jwt.InvalidTokenError:
             return jsonify({"message": "Invalid token"}), 401
-        
+
         token_type = payload.get("token_type", "access")
 
         if token_type != "access":
