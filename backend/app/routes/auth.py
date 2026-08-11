@@ -12,6 +12,7 @@ from app.utils.auth import (
     generate_refresh_token,
     hash_refresh_token,
     issue_access_token,
+    normalize_client_type,
     now_utc,
     refresh_session_expiry,
 )
@@ -781,30 +782,35 @@ def create_auth_session(db, user, login_data=None):
     refresh_token = generate_refresh_token()
     refresh_token_hash = hash_refresh_token(refresh_token)
     current_time = now_utc()
+    client_type = normalize_client_type(
+            login_data.get("platform") or login_data.get("client_type")
+        )
+    session_expires_at = refresh_session_expiry(client_type)
 
     db.auth_sessions.insert_one({
-        "user_id": str(user["_id"]),
-        "tenant_id": (
-            user.get("tenant_id")
-            or default_tenant_id()
-        ),
-        "refresh_token_hash": refresh_token_hash,
-        "device_id": normalize_text(
-            login_data.get("device_id")
-        ),
-        "device_name": normalize_text(
-            login_data.get("device_name")
-        ),
-        "platform": normalize_text(
-            login_data.get("platform")
-        ) or "mobile",
-        "is_revoked": False,
-        "created_at": current_time,
-        "updated_at": current_time,
-        "last_used_at": current_time,
-        "expires_at": refresh_session_expiry(),
-        "revoked_at": None,
-    })
+            "user_id": str(user["_id"]),
+            "tenant_id": (
+                user.get("tenant_id")
+                or default_tenant_id()
+            ),
+            "refresh_token_hash": refresh_token_hash,
+            "device_id": normalize_text(
+                login_data.get("device_id")
+            ),
+            "device_name": normalize_text(
+                login_data.get("device_name")
+            ),
+            # Missing platform/client_type intentionally means web so existing
+            # browser clients keep the current 3-hour session behavior.
+            "platform": client_type,
+            "client_type": client_type,
+            "is_revoked": False,
+            "created_at": current_time,
+            "updated_at": current_time,
+            "last_used_at": current_time,
+            "expires_at": session_expires_at,
+            "revoked_at": None,
+        })
 
     return refresh_token
 
@@ -869,7 +875,12 @@ def login():
     audit("login", "users", user["_id"], {"email": email})
 
     tenant_payload = build_auth_tenant_payload(db, user)
+    client_type = normalize_client_type(
+            data.get("platform") or data.get("client_type")
+        )
+    is_mobile_session = client_type == "mobile"
 
+    #changes by atlanta
     return jsonify({
         # Keep "token" temporarily for compatibility with older clients.
         "token": access_token,
@@ -877,7 +888,11 @@ def login():
         "refresh_token": refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": 180 * 60,
+        # None means the mobile refresh session has no absolute timeout.
+        # Web remains exactly 180 minutes.
+        "refresh_expires_in": None if is_mobile_session else 180 * 60,
+        "persistent_session": is_mobile_session,
+        "client_type": client_type,
         "user": clean_doc(sanitize_user_for_response(user)),
         "employee": clean_doc(employee),
         "tenant": tenant_payload["tenant"],
@@ -1028,14 +1043,35 @@ def refresh_access_token():
             "message": "Refresh token has already been rotated"
         }), 409
 
+    #changes by atlanta
     access_token = issue_access_token(user)
+    client_type = normalize_client_type(
+            session.get("client_type") or session.get("platform")
+        )
+        # Legacy sessions may have been stored as platform=mobile even when they
+        # were actually created by the old web flow. Only a session with no
+        # absolute expiry is considered a persistent mobile session here.
+    is_mobile_session = (
+        client_type == "mobile" and session_expires_at is None
+    )
 
     return jsonify({
         "access_token": access_token,
         "refresh_token": new_refresh_token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_MINUTES * 60,
-        "refresh_expires_in": max(0, int((session_expires_at - current_time).total_seconds())) if session_expires_at else 0,
+        "refresh_expires_in": (
+            None
+            if is_mobile_session
+            else max(
+                0,
+                int((session_expires_at - current_time).total_seconds()),
+            )
+            if session_expires_at
+            else 0
+        ),
+        "persistent_session": is_mobile_session,
+        "client_type": client_type,
     }), 200
 
 

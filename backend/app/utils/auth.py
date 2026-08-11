@@ -31,11 +31,11 @@ EMPLOYEE_CAPABILITY_ROLES = {
 
 ACCESS_TOKEN_MINUTES = 30
 
-# Absolute authenticated session lifetime.
-# Access tokens remain short-lived and may be silently refreshed during this
-# window, but the refresh session itself must not continue beyond 180 minutes
-# from the original login.
+# Web keeps the existing absolute authenticated-session lifetime.
+# Mobile refresh sessions are persistent and are revoked only by explicit
+# logout (or when the account becomes unavailable/revoked server-side).
 SESSION_MAX_MINUTES = 180
+MOBILE_CLIENT_TYPES = {"mobile", "app", "flutter", "android", "ios"}
 
 # Backward-compatible export retained because existing route modules import it.
 # The active session lifetime is now minute-based via SESSION_MAX_MINUTES.
@@ -168,14 +168,29 @@ def hash_refresh_token(token):
     ).hexdigest()
 
 
-def refresh_session_expiry():
+def normalize_client_type(value):
     """
-    Returns the absolute expiry time for the authenticated refresh session.
+    Normalizes the requesting client without changing existing web behavior.
 
-    The session is valid for 180 minutes from login. Refreshing the access
-    token must not extend this deadline; the route layer must preserve the
-    original expires_at value when rotating refresh tokens.
+    Existing web clients do not need to send a platform/client_type value.
+    Only explicitly recognized app values are treated as mobile.
     """
+    client_type = str(value or "").strip().lower()
+    return "mobile" if client_type in MOBILE_CLIENT_TYPES else "web"
+
+
+def refresh_session_expiry(client_type="web"):
+    """
+    Returns the refresh-session expiry for the requested client.
+
+    Web sessions retain the existing 180-minute absolute lifetime. Mobile
+    sessions intentionally have no absolute expiry and remain valid until the
+    refresh session is revoked (for example, explicit logout) or the account
+    becomes unavailable. MongoDB TTL indexes ignore a missing/null date value.
+    """
+    if normalize_client_type(client_type) == "mobile":
+        return None
+
     return now_utc() + timedelta(minutes=SESSION_MAX_MINUTES)
 
 
