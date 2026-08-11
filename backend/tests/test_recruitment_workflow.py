@@ -15,6 +15,7 @@ from app.services.recruitment_service import (
     BACKGROUND_CHECKS,
     CANDIDATES,
     DOCUMENTS,
+    FEEDBACK,
     HIRING_REQUESTS,
     INTERVIEWS,
     JOB_OPENINGS,
@@ -275,9 +276,11 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         self.db = MemoryDatabase()
 
         self.hr_id = self._seed_user(self.TENANT_A, "HR Manager", "hr@example.com", ["hr_manager"])
+        self.admin_id = self._seed_user(self.TENANT_A, "Admin Approver", "admin@example.com", ["admin"])
         self.manager_id = self._seed_user(self.TENANT_A, "Department Manager", "manager@example.com", ["manager"])
         self.finance_id = self._seed_user(self.TENANT_A, "Finance Approver", "finance@example.com", ["finance"])
-        self.interviewer_id = self._seed_user(self.TENANT_A, "Interviewer", "interviewer@example.com", ["manager"])
+        self.interviewer_id = self._seed_user(self.TENANT_A, "Technical Interviewer", "interviewer@example.com", ["manager"])
+        self.assistant_id = self._seed_user(self.TENANT_A, "Hiring Assistant", "assistant@example.com", ["employee"])
         self.employee_id = self._seed_user(self.TENANT_A, "Normal Employee", "employee@example.com", ["employee"])
         self.other_hr_id = self._seed_user(self.TENANT_B, "Other HR", "other.hr@example.com", ["hr_manager"])
 
@@ -294,9 +297,11 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         })
 
         self.hr = self._service(self.TENANT_A, self.hr_id)
+        self.admin = self._service(self.TENANT_A, self.admin_id)
         self.manager = self._service(self.TENANT_A, self.manager_id)
         self.finance = self._service(self.TENANT_A, self.finance_id)
         self.interviewer = self._service(self.TENANT_A, self.interviewer_id)
+        self.assistant = self._service(self.TENANT_A, self.assistant_id)
         self.employee = self._service(self.TENANT_A, self.employee_id)
         self.other_hr = self._service(self.TENANT_B, self.other_hr_id)
         self.public = self._service(self.TENANT_A, None, public=True)
@@ -336,12 +341,12 @@ class RecruitmentWorkflowTests(unittest.TestCase):
             "vacancies": 1,
             "salary_min": 500000,
             "salary_max": 700000,
-            "approver_user_ids": [str(self.manager_id)],
+            "approver_user_ids": [str(self.admin_id)],
             "hiring_manager_user_id": str(self.manager_id),
             "hiring_manager_name": "Department Manager",
         })
         self.hr.submit_hiring_request(request["_id"])
-        approved = self.manager.decide_hiring_request(request["_id"], "approved")
+        approved = self.admin.decide_hiring_request(request["_id"], "approved")
         self.assertEqual(approved["status"], "approved")
 
         job = self.hr.create_job_opening({
@@ -377,8 +382,76 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         _request, job = self._create_approved_job(open_job=True)
         candidate, application = self._create_candidate_application(job["_id"])
         application = self.hr.change_application_status(application["_id"], "shortlisted")
+        interview = self._schedule_interview(
+            application,
+            round_key="technical",
+            panel=[
+                (
+                    self.interviewer_id,
+                    ["technical_interviewer", "hiring_manager"],
+                )
+            ],
+        )
+        self.hr.change_interview_status(interview["_id"], "completed")
+        self.interviewer.submit_interview_feedback(
+            interview["_id"],
+            self._feedback_payload(),
+        )
+        application = self.hr.complete_interview_process(application["_id"])
+        self.assertTrue(application["interview_process_completed"])
         application = self.hr.change_application_status(application["_id"], "selected")
         return candidate, job, application
+
+    @staticmethod
+    def _feedback_payload(
+        *,
+        recommendation="strong_hire",
+        comments="Strong practical knowledge and relevant experience.",
+        strengths="Role knowledge\nStructured communication",
+        concerns="No material concern recorded.",
+        score=4,
+    ):
+        return {
+            "ratings": {
+                "role_knowledge": score,
+                "relevant_experience": score,
+                "communication": score,
+                "problem_solving": score,
+                "work_approach": score,
+            },
+            "recommendation": recommendation,
+            "comments": comments,
+            "strengths": strengths,
+            "concerns": concerns,
+        }
+
+    def _schedule_interview(
+        self,
+        application,
+        *,
+        round_key="technical",
+        panel=None,
+        days_from_now=1,
+    ):
+        panel = panel or [
+            (self.interviewer_id, ["technical_interviewer"]),
+        ]
+        interviewer_user_ids = [str(user_id) for user_id, _roles in panel]
+        interviewer_panel = [
+            {"user_id": str(user_id), "roles": list(roles)}
+            for user_id, roles in panel
+        ]
+        return self.hr.schedule_interview(application["_id"], {
+            "round_key": round_key,
+            "scheduled_at": (
+                datetime.utcnow() + timedelta(days=days_from_now)
+            ).isoformat(),
+            "duration_minutes": 45,
+            "mode": "online",
+            "meeting_link": "https://meet.example.com/interview",
+            "interviewer_user_ids": interviewer_user_ids,
+            "interviewer_panel": interviewer_panel,
+        })
 
     def _create_accepted_offer(self):
         candidate, job, application = self._create_selected_application()
@@ -487,6 +560,90 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 409)
         self.assertEqual(context.exception.code, "career_slug_already_exists")
 
+    def test_interview_rounds_can_be_added_renamed_and_reordered(self):
+        settings = self.hr.update_settings({
+            "default_interview_rounds": [
+                {"key": "manager", "label": "Manager Interview", "order": 3},
+                {"key": "culture", "label": "Culture Discussion", "order": 2},
+                {"key": "technical", "label": "Technical Interview", "order": 1},
+            ],
+        })
+        self.assertEqual(
+            [item["key"] for item in settings["default_interview_rounds"]],
+            ["technical", "culture", "manager"],
+        )
+        self.assertEqual(
+            [item["sequence_no"] for item in settings["default_interview_rounds"]],
+            [1, 2, 3],
+        )
+
+        updated = self.hr.update_settings({
+            "default_interview_rounds": [
+                {"key": "manager", "label": "Leadership Interview", "order": 1},
+                {"key": "technical", "label": "Technical Interview", "order": 2},
+                {"key": "culture", "label": "Values Discussion", "order": 3},
+            ],
+        })
+        self.assertEqual(
+            [item["key"] for item in updated["default_interview_rounds"]],
+            ["manager", "technical", "culture"],
+        )
+        self.assertEqual(updated["default_interview_rounds"][0]["label"], "Leadership Interview")
+        self.assertEqual(updated["default_interview_rounds"][2]["label"], "Values Discussion")
+
+    def test_used_interview_round_cannot_be_removed(self):
+        _request, job = self._create_approved_job()
+        _candidate, application = self._create_candidate_application(job["_id"])
+        application = self.hr.change_application_status(application["_id"], "shortlisted")
+        self._schedule_interview(application, round_key="technical")
+
+        with self.assertRaises(RecruitmentServiceError) as context:
+            self.hr.update_settings({
+                "default_interview_rounds": [
+                    {"key": "hr_screening", "label": "HR Screening", "order": 1},
+                    {"key": "manager", "label": "Manager Interview", "order": 2},
+                ],
+            })
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.code, "interview_round_in_use")
+        self.assertEqual(context.exception.details["round_keys"], ["technical"])
+
+    def test_interview_round_keys_and_labels_must_be_unique(self):
+        invalid_round_sets = [
+            (
+                "duplicate_interview_round_key",
+                [
+                    {"key": "technical", "label": "Technical One", "order": 1},
+                    {"key": "technical", "label": "Technical Two", "order": 2},
+                ],
+            ),
+            (
+                "duplicate_interview_round_label",
+                [
+                    {"key": "technical_one", "label": "Technical", "order": 1},
+                    {"key": "technical_two", "label": "technical", "order": 2},
+                ],
+            ),
+        ]
+        for expected_code, rounds in invalid_round_sets:
+            with self.subTest(expected_code=expected_code):
+                with self.assertRaises(RecruitmentServiceError) as context:
+                    self.hr.update_settings({"default_interview_rounds": rounds})
+                self.assertEqual(context.exception.code, expected_code)
+
+    def test_recruitment_settings_are_read_only_for_non_hr_recruitment_reader(self):
+        settings = self.manager.get_settings()
+        self.assertGreater(len(settings["default_interview_rounds"]), 0)
+
+        with self.assertRaises(RecruitmentServiceError) as context:
+            self.manager.update_settings({
+                "default_interview_rounds": [
+                    {"key": "manager", "label": "Manager Interview", "order": 1}
+                ],
+            })
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.code, "recruitment_hr_permission_required")
+
     # ------------------------------------------------------------------
     # Permission, tenant and status controls
     # ------------------------------------------------------------------
@@ -505,18 +662,21 @@ class RecruitmentWorkflowTests(unittest.TestCase):
             "job_title": "Developer",
             "department": "IT",
             "business_reason": "New client project",
-            "approver_user_ids": [str(self.manager_id)],
+            "approver_user_ids": [str(self.admin_id)],
         })
         with self.assertRaises(RecruitmentServiceError) as context:
             self.hr.create_job_opening({
                 "hiring_request_id": str(request["_id"]),
                 "description": "Build and maintain HRMS applications.",
             })
-        self.assertEqual(context.exception.code, "hiring_request_not_approved")
+        self.assertEqual(
+            context.exception.code,
+            "hiring_request_final_approval_required",
+        )
 
         submitted = self.hr.submit_hiring_request(request["_id"])
         self.assertEqual(submitted["status"], "submitted")
-        approved = self.manager.decide_hiring_request(request["_id"], "approved")
+        approved = self.admin.decide_hiring_request(request["_id"], "approved")
         self.assertEqual(approved["status"], "approved")
 
         job = self.hr.create_job_opening({
@@ -567,55 +727,346 @@ class RecruitmentWorkflowTests(unittest.TestCase):
     # ------------------------------------------------------------------
     # Interview and offer flow
     # ------------------------------------------------------------------
-    def test_only_assigned_interviewer_can_submit_feedback(self):
+    def test_interviewer_panel_persists_roles_and_requires_exact_membership(self):
         _request, job = self._create_approved_job()
         _candidate, application = self._create_candidate_application(job["_id"])
         application = self.hr.change_application_status(application["_id"], "shortlisted")
-        interview = self.hr.schedule_interview(application["_id"], {
-            "round_key": "technical",
-            "round_label": "Technical Interview",
-            "scheduled_at": (datetime.utcnow() + timedelta(days=1)).isoformat(),
-            "duration_minutes": 45,
-            "mode": "online",
-            "meeting_link": "https://meet.example.com/interview",
-            "interviewer_user_ids": [str(self.interviewer_id)],
-        })
+        interview = self._schedule_interview(
+            application,
+            panel=[
+                (
+                    self.interviewer_id,
+                    ["hiring_manager", "technical_interviewer"],
+                ),
+                (self.assistant_id, ["hiring_assistant"]),
+            ],
+        )
+
         self.assertEqual(interview["status"], "scheduled")
+        self.assertEqual(interview["feedback_status"], "not_available")
+        self.assertEqual(interview["feedback_assigned_count"], 2)
+        self.assertEqual(
+            interview["interviewer_user_ids"],
+            [str(self.interviewer_id), str(self.assistant_id)],
+        )
+        self.assertEqual(interview["interviewer_panel"], interview["interviewers"])
+        self.assertEqual(
+            interview["interviewer_panel"][0]["roles"],
+            ["hiring_manager", "technical_interviewer"],
+        )
+        self.assertEqual(
+            interview["interviewer_panel"][1]["roles"],
+            ["hiring_assistant"],
+        )
+        self.assertEqual(interview["round_label"], "Technical Interview")
+        self.assertEqual(interview["sequence_no"], 2)
         self.assertEqual(
             self.db[APPLICATIONS].find_one({"_id": application["_id"]})["status"],
             "interview_scheduled",
         )
 
+        invalid_cases = [
+            (
+                "duplicate_interviewer",
+                [str(self.interviewer_id), str(self.interviewer_id)],
+                [
+                    {
+                        "user_id": str(self.interviewer_id),
+                        "roles": ["technical_interviewer"],
+                    },
+                    {
+                        "user_id": str(self.interviewer_id),
+                        "roles": ["hiring_manager"],
+                    },
+                ],
+            ),
+            (
+                "interviewer_panel_mismatch",
+                [str(self.interviewer_id), str(self.assistant_id)],
+                [
+                    {
+                        "user_id": str(self.interviewer_id),
+                        "roles": ["technical_interviewer"],
+                    }
+                ],
+            ),
+            (
+                "interviewer_role_required",
+                [str(self.interviewer_id)],
+                [{"user_id": str(self.interviewer_id), "roles": []}],
+            ),
+            (
+                "invalid_interviewer_role",
+                [str(self.interviewer_id)],
+                [
+                    {
+                        "user_id": str(self.interviewer_id),
+                        "roles": ["observer"],
+                    }
+                ],
+            ),
+            (
+                "invalid_interviewer",
+                [str(self.other_hr_id)],
+                [
+                    {
+                        "user_id": str(self.other_hr_id),
+                        "roles": ["hiring_manager"],
+                    }
+                ],
+            ),
+        ]
+        for expected_code, interviewer_ids, panel in invalid_cases:
+            with self.subTest(expected_code=expected_code):
+                with self.assertRaises(RecruitmentServiceError) as context:
+                    self.hr.schedule_interview(application["_id"], {
+                        "round_key": "manager",
+                        "scheduled_at": (
+                            datetime.utcnow() + timedelta(days=2)
+                        ).isoformat(),
+                        "interviewer_user_ids": interviewer_ids,
+                        "interviewer_panel": panel,
+                    })
+                self.assertEqual(context.exception.code, expected_code)
+
+    def test_feedback_is_assigned_only_after_completion_and_unique_per_user(self):
+        _request, job = self._create_approved_job()
+        _candidate, application = self._create_candidate_application(job["_id"])
+        application = self.hr.change_application_status(application["_id"], "shortlisted")
+        interview = self._schedule_interview(
+            application,
+            panel=[
+                (
+                    self.interviewer_id,
+                    ["hiring_manager", "technical_interviewer"],
+                ),
+                (self.assistant_id, ["hiring_assistant"]),
+            ],
+        )
+
+        with self.assertRaises(RecruitmentServiceError) as timing_context:
+            self.interviewer.submit_interview_feedback(
+                interview["_id"], self._feedback_payload()
+            )
+        self.assertEqual(
+            timing_context.exception.code,
+            "interview_feedback_not_allowed",
+        )
+
+        completed = self.hr.change_interview_status(
+            interview["_id"], "completed"
+        )
+        self.assertEqual(completed["feedback_status"], "pending")
+        self.assertEqual(completed["feedback_pending_count"], 2)
+
         with self.assertRaises(RecruitmentServiceError) as context:
-            self.manager.submit_interview_feedback(interview["_id"], {
-                "ratings": {
-                    "role_knowledge": 4,
-                    "relevant_experience": 4,
-                    "communication": 4,
-                    "problem_solving": 4,
-                    "work_approach": 4,
-                },
-                "recommendation": "hire",
-                "comments": "Suitable candidate.",
-            })
+            self.employee.submit_interview_feedback(
+                interview["_id"], self._feedback_payload()
+            )
         self.assertEqual(context.exception.code, "interview_feedback_access_denied")
 
-        feedback = self.interviewer.submit_interview_feedback(interview["_id"], {
-            "ratings": {
-                "role_knowledge": 5,
-                "relevant_experience": 4,
-                "communication": 4,
-                "problem_solving": 5,
-                "work_approach": 4,
-            },
-            "recommendation": "strong_hire",
-            "comments": "Strong practical knowledge and relevant experience.",
-            "strengths": ["GST", "Financial reporting"],
-        })
+        feedback = self.interviewer.submit_interview_feedback(
+            interview["_id"],
+            self._feedback_payload(
+                score=5,
+                strengths=["GST", "Financial reporting"],
+            ),
+        )
         self.assertEqual(feedback["recommendation"], "strong_hire")
-        self.assertEqual(feedback["overall_rating"], 4.4)
+        self.assertEqual(feedback["overall_rating"], 5.0)
+        self.assertEqual(feedback["version"], 1)
+        self.assertEqual(
+            feedback["interviewer_roles"],
+            ["hiring_manager", "technical_interviewer"],
+        )
+        self.assertEqual(feedback["strengths"], "GST\nFinancial reporting")
+
         stored_interview = self.db[INTERVIEWS].find_one({"_id": interview["_id"]})
         self.assertEqual(stored_interview["feedback_count"], 1)
+        self.assertEqual(stored_interview["feedback_pending_count"], 1)
+        self.assertFalse(stored_interview["feedback_complete"])
+
+        assistant_feedback = self.assistant.submit_interview_feedback(
+            interview["_id"],
+            self._feedback_payload(recommendation="hire", score=4),
+        )
+        self.assertEqual(
+            assistant_feedback["interviewer_roles"],
+            ["hiring_assistant"],
+        )
+
+        revised = self.interviewer.submit_interview_feedback(
+            interview["_id"],
+            self._feedback_payload(
+                recommendation="hire",
+                comments="Revised after final evidence review.",
+                score=4,
+            ),
+        )
+        self.assertEqual(revised["version"], 2)
+        self.assertEqual(len(revised["revision_history"]), 1)
+        self.assertEqual(
+            revised["revision_history"][0]["interviewer_roles"],
+            ["hiring_manager", "technical_interviewer"],
+        )
+        self.assertEqual(
+            self.db[FEEDBACK].count_documents({
+                "tenant_id": self.TENANT_A,
+                "interview_id": str(interview["_id"]),
+                "interviewer_user_id": str(self.interviewer_id),
+            }),
+            1,
+        )
+
+        listed = self.hr.list_interviews(application_id=str(application["_id"]))
+        listed_interview = listed["items"][0]
+        self.assertEqual(listed_interview["feedback_status"], "complete")
+        self.assertEqual(listed_interview["feedback_submitted_count"], 2)
+        self.assertEqual(listed_interview["feedback_assigned_count"], 2)
+        self.assertTrue(listed_interview["feedback_complete"])
+
+        interviewer_rows = self.interviewer.list_interview_feedback(
+            interview["_id"]
+        )
+        self.assertEqual(len(interviewer_rows), 1)
+        self.assertEqual(
+            interviewer_rows[0]["interviewer_user_id"],
+            str(self.interviewer_id),
+        )
+        hr_rows = self.hr.list_interview_feedback(interview["_id"])
+        self.assertEqual(len(hr_rows), 2)
+
+    def test_application_feedback_sheet_separates_pending_and_not_available(self):
+        _request, job = self._create_approved_job()
+        _candidate, application = self._create_candidate_application(job["_id"])
+        application = self.hr.change_application_status(application["_id"], "shortlisted")
+        technical = self._schedule_interview(
+            application,
+            round_key="technical",
+            panel=[
+                (self.interviewer_id, ["technical_interviewer"]),
+                (self.assistant_id, ["hiring_assistant"]),
+            ],
+            days_from_now=1,
+        )
+        manager_round = self._schedule_interview(
+            application,
+            round_key="manager",
+            panel=[(self.manager_id, ["hiring_manager"])],
+            days_from_now=2,
+        )
+        self.hr.change_interview_status(technical["_id"], "completed")
+        self.interviewer.submit_interview_feedback(
+            technical["_id"], self._feedback_payload()
+        )
+
+        sheet = self.hr.get_application_interview_feedback(application["_id"])
+        self.assertEqual([item["round_key"] for item in sheet["rounds"]], [
+            "technical",
+            "manager",
+        ])
+        self.assertEqual(sheet["feedback_summary"]["assigned"], 3)
+        self.assertEqual(sheet["feedback_summary"]["submitted"], 1)
+        self.assertEqual(sheet["feedback_summary"]["pending"], 1)
+        self.assertEqual(sheet["feedback_summary"]["not_available"], 1)
+        self.assertFalse(sheet["feedback_summary"]["complete"])
+
+        technical_sheet, manager_sheet = sheet["rounds"]
+        self.assertEqual(technical_sheet["feedback_summary"]["status"], "pending")
+        self.assertEqual(
+            technical_sheet["feedback_summary"]["pending_interviewers"][0]["name"],
+            "Hiring Assistant",
+        )
+        self.assertEqual(
+            manager_sheet["feedback_summary"]["status"],
+            "not_available",
+        )
+        self.assertEqual(
+            manager_sheet["interviewer_panel"][0]["feedback_status"],
+            "not_available",
+        )
+
+        with self.assertRaises(RecruitmentServiceError) as context:
+            self.interviewer.get_application_interview_feedback(application["_id"])
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.code, "recruitment_hr_permission_required")
+
+        assigned_rows = self.interviewer.list_interviews()["items"]
+        self.assertEqual([str(item["_id"]) for item in assigned_rows], [
+            str(technical["_id"]),
+        ])
+        self.assertTrue(assigned_rows[0]["can_submit_feedback"])
+        self.assertTrue(assigned_rows[0]["my_feedback_submitted"])
+        self.assertNotIn(
+            str(manager_round["_id"]),
+            [str(item["_id"]) for item in assigned_rows],
+        )
+
+    def test_interview_process_requires_all_rounds_and_all_feedback(self):
+        _request, job = self._create_approved_job()
+        _candidate, application = self._create_candidate_application(job["_id"])
+        application = self.hr.change_application_status(application["_id"], "shortlisted")
+        technical = self._schedule_interview(
+            application,
+            round_key="technical",
+            panel=[
+                (self.interviewer_id, ["technical_interviewer"]),
+                (self.assistant_id, ["hiring_assistant"]),
+            ],
+            days_from_now=1,
+        )
+        manager_round = self._schedule_interview(
+            application,
+            round_key="manager",
+            panel=[(self.manager_id, ["hiring_manager"])],
+            days_from_now=2,
+        )
+        self.hr.change_interview_status(technical["_id"], "completed")
+
+        with self.assertRaises(RecruitmentServiceError) as active_context:
+            self.hr.complete_interview_process(application["_id"])
+        self.assertEqual(
+            active_context.exception.code,
+            "active_interview_rounds_exist",
+        )
+
+        self.hr.change_interview_status(manager_round["_id"], "completed")
+        with self.assertRaises(RecruitmentServiceError) as selection_context:
+            self.hr.change_application_status(application["_id"], "selected")
+        self.assertEqual(
+            selection_context.exception.code,
+            "interview_process_not_completed",
+        )
+
+        self.interviewer.submit_interview_feedback(
+            technical["_id"], self._feedback_payload()
+        )
+        self.manager.submit_interview_feedback(
+            manager_round["_id"], self._feedback_payload(recommendation="hire")
+        )
+        with self.assertRaises(RecruitmentServiceError) as feedback_context:
+            self.hr.complete_interview_process(application["_id"])
+        self.assertEqual(
+            feedback_context.exception.code,
+            "interview_feedback_incomplete",
+        )
+        pending = feedback_context.exception.details["rounds"][0]
+        self.assertEqual(pending["round_key"], "technical")
+        self.assertEqual(pending["pending_interviewers"][0]["name"], "Hiring Assistant")
+
+        self.assistant.submit_interview_feedback(
+            technical["_id"], self._feedback_payload(recommendation="hire")
+        )
+        completed_application = self.hr.complete_interview_process(application["_id"])
+        self.assertTrue(completed_application["interview_process_completed"])
+        self.assertEqual(
+            completed_application["interview_process_status"],
+            "completed",
+        )
+        selected = self.hr.change_application_status(
+            application["_id"], "selected"
+        )
+        self.assertEqual(selected["status"], "selected")
 
     def test_offer_must_be_approved_before_sending(self):
         _candidate, _job, application = self._create_selected_application()

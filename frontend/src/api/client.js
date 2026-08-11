@@ -2223,6 +2223,18 @@ export function changeRecruitmentApplicationStatus(
   );
 }
 
+
+export function completeRecruitmentInterviewProcess(applicationId) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/interview-process/complete`,
+    'POST',
+    {},
+  );
+}
+
 export function getRecruitmentInterviews(params = {}) {
   return recruitmentJson(`/interviews${buildQuery(params)}`);
 }
@@ -2271,6 +2283,15 @@ export function submitRecruitmentInterviewFeedback(
 export function getRecruitmentInterviewFeedback(interviewId) {
   return recruitmentJson(
     `/interviews/${recruitmentId(interviewId, 'Interview ID')}/feedback`,
+  );
+}
+
+export function getRecruitmentApplicationInterviewFeedback(applicationId) {
+  return recruitmentJson(
+    `/applications/${recruitmentId(
+      applicationId,
+      'Application ID',
+    )}/interview-feedback`,
   );
 }
 

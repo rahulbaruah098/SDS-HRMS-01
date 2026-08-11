@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, BadgeCheck, BriefcaseBusiness, CalendarClock, Check,
+  Activity, AlertCircle, ArrowDown, ArrowUp, BadgeCheck, BriefcaseBusiness, CalendarClock, Check,
   CheckCircle2, ChevronRight, ClipboardCheck, Clock3, Download, FileCheck2,
   FileSearch, FileText, Filter, Gauge, Inbox, LayoutDashboard, Loader2, Mail,
   Copy, ExternalLink, Link2, MapPin, Paperclip, PauseCircle, Plus, RefreshCw, Search, Send, Settings2,
-  ShieldCheck, Sparkles, Star, UploadCloud, UserCheck, UserPlus, Users,
+  ShieldCheck, Sparkles, Star, Trash2, UploadCloud, UserCheck, UserPlus, Users,
   UserSearch, X, XCircle,
 } from 'lucide-react';
 import {
@@ -13,6 +13,7 @@ import {
   changeRecruitmentJobOpeningStatus,
   changeRecruitmentJoiningStatus,
   convertRecruitmentCandidateToEmployee,
+  completeRecruitmentInterviewProcess,
   createRecruitmentApplication,
   createRecruitmentCandidate,
   createRecruitmentHiringRequest,
@@ -28,6 +29,7 @@ import {
   getDepartments,
   getDesignations,
   getRecruitmentActivity,
+  getRecruitmentApplicationInterviewFeedback,
   getRecruitmentApplications,
   getRecruitmentBackgroundChecks,
   getRecruitmentCandidates,
@@ -59,6 +61,7 @@ const TABS = [
   ['jobs', 'Job Openings', BriefcaseBusiness],
   ['candidates', 'Candidates', Users],
   ['interviews', 'Interviews', CalendarClock],
+  ['feedback', 'Interview Feedback', Star],
   ['offers', 'Offers', FileCheck2],
   ['joining', 'Joining', UserCheck],
   ['reports', 'Reports', Gauge],
@@ -80,6 +83,16 @@ const OFFER_APPROVERS = new Set([
 const JOINING_STATUSES = new Set([
   'documents_pending', 'ready_to_join', 'joining_deferred', 'joined', 'did_not_join',
 ]);
+const INTERVIEWER_ROLE_OPTIONS = [
+  ['hiring_manager', 'Hiring Manager'],
+  ['hiring_assistant', 'Hiring Assistant'],
+  ['technical_interviewer', 'Technical Interviewer'],
+];
+const DEFAULT_INTERVIEW_ROUNDS = [
+  { key: 'hr_screening', label: 'HR Screening', order: 1, sequence_no: 1 },
+  { key: 'technical', label: 'Technical Interview', order: 2, sequence_no: 2 },
+  { key: 'manager', label: 'Manager Interview', order: 3, sequence_no: 3 },
+];
 
 const EMPTY_REQUEST = {
   job_title: '', department: '', department_id: '', vacancies: 1,
@@ -106,7 +119,7 @@ const EMPTY_CANDIDATE = {
 const EMPTY_INTERVIEW = {
   application_id: '', round_key: 'hr_screening', round_label: 'HR Screening',
   scheduled_at: '', duration_minutes: 45, mode: 'online', location: '',
-  meeting_link: '', interviewer_user_id: '', candidate_notes: '', internal_notes: '',
+  meeting_link: '', candidate_notes: '', internal_notes: '',
 };
 const EMPTY_OFFER = {
   application_id: '', designation: '', department: '', reporting_manager_user_id: '',
@@ -120,6 +133,7 @@ const DEFAULT_SETTINGS = {
   default_currency: 'INR', default_application_source: 'career_page',
   candidate_retention_days: 730, resume_max_size_mb: 8,
   employee_code_prefix: 'EMP', public_career_slug: '',
+  default_interview_rounds: DEFAULT_INTERVIEW_ROUNDS,
   email_candidate_on_application: true, email_candidate_on_interview: true,
   email_candidate_on_offer: true, email_candidate_on_rejection: true,
 };
@@ -143,6 +157,20 @@ const listOf = (response) => Array.isArray(response) ? response : response?.item
 const itemOf = (response) => response?.item || response?.data || response?.result || response || {};
 const messageOf = (error, fallback = 'The action could not be completed.') => error?.message || error?.data?.message || error?.error || fallback;
 const commaList = (value) => Array.isArray(value) ? value.filter(Boolean) : String(value || '').split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+const textOf = (value) => Array.isArray(value) ? value.filter(Boolean).join('\n') : String(value || '').trim();
+const orderedRounds = (value) => {
+  const source = Array.isArray(value) && value.length ? value : DEFAULT_INTERVIEW_ROUNDS;
+  return source
+    .map((item, index) => ({
+      key: keyOf(item?.key || item?.label || `round_${index + 1}`),
+      label: String(item?.label || item?.name || `Interview Round ${index + 1}`).trim(),
+      order: Number(item?.order || item?.sequence_no || index + 1),
+      sequence_no: Number(item?.sequence_no || item?.order || index + 1),
+    }))
+    .sort((left, right) => left.order - right.order)
+    .map((item, index) => ({ ...item, order: index + 1, sequence_no: index + 1 }));
+};
+const feedbackSheetOf = (response) => response?.data?.rounds ? response.data : response || {};
 const dateInput = (value) => value ? String(value).slice(0, 10) : '';
 const dateTimeInput = (value) => {
   if (!value) return '';
@@ -1640,6 +1668,248 @@ const RECRUITMENT_RESPONSIVE_REFINEMENTS = `
       padding-block: 10px !important;
     }
   }
+
+  .recruitment-round-editor,
+  .recruitment-panel-selector,
+  .recruitment-feedback-rounds {
+    display: grid;
+    gap: 12px;
+  }
+
+  .recruitment-round-row,
+  .recruitment-panel-member,
+  .recruitment-feedback-round,
+  .recruitment-feedback-person {
+    border: 1px solid rgba(98, 84, 218, .16);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .86);
+  }
+
+  .recruitment-round-row {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 11px;
+  }
+
+  .recruitment-round-number {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    background: rgba(98, 84, 218, .1);
+    color: var(--rec-deep);
+    font-weight: 800;
+  }
+
+  .recruitment-round-actions,
+  .recruitment-panel-roles,
+  .recruitment-feedback-summary,
+  .recruitment-feedback-role-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .recruitment-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(98, 84, 218, .18);
+    border-radius: 11px;
+    background: #fff;
+    color: var(--rec-deep);
+    cursor: pointer;
+  }
+
+  .recruitment-icon-btn:disabled {
+    opacity: .38;
+    cursor: not-allowed;
+  }
+
+  .recruitment-panel-member {
+    padding: 14px;
+  }
+
+  .recruitment-panel-member-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .recruitment-panel-member-copy {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .recruitment-role-option {
+    display: inline-flex;
+    gap: 7px;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid rgba(98, 84, 218, .16);
+    border-radius: 12px;
+    background: rgba(246, 245, 255, .84);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .recruitment-panel-member.is-selected {
+    border-color: rgba(98, 84, 218, .42);
+    box-shadow: 0 10px 24px rgba(74, 61, 170, .09);
+  }
+
+  .recruitment-feedback-status-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 12px;
+  }
+
+  .recruitment-feedback-layout {
+    display: grid;
+    grid-template-columns: minmax(240px, 310px) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+  }
+
+  .recruitment-feedback-candidates {
+    display: grid;
+    gap: 9px;
+    max-height: 720px;
+    overflow-y: auto;
+  }
+
+  .recruitment-feedback-candidate {
+    width: 100%;
+    padding: 13px;
+    border: 1px solid rgba(98, 84, 218, .14);
+    border-radius: 15px;
+    background: #fff;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .recruitment-feedback-candidate strong,
+  .recruitment-feedback-candidate small {
+    display: block;
+  }
+
+  .recruitment-feedback-candidate small {
+    margin-top: 4px;
+    color: var(--rec-muted);
+  }
+
+  .recruitment-feedback-candidate.active {
+    color: #fff;
+    border-color: var(--rec-deep);
+    background: linear-gradient(135deg, var(--rec-deep), #6856da);
+  }
+
+  .recruitment-feedback-candidate.active small {
+    color: rgba(255, 255, 255, .76);
+  }
+
+  .recruitment-feedback-sheet-head,
+  .recruitment-feedback-round-head,
+  .recruitment-feedback-person-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+  }
+
+  .recruitment-feedback-round {
+    padding: 16px;
+  }
+
+  .recruitment-feedback-panel-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .recruitment-feedback-person {
+    padding: 14px;
+    background: rgba(249, 249, 255, .9);
+  }
+
+  .recruitment-feedback-copy-grid,
+  .recruitment-feedback-rating-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .recruitment-feedback-copy,
+  .recruitment-feedback-rating {
+    padding: 10px;
+    border-radius: 12px;
+    background: #fff;
+    border: 1px solid rgba(98, 84, 218, .1);
+  }
+
+  .recruitment-feedback-copy.is-full {
+    grid-column: 1 / -1;
+  }
+
+  .recruitment-feedback-copy span,
+  .recruitment-feedback-rating span {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--rec-muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+  .recruitment-feedback-copy p {
+    margin: 0;
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 900px) {
+    .recruitment-feedback-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .recruitment-feedback-candidates {
+      max-height: 280px;
+    }
+  }
+
+  @media (max-width: 600px) {
+    .recruitment-round-row,
+    .recruitment-feedback-copy-grid,
+    .recruitment-feedback-rating-list {
+      grid-template-columns: 1fr;
+    }
+
+    .recruitment-round-actions,
+    .recruitment-feedback-sheet-head,
+    .recruitment-feedback-round-head,
+    .recruitment-feedback-person-head,
+    .recruitment-panel-member-head {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .recruitment-feedback-copy.is-full {
+      grid-column: auto;
+    }
+  }
 `;
 
 export default function Recruitment() {
@@ -1653,6 +1923,10 @@ export default function Recruitment() {
   const isTeamLeader = canAny(roles, TEAM_LEADER_ROLES) && !canManage;
   const canCreateRequest = canManage || isTeamLeader;
   const canApproveOffers = canAny(roles, OFFER_APPROVERS);
+  const visibleTabs = useMemo(
+    () => TABS.filter(([key]) => key !== 'feedback' || canManage),
+    [canManage],
+  );
   const actorId = idOf(user);
   const userName = user.name || user.full_name || employee.name || employee.employee_name || user.email || 'User';
   const departmentScope = useMemo(() => ({
@@ -1679,6 +1953,10 @@ export default function Recruitment() {
   const [candidates, setCandidates] = useState([]);
   const [applications, setApplications] = useState([]);
   const [interviews, setInterviews] = useState([]);
+  const [feedbackApplications, setFeedbackApplications] = useState([]);
+  const [feedbackApplicationId, setFeedbackApplicationId] = useState('');
+  const [feedbackSheet, setFeedbackSheet] = useState({});
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [offers, setOffers] = useState([]);
   const [reports, setReports] = useState({});
   const [activities, setActivities] = useState([]);
@@ -1721,12 +1999,41 @@ export default function Recruitment() {
 
   const loadReferences = useCallback(async () => {
     const values = await Promise.allSettled([
-      getActiveEmployees({ limit: 500 }), getDepartments({ limit: 500 }), getDesignations({ limit: 500 }),
+      getActiveEmployees({ limit: 500 }), getDepartments({ limit: 500 }),
+      getDesignations({ limit: 500 }), getRecruitmentSettings(),
     ]);
     if (values[0].status === 'fulfilled') setEmployees(listOf(values[0].value));
     if (values[1].status === 'fulfilled') setDepartments(listOf(values[1].value));
     if (values[2].status === 'fulfilled') setDesignations(listOf(values[2].value));
+    if (values[3].status === 'fulfilled') {
+      const saved = itemOf(values[3].value);
+      setSettings({
+        ...DEFAULT_SETTINGS,
+        ...saved,
+        default_interview_rounds: orderedRounds(saved.default_interview_rounds),
+      });
+    }
   }, []);
+
+  const openFeedbackApplication = useCallback(async (applicationId, quiet = false) => {
+    const nextId = String(applicationId || '').trim();
+    setFeedbackApplicationId(nextId);
+    if (!nextId) {
+      setFeedbackSheet({});
+      return;
+    }
+    if (!quiet) setFeedbackLoading(true);
+    try {
+      setFeedbackSheet(feedbackSheetOf(
+        await getRecruitmentApplicationInterviewFeedback(nextId),
+      ));
+    } catch (error) {
+      setFeedbackSheet({});
+      flash('danger', messageOf(error, 'Unable to load interview feedback.'));
+    } finally {
+      if (!quiet) setFeedbackLoading(false);
+    }
+  }, [flash]);
 
   const load = useCallback(async (target = tab, quiet = false) => {
     if (!quiet) setLoading(true);
@@ -1755,6 +2062,24 @@ export default function Recruitment() {
           getRecruitmentApplications({ page_size: 100 }),
         ]);
         setInterviews(listOf(rows)); setApplications(listOf(applicationRows));
+      } else if (target === 'feedback') {
+        const [applicationRows, interviewRows] = await Promise.all([
+          getRecruitmentApplications({ page_size: 100 }),
+          getRecruitmentInterviews({ page_size: 100 }),
+        ]);
+        const allApplications = listOf(applicationRows);
+        const allInterviews = listOf(interviewRows);
+        const applicationIds = new Set(
+          allInterviews.map((item) => String(item.application_id || '')).filter(Boolean),
+        );
+        const rows = allApplications.filter((item) => applicationIds.has(idOf(item)));
+        setApplications(allApplications);
+        setInterviews(allInterviews);
+        setFeedbackApplications(rows);
+        const selectedId = rows.some((item) => idOf(item) === feedbackApplicationId)
+          ? feedbackApplicationId
+          : idOf(rows[0]);
+        await openFeedbackApplication(selectedId, true);
       } else if (target === 'offers') {
         const [rows, applicationRows] = await Promise.all([
           getRecruitmentOffers({ page_size: 100, status: filters.offerStatus }),
@@ -1773,14 +2098,19 @@ export default function Recruitment() {
         ]);
         setReports(itemOf(reportRows)); setJobs(listOf(jobRows));
       } else if (target === 'settings') {
-        setSettings({ ...DEFAULT_SETTINGS, ...itemOf(await getRecruitmentSettings()) });
+        const saved = itemOf(await getRecruitmentSettings());
+        setSettings({
+          ...DEFAULT_SETTINGS,
+          ...saved,
+          default_interview_rounds: orderedRounds(saved.default_interview_rounds),
+        });
       }
     } catch (error) {
       flash('danger', messageOf(error, 'Unable to load Recruitment data.'));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [tab, filters, flash]);
+  }, [tab, filters, flash, feedbackApplicationId, openFeedbackApplication]);
 
   useEffect(() => { loadReferences(); }, [loadReferences]);
   useEffect(() => { load(tab); }, [tab]);
@@ -1839,7 +2169,7 @@ export default function Recruitment() {
   const offerReady = useMemo(() => applications.filter((item) => ['selected', 'offer_pending', 'offer_expired'].includes(keyOf(item.status))), [applications]);
   const joiningRows = useMemo(() => applications.filter((item) => JOINING_STATUSES.has(keyOf(item.status)) || JOINING_STATUSES.has(keyOf(item.joining_status)) || item.offer_accepted_at), [applications]);
   const cards = dashboard.cards || {};
-  const counts = { requests: cards.open_hiring_requests, jobs: cards.open_vacancies, candidates: cards.new_applications, interviews: cards.interviews_today, offers: cards.offers_awaiting_reply, joining: cards.ready_to_join };
+  const counts = { requests: cards.open_hiring_requests, jobs: cards.open_vacancies, candidates: cards.new_applications, interviews: cards.interviews_today, feedback: cards.feedback_pending, offers: cards.offers_awaiting_reply, joining: cards.ready_to_join };
 
   async function openJoining(application) {
     setBusy(`joining:${idOf(application)}`);
@@ -1929,7 +2259,9 @@ export default function Recruitment() {
         return <tr key={idOf(item)}><td><div className="recruitment-person"><span className="recruitment-avatar">{initials(item.candidate_name)}</span><span className="recruitment-person-copy"><strong>{item.candidate_name || 'Candidate'}</strong><small>{item.candidate_email || item.candidate_phone || '—'}</small></span></div></td><td><b className="recruitment-table-primary">{item.job_title || '—'}</b><small className="recruitment-table-secondary">{item.job_reference || item.reference_no}</small></td><td>{labelOf(item.source)}</td><td>{formatDate(item.applied_at)}</td><td><Status value={status} /></td><td>{matchScore === null ? <span className="recruitment-table-secondary">Not calculated</span> : <button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => setMatchApplication(item)} title="Open the explainable resume-match breakdown"><Gauge size={13} />{matchScore}% · {item.resume_match?.label || labelOf(item.resume_match_band)}</button>}</td><td>{item.screening_outcome ? labelOf(item.screening_outcome) : 'Pending'}</td><td><div className="recruitment-table-actions">
           {canManage && ['applied', 'under_review'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" onClick={() => setModal({ type: 'screen', application: item })}><UserSearch size={13} />Screen</button> : null}
           {canManage && ['shortlisted', 'on_hold', 'interviewed'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-primary recruitment-btn-sm" onClick={() => setModal({ type: 'interview', application: item })}><CalendarClock size={13} />Interview</button> : null}
-          {canManage && status === 'interviewed' ? <button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => setConfirm({ title: 'Select candidate', message: 'Confirm selection based on completed interviews and human review, not the automated match score alone.', label: 'Select', tone: 'success', action: () => act(`select:${idOf(item)}`, () => changeRecruitmentApplicationStatus(idOf(item), { status: 'selected' }), 'Candidate selected.', 'candidates') })}><BadgeCheck size={13} />Select</button> : null}
+          {canManage && ['interview_scheduled', 'interviewed', 'selected', 'offer_pending', 'offer_sent'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => { setFeedbackApplicationId(idOf(item)); changeTab('feedback'); }}><Star size={13} />Review feedback</button> : null}
+          {canManage && status === 'interviewed' && item.interview_process_completed !== true ? <button type="button" className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" onClick={() => setConfirm({ title: 'Complete interview process', message: 'This checks that every scheduled round is completed and every assigned interviewer has submitted feedback.', label: 'Complete process', tone: 'primary', action: () => act(`complete-process:${idOf(item)}`, () => completeRecruitmentInterviewProcess(idOf(item)), 'Interview process completed.', 'candidates') })}><ClipboardCheck size={13} />Complete process</button> : null}
+          {canManage && status === 'interviewed' && item.interview_process_completed === true ? <button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => setConfirm({ title: 'Select candidate', message: 'Confirm selection based on completed interviews and human review, not the automated match score alone.', label: 'Select', tone: 'success', action: () => act(`select:${idOf(item)}`, () => changeRecruitmentApplicationStatus(idOf(item), { status: 'selected' }), 'Candidate selected.', 'candidates') })}><BadgeCheck size={13} />Select</button> : null}
           {canManage && !['selected', 'rejected', 'withdrawn', 'joined'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-danger recruitment-btn-sm" onClick={() => setConfirm({ title: 'Reject application', message: 'Enter a factual, role-related reason. Do not rely only on the match score.', label: 'Reject', tone: 'danger', reason: true, action: (text) => act(`reject-app:${idOf(item)}`, () => changeRecruitmentApplicationStatus(idOf(item), { status: 'rejected', reason: text, notes: text }), 'Application rejected.', 'candidates') })}><XCircle size={13} />Reject</button> : null}
         </div></td></tr>;
       })}</Table> : <Empty icon={Users} title="No applications found" message={isTeamLeader ? 'No candidates are currently connected to your assigned hiring work.' : 'Upload a resume or add a candidate manually.'} action={canManage ? 'Add candidate' : ''} onAction={() => setModal({ type: 'candidate' })} />}
@@ -1941,10 +2273,57 @@ export default function Recruitment() {
   function interviewsPage() {
     return <section className="recruitment-panel"><SectionHead title="Interviews" description="Schedule rounds and collect written feedback">{canManage ? <button type="button" className="recruitment-btn recruitment-btn-primary" disabled={!interviewReady.length} onClick={() => setModal({ type: 'interview' })}><Plus size={15} />Schedule interview</button> : null}</SectionHead>
       <Toolbar status={filters.interviewStatus} setStatus={(value) => setFilters((state) => ({ ...state, interviewStatus: value }))} statuses={['scheduled', 'rescheduled', 'completed', 'cancelled', 'candidate_absent', 'interviewer_absent']} onApply={() => load('interviews')} />
-      {interviews.length ? <div className="recruitment-interview-list">{interviews.map((item) => { const status = keyOf(item.status); const date = new Date(item.scheduled_at); return <article className="recruitment-interview-card" key={idOf(item)}><div className="recruitment-interview-date"><strong>{Number.isNaN(date.getTime()) ? '—' : String(date.getDate()).padStart(2, '0')}</strong><span>{Number.isNaN(date.getTime()) ? 'DATE' : date.toLocaleString('en-IN', { month: 'short' })}</span></div><div className="recruitment-interview-main"><h4>{item.candidate_name || 'Candidate'} · {item.round_label || 'Interview'}</h4><p>{item.job_title || 'Job opening'}</p><div className="recruitment-interview-meta"><span><Clock3 size={12} />{formatDate(item.scheduled_at, true)}</span><span><MapPin size={12} />{item.meeting_link || item.location || labelOf(item.mode)}</span><Status value={status} /></div></div><div className="recruitment-table-actions">
+      {interviews.length ? <div className="recruitment-interview-list">{interviews.map((item) => {
+        const status = keyOf(item.status);
+        const date = new Date(item.scheduled_at);
+        const panel = Array.isArray(item.interviewer_panel) ? item.interviewer_panel : (item.interviewers || []);
+        const summary = item.feedback_summary || {
+          assigned: Number(item.feedback_assigned_count || panel.length || 0),
+          submitted: Number(item.feedback_submitted_count || item.feedback_count || 0),
+          pending: Number(item.feedback_pending_count || 0),
+          status: item.feedback_status || (status === 'completed' ? 'pending' : 'not_available'),
+          pending_user_ids: [],
+        };
+        const pendingIds = new Set((summary.pending_user_ids || []).map(String));
+        const pendingNames = panel.filter((member) => pendingIds.has(String(member.user_id || member.id || ''))).map((member) => member.name || member.email || 'Assigned interviewer');
+        return <article className="recruitment-interview-card" key={idOf(item)}><div className="recruitment-interview-date"><strong>{Number.isNaN(date.getTime()) ? '—' : String(date.getDate()).padStart(2, '0')}</strong><span>{Number.isNaN(date.getTime()) ? 'DATE' : date.toLocaleString('en-IN', { month: 'short' })}</span></div><div className="recruitment-interview-main"><h4>{item.candidate_name || 'Candidate'} · {item.round_label || 'Interview'}</h4><p>{item.job_title || 'Job opening'}</p><div className="recruitment-interview-meta"><span><Clock3 size={12} />{formatDate(item.scheduled_at, true)}</span><span><MapPin size={12} />{item.meeting_link || item.location || labelOf(item.mode)}</span><Status value={status} /></div>{panel.length ? <div className="recruitment-chip-list">{panel.map((member) => <span className="recruitment-chip" key={member.user_id || member.id}>{member.name || member.email || 'Interviewer'}{member.roles?.length ? ` · ${member.roles.map(labelOf).join(', ')}` : ''}</span>)}</div> : null}<small className="recruitment-table-secondary">Feedback: {summary.status === 'not_available' ? 'Not available until this interview is completed' : `${summary.submitted || 0}/${summary.assigned || 0} submitted${pendingNames.length ? ` · Pending: ${pendingNames.join(', ')}` : ''}`}</small></div><div className="recruitment-table-actions">
         {canManage && ['scheduled', 'rescheduled'].includes(status) ? <><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => setModal({ type: 'reschedule', interview: item })}><CalendarClock size={13} />Reschedule</button><button type="button" className="recruitment-btn recruitment-btn-success recruitment-btn-sm" onClick={() => act(`complete-int:${idOf(item)}`, () => changeRecruitmentInterviewStatus(idOf(item), { status: 'completed' }), 'Interview completed.', 'interviews')}><CheckCircle2 size={13} />Complete</button></> : null}
-        {['scheduled', 'rescheduled', 'completed'].includes(status) ? <button type="button" className="recruitment-btn recruitment-btn-primary recruitment-btn-sm" onClick={() => setModal({ type: 'feedback', interview: item })}><Star size={13} />Feedback</button> : null}
-      </div></article>; })}</div> : <Empty icon={CalendarClock} title="No interviews found" message="Shortlist a candidate before scheduling an interview." action={canManage && interviewReady.length ? 'Schedule interview' : ''} onAction={() => setModal({ type: 'interview' })} />}
+        {item.can_submit_feedback ? <button type="button" className="recruitment-btn recruitment-btn-primary recruitment-btn-sm" onClick={() => setModal({ type: 'feedback', interview: item })}><Star size={13} />{item.my_feedback_submitted ? 'Edit feedback' : 'Give feedback'}</button> : null}
+        {canManage ? <button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" onClick={() => { setFeedbackApplicationId(String(item.application_id || '')); changeTab('feedback'); }}><ClipboardCheck size={13} />Review feedback</button> : null}
+      </div></article>;
+      })}</div> : <Empty icon={CalendarClock} title="No interviews found" message="Shortlist a candidate before scheduling an interview." action={canManage && interviewReady.length ? 'Schedule interview' : ''} onAction={() => setModal({ type: 'interview' })} />}
+    </section>;
+  }
+
+  function feedbackPage() {
+    const application = feedbackSheet.application || {};
+    const rounds = Array.isArray(feedbackSheet.rounds) ? feedbackSheet.rounds : [];
+    const summary = feedbackSheet.feedback_summary || {};
+    return <section className="recruitment-panel"><SectionHead title="Interview feedback" description="HR and Admin review every round, interviewer role, submitted scorecard and pending response in one place" />
+      {feedbackApplications.length ? <div className="recruitment-feedback-layout">
+        <aside className="recruitment-feedback-candidates" aria-label="Applications with interviews">{feedbackApplications.map((item) => {
+          const itemInterviews = interviews.filter((row) => String(row.application_id || '') === idOf(item));
+          const completed = itemInterviews.filter((row) => keyOf(row.status) === 'completed').length;
+          return <button type="button" key={idOf(item)} className={`recruitment-feedback-candidate${feedbackApplicationId === idOf(item) ? ' active' : ''}`} onClick={() => openFeedbackApplication(idOf(item))}><strong>{item.candidate_name || 'Candidate'}</strong><small>{item.job_title || 'Job opening'}</small><small>{completed}/{itemInterviews.length} rounds completed · {labelOf(item.status)}</small></button>;
+        })}</aside>
+        <div>{feedbackLoading ? <Loading /> : feedbackApplicationId && rounds.length ? <>
+          <div className="recruitment-feedback-sheet-head"><div><h3>{application.candidate_name || 'Candidate'}</h3><p className="recruitment-muted">{application.job_title || 'Job opening'} · {application.reference_no || 'Application'}</p><div className="recruitment-feedback-summary"><Status value={summary.complete ? 'complete' : (summary.pending ? 'pending' : 'not_available')} /><span className="recruitment-chip">{summary.submitted || 0}/{summary.assigned || 0} submitted</span>{summary.pending ? <span className="recruitment-chip">{summary.pending} pending</span> : null}</div></div>{keyOf(application.status) === 'interviewed' && application.interview_process_completed !== true && summary.complete ? <button type="button" className="recruitment-btn recruitment-btn-primary" onClick={() => setConfirm({ title: 'Complete interview process', message: 'All rounds and assigned feedback are complete. Confirm the process before candidate selection.', label: 'Complete process', tone: 'primary', action: () => act(`complete-process:${idOf(application)}`, () => completeRecruitmentInterviewProcess(idOf(application)), 'Interview process completed.', 'feedback') })}><ClipboardCheck size={15} />Complete process</button> : application.interview_process_completed === true ? <Status value="complete" /> : null}</div>
+          {summary.pending_interviewers?.length ? <div className="recruitment-alert recruitment-alert-warning" style={{ marginTop: 14 }}><AlertCircle size={17} /><span>Pending feedback: {summary.pending_interviewers.map((item) => `${item.name || 'Assigned interviewer'} (${item.round_label || 'Interview'})`).join(', ')}</span></div> : null}
+          <div className="recruitment-feedback-rounds" style={{ marginTop: 16 }}>{rounds.map((round, roundIndex) => {
+            const roundSummary = round.feedback_summary || {};
+            const panel = Array.isArray(round.interviewer_panel) ? round.interviewer_panel : [];
+            return <article className="recruitment-feedback-round" key={idOf(round.interview) || `${round.round_key}-${roundIndex}`}><div className="recruitment-feedback-round-head"><div><h4>{round.sequence_no || roundIndex + 1}. {round.round_label || labelOf(round.round_key)}</h4><p className="recruitment-muted">{formatDate(round.interview?.scheduled_at, true)} · {labelOf(round.interview?.mode)}</p></div><div className="recruitment-feedback-summary"><Status value={round.status || 'scheduled'} /><Status value={roundSummary.status || 'not_available'} /><span className="recruitment-chip">{roundSummary.submitted || 0}/{roundSummary.assigned || 0}</span></div></div>
+              <div className="recruitment-feedback-panel-list">{panel.map((member, memberIndex) => {
+                const memberFeedback = member.feedback || null;
+                const roles = member.roles || memberFeedback?.interviewer_roles || [];
+                return <section className="recruitment-feedback-person" key={member.user_id || memberIndex}><div className="recruitment-feedback-person-head"><div className="recruitment-person"><span className="recruitment-avatar">{initials(member.name || member.email)}</span><span className="recruitment-person-copy"><strong>{member.name || member.email || 'Assigned interviewer'}</strong><small>{roles.length ? roles.map(labelOf).join(' · ') : 'Interviewer'}</small></span></div><Status value={member.feedback_status || (memberFeedback ? 'submitted' : 'not_available')} /></div>
+                  {memberFeedback ? <><div className="recruitment-feedback-rating-list"><div className="recruitment-feedback-rating"><span>Overall rating</span><strong>{memberFeedback.overall_rating ?? '—'} / 5</strong></div><div className="recruitment-feedback-rating"><span>Recommendation</span><strong>{labelOf(memberFeedback.recommendation)}</strong></div>{Object.entries(memberFeedback.ratings || {}).map(([key, value]) => <div className="recruitment-feedback-rating" key={key}><span>{labelOf(key)}</span><strong>{value} / 5</strong></div>)}</div><div className="recruitment-feedback-copy-grid"><div className="recruitment-feedback-copy"><span>Strengths</span><p>{textOf(memberFeedback.strengths) || '—'}</p></div><div className="recruitment-feedback-copy"><span>Concerns</span><p>{textOf(memberFeedback.concerns) || '—'}</p></div><div className="recruitment-feedback-copy is-full"><span>Comments</span><p>{textOf(memberFeedback.comments) || '—'}</p></div></div></> : <p className="recruitment-feedback-status-line">{member.feedback_status === 'pending' ? 'Interview completed; this interviewer still needs to submit feedback.' : 'Feedback becomes available after this interview is completed.'}</p>}
+                </section>;
+              })}</div>
+            </article>;
+          })}</div>
+        </> : <Empty icon={ClipboardCheck} title="No feedback sheet available" message="Choose an application with scheduled interviews." />}</div>
+      </div> : <Empty icon={ClipboardCheck} title="No interview feedback found" message="Applications appear here after the first interview is scheduled." />}
     </section>;
   }
 
@@ -1986,6 +2365,7 @@ export default function Recruitment() {
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Workflow controls</h3><div className="recruitment-form-grid">{[
           ['module_enabled', 'Recruitment module enabled'], ['career_page_enabled', 'Public career page enabled'], ['allow_employee_referrals', 'Allow employee referrals'], ['require_hiring_request_approval', 'Require hiring request approval'], ['require_salary_approval', 'Require salary and offer approval'],
         ].map(([key, label]) => <label className="recruitment-checkbox-row" key={key}><input type="checkbox" checked={Boolean(settings[key])} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, [key]: event.target.checked }))} /><span>{label}</span></label>)}</div></div>
+        <InterviewRoundsEditor rounds={settings.default_interview_rounds} disabled={!canManage} onChange={(default_interview_rounds) => setSettings((state) => ({ ...state, default_interview_rounds }))} />
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">General defaults</h3><div className="recruitment-form-grid recruitment-form-grid-3"><Field label="Default currency"><select value={settings.default_currency || 'INR'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_currency: event.target.value }))}>{['INR', 'USD', 'BDT', 'EUR', 'GBP'].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Default application source"><select value={settings.default_application_source || 'career_page'} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, default_application_source: event.target.value }))}>{['career_page', 'manual', 'employee_referral', 'job_portal', 'social_media', 'agency'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field><Field label="Employee code prefix"><input value={settings.employee_code_prefix || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, employee_code_prefix: event.target.value.toUpperCase() }))} /></Field><Field label="Candidate retention days"><input type="number" min="30" value={settings.candidate_retention_days || 730} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, candidate_retention_days: Number(event.target.value) }))} /></Field><Field label="Maximum resume size (MB)"><input type="number" min="1" max="25" value={settings.resume_max_size_mb || 8} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, resume_max_size_mb: Number(event.target.value) }))} /></Field><Field label="Career page slug"><input value={settings.public_career_slug || ''} disabled={!canManage} onChange={(event) => setSettings((state) => ({ ...state, public_career_slug: slugOf(event.target.value) }))} /></Field></div></div>
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Candidate emails</h3><div className="recruitment-form-grid">{[
           ['email_candidate_on_application', 'Application received confirmation'], ['email_candidate_on_interview', 'Interview invitations and changes'], ['email_candidate_on_offer', 'Approved offer communication'], ['email_candidate_on_rejection', 'Respectful rejection communication'],
@@ -2020,6 +2400,7 @@ export default function Recruitment() {
     if (tab === 'jobs') return jobsPage();
     if (tab === 'candidates') return candidatesPage();
     if (tab === 'interviews') return interviewsPage();
+    if (tab === 'feedback') return feedbackPage();
     if (tab === 'offers') return offersPage();
     if (tab === 'joining') return joiningPage();
     if (tab === 'reports') return reportsPage();
@@ -2033,14 +2414,14 @@ export default function Recruitment() {
     {transitioning ? <><div className="recruitment-route-progress" aria-hidden="true" /><div className="recruitment-transition-note" role="status"><Loader2 size={13} />{transitionNote || 'Opening section…'}</div></> : null}
     <ToastRegion toasts={toasts} onClose={dismissToast} />
     <header className="recruitment-header"><div className="recruitment-header-copy"><span className="recruitment-eyebrow"><ShieldCheck size={14} />YourComate Recruitment</span><h1>Recruitment</h1><p>Team Leaders raise department needs, Admin or the Managing Director gives final approval, HR publishes vacancies, and the assigned hiring team reviews candidates through one protected workflow.</p></div><div className="recruitment-header-actions"><span className="recruitment-header-note"><Sparkles size={14} />Explainable resume matching · human decision required</span><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={() => load(tab)} disabled={loading}><RefreshCw size={15} />Refresh</button>{primaryActionType ? <button type="button" className="recruitment-btn recruitment-btn-primary" onClick={openPrimaryAction}><Plus size={15} />New action</button> : null}</div></header>
-    <nav className="recruitment-tabs-shell" aria-label="Recruitment sections"><div className="recruitment-tabs" role="tablist">{TABS.map(([key, label, Icon]) => <button type="button" role="tab" aria-selected={tab === key} className={`recruitment-tab${tab === key ? ' active' : ''}`} key={key} onClick={() => changeTab(key)} disabled={transitioning}><Icon size={15} />{label}{Number(counts[key]) > 0 ? <span className="recruitment-tab-count">{counts[key]}</span> : null}</button>)}</div></nav>
+    <nav className="recruitment-tabs-shell" aria-label="Recruitment sections"><div className="recruitment-tabs" role="tablist">{visibleTabs.map(([key, label, Icon]) => <button type="button" role="tab" aria-selected={tab === key} className={`recruitment-tab${tab === key ? ' active' : ''}`} key={key} onClick={() => changeTab(key)} disabled={transitioning}><Icon size={15} />{label}{Number(counts[key]) > 0 ? <span className="recruitment-tab-count">{counts[key]}</span> : null}</button>)}</div></nav>
     <div className={`recruitment-route-stage${transitioning ? ' is-leaving' : ''}`} key={tab}>{content()}</div>
 
     {modal?.type === 'request' ? <RequestModal employees={employees} departments={departments} busy={busy === 'create-request'} isTeamLeader={isTeamLeader} departmentScope={departmentScope} actorId={actorId} actorName={userName} onClose={() => setModal(null)} onSave={(payload) => act('create-request', () => createRecruitmentHiringRequest(payload), 'Hiring request created as a draft.', 'requests')} /> : null}
     {modal?.type === 'job' ? <JobModal requests={approvedRequests} initial={modal.request} employees={employees} busy={busy === 'create-job'} onClose={() => setModal(null)} onSave={(payload) => act('create-job', () => createRecruitmentJobOpening(payload), 'Job opening created as a draft.', 'jobs')} /> : null}
     {modal?.type === 'candidate' ? <CandidateModal jobs={jobs.filter((job) => ['open', 'draft'].includes(keyOf(job.status)))} busy={busy === 'create-candidate'} onClose={() => setModal(null)} onSave={async ({ candidatePayload, resumeFile, jobOpeningId, source }) => { setBusy('create-candidate'); try { const result = await createRecruitmentCandidate(candidatePayload, resumeFile); const candidate = itemOf(result); if (jobOpeningId) await createRecruitmentApplication({ candidate_id: idOf(candidate), job_opening_id: jobOpeningId, source }); flash('success', jobOpeningId ? 'Candidate and application created.' : 'Candidate saved.'); setModal(null); await load('candidates', true); } catch (error) { flash('danger', messageOf(error)); } finally { setBusy(''); } }} /> : null}
     {modal?.type === 'screen' ? <ScreenModal application={modal.application} busy={busy === `screen:${idOf(modal.application)}`} onClose={() => setModal(null)} onSave={(payload) => act(`screen:${idOf(modal.application)}`, () => updateRecruitmentScreening(idOf(modal.application), payload), 'Candidate screening saved.', 'candidates')} /> : null}
-    {modal?.type === 'interview' ? <InterviewModal applications={interviewReady} initial={modal.application} employees={employees} settings={settings} busy={busy === 'create-interview'} onClose={() => setModal(null)} onSave={(payload) => act('create-interview', () => scheduleRecruitmentInterview(payload.application_id, { ...payload, interviewer_user_ids: [payload.interviewer_user_id] }), 'Interview scheduled.', 'interviews')} /> : null}
+    {modal?.type === 'interview' ? <InterviewModal applications={interviewReady} initial={modal.application} employees={employees} settings={settings} busy={busy === 'create-interview'} onClose={() => setModal(null)} onSave={(payload) => act('create-interview', () => scheduleRecruitmentInterview(payload.application_id, payload), 'Interview scheduled.', 'interviews')} /> : null}
     {modal?.type === 'reschedule' ? <RescheduleModal interview={modal.interview} busy={busy === `reschedule:${idOf(modal.interview)}`} onClose={() => setModal(null)} onSave={(payload) => act(`reschedule:${idOf(modal.interview)}`, () => rescheduleRecruitmentInterview(idOf(modal.interview), payload), 'Interview rescheduled.', 'interviews')} /> : null}
     {modal?.type === 'feedback' ? <FeedbackModal interview={modal.interview} busy={busy === `feedback:${idOf(modal.interview)}`} onClose={() => setModal(null)} onSave={(payload) => act(`feedback:${idOf(modal.interview)}`, () => submitRecruitmentInterviewFeedback(idOf(modal.interview), payload), 'Feedback submitted.', 'interviews')} /> : null}
     {modal?.type === 'offer' ? <OfferModal applications={offerReady} initial={modal.application} employees={employees} designations={designations} settings={settings} busy={busy === 'create-offer'} onClose={() => setModal(null)} onSave={({ applicationId, payload, offerFile }) => act('create-offer', () => createRecruitmentOffer(applicationId, payload, offerFile), 'Offer draft created.', 'offers')} /> : null}
@@ -2049,6 +2430,30 @@ export default function Recruitment() {
     {confirm ? <ConfirmModal {...confirm} busy={Boolean(busy)} onClose={() => setConfirm(null)} /> : null}
     {drawer ? <JoiningDrawer state={drawer} canManage={canManage} busy={busy} onClose={() => setDrawer(null)} onDownload={(document) => downloadRecruitmentJoiningDocument(idOf(document), document.file_name || 'joining-document').catch((error) => flash('danger', messageOf(error)))} onReview={(document, status, reason = '') => act(`review-doc:${idOf(document)}`, () => reviewRecruitmentJoiningDocument(idOf(document), { status, reason }), 'Document review saved.', 'joining', true)} onCheck={(payload) => act(`check:${idOf(drawer.application)}`, () => updateRecruitmentBackgroundCheck(idOf(drawer.application), payload), 'Background check updated.', 'joining', true)} onDidNotJoin={() => setConfirm({ title: 'Mark as did not join', message: 'Enter a clear reason.', label: 'Mark did not join', tone: 'danger', reason: true, action: (text) => act(`dnjoin:${idOf(drawer.application)}`, () => changeRecruitmentJoiningStatus(idOf(drawer.application), { status: 'did_not_join', reason: text }), 'Candidate marked as did not join.', 'joining', true) })} /> : null}
   </main>;
+}
+
+function InterviewRoundsEditor({ rounds, disabled, onChange }) {
+  const items = Array.isArray(rounds) ? rounds : [];
+  const apply = (next) => onChange(next.map((item, index) => ({
+    ...item,
+    order: index + 1,
+    sequence_no: index + 1,
+  })));
+  const move = (index, offset) => {
+    const target = index + offset;
+    if (target < 0 || target >= items.length) return;
+    const next = [...items];
+    [next[index], next[target]] = [next[target], next[index]];
+    apply(next);
+  };
+  const add = () => {
+    const keys = new Set(items.map((item) => item.key));
+    let suffix = items.length + 1;
+    let key = `interview_round_${suffix}`;
+    while (keys.has(key)) { suffix += 1; key = `interview_round_${suffix}`; }
+    apply([...items, { key, label: `Interview Round ${items.length + 1}` }]);
+  };
+  return <div className="recruitment-form-section"><div className="recruitment-section-head"><div><h3 className="recruitment-form-section-title">Interview rounds</h3><p>Rename or reorder tenant rounds. The stable round key is preserved when its label changes.</p></div>{!disabled ? <button type="button" className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" onClick={add}><Plus size={13} />Add round</button> : null}</div><div className="recruitment-round-editor">{items.map((round, index) => <div className="recruitment-round-row" key={round.key}><span className="recruitment-round-number">{index + 1}</span><Field label="Round label" hint={`Key: ${round.key}`}><input required value={round.label || ''} disabled={disabled} onChange={(event) => apply(items.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} /></Field><div className="recruitment-round-actions"><button type="button" className="recruitment-icon-btn" title="Move round up" aria-label={`Move ${round.label} up`} disabled={disabled || index === 0} onClick={() => move(index, -1)}><ArrowUp size={15} /></button><button type="button" className="recruitment-icon-btn" title="Move round down" aria-label={`Move ${round.label} down`} disabled={disabled || index === items.length - 1} onClick={() => move(index, 1)}><ArrowDown size={15} /></button><button type="button" className="recruitment-icon-btn" title="Remove round" aria-label={`Remove ${round.label}`} disabled={disabled || items.length <= 1} onClick={() => apply(items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></div></div>)}</div></div>;
 }
 
 function Toolbar({ search, setSearch, status, setStatus, statuses = [], onApply, placeholder = 'Search' }) {
@@ -2207,20 +2612,62 @@ function ScreenModal({ application, busy, onClose, onSave }) {
 }
 
 function InterviewModal({ applications, initial, employees, settings, busy, onClose, onSave }) {
-  const rounds = Array.isArray(settings?.default_interview_rounds) && settings.default_interview_rounds.length ? settings.default_interview_rounds : [{ key: 'hr_screening', label: 'HR Screening' }, { key: 'technical', label: 'Technical Interview' }, { key: 'manager', label: 'Manager Interview' }];
-  const [form, setForm] = useState({ ...EMPTY_INTERVIEW, application_id: idOf(initial) || idOf(applications[0]), scheduled_at: dateTimeInput(new Date(Date.now() + 86400000)) });
+  const rounds = orderedRounds(settings?.default_interview_rounds);
+  const [form, setForm] = useState({ ...EMPTY_INTERVIEW, application_id: idOf(initial) || idOf(applications[0]), round_key: rounds[0]?.key || '', round_label: rounds[0]?.label || '', scheduled_at: dateTimeInput(new Date(Date.now() + 86400000)) });
+  const [panel, setPanel] = useState({});
+  const [panelError, setPanelError] = useState('');
   const update = (key, value) => setForm((state) => ({ ...state, [key]: value }));
-  const submit = (event) => { event.preventDefault(); const round = rounds.find((item) => item.key === form.round_key); onSave({ ...form, scheduled_at: new Date(form.scheduled_at).toISOString(), duration_minutes: Number(form.duration_minutes || 45), round_label: round?.label || form.round_label }); };
-  return <Modal title="Schedule interview" subtitle="Choose the candidate, round, time and interviewer." onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="interview-form" className="recruitment-btn recruitment-btn-primary" disabled={busy}>{busy ? <Loader2 size={15} /> : <CalendarClock size={15} />}Schedule interview</button></>}><form id="interview-form" className="recruitment-form" onSubmit={submit}><div className="recruitment-form-grid recruitment-form-grid-3">
+  const toggleMember = (employee) => {
+    const userId = employeeUserId(employee);
+    if (!userId) return;
+    setPanelError('');
+    setPanel((state) => {
+      const next = { ...state };
+      if (next[userId]) delete next[userId];
+      else next[userId] = { user_id: userId, name: employeeName(employee), email: employee.email || employee.user?.email || '', roles: [] };
+      return next;
+    });
+  };
+  const toggleRole = (userId, role) => {
+    setPanelError('');
+    setPanel((state) => {
+      const member = state[userId];
+      if (!member) return state;
+      const roles = new Set(member.roles || []);
+      if (roles.has(role)) roles.delete(role); else roles.add(role);
+      return { ...state, [userId]: { ...member, roles: [...roles] } };
+    });
+  };
+  const submit = (event) => {
+    event.preventDefault();
+    const interviewerPanel = Object.values(panel);
+    if (!interviewerPanel.length) { setPanelError('Select at least one interviewer.'); return; }
+    const withoutRole = interviewerPanel.find((member) => !member.roles?.length);
+    if (withoutRole) { setPanelError(`Choose at least one interview role for ${withoutRole.name || 'every selected interviewer'}.`); return; }
+    const round = rounds.find((item) => item.key === form.round_key);
+    onSave({
+      ...form,
+      scheduled_at: new Date(form.scheduled_at).toISOString(),
+      duration_minutes: Number(form.duration_minutes || 45),
+      round_label: round?.label || form.round_label,
+      sequence_no: Number(round?.sequence_no || round?.order || 1),
+      interviewer_user_ids: interviewerPanel.map((member) => member.user_id),
+      interviewer_panel: interviewerPanel,
+    });
+  };
+  return <Modal title="Schedule interview" subtitle="Choose the candidate, tenant-defined round, time and role-based interviewer panel." onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="interview-form" className="recruitment-btn recruitment-btn-primary" disabled={busy}>{busy ? <Loader2 size={15} /> : <CalendarClock size={15} />}Schedule interview</button></>}><form id="interview-form" className="recruitment-form" onSubmit={submit}><div className="recruitment-form-grid recruitment-form-grid-3">
     <Field label="Candidate application" required full><select required value={form.application_id} onChange={(event) => update('application_id', event.target.value)}><option value="">Choose candidate</option>{applications.map((item) => <option key={idOf(item)} value={idOf(item)}>{item.candidate_name} · {item.job_title} · {labelOf(item.status)}</option>)}</select></Field>
     <Field label="Interview round" required><select required value={form.round_key} onChange={(event) => update('round_key', event.target.value)}>{rounds.map((round) => <option key={round.key} value={round.key}>{round.label}</option>)}</select></Field>
     <Field label="Date and time" required><input required type="datetime-local" value={form.scheduled_at} onChange={(event) => update('scheduled_at', event.target.value)} /></Field>
     <Field label="Duration"><select value={form.duration_minutes} onChange={(event) => update('duration_minutes', event.target.value)}>{[30, 45, 60, 90, 120].map((value) => <option key={value} value={value}>{value} minutes</option>)}</select></Field>
     <Field label="Interview mode"><select value={form.mode} onChange={(event) => update('mode', event.target.value)}>{['online', 'office', 'phone', 'hybrid'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field>
-    <Field label="Assigned interviewer" required><select required value={form.interviewer_user_id} onChange={(event) => update('interviewer_user_id', event.target.value)}><option value="">Choose interviewer</option>{employees.map((item) => <option key={employeeUserId(item)} value={employeeUserId(item)}>{employeeName(item)}</option>)}</select></Field>
     {form.mode === 'online' ? <Field label="Meeting link" full><input type="url" value={form.meeting_link} onChange={(event) => update('meeting_link', event.target.value)} /></Field> : <Field label="Location" full><input value={form.location} onChange={(event) => update('location', event.target.value)} /></Field>}
     <Field label="Candidate instructions" full><textarea value={form.candidate_notes} onChange={(event) => update('candidate_notes', event.target.value)} /></Field><Field label="Internal notes" full><textarea value={form.internal_notes} onChange={(event) => update('internal_notes', event.target.value)} /></Field>
-  </div></form></Modal>;
+  </div><div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Interviewer panel and roles</h3><p className="recruitment-muted">Select every interviewer and assign one or more responsibilities. Each selected person submits an individual scorecard after completion.</p>{panelError ? <div className="recruitment-alert recruitment-alert-danger" style={{ margin: '12px 0' }}><AlertCircle size={16} /><span>{panelError}</span></div> : null}<div className="recruitment-panel-selector">{employees.filter((employee) => employeeUserId(employee)).map((employee) => {
+    const userId = employeeUserId(employee);
+    const member = panel[userId];
+    return <div className={`recruitment-panel-member${member ? ' is-selected' : ''}`} key={userId}><div className="recruitment-panel-member-head"><div className="recruitment-panel-member-copy"><span className="recruitment-avatar">{initials(employeeName(employee))}</span><span className="recruitment-person-copy"><strong>{employeeName(employee)}</strong><small>{employee.designation || employee.department || employee.email || 'Active employee'}</small></span></div><label className="recruitment-checkbox-row"><input type="checkbox" checked={Boolean(member)} onChange={() => toggleMember(employee)} /><span>{member ? 'Selected' : 'Add'}</span></label></div>{member ? <div className="recruitment-panel-roles" style={{ marginTop: 12 }}>{INTERVIEWER_ROLE_OPTIONS.map(([role, label]) => <label className="recruitment-role-option" key={role}><input type="checkbox" checked={member.roles.includes(role)} onChange={() => toggleRole(userId, role)} /><span>{label}</span></label>)}</div> : null}</div>;
+  })}</div></div></form></Modal>;
 }
 
 function RescheduleModal({ interview, busy, onClose, onSave }) {
@@ -2233,10 +2680,12 @@ function Rating({ label, value, onChange }) {
   return <div className="recruitment-rating-item"><label>{label}</label><div className="recruitment-rating-options">{[1, 2, 3, 4, 5].map((score) => <button type="button" key={score} className={Number(value) === score ? 'active' : ''} onClick={() => onChange(score)}>{score}</button>)}</div></div>;
 }
 function FeedbackModal({ interview, busy, onClose, onSave }) {
-  const [form, setForm] = useState({ role_knowledge: 0, relevant_experience: 0, communication: 0, problem_solving: 0, work_approach: 0, recommendation: '', strengths: '', concerns: '', comments: '' });
+  const existing = interview.my_feedback || {};
+  const ratings = existing.ratings || {};
+  const [form, setForm] = useState({ role_knowledge: ratings.role_knowledge || 0, relevant_experience: ratings.relevant_experience || 0, communication: ratings.communication || 0, problem_solving: ratings.problem_solving || 0, work_approach: ratings.work_approach || 0, recommendation: existing.recommendation || '', strengths: textOf(existing.strengths), concerns: textOf(existing.concerns), comments: textOf(existing.comments) });
   const complete = ['role_knowledge', 'relevant_experience', 'communication', 'problem_solving', 'work_approach'].every((key) => Number(form[key]) >= 1);
   const submit = (event) => { event.preventDefault(); onSave({ ratings: { role_knowledge: Number(form.role_knowledge), relevant_experience: Number(form.relevant_experience), communication: Number(form.communication), problem_solving: Number(form.problem_solving), work_approach: Number(form.work_approach) }, recommendation: form.recommendation, strengths: form.strengths, concerns: form.concerns, comments: form.comments }); };
-  return <Modal title="Interview feedback" subtitle={`${interview.candidate_name || 'Candidate'} · ${interview.round_label || 'Interview'}`} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="feedback-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || !complete || !form.recommendation}>{busy ? <Loader2 size={15} /> : <Check size={15} />}Submit feedback</button></>}><form id="feedback-form" className="recruitment-form" onSubmit={submit}><div className="recruitment-rating-grid"><Rating label="Role knowledge" value={form.role_knowledge} onChange={(value) => setForm((state) => ({ ...state, role_knowledge: value }))} /><Rating label="Relevant experience" value={form.relevant_experience} onChange={(value) => setForm((state) => ({ ...state, relevant_experience: value }))} /><Rating label="Communication" value={form.communication} onChange={(value) => setForm((state) => ({ ...state, communication: value }))} /><Rating label="Problem solving" value={form.problem_solving} onChange={(value) => setForm((state) => ({ ...state, problem_solving: value }))} /><Rating label="Work approach" value={form.work_approach} onChange={(value) => setForm((state) => ({ ...state, work_approach: value }))} /></div><div className="recruitment-form-grid"><Field label="Final recommendation" required><select required value={form.recommendation} onChange={(event) => setForm((state) => ({ ...state, recommendation: event.target.value }))}><option value="">Choose recommendation</option><option value="strong_hire">Strong Hire</option><option value="hire">Hire</option><option value="hold">Hold</option><option value="reject">Reject</option></select></Field><Field label="Strengths"><textarea value={form.strengths} onChange={(event) => setForm((state) => ({ ...state, strengths: event.target.value }))} /></Field><Field label="Concerns"><textarea value={form.concerns} onChange={(event) => setForm((state) => ({ ...state, concerns: event.target.value }))} /></Field><Field label="Final comments" required full><textarea required value={form.comments} onChange={(event) => setForm((state) => ({ ...state, comments: event.target.value }))} /></Field></div></form></Modal>;
+  return <Modal title={interview.my_feedback_submitted ? 'Edit interview feedback' : 'Interview feedback'} subtitle={`${interview.candidate_name || 'Candidate'} · ${interview.round_label || 'Interview'}`} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="feedback-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || !complete || !form.recommendation}>{busy ? <Loader2 size={15} /> : <Check size={15} />}{interview.my_feedback_submitted ? 'Update feedback' : 'Submit feedback'}</button></>}><form id="feedback-form" className="recruitment-form" onSubmit={submit}>{interview.my_feedback_submitted ? <div className="recruitment-alert"><ShieldCheck size={17} /><span>You are revising your own scorecard. The previous version remains in the audit history.</span></div> : null}<div className="recruitment-rating-grid"><Rating label="Role knowledge" value={form.role_knowledge} onChange={(value) => setForm((state) => ({ ...state, role_knowledge: value }))} /><Rating label="Relevant experience" value={form.relevant_experience} onChange={(value) => setForm((state) => ({ ...state, relevant_experience: value }))} /><Rating label="Communication" value={form.communication} onChange={(value) => setForm((state) => ({ ...state, communication: value }))} /><Rating label="Problem solving" value={form.problem_solving} onChange={(value) => setForm((state) => ({ ...state, problem_solving: value }))} /><Rating label="Work approach" value={form.work_approach} onChange={(value) => setForm((state) => ({ ...state, work_approach: value }))} /></div><div className="recruitment-form-grid"><Field label="Final recommendation" required><select required value={form.recommendation} onChange={(event) => setForm((state) => ({ ...state, recommendation: event.target.value }))}><option value="">Choose recommendation</option><option value="strong_hire">Strong Hire</option><option value="hire">Hire</option><option value="hold">Hold</option><option value="reject">Reject</option></select></Field><Field label="Strengths"><textarea value={form.strengths} onChange={(event) => setForm((state) => ({ ...state, strengths: event.target.value }))} /></Field><Field label="Concerns"><textarea value={form.concerns} onChange={(event) => setForm((state) => ({ ...state, concerns: event.target.value }))} /></Field><Field label="Final comments" required full><textarea required value={form.comments} onChange={(event) => setForm((state) => ({ ...state, comments: event.target.value }))} /></Field></div></form></Modal>;
 }
 
 function OfferModal({ applications, initial, employees, designations, settings, busy, onClose, onSave }) {

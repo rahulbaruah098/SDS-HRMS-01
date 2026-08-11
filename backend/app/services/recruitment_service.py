@@ -106,6 +106,11 @@ DOCUMENT_STATUSES = {"pending", "received", "accepted", "rejected", "needs_corre
 BACKGROUND_CHECK_STATUSES = {"pending", "clear", "clarification_required", "not_clear", "not_required"}
 JOINING_STATUSES = {"documents_pending", "ready_to_join", "joining_deferred", "joined", "did_not_join"}
 RECOMMENDATIONS = {"strong_hire", "hire", "hold", "reject"}
+INTERVIEWER_ROLES = {
+    "hiring_manager",
+    "hiring_assistant",
+    "technical_interviewer",
+}
 FINAL_APPLICATION_STATUSES = {"joined", "did_not_join", "rejected", "withdrawn", "offer_declined"}
 
 DEFAULT_RECRUITMENT_SETTINGS = {
@@ -249,6 +254,12 @@ def clean_mapping(value): return dict(value) if isinstance(value, Mapping) else 
 def clean_list(value, limit=100):
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)): return []
     return [dict(v) for v in value[:limit] if isinstance(v, Mapping)]
+def feedback_text(value, limit=30000):
+    if isinstance(value, str):
+        return value.strip()[:limit]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return "\n".join(unique_strings(value, limit=100)).strip()[:limit]
+    return safe_str(value)[:limit]
 def deep_merge(base, updates):
     result = deepcopy(dict(base))
     for key, value in dict(updates or {}).items():
@@ -605,6 +616,391 @@ class RecruitmentService:
             ],
         }
         return list(self.db.users.find(query))
+
+    def _normalise_interview_rounds(self, value, *, required=True):
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            if required:
+                raise RecruitmentServiceError(
+                    "Interview rounds must be provided as a list.",
+                    code="invalid_interview_rounds",
+                )
+            return []
+
+        prepared = []
+        seen_keys = set()
+        seen_labels = set()
+        for position, item in enumerate(value[:50], start=1):
+            if not isinstance(item, Mapping):
+                raise RecruitmentServiceError(
+                    "Every interview round must be an object containing a key and label.",
+                    code="invalid_interview_round",
+                    details={"position": position},
+                )
+            label = safe_str(item.get("label") or item.get("name"))
+            key = normalize_key(item.get("key") or label)
+            if not key or not label:
+                raise RecruitmentServiceError(
+                    "Every interview round requires a key and label.",
+                    code="interview_round_key_label_required",
+                    details={"position": position},
+                )
+            label_key = label.casefold()
+            if key in seen_keys:
+                raise RecruitmentServiceError(
+                    f"Interview round key '{key}' is duplicated.",
+                    code="duplicate_interview_round_key",
+                    details={"round_key": key},
+                )
+            if label_key in seen_labels:
+                raise RecruitmentServiceError(
+                    f"Interview round label '{label}' is duplicated.",
+                    code="duplicate_interview_round_label",
+                    details={"round_label": label},
+                )
+            try:
+                requested_order = int(
+                    item.get("order") or item.get("sequence_no") or position
+                )
+            except (TypeError, ValueError) as exc:
+                raise RecruitmentServiceError(
+                    "Interview round order must be a whole number.",
+                    code="invalid_interview_round_order",
+                    details={"round_key": key},
+                ) from exc
+            if requested_order < 1:
+                raise RecruitmentServiceError(
+                    "Interview round order must start from 1.",
+                    code="invalid_interview_round_order",
+                    details={"round_key": key},
+                )
+            seen_keys.add(key)
+            seen_labels.add(label_key)
+            prepared.append(
+                {
+                    "key": key,
+                    "label": label[:160],
+                    "requested_order": requested_order,
+                    "position": position,
+                }
+            )
+
+        if required and not prepared:
+            raise RecruitmentServiceError(
+                "At least one interview round is required.",
+                code="interview_round_required",
+            )
+
+        prepared.sort(
+            key=lambda item: (item["requested_order"], item["position"])
+        )
+        return [
+            {
+                "key": item["key"],
+                "label": item["label"],
+                "order": sequence_no,
+                "sequence_no": sequence_no,
+            }
+            for sequence_no, item in enumerate(prepared, start=1)
+        ]
+
+    def _available_interview_rounds(self, application=None):
+        by_key = {}
+        application = dict(application or {})
+        job_opening_id = safe_str(application.get("job_opening_id"))
+        if job_opening_id:
+            job = self._c(JOB_OPENINGS).find_one(
+                self._q({"_id": as_object_id(job_opening_id, "job opening id")})
+            ) or {}
+            try:
+                job_rounds = self._normalise_interview_rounds(
+                    job.get("interview_rounds") or [], required=False
+                )
+            except RecruitmentServiceError:
+                job_rounds = []
+            for item in job_rounds:
+                by_key[item["key"]] = item
+
+        current_rounds = self._normalise_interview_rounds(
+            self._settings().get("default_interview_rounds") or [],
+            required=True,
+        )
+        for item in current_rounds:
+            by_key[item["key"]] = item
+        return sorted(
+            by_key.values(),
+            key=lambda item: (int(item.get("order") or 999999), item.get("label") or ""),
+        )
+
+    @staticmethod
+    def _interviewer_ids(interview):
+        values = list(interview.get("interviewer_user_ids") or [])
+        for field in ("interviewer_panel", "interviewers"):
+            for item in interview.get(field) or []:
+                if isinstance(item, Mapping):
+                    values.append(item.get("user_id"))
+        return unique_strings(values)
+
+    def _tenant_users_by_ids(self, ids, *, active_only=False):
+        requested = unique_strings(ids)
+        if not requested:
+            return {}
+        object_ids = []
+        for value in requested:
+            try:
+                object_ids.append(ObjectId(value))
+            except Exception:
+                continue
+        query = {
+            "tenant_id": self.tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"_id": {"$in": object_ids}},
+                {"_id": {"$in": requested}},
+                {"user_id": {"$in": requested}},
+            ],
+        }
+        if active_only:
+            query.update(
+                {
+                    "is_active": {"$ne": False},
+                    "status": {"$ne": "inactive"},
+                }
+            )
+        output = {}
+        for user in self.db.users.find(query):
+            canonical_id = safe_str(user.get("_id"))
+            aliases = unique_strings(
+                [canonical_id, user.get("user_id")]
+            )
+            for alias in aliases:
+                output[alias] = user
+        return output
+
+    def _validated_interviewer_panel(self, data):
+        raw_ids = data.get("interviewer_user_ids") or []
+        if not isinstance(raw_ids, Sequence) or isinstance(
+            raw_ids, (str, bytes, bytearray)
+        ):
+            raise RecruitmentServiceError(
+                "Interviewer user IDs must be provided as a list.",
+                code="invalid_interviewer_user_ids",
+            )
+        requested_ids = [safe_str(value) for value in raw_ids if safe_str(value)]
+        if not requested_ids:
+            raise RecruitmentServiceError(
+                "Select at least one interviewer.",
+                code="interviewer_required",
+            )
+
+        panel_supplied = (
+            "interviewer_panel" in data or "interviewers" in data
+        )
+        raw_panel = data.get("interviewer_panel")
+        if raw_panel is None:
+            raw_panel = data.get("interviewers")
+
+        # Old web/mobile clients sent only interviewer_user_ids. Keep that
+        # contract working, while all new panel payloads use strict role
+        # validation below.
+        if not panel_supplied:
+            raw_panel = [
+                {"user_id": user_id, "roles": []}
+                for user_id in unique_strings(requested_ids)
+            ]
+        elif not isinstance(raw_panel, Sequence) or isinstance(
+            raw_panel, (str, bytes, bytearray)
+        ):
+            raise RecruitmentServiceError(
+                "Interviewer panel must be provided as a list.",
+                code="invalid_interviewer_panel",
+            )
+
+        if panel_supplied and len(requested_ids) != len(set(requested_ids)):
+            raise RecruitmentServiceError(
+                "The same interviewer cannot be selected more than once.",
+                code="duplicate_interviewer",
+            )
+
+        panel_by_requested_id = {}
+        for position, member in enumerate(raw_panel or [], start=1):
+            if not isinstance(member, Mapping):
+                raise RecruitmentServiceError(
+                    "Every interviewer panel member must be an object.",
+                    code="invalid_interviewer_panel_member",
+                    details={"position": position},
+                )
+            user_id = safe_str(member.get("user_id") or member.get("id"))
+            if not user_id:
+                raise RecruitmentServiceError(
+                    "Every interviewer panel member requires a user ID.",
+                    code="interviewer_user_id_required",
+                    details={"position": position},
+                )
+            if user_id in panel_by_requested_id:
+                raise RecruitmentServiceError(
+                    "The same interviewer cannot be selected more than once.",
+                    code="duplicate_interviewer",
+                    details={"user_id": user_id},
+                )
+            roles = sorted(normalize_roles(member))
+            invalid_roles = sorted(set(roles) - INTERVIEWER_ROLES)
+            if invalid_roles:
+                raise RecruitmentServiceError(
+                    "One or more interviewer roles are invalid.",
+                    code="invalid_interviewer_role",
+                    details={
+                        "user_id": user_id,
+                        "invalid_roles": invalid_roles,
+                        "allowed_roles": sorted(INTERVIEWER_ROLES),
+                    },
+                )
+            if panel_supplied and not roles:
+                raise RecruitmentServiceError(
+                    "Each selected interviewer must have at least one interviewer role.",
+                    code="interviewer_role_required",
+                    details={"user_id": user_id},
+                )
+            panel_by_requested_id[user_id] = roles
+
+        if set(panel_by_requested_id) != set(requested_ids):
+            raise RecruitmentServiceError(
+                "Interviewer panel members must exactly match interviewer_user_ids.",
+                code="interviewer_panel_mismatch",
+                details={
+                    "interviewer_user_ids": requested_ids,
+                    "panel_user_ids": list(panel_by_requested_id),
+                },
+            )
+
+        users_by_alias = self._tenant_users_by_ids(requested_ids, active_only=True)
+        canonical_ids = []
+        snapshots = []
+        seen_canonical_ids = set()
+        for requested_id in requested_ids:
+            user = users_by_alias.get(requested_id)
+            if not user:
+                raise RecruitmentServiceError(
+                    "One or more selected interviewers are invalid or inactive.",
+                    code="invalid_interviewer",
+                    details={"user_id": requested_id},
+                )
+            canonical_id = safe_str(user.get("_id"))
+            if canonical_id in seen_canonical_ids:
+                raise RecruitmentServiceError(
+                    "The same interviewer cannot be selected more than once.",
+                    code="duplicate_interviewer",
+                    details={"user_id": canonical_id},
+                )
+            seen_canonical_ids.add(canonical_id)
+            canonical_ids.append(canonical_id)
+            snapshots.append(
+                {
+                    "user_id": canonical_id,
+                    "name": safe_str(
+                        user.get("name")
+                        or user.get("full_name")
+                        or user.get("email")
+                    ),
+                    "email": normalize_email(user.get("email")),
+                    "roles": panel_by_requested_id[requested_id],
+                }
+            )
+        return canonical_ids, snapshots, panel_supplied
+
+    def _normalised_interviewer_panel(self, interview, *, enrich_users=False):
+        interviewer_ids = self._interviewer_ids(interview)
+        panel_by_id = {}
+        for field in ("interviewer_panel", "interviewers"):
+            for item in interview.get(field) or []:
+                if not isinstance(item, Mapping):
+                    continue
+                user_id = safe_str(item.get("user_id") or item.get("id"))
+                if not user_id or user_id in panel_by_id:
+                    continue
+                panel_by_id[user_id] = {
+                    "user_id": user_id,
+                    "name": safe_str(item.get("name")),
+                    "email": normalize_email(item.get("email")),
+                    "roles": sorted(
+                        normalize_roles(item) & INTERVIEWER_ROLES
+                    ),
+                }
+
+        users_by_alias = (
+            self._tenant_users_by_ids(interviewer_ids, active_only=False)
+            if enrich_users
+            else {}
+        )
+        output = []
+        seen = set()
+        for user_id in interviewer_ids:
+            member = deepcopy(panel_by_id.get(user_id) or {})
+            user = users_by_alias.get(user_id) or {}
+            canonical_id = safe_str(user.get("_id") or user_id)
+            if canonical_id in seen:
+                continue
+            seen.add(canonical_id)
+            member.update(
+                {
+                    "user_id": canonical_id,
+                    "name": safe_str(
+                        member.get("name")
+                        or user.get("name")
+                        or user.get("full_name")
+                        or user.get("email")
+                    ),
+                    "email": normalize_email(
+                        member.get("email") or user.get("email")
+                    ),
+                    "roles": sorted(
+                        normalize_roles(member) & INTERVIEWER_ROLES
+                    ),
+                }
+            )
+            output.append(member)
+        return output
+
+    def _interview_feedback_summary(self, interview, feedback_rows=None):
+        assigned_ids = self._interviewer_ids(interview)
+        if feedback_rows is None:
+            feedback_rows = list(
+                self._c(FEEDBACK).find(
+                    self._q({"interview_id": str(interview.get("_id"))}),
+                    {"interviewer_user_id": 1},
+                )
+            )
+        submitted_ids = {
+            safe_str(item.get("interviewer_user_id"))
+            for item in feedback_rows
+            if safe_str(item.get("interviewer_user_id")) in assigned_ids
+        }
+        pending_ids = [
+            user_id for user_id in assigned_ids if user_id not in submitted_ids
+        ]
+        is_completed = normalize_key(interview.get("status")) == "completed"
+        return {
+            "assigned": len(assigned_ids),
+            "submitted": len(submitted_ids),
+            "pending": len(pending_ids) if is_completed else 0,
+            "not_available": len(pending_ids) if not is_completed else 0,
+            "pending_user_ids": pending_ids if is_completed else [],
+            "complete": bool(
+                is_completed
+                and assigned_ids
+                and len(submitted_ids) == len(assigned_ids)
+            ),
+            "status": (
+                "complete"
+                if is_completed
+                and assigned_ids
+                and len(submitted_ids) == len(assigned_ids)
+                else "pending"
+                if is_completed
+                else "not_available"
+            ),
+        }
     def _notify(self, ids, *, title, body, target, entity_type, entity_id, application_id="", priority="normal", popup=False):
         now=utcnow(); docs=[]
         for uid in unique_strings(ids): docs.append({"tenant_id":self.tenant_id,"user_id":uid,"user_ids":[uid],"title":safe_str(title),"body":safe_str(body),"message":safe_str(body),"notification_type":"recruitment","priority":normalize_key(priority),"target":normalize_key(target),"target_scope":"selected_users","audience":"selected_users","show_popup":bool(popup),"popup_seen":False,"read":False,"status":"unread","created_at":now,"updated_at":now,"created_by":self.actor_id or "system","created_by_name":self.actor_name,"created_by_role":sorted(self.actor_roles) or ["system"],"is_deleted":False,"meta":{"page":"recruitment","target":normalize_key(target),"entity_type":normalize_key(entity_type),"entity_id":safe_str(entity_id),"application_id":safe_str(application_id)}})
@@ -653,6 +1049,16 @@ class RecruitmentService:
             DEFAULT_RECRUITMENT_SETTINGS,
             self._c(SETTINGS).find_one(self._q()) or {},
         )
+        try:
+            settings["default_interview_rounds"] = self._normalise_interview_rounds(
+                settings.get("default_interview_rounds") or [],
+                required=True,
+            )
+        except RecruitmentServiceError:
+            settings["default_interview_rounds"] = self._normalise_interview_rounds(
+                DEFAULT_RECRUITMENT_SETTINGS["default_interview_rounds"],
+                required=True,
+            )
         if not safe_str(settings.get("public_career_slug")):
             settings["public_career_slug"] = self._tenant_career_slug()
         return settings
@@ -662,7 +1068,7 @@ class RecruitmentService:
         return self._settings()
 
     def update_settings(self, updates):
-        self._require_admin()
+        self._require_hr()
         allowed = set(DEFAULT_RECRUITMENT_SETTINGS)
         payload = {
             key: deepcopy(value)
@@ -699,6 +1105,35 @@ class RecruitmentService:
                     code="career_slug_already_exists",
                     status_code=409,
                 )
+
+        if "default_interview_rounds" in payload:
+            current_rounds = self._normalise_interview_rounds(
+                self._settings().get("default_interview_rounds") or [],
+                required=True,
+            )
+            next_rounds = self._normalise_interview_rounds(
+                payload.get("default_interview_rounds"),
+                required=True,
+            )
+            current_keys = {item["key"] for item in current_rounds}
+            next_keys = {item["key"] for item in next_rounds}
+            removed_keys = current_keys - next_keys
+            if removed_keys:
+                used_keys = {
+                    normalize_key(item.get("round_key"))
+                    for item in self._c(INTERVIEWS).find(
+                        self._q(), {"round_key": 1}
+                    )
+                    if normalize_key(item.get("round_key")) in removed_keys
+                }
+                if used_keys:
+                    raise RecruitmentServiceError(
+                        "Interview rounds already used by an interview cannot be removed. Rename or reorder them instead.",
+                        code="interview_round_in_use",
+                        status_code=409,
+                        details={"round_keys": sorted(used_keys)},
+                    )
+            payload["default_interview_rounds"] = next_rounds
 
         now = utcnow()
         payload.update(
@@ -1191,7 +1626,7 @@ class RecruitmentService:
         if not description: raise RecruitmentServiceError("Job description is required.",code="job_description_required")
         closing=parse_date(data.get("closing_date"),"closing_date")
         if closing and closing<date.today().isoformat(): raise RecruitmentServiceError("Closing date cannot be in the past.",code="invalid_job_closing_date")
-        ref=self._next("job_opening","JOB"); now=utcnow(); rounds=clean_list(data.get("interview_rounds")) or deepcopy(self._settings().get("default_interview_rounds") or [])
+        ref=self._next("job_opening","JOB"); now=utcnow(); rounds=self._normalise_interview_rounds(clean_list(data.get("interview_rounds")) or deepcopy(self._settings().get("default_interview_rounds") or []), required=True)
         doc={"tenant_id":self.tenant_id,"reference_no":ref,"hiring_request_id":str(req["_id"]),"hiring_request_reference":req.get("reference_no"),"job_title":safe_str(data.get("job_title") or req.get("job_title")),"department":safe_str(data.get("department") or req.get("department")),"department_id":safe_str(data.get("department_id") or req.get("department_id")),"vacancies":int(data.get("vacancies") or req.get("vacancies") or 1),"filled_vacancies":0,"description":description,"responsibilities":unique_strings(data.get("responsibilities") or []),"qualification":safe_str(data.get("qualification") or req.get("qualification")),"required_skills":unique_strings(data.get("required_skills") or req.get("required_skills") or []),"required_experience":safe_str(data.get("required_experience") or req.get("required_experience")),"employment_type":normalize_key(data.get("employment_type") or req.get("employment_type") or "permanent"),"work_location":safe_str(data.get("work_location") or req.get("work_location")),"work_mode":normalize_key(data.get("work_mode") or "office"),"salary_visible":bool(data.get("salary_visible")),"salary_min":req.get("salary_min"),"salary_max":req.get("salary_max"),"currency":req.get("currency") or "INR","recruiter_user_id":safe_str(data.get("recruiter_user_id") or self.actor_id),"recruiter_name":safe_str(data.get("recruiter_name") or self.actor_name),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id") or req.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name") or req.get("hiring_manager_name")),"panel_user_ids":unique_strings(data.get("panel_user_ids") or []),"interview_rounds":rounds,"opening_date":"","closing_date":closing,"public_slug":self._unique_slug(slugify(f"{data.get('job_title') or req.get('job_title')}-{ref}")),"published_channels":[],"application_form_fields":clean_list(data.get("application_form_fields")),"status":"draft","status_history":[],"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False}
         result=self._c(JOB_OPENINGS).insert_one(doc); doc["_id"]=result.inserted_id; self._activity("created","job_opening",doc["_id"],message=f"Job opening {ref} was created.",new="draft",details={"hiring_request_id":str(req["_id"])}); return doc
     def _public_job(self,doc):
@@ -1642,7 +2077,7 @@ class RecruitmentService:
         return doc
 
     def get_application(self, application_id):
-        self._require_reader()
+        self._auth()
         application = self._get(APPLICATIONS, application_id, "Application")
         if not self._has(HR_ROLES):
             accessible = self._c(APPLICATIONS).find_one(
@@ -1670,7 +2105,7 @@ class RecruitmentService:
         page=1,
         page_size=25,
     ):
-        self._require_reader()
+        self._auth()
         query = self._q()
         if job_opening_id:
             query["job_opening_id"] = str(as_object_id(job_opening_id, "job opening id"))
@@ -1831,25 +2266,41 @@ class RecruitmentService:
                 "Interview time must be in the future.",
                 code="invalid_interview_time",
             )
-        interviewer_ids = unique_strings(data.get("interviewer_user_ids") or [])
-        if not interviewer_ids:
-            raise RecruitmentServiceError(
-                "Select at least one interviewer.",
-                code="interviewer_required",
-            )
+        interviewer_ids, interviewer_panel, panel_supplied = (
+            self._validated_interviewer_panel(data)
+        )
         users = self._active_users(interviewer_ids)
-        valid_ids = {str(user["_id"]) for user in users}
-        if valid_ids != set(interviewer_ids):
-            raise RecruitmentServiceError(
-                "One or more selected interviewers are invalid or inactive.",
-                code="invalid_interviewer",
-            )
 
-        round_key = normalize_key(data.get("round_key") or data.get("interview_round") or "interview")
-        round_label = safe_str(data.get("round_label") or data.get("interview_round") or round_key.replace("_", " ").title())
-        sequence_no = int(data.get("sequence_no") or self._c(INTERVIEWS).count_documents(
-            self._q({"application_id": str(application["_id"])})
-        ) + 1)
+        round_key = normalize_key(
+            data.get("round_key") or data.get("interview_round")
+        )
+        if not round_key:
+            raise RecruitmentServiceError(
+                "Select an interview round.",
+                code="interview_round_required",
+            )
+        available_rounds = self._available_interview_rounds(application)
+        selected_round = next(
+            (item for item in available_rounds if item.get("key") == round_key),
+            None,
+        )
+        if not selected_round:
+            raise RecruitmentServiceError(
+                "The selected interview round is not configured for this company.",
+                code="invalid_interview_round",
+                details={
+                    "round_key": round_key,
+                    "available_round_keys": [
+                        item.get("key") for item in available_rounds
+                    ],
+                },
+            )
+        round_label = safe_str(selected_round.get("label"))
+        sequence_no = int(
+            selected_round.get("sequence_no")
+            or selected_round.get("order")
+            or 1
+        )
         duration_minutes = int(data.get("duration_minutes") or 45)
         if duration_minutes < 10 or duration_minutes > 480:
             raise RecruitmentServiceError(
@@ -1878,14 +2329,11 @@ class RecruitmentService:
             "location": safe_str(data.get("location")),
             "meeting_link": safe_str(data.get("meeting_link")),
             "interviewer_user_ids": interviewer_ids,
-            "interviewers": [
-                {
-                    "user_id": str(user["_id"]),
-                    "name": safe_str(user.get("name") or user.get("full_name") or user.get("email")),
-                    "email": normalize_email(user.get("email")),
-                }
-                for user in users
-            ],
+            "interviewer_panel": deepcopy(interviewer_panel),
+            "interviewers": deepcopy(interviewer_panel),
+            "interviewer_assignment_version": (
+                2 if panel_supplied else 1
+            ),
             "candidate_notes": safe_str(data.get("candidate_notes"))[:10000],
             "internal_notes": safe_str(data.get("internal_notes"))[:10000],
             "feedback_due_at": parse_datetime(data.get("feedback_due_at"), "feedback_due_at")
@@ -1893,6 +2341,11 @@ class RecruitmentService:
             "status": "scheduled",
             "status_history": [],
             "feedback_count": 0,
+            "feedback_assigned_count": len(interviewer_ids),
+            "feedback_submitted_count": 0,
+            "feedback_pending_count": 0,
+            "feedback_complete": False,
+            "feedback_status": "not_available",
             "created_at": now,
             "updated_at": now,
             "created_by": self.actor_id,
@@ -1929,11 +2382,15 @@ class RecruitmentService:
             application_id=application["_id"],
             message=f"{round_label} was scheduled.",
             new="scheduled",
-            details={"scheduled_at": scheduled_at.isoformat(), "interviewer_user_ids": interviewer_ids},
+            details={
+                "scheduled_at": scheduled_at.isoformat(),
+                "interviewer_user_ids": interviewer_ids,
+                "interviewer_panel": deepcopy(interviewer_panel),
+            },
         )
 
         candidate = self._get(CANDIDATES, application.get("candidate_id"), "Candidate")
-        interviewer_names = [item["name"] for item in doc["interviewers"]]
+        interviewer_names = [item["name"] for item in doc["interviewer_panel"]]
         date_text = scheduled_at.strftime("%d %B %Y")
         time_text = scheduled_at.strftime("%I:%M %p")
         location_or_link = doc.get("meeting_link") or doc.get("location")
@@ -2012,6 +2469,9 @@ class RecruitmentService:
             "feedback_due_at": parse_datetime(data.get("feedback_due_at"), "feedback_due_at")
                 or scheduled_at + timedelta(hours=24),
             "status": new,
+            "feedback_pending_count": 0,
+            "feedback_complete": False,
+            "feedback_status": "not_available",
             "status_reason": reason,
             "updated_at": now,
             "updated_by": self.actor_id,
@@ -2088,6 +2548,19 @@ class RecruitmentService:
         }
         if new == "completed":
             update["completed_at"] = now
+        feedback_summary = self._interview_feedback_summary(
+            {**interview, "status": new}
+        )
+        update.update(
+            {
+                "feedback_assigned_count": feedback_summary["assigned"],
+                "feedback_submitted_count": feedback_summary["submitted"],
+                "feedback_count": feedback_summary["submitted"],
+                "feedback_pending_count": feedback_summary["pending"],
+                "feedback_complete": feedback_summary["complete"],
+                "feedback_status": feedback_summary["status"],
+            }
+        )
         self._c(INTERVIEWS).update_one(
             {"_id": interview["_id"], "tenant_id": self.tenant_id},
             {"$set": update},
@@ -2135,9 +2608,8 @@ class RecruitmentService:
     def submit_interview_feedback(self, interview_id, payload):
         self._auth()
         interview = self._get(INTERVIEWS, interview_id, "Interview")
-        assigned = self.actor_id in unique_strings(
-            interview.get("interviewer_user_ids") or []
-        )
+        assigned_ids = self._interviewer_ids(interview)
+        assigned = self.actor_id in assigned_ids
         if not assigned:
             raise RecruitmentServiceError(
                 "You are not assigned to submit feedback for this interview.",
@@ -2198,6 +2670,17 @@ class RecruitmentService:
             )
 
         now = utcnow()
+        panel_member = next(
+            (
+                item
+                for item in self._normalised_interviewer_panel(interview)
+                if safe_str(item.get("user_id")) == self.actor_id
+            ),
+            {},
+        )
+        interviewer_roles = sorted(
+            normalize_roles(panel_member) & INTERVIEWER_ROLES
+        )
         query = self._q({
             "interview_id": str(interview["_id"]),
             "interviewer_user_id": self.actor_id,
@@ -2214,12 +2697,18 @@ class RecruitmentService:
             "round_key": interview.get("round_key"),
             "round_label": interview.get("round_label"),
             "interviewer_user_id": self.actor_id,
-            "interviewer_name": self.actor_name,
+            "interviewer_name": safe_str(
+                panel_member.get("name") or self.actor_name
+            ),
+            "interviewer_email": normalize_email(
+                panel_member.get("email") or self.actor_email
+            ),
+            "interviewer_roles": interviewer_roles,
             "ratings": cleaned_ratings,
             "overall_rating": round(sum(cleaned_ratings.values()) / max(1, len(cleaned_ratings)), 2),
             "comments": comments[:30000],
-            "strengths": unique_strings(data.get("strengths") or [], limit=30),
-            "concerns": unique_strings(data.get("concerns") or [], limit=30),
+            "strengths": feedback_text(data.get("strengths")),
+            "concerns": feedback_text(data.get("concerns")),
             "recommendation": recommendation,
             "version": version,
             "submitted_at": now,
@@ -2236,11 +2725,14 @@ class RecruitmentService:
                     "$push": {
                         "revision_history": {
                             "version": existing.get("version", 1),
+                            "interviewer_roles": existing.get("interviewer_roles") or [],
                             "ratings": existing.get("ratings"),
+                            "overall_rating": existing.get("overall_rating"),
                             "comments": existing.get("comments"),
                             "strengths": existing.get("strengths"),
                             "concerns": existing.get("concerns"),
                             "recommendation": existing.get("recommendation"),
+                            "submitted_at": existing.get("submitted_at"),
                             "revised_at": now,
                             "revised_by": self.actor_id,
                             "revised_by_name": self.actor_name,
@@ -2254,16 +2746,32 @@ class RecruitmentService:
             doc["created_at"] = now
             doc["created_by"] = self.actor_id
             doc["created_by_name"] = self.actor_name
+            doc["revision_history"] = []
             result = self._c(FEEDBACK).insert_one(doc)
             feedback_id = result.inserted_id
             action = "feedback_submitted"
 
-        count = self._c(FEEDBACK).count_documents(
-            self._q({"interview_id": str(interview["_id"])})
+        feedback_rows = list(
+            self._c(FEEDBACK).find(
+                self._q({"interview_id": str(interview["_id"])})
+            )
+        )
+        feedback_summary = self._interview_feedback_summary(
+            interview, feedback_rows
         )
         self._c(INTERVIEWS).update_one(
             {"_id": interview["_id"], "tenant_id": self.tenant_id},
-            {"$set": {"feedback_count": count, "updated_at": now}},
+            {
+                "$set": {
+                    "feedback_count": feedback_summary["submitted"],
+                    "feedback_assigned_count": feedback_summary["assigned"],
+                    "feedback_submitted_count": feedback_summary["submitted"],
+                    "feedback_pending_count": feedback_summary["pending"],
+                    "feedback_complete": feedback_summary["complete"],
+                    "feedback_status": feedback_summary["status"],
+                    "updated_at": now,
+                }
+            },
         )
         self._activity(
             action,
@@ -2271,12 +2779,16 @@ class RecruitmentService:
             feedback_id,
             application_id=interview.get("application_id"),
             message=f"Feedback was submitted for {interview.get('round_label')}.",
-            details={"recommendation": recommendation, "overall_rating": doc["overall_rating"]},
+            details={
+                "recommendation": recommendation,
+                "overall_rating": doc["overall_rating"],
+                "interviewer_roles": interviewer_roles,
+            },
         )
         return self._c(FEEDBACK).find_one({"_id": feedback_id, "tenant_id": self.tenant_id})
 
     def list_interviews(self, *, application_id="", status="", from_date="", to_date="", page=1, page_size=25):
-        self._require_reader()
+        self._auth()
         query = self._q()
         if application_id:
             query["application_id"] = str(as_object_id(application_id, "application id"))
@@ -2292,7 +2804,11 @@ class RecruitmentService:
         if date_filter:
             query["scheduled_at"] = date_filter
         if not self._has(HR_ROLES):
-            query["interviewer_user_ids"] = self.actor_id
+            query["$or"] = [
+                {"interviewer_user_ids": self.actor_id},
+                {"interviewer_panel.user_id": self.actor_id},
+                {"interviewers.user_id": self.actor_id},
+            ]
 
         result = self._paged(
             INTERVIEWS,
@@ -2308,54 +2824,261 @@ class RecruitmentService:
             if item.get("_id")
         ]
 
-        actor_feedback = {}
+        feedback_by_interview = {}
         if interview_ids and self.actor_id:
             rows = self._c(FEEDBACK).find(
                 self._q({
                     "interview_id": {"$in": interview_ids},
-                    "interviewer_user_id": self.actor_id,
                 })
             )
-            actor_feedback = {
-                safe_str(row.get("interview_id")): row
-                for row in rows
-            }
+            for row in rows:
+                feedback_by_interview.setdefault(
+                    safe_str(row.get("interview_id")), []
+                ).append(row)
 
         for item in result.get("items", []):
             interview_id = str(item.get("_id"))
-            feedback = actor_feedback.get(interview_id)
-            count = int(item.get("feedback_count") or 0)
-
-            assigned = self.actor_id in unique_strings(
-                item.get("interviewer_user_ids") or []
+            feedback_rows = feedback_by_interview.get(interview_id, [])
+            feedback = next(
+                (
+                    row
+                    for row in feedback_rows
+                    if safe_str(row.get("interviewer_user_id"))
+                    == self.actor_id
+                ),
+                None,
+            )
+            assigned = self.actor_id in self._interviewer_ids(item)
+            feedback_summary = self._interview_feedback_summary(
+                item, feedback_rows
             )
 
-            item["feedback_count"] = count
-            item["feedback_given"] = count > 0
-            # This flag represents whether the current user is the assigned
-            # interviewer for this round. Flutter uses it to allow that
-            # interviewer to mark a scheduled round as completed, and then to
-            # submit/edit feedback after completion.
-            item["can_submit_feedback"] = bool(assigned)
+            item["interviewer_panel"] = self._normalised_interviewer_panel(item)
+            item["feedback_count"] = feedback_summary["submitted"]
+            item["feedback_assigned_count"] = feedback_summary["assigned"]
+            item["feedback_submitted_count"] = feedback_summary["submitted"]
+            item["feedback_pending_count"] = feedback_summary["pending"]
+            item["feedback_complete"] = feedback_summary["complete"]
+            item["feedback_status"] = feedback_summary["status"]
+            item["feedback_summary"] = feedback_summary
+            item["feedback_given"] = feedback_summary["submitted"] > 0
+            item["can_submit_feedback"] = bool(
+                assigned and normalize_key(item.get("status")) == "completed"
+            )
             item["my_feedback_submitted"] = feedback is not None
             item["my_feedback"] = feedback or {}
 
         return result
 
     def list_interview_feedback(self, interview_id):
-        self._require_reader()
+        self._auth()
         interview = self._get(INTERVIEWS, interview_id, "Interview")
-        if not self._has(HR_ROLES) and self.actor_id not in unique_strings(interview.get("interviewer_user_ids") or []):
+        assigned = self.actor_id in self._interviewer_ids(interview)
+        if not self._has(HR_ROLES) and not assigned:
             raise RecruitmentServiceError(
                 "You are not assigned to this interview.",
                 code="interview_feedback_access_denied",
                 status_code=403,
             )
+        query = self._q({"interview_id": str(interview["_id"])})
+        if not self._has(HR_ROLES):
+            query["interviewer_user_id"] = self.actor_id
         return list(
             self._c(FEEDBACK).find(
-                self._q({"interview_id": str(interview["_id"])}),
+                query,
             ).sort("submitted_at", ASCENDING)
         )
+
+    def get_application_interview_feedback(self, application_id):
+        self._require_hr()
+        application = self._get(APPLICATIONS, application_id, "Application")
+        interviews = list(
+            self._c(INTERVIEWS).find(
+                self._q({"application_id": str(application["_id"])})
+            ).sort(
+                [
+                    ("sequence_no", ASCENDING),
+                    ("scheduled_at", ASCENDING),
+                    ("created_at", ASCENDING),
+                ]
+            )
+        )
+        interview_ids = [str(item["_id"]) for item in interviews]
+        feedback_by_interview = {}
+        if interview_ids:
+            for feedback in self._c(FEEDBACK).find(
+                self._q({"interview_id": {"$in": interview_ids}})
+            ).sort("submitted_at", ASCENDING):
+                feedback_by_interview.setdefault(
+                    safe_str(feedback.get("interview_id")), []
+                ).append(feedback)
+
+        rounds = []
+        total_assigned = 0
+        total_submitted = 0
+        total_pending = 0
+        total_not_available = 0
+        all_pending_interviewers = []
+        for interview in interviews:
+            interview_id = str(interview["_id"])
+            feedback_rows = feedback_by_interview.get(interview_id, [])
+            feedback_by_user = {
+                safe_str(item.get("interviewer_user_id")): item
+                for item in feedback_rows
+                if safe_str(item.get("interviewer_user_id"))
+            }
+            panel = self._normalised_interviewer_panel(
+                interview, enrich_users=True
+            )
+            panel_ids = {
+                safe_str(item.get("user_id")) for item in panel
+            }
+            for user_id, feedback in feedback_by_user.items():
+                if user_id in panel_ids:
+                    continue
+                panel.append(
+                    {
+                        "user_id": user_id,
+                        "name": safe_str(feedback.get("interviewer_name")),
+                        "email": normalize_email(
+                            feedback.get("interviewer_email")
+                        ),
+                        "roles": sorted(
+                            normalize_roles(
+                                feedback.get("interviewer_roles") or []
+                            )
+                            & INTERVIEWER_ROLES
+                        ),
+                    }
+                )
+                panel_ids.add(user_id)
+
+            interview_status = normalize_key(interview.get("status"))
+            is_completed = interview_status == "completed"
+            panel_output = []
+            pending_interviewers = []
+            for member in panel:
+                user_id = safe_str(member.get("user_id"))
+                feedback = feedback_by_user.get(user_id)
+                roles = sorted(
+                    (
+                        normalize_roles(member)
+                        or normalize_roles(
+                            (feedback or {}).get("interviewer_roles") or []
+                        )
+                    )
+                    & INTERVIEWER_ROLES
+                )
+                feedback_status = (
+                    "submitted"
+                    if feedback
+                    else "pending"
+                    if is_completed
+                    else "not_available"
+                )
+                feedback_snapshot = deepcopy(feedback) if feedback else None
+                if feedback_snapshot is not None:
+                    feedback_snapshot["interviewer_roles"] = sorted(
+                        normalize_roles(
+                            feedback_snapshot.get("interviewer_roles") or roles
+                        )
+                        & INTERVIEWER_ROLES
+                    )
+                member_output = {
+                    **deepcopy(member),
+                    "roles": roles,
+                    "feedback_status": feedback_status,
+                    "feedback": feedback_snapshot,
+                }
+                panel_output.append(member_output)
+                if feedback_status == "pending":
+                    pending_person = {
+                        "user_id": user_id,
+                        "name": safe_str(member.get("name")),
+                        "roles": roles,
+                    }
+                    pending_interviewers.append(pending_person)
+                    all_pending_interviewers.append(
+                        {
+                            **pending_person,
+                            "interview_id": interview_id,
+                            "round_key": interview.get("round_key"),
+                            "round_label": interview.get("round_label"),
+                        }
+                    )
+
+            assigned_count = len(panel_output)
+            submitted_count = sum(
+                1
+                for item in panel_output
+                if item.get("feedback_status") == "submitted"
+            )
+            pending_count = sum(
+                1
+                for item in panel_output
+                if item.get("feedback_status") == "pending"
+            )
+            not_available_count = sum(
+                1
+                for item in panel_output
+                if item.get("feedback_status") == "not_available"
+            )
+            summary = {
+                "assigned": assigned_count,
+                "submitted": submitted_count,
+                "pending": pending_count,
+                "not_available": not_available_count,
+                "complete": bool(
+                    is_completed
+                    and assigned_count > 0
+                    and submitted_count == assigned_count
+                ),
+                "status": (
+                    "complete"
+                    if is_completed
+                    and assigned_count > 0
+                    and submitted_count == assigned_count
+                    else "pending"
+                    if is_completed
+                    else "not_available"
+                ),
+                "pending_interviewers": pending_interviewers,
+            }
+            total_assigned += assigned_count
+            total_submitted += submitted_count
+            total_pending += pending_count
+            total_not_available += not_available_count
+            rounds.append(
+                {
+                    "round_key": safe_str(interview.get("round_key")),
+                    "round_label": safe_str(interview.get("round_label")),
+                    "sequence_no": interview.get("sequence_no"),
+                    "status": interview_status,
+                    "interview": interview,
+                    "interviewer_panel": panel_output,
+                    "feedback_summary": summary,
+                }
+            )
+
+        return {
+            "application": application,
+            "rounds": rounds,
+            "feedback_summary": {
+                "assigned": total_assigned,
+                "submitted": total_submitted,
+                "pending": total_pending,
+                "not_available": total_not_available,
+                "complete": bool(
+                    rounds
+                    and all(
+                        item.get("status") == "completed"
+                        and item.get("feedback_summary", {}).get("complete")
+                        for item in rounds
+                    )
+                ),
+                "pending_interviewers": all_pending_interviewers,
+            },
+        }
 
     def complete_interview_process(self, application_id):
         """Complete the full multi-round interview process for an application.
@@ -2411,21 +3134,54 @@ class RecruitmentService:
                 },
             )
 
-        missing_feedback = [
-            item
-            for item in completed
-            if int(item.get("feedback_count") or 0) <= 0
-        ]
-        if missing_feedback:
+        incomplete_rounds = []
+        for item in completed:
+            summary = self._interview_feedback_summary(item)
+            self._c(INTERVIEWS).update_one(
+                {"_id": item["_id"], "tenant_id": self.tenant_id},
+                {
+                    "$set": {
+                        "feedback_count": summary["submitted"],
+                        "feedback_assigned_count": summary["assigned"],
+                        "feedback_submitted_count": summary["submitted"],
+                        "feedback_pending_count": summary["pending"],
+                        "feedback_complete": summary["complete"],
+                        "feedback_status": summary["status"],
+                    }
+                },
+            )
+            if not summary["complete"]:
+                panel_by_id = {
+                    member.get("user_id"): member
+                    for member in self._normalised_interviewer_panel(
+                        item, enrich_users=True
+                    )
+                }
+                incomplete_rounds.append(
+                    {
+                        "interview_id": str(item.get("_id")),
+                        "round_key": item.get("round_key"),
+                        "round_label": item.get("round_label"),
+                        "assigned": summary["assigned"],
+                        "submitted": summary["submitted"],
+                        "pending": summary["pending"],
+                        "pending_interviewers": [
+                            {
+                                "user_id": user_id,
+                                "name": safe_str(
+                                    (panel_by_id.get(user_id) or {}).get("name")
+                                ),
+                            }
+                            for user_id in summary["pending_user_ids"]
+                        ],
+                    }
+                )
+        if incomplete_rounds:
             raise RecruitmentServiceError(
-                "Feedback is required for every completed interview round.",
+                "Every assigned interviewer must submit feedback before the interview process can be completed.",
                 code="interview_feedback_incomplete",
                 status_code=409,
-                details={
-                    "interview_ids": [
-                        str(item.get("_id")) for item in missing_feedback
-                    ]
-                },
+                details={"rounds": incomplete_rounds},
             )
 
         if application.get("interview_process_completed") is True:
@@ -3747,13 +4503,21 @@ class RecruitmentService:
         today_start = datetime.combine(date.today(), datetime.min.time())
         tomorrow_start = today_start + timedelta(days=1)
         month_start = date.today().replace(day=1).isoformat()
+        completed_interviews = list(
+            self._c(INTERVIEWS).find(self._q({"status": "completed"}))
+        )
+        feedback_pending = sum(
+            1
+            for item in completed_interviews
+            if not self._interview_feedback_summary(item)["complete"]
+        )
         counts = {
             "open_hiring_requests": self._c(HIRING_REQUESTS).count_documents(self._q({"status": {"$in": ["submitted", "approved", "on_hold", "returned"]}})),
             "open_vacancies": self._c(JOB_OPENINGS).count_documents(self._q({"status": "open"})),
             "new_applications": self._c(APPLICATIONS).count_documents(self._q({"status": "applied"})),
             "pending_screening": self._c(APPLICATIONS).count_documents(self._q({"status": {"$in": ["applied", "under_review"]}})),
             "interviews_today": self._c(INTERVIEWS).count_documents(self._q({"scheduled_at": {"$gte": today_start, "$lt": tomorrow_start}, "status": {"$in": ["scheduled", "rescheduled"]}})),
-            "feedback_pending": self._c(INTERVIEWS).count_documents(self._q({"status": "completed", "feedback_complete": {"$ne": True}})),
+            "feedback_pending": feedback_pending,
             "offers_awaiting_reply": self._c(OFFERS).count_documents(self._q({"status": "sent"})),
             "joining_this_month": self._c(APPLICATIONS).count_documents(self._q({"joining_date": {"$gte": month_start}, "status": {"$in": ["documents_pending", "ready_to_join", "joining_deferred"]}})),
             "ready_to_join": self._c(APPLICATIONS).count_documents(self._q({"status": "ready_to_join"})),

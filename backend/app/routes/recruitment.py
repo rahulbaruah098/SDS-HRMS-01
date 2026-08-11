@@ -987,6 +987,13 @@ def list_interview_feedback(interview_id: str):
     return _json_response({"ok": True, "items": items})
 
 
+@recruitment_bp.get("/applications/<application_id>/interview-feedback")
+@tenant_module_required("recruitment")
+def get_application_interview_feedback(application_id: str):
+    result = _service().get_application_interview_feedback(application_id)
+    return _json_response({"ok": True, **result})
+
+
 # -----------------------------------------------------------------------------
 # Offers
 # -----------------------------------------------------------------------------
