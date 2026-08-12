@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import Icon from "../components/Icon";
 
@@ -104,17 +105,22 @@ function SectionHeading({ eyebrow, title, copy, number }) {
 }
 
 export default function AboutSayanantPage() {
+  useEffect(() => {
+    document.documentElement.classList.add("yc-about-sayanant-active");
+    document.body.classList.add("yc-about-sayanant-active");
+
+    return () => {
+      document.documentElement.classList.remove("yc-about-sayanant-active");
+      document.body.classList.remove("yc-about-sayanant-active");
+    };
+  }, []);
+
   return (
     <main className="public-main yc-profile-page yc-profile-page-sayanant">
       <section className="yc-profile-hero yc-profile-hero-sayanant">
         <div className="page-width yc-profile-hero-grid">
           <div className="yc-profile-hero-copy">
-            <div className="yc-profile-document-line">
-              <span>YOURCOMATE × SAYANANT GROUP</span>
-              <span>COMPANY & PLATFORM PROFILE</span>
-            </div>
-
-            <span className="yc-profile-part">PART 02 · ABOUT SAYANANT GROUP</span>
+            <span className="yc-profile-part">COMPANY PROFILE</span>
 
             <h1>
               About
@@ -137,21 +143,25 @@ export default function AboutSayanantPage() {
             </div>
           </div>
 
-          <aside className="yc-profile-hero-board yc-profile-hero-board-sayanant" aria-label="Sayanant Group profile summary">
-            <span>02</span>
+          <aside
+            className="yc-profile-hero-board yc-profile-hero-board-sayanant"
+            aria-label="Sayanant Group profile summary"
+          >
+            <span className="yc-profile-hero-icon" aria-hidden="true">
+              <Icon name="building" />
+            </span>
             <small>A CONNECTED VIEW OF</small>
             <strong>PURPOSE</strong>
             <strong>PEOPLE</strong>
             <strong>PRACTICE</strong>
             <div>
-              <i />
               <p>People. Process. Performance. Purpose.</p>
             </div>
           </aside>
         </div>
       </section>
 
-      <section className="yc-profile-section">
+      <section className="yc-profile-section yc-sg-section yc-sg-overview-section">
         <div className="page-width">
           <SectionHeading
             number="14"
@@ -160,59 +170,73 @@ export default function AboutSayanantPage() {
             copy="Sayanant’s official materials position the group around enabling ecosystems for inclusive growth, with SDS and allied initiatives working across rural livelihoods, institutions, markets, skills, research and technology."
           />
 
-          <div className="yc-profile-group-overview">
-            <article className="yc-profile-group-story">
-              <small>GROUP PROFILE</small>
-              <h3>Development expertise grounded in field realities.</h3>
+          <article className="yc-sg-story-card">
+            <small>GROUP PROFILE</small>
+            <h3>Development expertise grounded in field realities.</h3>
+            <p>
+              The official About page describes work with governments,
+              corporate social responsibility agencies, farmer producer
+              organisations and enterprises across Eastern and North-Eastern
+              India. The wider website connects this work with agripreneurship,
+              producer collectives, climate-smart practice, research,
+              programme management and digital transformation.
+            </p>
+          </article>
+
+          <h3 className="yc-sg-subheading">Legacy and organisational story</h3>
+
+          <div className="yc-sg-history">
+            <article className="tone-violet">
+              <span aria-hidden="true" />
+              <b>3+ decades</b>
               <p>
-                The official About page describes work with governments,
-                corporate social responsibility agencies, farmer producer
-                organisations and enterprises across Eastern and North-Eastern
-                India. The wider website connects this work with agripreneurship,
-                producer collectives, climate-smart practice, research,
-                programme management and digital transformation.
+                The official home page describes the wider Sayanant Group legacy
+                as spanning more than three decades in development consulting.
               </p>
             </article>
-
-            <div className="yc-profile-stat-grid">
-              <article>
-                <strong>60+</strong>
-                <span>Advisory engagements</span>
-              </article>
-              <article>
-                <strong>13+</strong>
-                <span>States impacted</span>
-              </article>
-              <article>
-                <strong>1,80,000+</strong>
-                <span>People impacted directly or indirectly</span>
-              </article>
-            </div>
-          </div>
-
-          <div className="yc-profile-history">
-            <article>
-              <b>3+ decades</b>
-              <p>The official home page describes the wider Sayanant Group legacy as spanning more than three decades in development consulting.</p>
-            </article>
-            <article>
+            <article className="tone-blue">
+              <span aria-hidden="true" />
               <b>2013</b>
-              <p>The official About page states that SDS was founded in 2013 to strengthen livelihoods, markets, institutions and development delivery.</p>
+              <p>
+                The official About page states that SDS was founded in 2013 to
+                strengthen livelihoods, markets, institutions and development
+                delivery.
+              </p>
             </article>
-            <article>
+            <article className="tone-cyan">
+              <span aria-hidden="true" />
               <b>Today</b>
-              <p>SDS and allied initiatives are presented as combining advisory, field implementation, research, systems, skills and technology-enabled services.</p>
+              <p>
+                SDS and allied initiatives are presented as combining advisory,
+                field implementation, research, systems, skills and
+                technology-enabled services.
+              </p>
             </article>
           </div>
 
-          <p className="yc-profile-footnote">
+          <div className="yc-sg-stat-grid">
+            <article className="tone-violet">
+              <strong>60+</strong>
+              <span>Advisory engagements</span>
+            </article>
+            <article className="tone-blue">
+              <strong>13+</strong>
+              <span>States impacted</span>
+            </article>
+            <article className="tone-cyan">
+              <strong>1,80,000+</strong>
+              <span>People impacted directly or indirectly</span>
+            </article>
+          </div>
+
+          <p className="yc-profile-footnote yc-sg-footnote">
             Published on the official Sayanant website; accessed 11 August 2026.
             Figures may change over time.
           </p>
         </div>
       </section>
 
-      <section className="yc-profile-section yc-profile-section-soft">
+      <section className="yc-profile-section yc-sg-section yc-sg-purpose-section">
         <div className="page-width">
           <SectionHeading
             number="15"
@@ -221,8 +245,8 @@ export default function AboutSayanantPage() {
             copy="The group’s public narrative brings together ambition for strong development institutions with a disciplined values framework for work affecting rural and disadvantaged communities."
           />
 
-          <div className="yc-profile-mission-grid">
-            <article>
+          <div className="yc-sg-mission-grid">
+            <article className="yc-sg-mission-card">
               <small>MISSION</small>
               <p>
                 Enable organisations and individuals to unlock their potential in
@@ -230,7 +254,8 @@ export default function AboutSayanantPage() {
                 disadvantaged communities.
               </p>
             </article>
-            <article>
+
+            <article className="yc-sg-vision-card">
               <small>VISION</small>
               <p>
                 Be recognised as a world-class development-support organisation
@@ -239,20 +264,19 @@ export default function AboutSayanantPage() {
             </article>
           </div>
 
-          <h3 className="yc-profile-subheading">The four stated values</h3>
-          <div className="yc-profile-card-grid yc-profile-card-grid-four">
-            {values.map(([number, title, copy]) => (
-              <article key={title}>
-                <b>{number}</b>
-                <div>
-                  <h3>{title}</h3>
-                  <p>{copy}</p>
-                </div>
+          <h3 className="yc-sg-subheading">The four stated values</h3>
+
+          <div className="yc-sg-values-grid">
+            {values.map(([number, title, copy], index) => (
+              <article className={`tone-${index + 1}`} key={title}>
+                <b>{index + 1}</b>
+                <h3>{title}</h3>
+                <p>{copy}</p>
               </article>
             ))}
           </div>
 
-          <div className="yc-profile-purpose-band">
+          <div className="yc-sg-purpose-band">
             <small>STRATEGIC DIRECTION</small>
             <p>
               The mission explains who should benefit; the vision defines the
@@ -263,7 +287,7 @@ export default function AboutSayanantPage() {
         </div>
       </section>
 
-      <section className="yc-profile-section">
+      <section className="yc-profile-section yc-sg-section yc-sg-portfolio-section">
         <div className="page-width">
           <SectionHeading
             number="16"
@@ -272,11 +296,11 @@ export default function AboutSayanantPage() {
             copy="The official website presents a broad portfolio that can support programmes from diagnosis and design through execution, capability building, monitoring and market linkage."
           />
 
-          <div className="yc-profile-portfolio-grid">
-            {portfolioColumns.map((column) => (
-              <article key={column.number}>
+          <div className="yc-sg-portfolio-grid">
+            {portfolioColumns.map((column, columnIndex) => (
+              <article className={`tone-${columnIndex + 1}`} key={column.number}>
                 <header>
-                  <b>{column.number}</b>
+                  <b>{columnIndex + 1}</b>
                   <h3>{column.title}</h3>
                 </header>
 
@@ -293,7 +317,7 @@ export default function AboutSayanantPage() {
             ))}
           </div>
 
-          <div className="yc-profile-callout">
+          <div className="yc-sg-callout">
             <strong>
               The portfolio is multidisciplinary by design: evidence informs
               programmes; institutions organise people; markets and systems enable scale.
@@ -302,7 +326,7 @@ export default function AboutSayanantPage() {
         </div>
       </section>
 
-      <section className="yc-profile-section yc-profile-section-soft">
+      <section className="yc-profile-section yc-sg-section yc-sg-landscape-section">
         <div className="page-width">
           <SectionHeading
             number="17"
@@ -311,22 +335,29 @@ export default function AboutSayanantPage() {
             copy="Sayanant’s official public material links sector knowledge with institution building, programme delivery and a defined set of Sustainable Development Goal commitments."
           />
 
-          <div className="yc-profile-sector-band">
-            <small>PRIORITY SECTORS</small>
-            <div>
-              {["Rural livelihoods", "Agriculture", "Fishery", "Poultry", "Piggery"].map((sector) => (
-                <span key={sector}>{sector}</span>
-              ))}
-            </div>
-          </div>
+          <div className="yc-sg-landscape-top">
+            <section className="yc-sg-sector-card">
+              <h3>Priority sectors</h3>
 
-          <div className="yc-profile-landscape-grid">
-            <section>
-              <h3>Who Sayanant works with</h3>
-              <div className="yc-profile-partner-list">
-                {partners.map(([number, title, copy]) => (
-                  <article key={title}>
-                    <b>{number}</b>
+              <div className="yc-sg-sector-map" aria-label="Priority sectors">
+                <span className="yc-sg-sector-core">Rural livelihoods</span>
+                <span className="yc-sg-sector-node node-agriculture">Agriculture</span>
+                <span className="yc-sg-sector-node node-fishery">Fishery</span>
+                <span className="yc-sg-sector-node node-poultry">Poultry</span>
+                <span className="yc-sg-sector-node node-piggery">Piggery</span>
+                <i className="line-top" aria-hidden="true" />
+                <i className="line-right" aria-hidden="true" />
+                <i className="line-bottom" aria-hidden="true" />
+                <i className="line-left" aria-hidden="true" />
+              </div>
+            </section>
+
+            <section className="yc-sg-partners-card">
+              <small>WHO SAYANANT WORKS WITH</small>
+              <div className="yc-sg-partner-list">
+                {partners.map(([number, title, copy], index) => (
+                  <article className={`tone-${index + 1}`} key={title}>
+                    <b>{index + 1}</b>
                     <div>
                       <strong>{title}</strong>
                       <p>{copy}</p>
@@ -335,25 +366,26 @@ export default function AboutSayanantPage() {
                 ))}
               </div>
             </section>
-
-            <section>
-              <h3>Sustainable Development Goals identified by Sayanant</h3>
-              <div className="yc-profile-sdg-grid">
-                {sdgs.map(([number, label]) => (
-                  <article key={number}>
-                    <b>{number}</b>
-                    <span>{label}</span>
-                  </article>
-                ))}
-              </div>
-            </section>
           </div>
 
-          <div className="yc-profile-delivery-logic">
+          <h3 className="yc-sg-subheading yc-sg-sdg-heading">
+            Sustainable Development Goals identified by Sayanant
+          </h3>
+
+          <div className="yc-sg-sdg-grid">
+            {sdgs.map(([number, label], index) => (
+              <article className={`tone-${index + 1}`} key={number}>
+                <b>{number}</b>
+                <span>{label}</span>
+              </article>
+            ))}
+          </div>
+
+          <div className="yc-sg-delivery-logic">
             <small>DELIVERY LOGIC</small>
             <div>
               {deliveryLogic.map((step, index) => (
-                <span key={step}>
+                <span className={`tone-${index + 1}`} key={step}>
                   <b>{index + 1}</b>
                   {step}
                 </span>
@@ -363,107 +395,7 @@ export default function AboutSayanantPage() {
         </div>
       </section>
 
-      <section className="yc-profile-section yc-profile-shared-section">
-        <div className="page-width">
-          <SectionHeading
-            number="18"
-            eyebrow="YourComate × Sayanant"
-            title="A shared operating philosophy."
-            copy="The connection below is an evidence-based positioning interpretation: it links YourComate’s implemented product principles with themes in Sayanant’s official mission, values and service model."
-          />
 
-          <div className="yc-profile-philosophy-grid">
-            {philosophy.map(([number, title, sayanant, yourcomate]) => (
-              <article key={title}>
-                <b>{number}</b>
-                <h3>{title}</h3>
-                <dl>
-                  <div>
-                    <dt>SAYANANT</dt>
-                    <dd>{sayanant}</dd>
-                  </div>
-                  <div>
-                    <dt>YOURCOMATE</dt>
-                    <dd>{yourcomate}</dd>
-                  </div>
-                </dl>
-              </article>
-            ))}
-          </div>
-
-          <div className="yc-profile-positioning">
-            <small>POSITIONING STATEMENT</small>
-            <strong>
-              Technology becomes useful when it respects people, roles and real
-              operating context.
-            </strong>
-            <p>
-              Viewed together, Sayanant contributes an institution-and-impact
-              lens while YourComate expresses that lens as a connected digital
-              workspace for everyday people operations.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="yc-profile-section">
-        <div className="page-width">
-          <SectionHeading
-            number="19"
-            eyebrow="Sources & editorial basis"
-            title="What this profile is—and is not."
-            copy="This section makes the evidence boundary explicit so the material can be used confidently as a content foundation and reviewed where necessary before public publication."
-          />
-
-          <div className="yc-profile-source-grid">
-            <article>
-              <small>YOURCOMATE SOURCE SET</small>
-              <p>
-                The YourComate profile is based on the supplied project’s
-                public-facing source content and implemented feature descriptions,
-                including the About page, Product page, Saya page and public-site
-                feature data.
-              </p>
-            </article>
-
-            <article>
-              <small>OFFICIAL SAYANANT SOURCES</small>
-              <p>
-                Sayanant descriptions are based on its official About, home, IT
-                consulting and contact materials covering mission, values,
-                services, sectors, SDG commitments and technology services.
-              </p>
-            </article>
-
-            <article>
-              <small>INTERPRETATION RULES</small>
-              <p>
-                Official claims are paraphrased; no unsupported entity,
-                ownership, certification or financial claims are introduced.
-                Dynamic outreach figures are dated 11 August 2026.
-              </p>
-            </article>
-          </div>
-
-          <div className="yc-profile-editorial-note">
-            <Icon name="shield" />
-            <p>
-              The shared-philosophy section is positioning interpretation, not a
-              formal corporate statement. Legal names, marks, statistics and
-              contact details should receive owner approval before public release.
-            </p>
-          </div>
-
-          <div className="yc-profile-hero-actions yc-profile-final-actions">
-            <Link className="button button-primary" to="/contact">
-              Start a conversation <Icon name="arrow" />
-            </Link>
-            <Link className="button button-ghost" to="/about">
-              Read about YourComate
-            </Link>
-          </div>
-        </div>
-      </section>
     </main>
   );
 }

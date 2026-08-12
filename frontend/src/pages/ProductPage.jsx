@@ -1,23 +1,38 @@
 import { Link } from "react-router-dom";
-import HeroScene from "../components/HeroScenes";
 import Icon from "../components/Icon";
 import PageHero from "../components/PageHero";
 import { productGroups } from "../data/publicSiteData";
 
 export default function ProductPage() {
   return (
-    <main className="public-main">
+    <main className="public-main yc-product-overview-page">
       <PageHero
         eyebrow="YourComate platform"
-        title="A connected operating system for everyday people work."
-        description="Bring employee data, attendance, leave, projects, recruitment, payroll, payslips, approvals, policies, support, Saya AI and workforce visibility into one responsive role-based platform."
+        title="One connected HR workspace for people, operations and workforce services."
+        description="Bring employee records, attendance, leave, projects, approvals, recruitment, payroll, payslips, policies, support, reporting, mobile work and Saya into one role-based platform."
         icon="hierarchy"
         tone="violet"
         variant="product"
         secondary={["View Pricing", "/pricing"]}
         note="Designed for office, remote and field teams"
       >
-        <HeroScene type="product" />
+        <div className="yc-product-hero-panel">
+          <span className="yc-product-hero-kicker">
+            <Icon name="hierarchy" /> YourComate platform
+          </span>
+          <h2>Connected workflows, separated by responsibility.</h2>
+          <p>
+            Start with the area your team needs, while shared people records,
+            role permissions and connected operational context keep the wider
+            HRMS aligned.
+          </p>
+          <div className="yc-product-hero-pillars">
+            <span>People foundation</span>
+            <span>Everyday operations</span>
+            <span>Talent & payroll</span>
+            <span>Service & intelligence</span>
+          </div>
+        </div>
       </PageHero>
 
       <section className="public-section">

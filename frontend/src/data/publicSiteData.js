@@ -59,7 +59,7 @@ export const navigationMenus = [
     featured: {
       eyebrow: "HR knowledge centre",
       title: "Practical resources for better HR operations",
-      copy: "Explore product guides, workflow explainers, HR templates, FAQs and implementation resources.",
+      copy: "Explore product guides, workflow explainers, FAQs and implementation resources.",
       href: "/resources",
       linkLabel: "Browse resources",
     },
@@ -68,10 +68,9 @@ export const navigationMenus = [
         title: "Learn & explore",
         tone: "amber",
         links: [
-          ["HRMS guides", "/resources#guides", "book"],
-          ["Product walkthroughs", "/resources#walkthroughs", "play"],
-          ["HR templates", "/resources#templates", "document"],
-          ["Frequently asked questions", "/resources#faq", "help"],
+          ["HRMS guides", "/resources/hrms-guide", "book"],
+          ["Product walkthroughs", "/resources/product-walkthroughs", "play"],
+          ["Frequently asked questions", "/resources/frequently-asked-questions", "help"],
         ],
       },
     ],
@@ -342,20 +341,6 @@ export const resourceCards = [
       ["Rules and exceptions", "Document working hours, late thresholds, checkout expectations and exception-review responsibilities."],
       ["Employee communication", "Prepare clear guidance for check-in, status review, mobile use and support escalation."],
       ["Reporting", "Agree the monthly denominator, status definitions and role-specific attendance views before rollout."],
-    ],
-  },
-  {
-    slug: "evaluation-template",
-    type: "Template",
-    title: "HRMS evaluation requirement template",
-    copy: "Capture current problems, must-have workflows, user roles, integrations and decision criteria.",
-    icon: "document",
-    tone: "amber",
-    sections: [
-      ["Organisation profile", "Record employee count, locations, departments, work modes and expected growth."],
-      ["Priority workflows", "List must-have modules such as attendance, leave, projects, support, assets, policies and reports."],
-      ["User roles", "Define employee, manager, HR, Admin, Finance and field access requirements."],
-      ["Evaluation criteria", "Score usability, security, implementation, reporting, support, mobile readiness and commercial fit."],
     ],
   },
 ];

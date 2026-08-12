@@ -9,10 +9,31 @@ function getRoutePath(href) {
   return href.split("#")[0].split("?")[0];
 }
 
+
+function isVisibleResourceMenuLink([label, href]) {
+  const normalizedLabel = String(label || "").trim().toLowerCase();
+  const normalizedHref = String(href || "").trim().toLowerCase();
+
+  return (
+    normalizedLabel !== "hr templates" &&
+    normalizedHref !== "/resources#templates" &&
+    normalizedHref !== "/resources/evaluation-template"
+  );
+}
+
+function getVisibleMenuGroups(menu) {
+  return menu.groups
+    .map((group) => ({
+      ...group,
+      links: group.links.filter(isVisibleResourceMenuLink),
+    }))
+    .filter((group) => group.links.length > 0);
+}
+
 function isMenuRouteActive(menu, pathname) {
   return [
     menu.featured.href,
-    ...menu.groups.flatMap((group) => group.links.map(([, href]) => href)),
+    ...getVisibleMenuGroups(menu).flatMap((group) => group.links.map(([, href]) => href)),
   ]
     .map(getRoutePath)
     .some(
@@ -23,7 +44,7 @@ function isMenuRouteActive(menu, pathname) {
 }
 
 function getMenuTone(menu) {
-  return menu.groups[0]?.tone || "violet";
+  return getVisibleMenuGroups(menu)[0]?.tone || "violet";
 }
 
 export default function SiteHeader() {
@@ -315,7 +336,7 @@ export default function SiteHeader() {
                     </Link>
 
                     <div className="public-mega-groups">
-                      {menu.groups.map((group, groupIndex) => (
+                      {getVisibleMenuGroups(menu).map((group, groupIndex) => (
                         <section
                           className={`public-mega-group tone-${group.tone}`}
                           key={group.title}
@@ -488,7 +509,7 @@ export default function SiteHeader() {
                     </Link>
 
                     <div className="yc-mobile-menu-link-grid">
-                      {menu.groups
+                      {getVisibleMenuGroups(menu)
                         .flatMap((group) => group.links)
                         .map(([label, href, icon]) => (
                           <Link

@@ -100,7 +100,14 @@ export default function PageHero({
           )}
         </div>
 
-        <div className="public-page-hero-visual" data-motion-depth="1.1">
+        <div
+          className="public-page-hero-visual"
+          {...(
+            ["feature-guide", "resources", "resource-detail", "product", "pricing"].includes(variant)
+              ? {}
+              : { "data-motion-depth": "1.1" }
+          )}
+        >
           <div className="yc-hero-visual-frame">
             {children}
           </div>

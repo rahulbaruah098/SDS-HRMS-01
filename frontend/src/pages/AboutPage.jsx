@@ -144,12 +144,7 @@ export default function AboutPage() {
       <section className="yc-profile-hero">
         <div className="page-width yc-profile-hero-grid">
           <div className="yc-profile-hero-copy">
-            <div className="yc-profile-document-line">
-              <span>YOURCOMATE × SAYANANT GROUP</span>
-              <span>COMPANY & PLATFORM PROFILE</span>
-            </div>
-
-            <span className="yc-profile-part">PART 01 · ABOUT YOURCOMATE</span>
+            <span className="yc-profile-part">PLATFORM PROFILE</span>
 
             <h1>
               About
@@ -173,13 +168,14 @@ export default function AboutPage() {
           </div>
 
           <aside className="yc-profile-hero-board" aria-label="YourComate profile summary">
-            <span>01</span>
+           <span className="yc-profile-hero-icon">
+  <Icon name="people" />
+</span>
             <small>A CONNECTED VIEW OF</small>
             <strong>PURPOSE</strong>
             <strong>PEOPLE</strong>
             <strong>PRACTICE</strong>
             <div>
-              <i />
               <p>People. Process. Performance.</p>
             </div>
           </aside>

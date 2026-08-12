@@ -1,210 +1,115 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import HeroScene from "../components/HeroScenes";
 import Icon from "../components/Icon";
 import PageHero from "../components/PageHero";
-import { resourceCards } from "../data/publicSiteData";
 
-const walkthroughs = [
-  [
-    "Attendance overview",
-    "Office, work-from-home and field attendance flow",
-    "attendance",
-    "/product/attendance",
-  ],
-  [
-    "Leave decision flow",
-    "Application, review and status visibility",
-    "calendar",
-    "/product/leave",
-  ],
-  [
-    "Project delivery flow",
-    "Ownership, collaboration and progress updates",
-    "project",
-    "/product/projects",
-  ],
-];
-
-const faqs = [
-  [
-    "What is included in the demo?",
-    "The demo provides controlled access for up to 10 employees over 15 days, with the available evaluation modules shown during onboarding.",
-  ],
-  [
-    "Why is company email OTP required?",
-    "OTP verifies access to the registered company email before the request enters Superadmin review.",
-  ],
-  [
-    "Can different roles receive different dashboards?",
-    "Yes. Employees, managers, HR, Admin and field roles receive interfaces aligned with their responsibilities.",
-  ],
-  [
-    "Is the platform mobile ready?",
-    "Yes. The public website and HRMS screens are designed to work responsively across desktop, tablet and mobile devices.",
-  ],
+const resources = [
+  {
+    type: "HRMS guide",
+    title: "YourComate HRMS Guide",
+    copy: "A complete operating guide to people, work, talent, payroll, service and platform administration.",
+    icon: "book",
+    tone: "cyan",
+    href: "/resources/hrms-guide",
+    detail: "Operating handbook",
+  },
+  {
+    type: "Product walkthroughs",
+    title: "YourComate Product Walkthroughs",
+    copy: "Role-by-role journeys through the most important YourComate workflows.",
+    icon: "play",
+    tone: "violet",
+    href: "/resources/product-walkthroughs",
+    detail: "16 guided workflows",
+  },
+  {
+    type: "Frequently asked questions",
+    title: "YourComate Frequently Asked Questions",
+    copy: "Clear answers about setup, roles, workflows, payroll, recruitment, support and Razorpay billing.",
+    icon: "help",
+    tone: "amber",
+    href: "/resources/frequently-asked-questions",
+    detail: "95 verified answers",
+  },
 ];
 
 export default function ResourcesPage() {
-  const [open, setOpen] = useState(0);
+  useEffect(() => {
+      document.documentElement.classList.add("yc-resource-page-active");
+      document.body.classList.add("yc-resource-page-active");
+
+      return () => {
+        document.documentElement.classList.remove("yc-resource-page-active");
+        document.body.classList.remove("yc-resource-page-active");
+      };
+    }, []);
 
   return (
-    <main className="public-main">
+    <main className="public-main yc-resource-centre-page">
       <PageHero
         eyebrow="Resource centre"
-        title="Practical HRMS knowledge for evaluation, rollout and everyday use."
-        description="Use guides, templates, walkthroughs and frequently asked questions to plan a clearer HR technology journey."
+        title="Choose the resource that matches what you need to do next."
+        description="Use the operating guide for implementation, walkthroughs for role-by-role actions, or FAQs for quick verified answers."
         icon="book"
         tone="amber"
         variant="resources"
         secondary={["Explore Product", "/product"]}
       >
-        <HeroScene type="resources" />
+        <div className="yc-resource-hero-panel tone-amber">
+          <span className="yc-resource-hero-panel-kicker">
+            <Icon name="book" /> Resource centre
+          </span>
+          <h2>Three focused ways to learn YourComate.</h2>
+          <p>
+            Pick the format that matches the job in front of you, then move
+            directly into the relevant guide, workflow or answer.
+          </p>
+          <div className="yc-resource-hero-panel-links">
+            <span><Icon name="book" /> Operating guide</span>
+            <span><Icon name="play" /> Product walkthroughs</span>
+            <span><Icon name="help" /> Verified FAQs</span>
+          </div>
+        </div>
       </PageHero>
 
-      <section className="public-section yc-resource-library-section" id="guides">
+      <section className="public-section yc-resource-library-section">
         <div className="page-width">
-          <div className="yc-inside-section-heading">
+          <header className="yc-resource-heading">
             <span className="public-kicker">
-              <Icon name="book" /> Guides and tools
+              <Icon name="book" /> Resource library
             </span>
             <div>
-              <h2>Start with the resource that matches your next decision.</h2>
+              <h2>Choose the resource that matches what you need to do next.</h2>
               <p>
-                Use a practical guide, checklist or template without adding
-                unnecessary process around the work.
+                The former combined resource content is now separated into three
+                dedicated pages for faster scanning, clearer navigation and better
+                mobile rendering.
               </p>
             </div>
-          </div>
+          </header>
 
           <div className="yc-resource-library-grid">
-            {resourceCards.map((resource, index) => (
-              <article
+            {resources.map((resource, index) => (
+              <Link
                 className={`yc-resource-library-card tone-${resource.tone}`}
-                key={resource.title}
+                to={resource.href}
+                key={resource.href}
+                aria-label={`Open ${resource.title}`}
               >
                 <header>
-                  <span aria-hidden="true">
-                    <Icon name={resource.icon} />
-                  </span>
+                  <span aria-hidden="true"><Icon name={resource.icon} /></span>
                   <b>{String(index + 1).padStart(2, "0")}</b>
                 </header>
-
                 <small>{resource.type}</small>
                 <h3>{resource.title}</h3>
                 <p>{resource.copy}</p>
-
-                <Link to={`/resources/${resource.slug}`}>
+                <div className="yc-resource-card-meta">{resource.detail}</div>
+                <span className="yc-resource-card-open">
                   Open resource <Icon name="arrow" />
-                </Link>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section
-        className="public-section yc-resource-walkthrough-section"
-        id="walkthroughs"
-      >
-        <div className="page-width">
-          <div className="public-section-heading public-section-heading-split">
-            <div>
-              <span className="public-kicker">
-                <Icon name="play" /> Product walkthroughs
-              </span>
-              <h2>Understand the workflow before opening the screen.</h2>
-            </div>
-            <p>
-              Walkthrough topics cover attendance, leave, projects, employee
-              self-service, support and demo onboarding.
-            </p>
-          </div>
-
-          <div className="yc-resource-walkthrough-grid">
-            {walkthroughs.map(([title, copy, icon, href], index) => (
-              <Link className="yc-resource-walkthrough-card" to={href} key={title}>
-                <b>{String(index + 1).padStart(2, "0")}</b>
-                <span aria-hidden="true">
-                  <Icon name={icon} />
                 </span>
-                <div>
-                  <h3>{title}</h3>
-                  <p>{copy}</p>
-                </div>
-                <em>
-                  View related product <Icon name="arrow" />
-                </em>
               </Link>
             ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="public-section yc-resource-template-section" id="templates">
-        <div className="page-width">
-          <div className="public-section-heading">
-            <span className="public-kicker">
-              <Icon name="document" /> HR templates
-            </span>
-            <h2>Reusable structures for evaluation and rollout.</h2>
-          </div>
-
-          <div className="yc-resource-template-band">
-            <span aria-hidden="true">
-              <Icon name="document" />
-            </span>
-            <div>
-              <small>READY-TO-USE STARTING POINT</small>
-              <h3>HRMS requirement capture</h3>
-              <p>
-                Document employee count, locations, work modes, user roles,
-                priority modules and decision criteria.
-              </p>
-            </div>
-            <Link className="button button-primary" to="/resources/evaluation-template">
-              Open Template <Icon name="arrow" />
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <section className="public-section yc-resource-faq-section" id="faq">
-        <div className="page-width yc-resource-faq-layout">
-          <div className="public-section-heading">
-            <span className="public-kicker">
-              <Icon name="help" /> FAQ
-            </span>
-            <h2>Common questions, clearly answered.</h2>
-            <p>
-              Open one question at a time to keep the page quick to scan on
-              desktop, tablet and mobile screens.
-            </p>
-          </div>
-
-          <div className="yc-resource-faq-list">
-            {faqs.map(([question, answer], index) => {
-              const isOpen = open === index;
-              const answerId = `resource-faq-answer-${index}`;
-
-              return (
-                <article className={isOpen ? "is-open" : ""} key={question}>
-                  <button
-                    type="button"
-                    aria-expanded={isOpen}
-                    aria-controls={answerId}
-                    onClick={() => setOpen(isOpen ? -1 : index)}
-                  >
-                    <b>{String(index + 1).padStart(2, "0")}</b>
-                    <span>{question}</span>
-                    <Icon name="chevronDown" />
-                  </button>
-                  <div id={answerId}>
-                    <p>{answer}</p>
-                  </div>
-                </article>
-              );
-            })}
           </div>
         </div>
       </section>
