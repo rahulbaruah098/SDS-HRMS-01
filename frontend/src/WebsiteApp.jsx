@@ -519,9 +519,23 @@ export default function WebsiteApp() {
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/saya" element={<SayaPage />} />
           <Route path="/privacy" element={<LegalPage pageKey="privacy" />} />
-          <Route path="/terms" element={<LegalPage pageKey="terms" />} />
+          <Route
+            path="/terms-and-conditions"
+            element={<LegalPage pageKey="terms" />}
+          />
+          <Route
+            path="/refund-policy"
+            element={<LegalPage pageKey="refund" />}
+          />
+          <Route
+            path="/terms"
+            element={<Navigate to="/terms-and-conditions" replace />}
+          />
           <Route path="/cookies" element={<LegalPage pageKey="cookies" />} />
-          <Route path="/accessibility" element={<LegalPage pageKey="accessibility" />} />
+          <Route
+            path="/accessibility"
+            element={<LegalPage pageKey="accessibility" />}
+          />
           <Route path="/disclaimer" element={<LegalPage pageKey="disclaimer" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

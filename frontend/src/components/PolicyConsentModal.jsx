@@ -19,10 +19,10 @@ const POLICY_DOCUMENTS = [
   },
   {
     key: "terms",
-    label: "Terms of Use",
+    label: "Terms and Conditions",
     eyebrow: "Website conditions",
     description:
-      "Review the conditions governing access to and use of this website.",
+      "Review the terms and conditions governing access to and use of this website.",
   },
 ];
 
@@ -544,7 +544,7 @@ export default function PolicyConsentModal() {
                     }
                   />
                   <span>
-                    <strong>I agree to the Terms of Use.</strong>
+                    <strong>I agree to the Terms and Conditions.</strong>
                     <small>
                       I agree to use the website lawfully and in accordance
                       with the published conditions.

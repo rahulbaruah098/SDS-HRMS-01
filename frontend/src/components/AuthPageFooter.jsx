@@ -38,13 +38,13 @@ export default function AuthPageFooter() {
             Cookie Policy
           </a>
 
-          <span>People. Process. Performance.</span>
+         
         </nav>
       </div>
 
       <div className="auth-page-footer-credit">
         <span>
-          Built by{" "}
+          Powered by{" "}
           <a
             href="https://sayanant.com"
             target="_blank"

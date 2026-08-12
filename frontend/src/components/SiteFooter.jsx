@@ -135,9 +135,10 @@ const footerGroups = [
   {
     title: "Trust",
     links: [
-      ["Security", "/security"],
       ["Privacy Policy", "/privacy"],
-      ["Terms of Use", "/terms"],
+      ["Terms and Conditions", "/terms-and-conditions"],
+      ["Refund Policy", "/refund-policy"],
+      ["Accessibility Statement", "/accessibility"],
     ],
   },
 ];
@@ -271,13 +272,13 @@ export default function SiteFooter() {
 
             <Link to="/cookies">Cookie Policy</Link>
 
-            <span>People. Process. Performance.</span>
+         
           </div>
         </div>
 
         <div className="yc-flow-footer-credit">
           <span>
-            Built by{" "}
+            Powered by{" "}
             <a
               href="https://sayanant.com"
               target="_blank"
