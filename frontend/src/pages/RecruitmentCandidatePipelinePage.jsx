@@ -48,28 +48,6 @@ const page = {
   "Notifications and reports support recruitment follow-up.",
   "Employee project and payroll setup occurs after conversion through their respective modules."
 ],
-  controls: [
-  "A resume-match result is explainable support for human review and cannot automatically approve, reject, shortlist or select a candidate.",
-  "Do not publish a vacancy before the required hiring-request approval.",
-  "Separate interviewer notes, candidate-facing information and authorised decisions.",
-  "Retain interview feedback history when an interviewer revises a scorecard.",
-  "Verify offer terms and approval before sending them to the candidate.",
-  "Convert to employee only after the accepted offer and required joining checks are complete."
-],
-  checklist: [
-  "Confirm business reason, department and vacancies.",
-  "Confirm budget, qualification and expected joining date.",
-  "Confirm final request approval.",
-  "Confirm candidate consent, resume and application record.",
-  "Confirm interview feedback and selection authority.",
-  "Confirm offer response, documents, background checks and joining status."
-],
-  notes: [
-  "Candidate retention, resume size and recruitment settings are configurable in the supplied module.",
-  "Automated or assistant output must never replace the authorised human hiring decision.",
-  "The exact tabs and actions shown depend on role, capability and live tenant configuration."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Recruitment.jsx; frontend/src/api/client.js recruitment services.",
 };
 
 export default function RecruitmentCandidatePipelinePage() {

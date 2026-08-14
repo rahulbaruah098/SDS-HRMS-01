@@ -1690,6 +1690,7 @@ const RECRUITMENT_RESPONSIVE_REFINEMENTS = `
     grid-template-columns: 42px minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
+    min-width: 0;
     padding: 11px;
   }
 
@@ -1767,149 +1768,812 @@ const RECRUITMENT_RESPONSIVE_REFINEMENTS = `
     box-shadow: 0 10px 24px rgba(74, 61, 170, .09);
   }
 
-  .recruitment-feedback-status-line {
-    display: flex;
-    flex-wrap: wrap;
+  /* Interview Feedback — candidate selector and details workspace */
+  .recruitment-feedback-page {
+    overflow: hidden;
+    padding: clamp(18px, 2vw, 26px);
+    background:
+      radial-gradient(circle at 7% 4%, rgba(185, 215, 255, .34), transparent 25%),
+      radial-gradient(circle at 96% 8%, rgba(201, 192, 255, .28), transparent 27%),
+      rgba(255, 253, 250, .98);
+  }
+
+  .recruitment-feedback-page > .recruitment-section-head {
+    margin-bottom: clamp(18px, 2vw, 24px);
+  }
+
+  .recruitment-feedback-selector {
+    width: min(100%, 760px);
+    margin-inline: auto;
+    padding: clamp(20px, 2.4vw, 30px);
+    border: 1px solid rgba(171, 181, 211, .68);
+    border-radius: 26px;
+    background:
+      radial-gradient(circle at 94% 6%, rgba(185, 215, 255, .38), transparent 28%),
+      radial-gradient(circle at 8% 96%, rgba(201, 192, 255, .24), transparent 30%),
+      linear-gradient(145deg, #fff 0%, #f4f9ff 56%, #f8f5ff 100%);
+    box-shadow:
+      9px 11px 0 rgba(185, 215, 255, .68),
+      0 24px 40px rgba(15, 20, 75, .09);
+  }
+
+  .recruitment-feedback-selector-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    font-size: 12px;
-  }
-
-  .recruitment-feedback-layout {
-    display: grid;
-    grid-template-columns: minmax(240px, 310px) minmax(0, 1fr);
     gap: 18px;
-    align-items: start;
+    min-width: 0;
   }
 
-  .recruitment-feedback-candidates {
+  .recruitment-feedback-selector-copy {
+    min-width: 0;
+  }
+
+  .recruitment-feedback-selector-eyebrow {
+    display: block;
+    color: var(--rec-violet);
+    font-size: 9px;
+    font-weight: 950;
+    letter-spacing: .12em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .recruitment-feedback-selector-copy h3 {
+    margin: 8px 0 0;
+    color: var(--rec-ink);
+    font-family: var(--yc-display, var(--heading), inherit);
+    font-size: clamp(25px, 3vw, 38px);
+    font-weight: 760;
+    line-height: 1;
+    letter-spacing: -.04em;
+  }
+
+  .recruitment-feedback-selector-copy p {
+    max-width: 590px;
+    margin: 8px 0 0;
+    color: var(--rec-soft);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .recruitment-feedback-selector-icon {
     display: grid;
-    gap: 9px;
-    max-height: 720px;
-    overflow-y: auto;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    flex: 0 0 auto;
+    border: 1px solid rgba(52, 43, 120, .14);
+    border-radius: 17px;
+    color: #fff;
+    background: linear-gradient(145deg, #4f72df, #2bb9b5);
+    box-shadow: 4px 5px 0 rgba(52, 43, 120, .18);
   }
 
-  .recruitment-feedback-candidate {
+  .recruitment-feedback-selector-field {
+    display: grid;
+    gap: 8px;
+    margin-top: clamp(22px, 2.6vw, 30px);
+  }
+
+  .recruitment-feedback-selector-field > label {
+    color: var(--rec-ink);
+    font-size: 10px;
+    font-weight: 950;
+    letter-spacing: .07em;
+    line-height: 1.3;
+    text-transform: uppercase;
+  }
+
+  .recruitment-feedback-select-wrap {
+    position: relative;
+    min-width: 0;
+    isolation: isolate;
+  }
+
+  .recruitment-feedback-select-trigger {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) 28px;
+    align-items: center;
+    gap: 10px;
     width: 100%;
-    padding: 13px;
-    border: 1px solid rgba(98, 84, 218, .14);
-    border-radius: 15px;
+    min-width: 0;
+    min-height: 54px;
+    padding: 8px 12px 8px 10px;
+    border: 1px solid rgba(159, 169, 205, .76);
+    border-radius: 16px;
+    outline: none;
     background: #fff;
+    color: var(--rec-ink);
     text-align: left;
     cursor: pointer;
   }
 
-  .recruitment-feedback-candidate strong,
-  .recruitment-feedback-candidate small {
+  .recruitment-feedback-select-trigger:focus-visible,
+  .recruitment-feedback-select-trigger.is-open {
+    border-color: rgba(98, 84, 218, .58);
+    box-shadow: 0 0 0 3px rgba(98, 84, 218, .1);
+  }
+
+  .recruitment-feedback-select-trigger-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    color: var(--rec-violet);
+    background: #f1efff;
+  }
+
+  .recruitment-feedback-select-trigger-copy {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--rec-ink);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recruitment-feedback-select-trigger-caret {
+    display: grid;
+    place-items: center;
+    color: var(--rec-deep);
+  }
+
+  .recruitment-feedback-options {
+    position: absolute;
+    z-index: 80;
+    right: 0;
+    bottom: calc(100% + 9px);
+    left: 0;
+    display: grid;
+    gap: 6px;
+    max-height: min(320px, 42dvh);
+    padding: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid rgba(159, 169, 205, .76);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, .98);
+    box-shadow:
+      0 -14px 34px rgba(15, 20, 75, .14),
+      5px 6px 0 rgba(201, 192, 255, .42);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(98, 84, 218, .34) transparent;
+  }
+
+  .recruitment-feedback-options::-webkit-scrollbar {
+    width: 7px;
+  }
+
+  .recruitment-feedback-options::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(98, 84, 218, .34);
+  }
+
+  .recruitment-feedback-option {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid rgba(171, 181, 211, .5);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--rec-ink);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .recruitment-feedback-option:hover,
+  .recruitment-feedback-option:focus-visible {
+    border-color: rgba(98, 84, 218, .34);
+    outline: none;
+    background: #f6f5ff;
+  }
+
+  .recruitment-feedback-option-avatar {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    color: var(--rec-deep);
+    background: #ece9ff;
+    font-size: 9px;
+    font-weight: 950;
+  }
+
+  .recruitment-feedback-option-copy {
+    min-width: 0;
+  }
+
+  .recruitment-feedback-option-copy strong,
+  .recruitment-feedback-option-copy small {
     display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .recruitment-feedback-candidate small {
-    margin-top: 4px;
-    color: var(--rec-muted);
+  .recruitment-feedback-option-copy strong {
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1.3;
   }
 
-  .recruitment-feedback-candidate.active {
-    color: #fff;
-    border-color: var(--rec-deep);
-    background: linear-gradient(135deg, var(--rec-deep), #6856da);
+  .recruitment-feedback-option-copy small {
+    margin-top: 2px;
+    color: var(--rec-soft);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.3;
   }
 
-  .recruitment-feedback-candidate.active small {
-    color: rgba(255, 255, 255, .76);
+  .recruitment-feedback-selector-field > small {
+    color: var(--rec-soft);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
   }
 
-  .recruitment-feedback-sheet-head,
-  .recruitment-feedback-round-head,
-  .recruitment-feedback-person-head {
+  .recruitment-feedback-details {
+    min-width: 0;
+  }
+
+  .recruitment-feedback-details-toolbar {
     display: flex;
-    justify-content: space-between;
-    gap: 14px;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: flex-start;
+    margin-bottom: 14px;
+  }
+
+  .recruitment-feedback-select-candidate-btn {
+    min-height: 38px;
+    padding-inline: 12px;
+  }
+
+  .recruitment-feedback-loading-card {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+    padding: clamp(17px, 1.8vw, 22px);
+    border: 1px solid rgba(171, 181, 211, .66);
+    border-radius: 22px;
+    background: linear-gradient(145deg, #fff, #f4f9ff);
+    box-shadow:
+      7px 9px 0 rgba(185, 215, 255, .52),
+      0 18px 30px rgba(15, 20, 75, .07);
+  }
+
+  .recruitment-feedback-loading-avatar {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+    color: #fff;
+    background: linear-gradient(145deg, #4f72df, #2bb9b5);
+    font-size: 11px;
+    font-weight: 950;
+  }
+
+  .recruitment-feedback-loading-copy {
+    min-width: 0;
+  }
+
+  .recruitment-feedback-loading-copy strong,
+  .recruitment-feedback-loading-copy span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recruitment-feedback-loading-copy strong {
+    color: var(--rec-ink);
+    font-size: 15px;
+    font-weight: 900;
+  }
+
+  .recruitment-feedback-loading-copy span {
+    margin-top: 3px;
+    color: var(--rec-soft);
+    font-size: 11px;
+  }
+
+  .recruitment-feedback-loading-copy small {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    color: var(--rec-violet);
+    font-size: 10px;
+    font-weight: 850;
+  }
+
+  .recruitment-feedback-loading-copy small svg {
+    animation: recruitmentSpin .8s linear infinite;
+  }
+
+  .recruitment-feedback-sheet {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .recruitment-feedback-sheet-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+    padding: clamp(17px, 1.8vw, 22px);
+    border: 1px solid rgba(171, 181, 211, .66);
+    border-radius: 22px;
+    background:
+      radial-gradient(circle at 92% 10%, rgba(201, 192, 255, .34), transparent 28%),
+      linear-gradient(145deg, #fff 0%, #f4f9ff 56%, #f8f5ff 100%);
+    box-shadow:
+      7px 9px 0 rgba(201, 192, 255, .58),
+      0 18px 30px rgba(15, 20, 75, .08);
+  }
+
+  .recruitment-feedback-sheet-identity {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+  }
+
+  .recruitment-feedback-sheet-avatar {
+    display: grid;
+    place-items: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 17px;
+    color: #fff;
+    background: linear-gradient(145deg, #4f72df, #2bb9b5);
+    box-shadow: 4px 5px 0 rgba(52, 43, 120, .2);
+    font-size: 12px;
+    font-weight: 950;
+  }
+
+  .recruitment-feedback-sheet-copy {
+    min-width: 0;
+  }
+
+  .recruitment-feedback-sheet-copy h3 {
+    margin: 0;
+    color: var(--rec-ink);
+    font-family: var(--yc-display, var(--heading), inherit);
+    font-size: clamp(24px, 2.4vw, 34px);
+    font-weight: 760;
+    line-height: 1;
+    letter-spacing: -.035em;
+  }
+
+  .recruitment-feedback-sheet-copy > p {
+    margin: 6px 0 0;
+    overflow-wrap: anywhere;
+    font-size: 11px;
+  }
+
+  .recruitment-feedback-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .recruitment-feedback-sheet-copy .recruitment-feedback-summary {
+    margin-top: 12px;
+  }
+
+  .recruitment-feedback-pending-alert {
+    margin: 0;
+    border-radius: 16px;
+  }
+
+  .recruitment-feedback-rounds {
+    display: grid;
+    gap: 16px;
+    margin: 0;
   }
 
   .recruitment-feedback-round {
-    padding: 16px;
+    min-width: 0;
+    padding: clamp(15px, 1.55vw, 20px);
+    border: 1px solid rgba(171, 181, 211, .66);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, .9);
+    box-shadow:
+      6px 7px 0 rgba(185, 215, 255, .48),
+      0 14px 24px rgba(15, 20, 75, .06);
+  }
+
+  .recruitment-feedback-round-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(171, 181, 211, .5);
+  }
+
+  .recruitment-feedback-round-title {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: center;
+    gap: 11px;
+    min-width: 0;
+  }
+
+  .recruitment-feedback-round-number {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    color: #fff;
+    background: #342b78;
+    box-shadow: 3px 4px 0 rgba(185, 215, 255, .8);
+    font-size: 10px;
+    font-weight: 950;
+  }
+
+  .recruitment-feedback-round-title h4 {
+    margin: 0;
+    color: var(--rec-ink);
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1.3;
+  }
+
+  .recruitment-feedback-round-title p {
+    margin: 4px 0 0;
+    font-size: 10px;
+    line-height: 1.4;
   }
 
   .recruitment-feedback-panel-list {
     display: grid;
-    gap: 10px;
+    gap: 12px;
     margin-top: 14px;
   }
 
   .recruitment-feedback-person {
-    padding: 14px;
-    background: rgba(249, 249, 255, .9);
+    min-width: 0;
+    padding: clamp(13px, 1.35vw, 17px);
+    border: 1px solid rgba(98, 84, 218, .14);
+    border-radius: 18px;
+    background: linear-gradient(145deg, rgba(250, 251, 255, .98), rgba(246, 249, 255, .94));
   }
 
-  .recruitment-feedback-copy-grid,
+  .recruitment-feedback-person-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .recruitment-feedback-person-head .recruitment-person {
+    min-width: 0;
+  }
+
   .recruitment-feedback-rating-list {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-top: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 9px;
+    margin-top: 13px;
   }
 
-  .recruitment-feedback-copy,
   .recruitment-feedback-rating {
-    padding: 10px;
-    border-radius: 12px;
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(171, 181, 211, .56);
+    border-radius: 13px;
     background: #fff;
-    border: 1px solid rgba(98, 84, 218, .1);
+  }
+
+  .recruitment-feedback-rating.is-overall {
+    border-color: rgba(55, 102, 219, .22);
+    background: #edf6ff;
+  }
+
+  .recruitment-feedback-rating.is-recommendation {
+    border-color: rgba(98, 84, 218, .2);
+    background: #f1efff;
+  }
+
+  .recruitment-feedback-rating span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--rec-soft);
+    font-size: 8px;
+    font-weight: 950;
+    line-height: 1.25;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .recruitment-feedback-rating strong {
+    display: block;
+    color: var(--rec-ink);
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .recruitment-feedback-copy-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+    margin-top: 10px;
+  }
+
+  .recruitment-feedback-copy {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid rgba(171, 181, 211, .5);
+    border-radius: 13px;
+    background: rgba(255, 255, 255, .86);
   }
 
   .recruitment-feedback-copy.is-full {
     grid-column: 1 / -1;
   }
 
-  .recruitment-feedback-copy span,
-  .recruitment-feedback-rating span {
+  .recruitment-feedback-copy span {
     display: block;
-    margin-bottom: 4px;
-    color: var(--rec-muted);
-    font-size: 11px;
-    font-weight: 800;
+    margin-bottom: 5px;
+    color: var(--rec-soft);
+    font-size: 8px;
+    font-weight: 950;
+    letter-spacing: .08em;
     text-transform: uppercase;
-    letter-spacing: .04em;
   }
 
   .recruitment-feedback-copy p {
     margin: 0;
+    color: var(--rec-ink);
+    font-size: 11px;
+    line-height: 1.55;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
-  @media (max-width: 900px) {
-    .recruitment-feedback-layout {
-      grid-template-columns: 1fr;
-    }
-
-    .recruitment-feedback-candidates {
-      max-height: 280px;
-    }
+  .recruitment-feedback-status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0 0;
+    padding: 11px 12px;
+    border: 1px dashed rgba(171, 181, 211, .72);
+    border-radius: 13px;
+    color: var(--rec-soft);
+    background: rgba(255, 255, 255, .72);
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.45;
   }
 
-  @media (max-width: 600px) {
-    .recruitment-round-row,
-    .recruitment-feedback-copy-grid,
-    .recruitment-feedback-rating-list {
-      grid-template-columns: 1fr;
+  @media (max-width: 680px) {
+    .recruitment-feedback-page {
+      padding: 15px;
+      border-radius: 20px;
     }
 
-    .recruitment-round-actions,
+    .recruitment-feedback-selector {
+      padding: 18px;
+      border-radius: 21px;
+    }
+
+    .recruitment-feedback-selector-head {
+      grid-template-columns: minmax(0, 1fr) 46px;
+      gap: 12px;
+    }
+
+    .recruitment-feedback-selector-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+    }
+
+    .recruitment-feedback-selector-copy h3 {
+      font-size: clamp(23px, 7vw, 31px);
+    }
+
+    .recruitment-feedback-select-trigger {
+      min-height: 50px;
+      grid-template-columns: 32px minmax(0, 1fr) 26px;
+      padding: 7px 10px 7px 8px;
+    }
+
+    .recruitment-feedback-select-trigger-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+    }
+
+    .recruitment-feedback-select-trigger-copy {
+      font-size: 11px;
+    }
+
+    .recruitment-feedback-options {
+      max-height: min(280px, 46dvh);
+    }
+
     .recruitment-feedback-sheet-head,
-    .recruitment-feedback-round-head,
-    .recruitment-feedback-person-head,
-    .recruitment-panel-member-head {
+    .recruitment-feedback-round-head {
+      grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
-      flex-direction: column;
+    }
+
+    .recruitment-feedback-sheet-head > .recruitment-btn,
+    .recruitment-feedback-sheet-head > .recruitment-status {
+      justify-self: start;
+    }
+
+    .recruitment-feedback-copy-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .recruitment-feedback-copy.is-full {
       grid-column: auto;
     }
+
+    .recruitment-feedback-round-head .recruitment-feedback-summary {
+      justify-content: flex-start;
+    }
   }
+
+  @media (max-width: 480px) {
+    .recruitment-feedback-page {
+      padding: 12px;
+    }
+
+    .recruitment-feedback-selector {
+      padding: 15px;
+      border-radius: 18px;
+    }
+
+    .recruitment-feedback-selector-head {
+      grid-template-columns: minmax(0, 1fr) 40px;
+      gap: 10px;
+    }
+
+    .recruitment-feedback-selector-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 13px;
+    }
+
+    .recruitment-feedback-selector-copy p {
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .recruitment-feedback-select-trigger {
+      min-height: 48px;
+      grid-template-columns: 30px minmax(0, 1fr) 24px;
+      gap: 8px;
+      padding: 6px 9px 6px 7px;
+    }
+
+    .recruitment-feedback-select-trigger-icon {
+      width: 30px;
+      height: 30px;
+    }
+
+    .recruitment-feedback-select-trigger-copy {
+      font-size: 10px;
+    }
+
+    .recruitment-feedback-options {
+      max-height: min(250px, 48dvh);
+      padding: 7px;
+      border-radius: 14px;
+    }
+
+    .recruitment-feedback-option {
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px;
+    }
+
+    .recruitment-feedback-option-avatar {
+      width: 34px;
+      height: 34px;
+    }
+
+    .recruitment-feedback-details-toolbar {
+      margin-bottom: 11px;
+    }
+
+    .recruitment-feedback-select-candidate-btn {
+      width: 100%;
+    }
+
+    .recruitment-feedback-loading-card {
+      grid-template-columns: 44px minmax(0, 1fr);
+      padding: 14px;
+      border-radius: 18px;
+    }
+
+    .recruitment-feedback-loading-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+    }
+
+    .recruitment-feedback-sheet-head {
+      padding: 14px;
+      border-radius: 18px;
+    }
+
+    .recruitment-feedback-sheet-identity {
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .recruitment-feedback-sheet-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+    }
+
+    .recruitment-feedback-sheet-copy h3 {
+      font-size: clamp(22px, 7vw, 28px);
+    }
+
+    .recruitment-feedback-round {
+      padding: 13px;
+      border-radius: 18px;
+    }
+
+    .recruitment-feedback-round-title {
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 9px;
+    }
+
+    .recruitment-feedback-round-number {
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+    }
+
+    .recruitment-feedback-person {
+      padding: 12px;
+      border-radius: 15px;
+    }
+
+    .recruitment-feedback-person-head {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .recruitment-feedback-rating-list {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .recruitment-feedback-status-line {
+      align-items: flex-start;
+    }
+  }
+
 `;
 
 export default function Recruitment() {
@@ -1957,6 +2621,7 @@ export default function Recruitment() {
   const [feedbackApplicationId, setFeedbackApplicationId] = useState('');
   const [feedbackSheet, setFeedbackSheet] = useState({});
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackCandidateMenuOpen, setFeedbackCandidateMenuOpen] = useState(false);
   const [offers, setOffers] = useState([]);
   const [reports, setReports] = useState({});
   const [activities, setActivities] = useState([]);
@@ -2076,10 +2741,23 @@ export default function Recruitment() {
         setApplications(allApplications);
         setInterviews(allInterviews);
         setFeedbackApplications(rows);
-        const selectedId = rows.some((item) => idOf(item) === feedbackApplicationId)
-          ? feedbackApplicationId
-          : idOf(rows[0]);
-        await openFeedbackApplication(selectedId, true);
+
+        if (quiet) {
+          const selectedId = rows.some((item) => idOf(item) === feedbackApplicationId)
+            ? feedbackApplicationId
+            : '';
+
+          if (selectedId) {
+            await openFeedbackApplication(selectedId, true);
+          } else {
+            setFeedbackApplicationId('');
+            setFeedbackSheet({});
+          }
+        } else {
+          setFeedbackApplicationId('');
+          setFeedbackSheet({});
+          setFeedbackLoading(false);
+        }
       } else if (target === 'offers') {
         const [rows, applicationRows] = await Promise.all([
           getRecruitmentOffers({ page_size: 100, status: filters.offerStatus }),
@@ -2299,31 +2977,276 @@ export default function Recruitment() {
     const application = feedbackSheet.application || {};
     const rounds = Array.isArray(feedbackSheet.rounds) ? feedbackSheet.rounds : [];
     const summary = feedbackSheet.feedback_summary || {};
-    return <section className="recruitment-panel"><SectionHead title="Interview feedback" description="HR and Admin review every round, interviewer role, submitted scorecard and pending response in one place" />
-      {feedbackApplications.length ? <div className="recruitment-feedback-layout">
-        <aside className="recruitment-feedback-candidates" aria-label="Applications with interviews">{feedbackApplications.map((item) => {
-          const itemInterviews = interviews.filter((row) => String(row.application_id || '') === idOf(item));
-          const completed = itemInterviews.filter((row) => keyOf(row.status) === 'completed').length;
-          return <button type="button" key={idOf(item)} className={`recruitment-feedback-candidate${feedbackApplicationId === idOf(item) ? ' active' : ''}`} onClick={() => openFeedbackApplication(idOf(item))}><strong>{item.candidate_name || 'Candidate'}</strong><small>{item.job_title || 'Job opening'}</small><small>{completed}/{itemInterviews.length} rounds completed · {labelOf(item.status)}</small></button>;
-        })}</aside>
-        <div>{feedbackLoading ? <Loading /> : feedbackApplicationId && rounds.length ? <>
-          <div className="recruitment-feedback-sheet-head"><div><h3>{application.candidate_name || 'Candidate'}</h3><p className="recruitment-muted">{application.job_title || 'Job opening'} · {application.reference_no || 'Application'}</p><div className="recruitment-feedback-summary"><Status value={summary.complete ? 'complete' : (summary.pending ? 'pending' : 'not_available')} /><span className="recruitment-chip">{summary.submitted || 0}/{summary.assigned || 0} submitted</span>{summary.pending ? <span className="recruitment-chip">{summary.pending} pending</span> : null}</div></div>{keyOf(application.status) === 'interviewed' && application.interview_process_completed !== true && summary.complete ? <button type="button" className="recruitment-btn recruitment-btn-primary" onClick={() => setConfirm({ title: 'Complete interview process', message: 'All rounds and assigned feedback are complete. Confirm the process before candidate selection.', label: 'Complete process', tone: 'primary', action: () => act(`complete-process:${idOf(application)}`, () => completeRecruitmentInterviewProcess(idOf(application)), 'Interview process completed.', 'feedback') })}><ClipboardCheck size={15} />Complete process</button> : application.interview_process_completed === true ? <Status value="complete" /> : null}</div>
-          {summary.pending_interviewers?.length ? <div className="recruitment-alert recruitment-alert-warning" style={{ marginTop: 14 }}><AlertCircle size={17} /><span>Pending feedback: {summary.pending_interviewers.map((item) => `${item.name || 'Assigned interviewer'} (${item.round_label || 'Interview'})`).join(', ')}</span></div> : null}
-          <div className="recruitment-feedback-rounds" style={{ marginTop: 16 }}>{rounds.map((round, roundIndex) => {
-            const roundSummary = round.feedback_summary || {};
-            const panel = Array.isArray(round.interviewer_panel) ? round.interviewer_panel : [];
-            return <article className="recruitment-feedback-round" key={idOf(round.interview) || `${round.round_key}-${roundIndex}`}><div className="recruitment-feedback-round-head"><div><h4>{round.sequence_no || roundIndex + 1}. {round.round_label || labelOf(round.round_key)}</h4><p className="recruitment-muted">{formatDate(round.interview?.scheduled_at, true)} · {labelOf(round.interview?.mode)}</p></div><div className="recruitment-feedback-summary"><Status value={round.status || 'scheduled'} /><Status value={roundSummary.status || 'not_available'} /><span className="recruitment-chip">{roundSummary.submitted || 0}/{roundSummary.assigned || 0}</span></div></div>
-              <div className="recruitment-feedback-panel-list">{panel.map((member, memberIndex) => {
-                const memberFeedback = member.feedback || null;
-                const roles = member.roles || memberFeedback?.interviewer_roles || [];
-                return <section className="recruitment-feedback-person" key={member.user_id || memberIndex}><div className="recruitment-feedback-person-head"><div className="recruitment-person"><span className="recruitment-avatar">{initials(member.name || member.email)}</span><span className="recruitment-person-copy"><strong>{member.name || member.email || 'Assigned interviewer'}</strong><small>{roles.length ? roles.map(labelOf).join(' · ') : 'Interviewer'}</small></span></div><Status value={member.feedback_status || (memberFeedback ? 'submitted' : 'not_available')} /></div>
-                  {memberFeedback ? <><div className="recruitment-feedback-rating-list"><div className="recruitment-feedback-rating"><span>Overall rating</span><strong>{memberFeedback.overall_rating ?? '—'} / 5</strong></div><div className="recruitment-feedback-rating"><span>Recommendation</span><strong>{labelOf(memberFeedback.recommendation)}</strong></div>{Object.entries(memberFeedback.ratings || {}).map(([key, value]) => <div className="recruitment-feedback-rating" key={key}><span>{labelOf(key)}</span><strong>{value} / 5</strong></div>)}</div><div className="recruitment-feedback-copy-grid"><div className="recruitment-feedback-copy"><span>Strengths</span><p>{textOf(memberFeedback.strengths) || '—'}</p></div><div className="recruitment-feedback-copy"><span>Concerns</span><p>{textOf(memberFeedback.concerns) || '—'}</p></div><div className="recruitment-feedback-copy is-full"><span>Comments</span><p>{textOf(memberFeedback.comments) || '—'}</p></div></div></> : <p className="recruitment-feedback-status-line">{member.feedback_status === 'pending' ? 'Interview completed; this interviewer still needs to submit feedback.' : 'Feedback becomes available after this interview is completed.'}</p>}
-                </section>;
-              })}</div>
-            </article>;
-          })}</div>
-        </> : <Empty icon={ClipboardCheck} title="No feedback sheet available" message="Choose an application with scheduled interviews." />}</div>
-      </div> : <Empty icon={ClipboardCheck} title="No interview feedback found" message="Applications appear here after the first interview is scheduled." />}
+    const selectedApplication = feedbackApplications.find(
+      (item) => idOf(item) === feedbackApplicationId,
+    ) || {};
+    const displayApplication = Object.keys(application).length ? application : selectedApplication;
+
+    const selectFeedbackCandidate = (applicationId) => {
+      const nextId = String(applicationId || '').trim();
+      if (!nextId) return;
+      setFeedbackCandidateMenuOpen(false);
+      openFeedbackApplication(nextId);
+    };
+
+    const showFeedbackCandidateSelector = () => {
+      setFeedbackCandidateMenuOpen(false);
+      setFeedbackApplicationId('');
+      setFeedbackSheet({});
+      setFeedbackLoading(false);
+    };
+
+    return <section className="recruitment-panel recruitment-feedback-page">
+      <SectionHead
+        title="Interview feedback"
+        description="HR and Admin review every round, interviewer role, submitted scorecard and pending response in one place"
+      />
+
+      {feedbackApplications.length ? !feedbackApplicationId ? <div className="recruitment-feedback-selector">
+        <div className="recruitment-feedback-selector-head">
+          <div className="recruitment-feedback-selector-copy">
+            <span className="recruitment-feedback-selector-eyebrow">Interview reviews</span>
+            <h3>Select a candidate</h3>
+            <p>Choose a candidate to open the complete interview feedback review.</p>
+          </div>
+          <span className="recruitment-feedback-selector-icon" aria-hidden="true">
+            <ClipboardCheck size={20} />
+          </span>
+        </div>
+
+        <div className="recruitment-feedback-selector-field">
+          <label htmlFor="recruitment-feedback-candidate-select">Available candidates</label>
+          <div className="recruitment-feedback-select-wrap">
+            <button
+              id="recruitment-feedback-candidate-select"
+              type="button"
+              className={`recruitment-feedback-select-trigger${feedbackCandidateMenuOpen ? ' is-open' : ''}`}
+              aria-haspopup="listbox"
+              aria-expanded={feedbackCandidateMenuOpen}
+              onClick={() => setFeedbackCandidateMenuOpen((open) => !open)}
+            >
+              <span className="recruitment-feedback-select-trigger-icon" aria-hidden="true">
+                <UserSearch size={16} />
+              </span>
+              <span className="recruitment-feedback-select-trigger-copy">Select candidate</span>
+              <span className="recruitment-feedback-select-trigger-caret" aria-hidden="true">
+                <ArrowUp size={16} />
+              </span>
+            </button>
+
+            {feedbackCandidateMenuOpen ? <div
+              className="recruitment-feedback-options"
+              role="listbox"
+              aria-label="Available candidates"
+            >
+              {feedbackApplications.map((item) => {
+                const itemInterviews = interviews.filter(
+                  (row) => String(row.application_id || '') === idOf(item),
+                );
+                const completed = itemInterviews.filter(
+                  (row) => keyOf(row.status) === 'completed',
+                ).length;
+
+                return <button
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  className="recruitment-feedback-option"
+                  key={idOf(item)}
+                  onClick={() => selectFeedbackCandidate(idOf(item))}
+                >
+                  <span className="recruitment-feedback-option-avatar" aria-hidden="true">
+                    {initials(item.candidate_name || 'Candidate')}
+                  </span>
+                  <span className="recruitment-feedback-option-copy">
+                    <strong>{item.candidate_name || 'Candidate'}</strong>
+                    <small>{item.job_title || 'Job opening'}</small>
+                    <small>{completed}/{itemInterviews.length} rounds completed</small>
+                  </span>
+                </button>;
+              })}
+            </div> : null}
+          </div>
+          <small>
+            {feedbackApplications.length} candidate{feedbackApplications.length === 1 ? '' : 's'} available for review
+          </small>
+        </div>
+      </div> : <div className="recruitment-feedback-details">
+        <div className="recruitment-feedback-details-toolbar">
+          <button
+            type="button"
+            className="recruitment-btn recruitment-btn-neutral recruitment-feedback-select-candidate-btn"
+            onClick={showFeedbackCandidateSelector}
+          >
+            <UserSearch size={14} />Select candidate
+          </button>
+        </div>
+
+        {feedbackLoading ? <div className="recruitment-feedback-loading-card" role="status" aria-live="polite">
+          <span className="recruitment-feedback-loading-avatar" aria-hidden="true">
+            {initials(selectedApplication.candidate_name || 'Candidate')}
+          </span>
+          <div className="recruitment-feedback-loading-copy">
+            <strong>{selectedApplication.candidate_name || 'Candidate'}</strong>
+            <span>{selectedApplication.job_title || 'Job opening'}</span>
+            <small><Loader2 size={13} />Loading feedback details…</small>
+          </div>
+        </div> : rounds.length ? <div className="recruitment-feedback-sheet">
+          <div className="recruitment-feedback-sheet-head">
+            <div className="recruitment-feedback-sheet-identity">
+              <span className="recruitment-feedback-sheet-avatar" aria-hidden="true">
+                {initials(displayApplication.candidate_name || 'Candidate')}
+              </span>
+
+              <div className="recruitment-feedback-sheet-copy">
+                <h3>{displayApplication.candidate_name || 'Candidate'}</h3>
+                <p className="recruitment-muted">
+                  {displayApplication.job_title || 'Job opening'} · {displayApplication.reference_no || 'Application'}
+                </p>
+
+                <div className="recruitment-feedback-summary">
+                  <Status value={summary.complete ? 'complete' : (summary.pending ? 'pending' : 'not_available')} />
+                  <span className="recruitment-chip">{summary.submitted || 0}/{summary.assigned || 0} submitted</span>
+                  {summary.pending ? <span className="recruitment-chip">{summary.pending} pending</span> : null}
+                </div>
+              </div>
+            </div>
+
+            {keyOf(displayApplication.status) === 'interviewed' &&
+            displayApplication.interview_process_completed !== true &&
+            summary.complete ? <button
+              type="button"
+              className="recruitment-btn recruitment-btn-primary"
+              onClick={() => setConfirm({
+                title: 'Complete interview process',
+                message: 'All rounds and assigned feedback are complete. Confirm the process before candidate selection.',
+                label: 'Complete process',
+                tone: 'primary',
+                action: () => act(
+                  `complete-process:${idOf(displayApplication)}`,
+                  () => completeRecruitmentInterviewProcess(idOf(displayApplication)),
+                  'Interview process completed.',
+                  'feedback',
+                ),
+              })}
+            >
+              <ClipboardCheck size={15} />Complete process
+            </button> : displayApplication.interview_process_completed === true ? <Status value="complete" /> : null}
+          </div>
+
+          {summary.pending_interviewers?.length ? <div className="recruitment-alert recruitment-alert-warning recruitment-feedback-pending-alert">
+            <AlertCircle size={17} />
+            <span>
+              Pending feedback: {summary.pending_interviewers.map(
+                (item) => `${item.name || 'Assigned interviewer'} (${item.round_label || 'Interview'})`,
+              ).join(', ')}
+            </span>
+          </div> : null}
+
+          <div className="recruitment-feedback-rounds">
+            {rounds.map((round, roundIndex) => {
+              const roundSummary = round.feedback_summary || {};
+              const panel = Array.isArray(round.interviewer_panel) ? round.interviewer_panel : [];
+
+              return <article
+                className="recruitment-feedback-round"
+                key={idOf(round.interview) || `${round.round_key}-${roundIndex}`}
+              >
+                <div className="recruitment-feedback-round-head">
+                  <div className="recruitment-feedback-round-title">
+                    <span className="recruitment-feedback-round-number" aria-hidden="true">
+                      {String(round.sequence_no || roundIndex + 1).padStart(2, '0')}
+                    </span>
+
+                    <div>
+                      <h4>{round.round_label || labelOf(round.round_key)}</h4>
+                      <p className="recruitment-muted">
+                        {formatDate(round.interview?.scheduled_at, true)} · {labelOf(round.interview?.mode)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="recruitment-feedback-summary">
+                    <Status value={round.status || 'scheduled'} />
+                    <Status value={roundSummary.status || 'not_available'} />
+                    <span className="recruitment-chip">{roundSummary.submitted || 0}/{roundSummary.assigned || 0}</span>
+                  </div>
+                </div>
+
+                <div className="recruitment-feedback-panel-list">
+                  {panel.map((member, memberIndex) => {
+                    const memberFeedback = member.feedback || null;
+                    const roles = member.roles || memberFeedback?.interviewer_roles || [];
+
+                    return <section className="recruitment-feedback-person" key={member.user_id || memberIndex}>
+                      <div className="recruitment-feedback-person-head">
+                        <div className="recruitment-person">
+                          <span className="recruitment-avatar">{initials(member.name || member.email)}</span>
+                          <span className="recruitment-person-copy">
+                            <strong>{member.name || member.email || 'Assigned interviewer'}</strong>
+                            <small>{roles.length ? roles.map(labelOf).join(' · ') : 'Interviewer'}</small>
+                          </span>
+                        </div>
+                        <Status value={member.feedback_status || (memberFeedback ? 'submitted' : 'not_available')} />
+                      </div>
+
+                      {memberFeedback ? <>
+                        <div className="recruitment-feedback-rating-list">
+                          <div className="recruitment-feedback-rating is-overall">
+                            <span>Overall rating</span>
+                            <strong>{memberFeedback.overall_rating ?? '—'} / 5</strong>
+                          </div>
+
+                          <div className="recruitment-feedback-rating is-recommendation">
+                            <span>Recommendation</span>
+                            <strong>{labelOf(memberFeedback.recommendation)}</strong>
+                          </div>
+
+                          {Object.entries(memberFeedback.ratings || {}).map(([key, value]) =>
+                            <div className="recruitment-feedback-rating" key={key}>
+                              <span>{labelOf(key)}</span>
+                              <strong>{value} / 5</strong>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="recruitment-feedback-copy-grid">
+                          <div className="recruitment-feedback-copy">
+                            <span>Strengths</span>
+                            <p>{textOf(memberFeedback.strengths) || '—'}</p>
+                          </div>
+
+                          <div className="recruitment-feedback-copy">
+                            <span>Concerns</span>
+                            <p>{textOf(memberFeedback.concerns) || '—'}</p>
+                          </div>
+
+                          <div className="recruitment-feedback-copy is-full">
+                            <span>Comments</span>
+                            <p>{textOf(memberFeedback.comments) || '—'}</p>
+                          </div>
+                        </div>
+                      </> : <p className="recruitment-feedback-status-line">
+                        {member.feedback_status === 'pending'
+                          ? 'Interview completed; this interviewer still needs to submit feedback.'
+                          : 'Feedback becomes available after this interview is completed.'}
+                      </p>}
+                    </section>;
+                  })}
+                </div>
+              </article>;
+            })}
+          </div>
+        </div> : <Empty
+          icon={ClipboardCheck}
+          title="No feedback sheet available"
+          message="This candidate has interviews, but no feedback details are available yet."
+        />}
+      </div> : <Empty
+        icon={ClipboardCheck}
+        title="No interview feedback found"
+        message="Applications appear here after the first interview is scheduled."
+      />}
     </section>;
   }
 
@@ -2359,8 +3282,8 @@ export default function Recruitment() {
   }
 
   function settingsPage() {
-    return <section className="recruitment-panel"><SectionHead title="Recruitment settings" description="Company-specific workflow and communication controls" />
-      <form className="recruitment-form" onSubmit={(event) => { event.preventDefault(); act('settings', () => updateRecruitmentSettings(settings), 'Recruitment settings updated.', 'settings'); }}>
+    return <section className="recruitment-panel recruitment-settings-page"><SectionHead title="Recruitment settings" description="Company-specific workflow and communication controls" />
+      <form className="recruitment-form recruitment-settings-form" onSubmit={(event) => { event.preventDefault(); act('settings', () => updateRecruitmentSettings(settings), 'Recruitment settings updated.', 'settings'); }}>
         <div className="recruitment-career-link-card"><span className="recruitment-career-link-icon"><Link2 size={18} /></span><div className="recruitment-career-link-copy"><strong>Public career portal link</strong><span>This direct link automatically uses the active YourComate domain and this tenant’s career slug.</span>{careerPortalUrl ? <a href={careerPortalUrl} target="_blank" rel="noreferrer">{careerPortalUrl}</a> : <em>Save a valid career page slug to generate the public link.</em>}</div><div className="recruitment-career-link-actions"><button type="button" className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" disabled={!careerPortalUrl} onClick={() => copyCareerPortalLink()}><Copy size={13} />Copy link</button><a className={`recruitment-btn recruitment-btn-primary recruitment-btn-sm${careerPortalUrl ? '' : ' is-disabled'}`} href={careerPortalUrl || undefined} target="_blank" rel="noreferrer" aria-disabled={!careerPortalUrl} onClick={(event) => { if (!careerPortalUrl) event.preventDefault(); }}><ExternalLink size={13} />Open portal</a></div></div>
         <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Workflow controls</h3><div className="recruitment-form-grid">{[
           ['module_enabled', 'Recruitment module enabled'], ['career_page_enabled', 'Public career page enabled'], ['allow_employee_referrals', 'Allow employee referrals'], ['require_hiring_request_approval', 'Require hiring request approval'], ['require_salary_approval', 'Require salary and offer approval'],
@@ -2453,7 +3376,7 @@ function InterviewRoundsEditor({ rounds, disabled, onChange }) {
     while (keys.has(key)) { suffix += 1; key = `interview_round_${suffix}`; }
     apply([...items, { key, label: `Interview Round ${items.length + 1}` }]);
   };
-  return <div className="recruitment-form-section"><div className="recruitment-section-head"><div><h3 className="recruitment-form-section-title">Interview rounds</h3><p>Rename or reorder tenant rounds. The stable round key is preserved when its label changes.</p></div>{!disabled ? <button type="button" className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" onClick={add}><Plus size={13} />Add round</button> : null}</div><div className="recruitment-round-editor">{items.map((round, index) => <div className="recruitment-round-row" key={round.key}><span className="recruitment-round-number">{index + 1}</span><Field label="Round label" hint={`Key: ${round.key}`}><input required value={round.label || ''} disabled={disabled} onChange={(event) => apply(items.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} /></Field><div className="recruitment-round-actions"><button type="button" className="recruitment-icon-btn" title="Move round up" aria-label={`Move ${round.label} up`} disabled={disabled || index === 0} onClick={() => move(index, -1)}><ArrowUp size={15} /></button><button type="button" className="recruitment-icon-btn" title="Move round down" aria-label={`Move ${round.label} down`} disabled={disabled || index === items.length - 1} onClick={() => move(index, 1)}><ArrowDown size={15} /></button><button type="button" className="recruitment-icon-btn" title="Remove round" aria-label={`Remove ${round.label}`} disabled={disabled || items.length <= 1} onClick={() => apply(items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></div></div>)}</div></div>;
+  return <div className="recruitment-form-section recruitment-settings-rounds"><div className="recruitment-section-head"><div><h3 className="recruitment-form-section-title">Interview rounds</h3><p>Rename or reorder tenant rounds. The stable round key is preserved when its label changes.</p></div>{!disabled ? <button type="button" className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" onClick={add}><Plus size={13} />Add round</button> : null}</div><div className="recruitment-round-editor">{items.map((round, index) => <div className="recruitment-round-row" key={round.key}><span className="recruitment-round-number">{index + 1}</span><Field label="Round label" hint={`Key: ${round.key}`}><input required value={round.label || ''} disabled={disabled} onChange={(event) => apply(items.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} /></Field><div className="recruitment-round-actions"><button type="button" className="recruitment-icon-btn" title="Move round up" aria-label={`Move ${round.label} up`} disabled={disabled || index === 0} onClick={() => move(index, -1)}><ArrowUp size={15} /></button><button type="button" className="recruitment-icon-btn" title="Move round down" aria-label={`Move ${round.label} down`} disabled={disabled || index === items.length - 1} onClick={() => move(index, 1)}><ArrowDown size={15} /></button><button type="button" className="recruitment-icon-btn" title="Remove round" aria-label={`Remove ${round.label}`} disabled={disabled || items.length <= 1} onClick={() => apply(items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></div></div>)}</div></div>;
 }
 
 function Toolbar({ search, setSearch, status, setStatus, statuses = [], onApply, placeholder = 'Search' }) {

@@ -52,6 +52,7 @@ export default function SiteHeader() {
   const navRef = useRef(null);
   const closeMenuTimerRef = useRef(null);
   const activeMenuRef = useRef(null);
+  const desktopPointerTypeRef = useRef("mouse");
   const mobileOpenRef = useRef(false);
   const mobileMenuCanvasRef = useRef(null);
   const mobilePanelRefs = useRef(new Map());
@@ -81,6 +82,14 @@ export default function SiteHeader() {
     (menuKey) => {
       cancelMenuClose();
       setActiveMenu(menuKey);
+    },
+    [cancelMenuClose],
+  );
+
+  const toggleDesktopMenu = useCallback(
+    (menuKey) => {
+      cancelMenuClose();
+      setActiveMenu((current) => (current === menuKey ? null : menuKey));
     },
     [cancelMenuClose],
   );
@@ -286,9 +295,24 @@ export default function SiteHeader() {
                 <div
                   className="public-nav-item"
                   key={menu.key}
-                  onPointerEnter={() => openDesktopMenu(menu.key)}
-                  onPointerLeave={scheduleMenuClose}
-                  onFocus={() => openDesktopMenu(menu.key)}
+                  onPointerDown={(event) => {
+                    desktopPointerTypeRef.current = event.pointerType || "mouse";
+                  }}
+                  onPointerEnter={(event) => {
+                    if (event.pointerType === "mouse") {
+                      openDesktopMenu(menu.key);
+                    }
+                  }}
+                  onPointerLeave={(event) => {
+                    if (event.pointerType === "mouse") {
+                      scheduleMenuClose();
+                    }
+                  }}
+                  onFocus={(event) => {
+                    if (event.target.matches?.(":focus-visible")) {
+                      openDesktopMenu(menu.key);
+                    }
+                  }}
                   onBlur={(event) => {
                     if (!event.currentTarget.contains(event.relatedTarget)) {
                       scheduleMenuClose();
@@ -298,7 +322,23 @@ export default function SiteHeader() {
                   <div
                     className={`public-nav-trigger ${isOpen || isCurrent ? "is-active" : ""}`}
                   >
-                    <NavLink to={menu.featured.href}>{menu.label}</NavLink>
+                    <NavLink
+                      to={menu.featured.href}
+                      onClick={(event) => {
+                        const isPointerActivation = event.detail > 0;
+                        const isTouchLikePointer =
+                          desktopPointerTypeRef.current === "touch" ||
+                          desktopPointerTypeRef.current === "pen";
+
+                        if (isPointerActivation && isTouchLikePointer) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleDesktopMenu(menu.key);
+                        }
+                      }}
+                    >
+                      {menu.label}
+                    </NavLink>
 
                     <button
                       type="button"
@@ -306,11 +346,11 @@ export default function SiteHeader() {
                       aria-label={`${isOpen ? "Close" : "Open"} ${menu.label} menu`}
                       aria-expanded={isOpen}
                       aria-controls={menuId}
-                      onClick={() =>
-                        setActiveMenu((current) =>
-                          current === menu.key ? null : menu.key,
-                        )
-                      }
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleDesktopMenu(menu.key);
+                      }}
                     >
                       <Icon name="chevronDown" />
                     </button>

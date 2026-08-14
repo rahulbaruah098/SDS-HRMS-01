@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -78,6 +79,25 @@ function buildFrameGeometry(width, height) {
 export default function FooterFlowFrame() {
   const hostRef = useRef(null);
   const [size, setSize] = useState(INITIAL_SIZE);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+
+    if (typeof IntersectionObserver !== "function") {
+      setIsVisible(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsVisible(Boolean(entry?.isIntersecting)),
+      { root: null, rootMargin: "160px 0px", threshold: 0.01 },
+    );
+
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -136,7 +156,7 @@ export default function FooterFlowFrame() {
   return (
     <div
       ref={hostRef}
-      className="yc-flow-footer-art"
+      className={`yc-flow-footer-art${isVisible ? " is-active" : ""}`}
       aria-hidden="true"
     >
       <svg

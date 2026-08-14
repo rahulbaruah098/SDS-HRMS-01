@@ -53,6 +53,7 @@ function HeroActionLink({ action, className, showArrow = false }) {
 export default function PageHero({
   eyebrow,
   title,
+  titleAccent,
   description,
   icon = "sparkle",
   tone = "violet",
@@ -76,7 +77,10 @@ export default function PageHero({
             </span>
           </div>
 
-          <h1>{title}</h1>
+          <h1>
+  <span>{title}</span>
+  {titleAccent ? <em>{titleAccent}</em> : null}
+</h1>
           <p>{description}</p>
 
           <div className="public-hero-actions">
@@ -100,14 +104,7 @@ export default function PageHero({
           )}
         </div>
 
-        <div
-          className="public-page-hero-visual"
-          {...(
-            ["feature-guide", "resources", "resource-detail", "product", "pricing"].includes(variant)
-              ? {}
-              : { "data-motion-depth": "1.1" }
-          )}
-        >
+        <div className="public-page-hero-visual">
           <div className="yc-hero-visual-frame">
             {children}
           </div>

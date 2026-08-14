@@ -699,14 +699,7 @@ const moduleRows = [
     "Validity, renewal alerts, quotation, Razorpay payment history and invoice downloads."
   ]
 ];
-const sourceItems = [
-  "frontend/src/data/modules.js - module titles, role sets, capability rules and workflow descriptions",
-  "frontend/src/data/publicSiteData.js - public product groups, feature summaries and workflow language",
-  "frontend/src/pages/ResourcesPage.jsx and ResourceDetailPage.jsx - resource-centre intent",
-  "frontend/src/pages/Recruitment.jsx - hiring request, interview, offer, joining and conversion workflow",
-  "frontend/src/pages/Payroll.jsx - payroll eligibility, HR Review, Finance approval, lock and disbursement flow",
-  "backend/app/services/pricing_service.py and billing_service.py - plans, authoritative pricing and payment activation"
-];
+
 
 function ResourceTable({ table }) {
   return (
@@ -742,7 +735,8 @@ export default function HRMSGuidePage() {
     <main className="public-main yc-resource-document yc-resource-guide-document">
       <PageHero
         eyebrow="HRMS guide"
-        title="Run YourComate with a clear operating playbook."
+        title="Run YourComate "
+        titleAccent="with a clear operating playbook."
         description="Set up roles, people data, approvals, payroll and everyday workflows in the right order—from approved trial to stable adoption."
         icon="book"
         tone="cyan"
@@ -823,15 +817,6 @@ export default function HRMSGuidePage() {
             </section>
           </div>
 
-          <section className="yc-resource-source-note">
-            <h2>Source and maintenance note</h2>
-            <p>The following project sources were used to verify the document. Review this resource whenever roles, module names, workflow states, pricing, trial rules or screen behaviour changes.</p>
-            <ol>{sourceItems.map((item) => <li key={item}>{item}</li>)}</ol>
-            <aside className="yc-resource-callout tone-cyan">
-              <strong>Resource owner</strong>
-              <p>Sayanant Development Services Pvt. Ltd. / YourComate HRMS. Questions or correction requests: <a href="mailto:hr@sayanant.com">hr@sayanant.com</a>.</p>
-            </aside>
-          </section>
 
           <div className="yc-resource-end-actions">
             <Link className="button button-ghost" to="/resources"><Icon name="arrowLeft" /> All Resources</Link>

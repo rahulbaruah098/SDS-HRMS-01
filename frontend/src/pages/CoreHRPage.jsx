@@ -48,28 +48,6 @@ const page = {
   "Payroll uses active employee, salary, bank and statutory context.",
   "Assets, policies, notifications and the directory remain tenant-scoped."
 ],
-  controls: [
-  "Verify the tenant before creating or editing an employee.",
-  "Keep department, designation and state masters accurate before onboarding staff.",
-  "Do not create separate TL or RO accounts for employees who already have logins.",
-  "Use lifecycle movement instead of leaving departed employees in the active master.",
-  "Limit exports and personal data access to authorised business users.",
-  "Review reporting mappings after a manager, designation or department change."
-],
-  checklist: [
-  "Confirm legal entity and work location.",
-  "Confirm official identity and contact details.",
-  "Confirm department, designation, employment type and status.",
-  "Confirm login requirement and role access.",
-  "Confirm TL/RO capability and reporting mappings where applicable.",
-  "Confirm exit information before moving a person to Alumni."
-],
-  notes: [
-  "The employee record is the shared source for multiple downstream modules, so duplicate or incomplete profiles can affect approvals and reporting.",
-  "Role visibility depends on the logged-in user's role, employee capability flags and tenant configuration.",
-  "Use CSV output as an authorised operational export, not as an uncontrolled replacement database."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Employees.jsx; frontend/src/pages/EmployeeDirectory.jsx.",
 };
 
 export default function CoreHRPage() {

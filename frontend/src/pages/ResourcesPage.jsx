@@ -49,7 +49,8 @@ export default function ResourcesPage() {
     <main className="public-main yc-resource-centre-page">
       <PageHero
         eyebrow="Resource centre"
-        title="Choose the resource that matches what you need to do next."
+        title="Choose the resource that matches what"
+        titleAccent="you need to do next."
         description="Use the operating guide for implementation, walkthroughs for role-by-role actions, or FAQs for quick verified answers."
         icon="book"
         tone="amber"

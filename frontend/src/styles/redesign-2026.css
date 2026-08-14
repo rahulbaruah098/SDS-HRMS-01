@@ -59,8 +59,8 @@ body {
   isolation: isolate;
 }
 
-.public-main > section::after,
-.public-main > article::after {
+.public-main:not(.yc-product-overview-page) > section::after,
+.public-main:not(.yc-product-overview-page) > article::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -159,6 +159,7 @@ body {
     0 16px 38px rgba(23, 33, 63, 0.11),
     inset 0 1px 0 rgba(255, 255, 255, 0.94);
 }
+
 
 .public-desktop-nav {
   padding: 4px;
@@ -525,7 +526,7 @@ body {
   font-family: var(--yc-display);
   font-size: clamp(52px, 5.2vw, 92px);
   font-style: italic;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 0.82;
   letter-spacing: -0.045em;
   text-align: center;
@@ -1069,6 +1070,12 @@ border-color: rgba(159, 194, 218, 0.64);
 @media (max-width: 760px) {
   :root {
     --yc-header-height: 94px;
+  }
+
+  .public-main > section::after,
+  .public-main > article::after {
+    content: none;
+    display: none;
   }
 
   .yc-saya-promo {
@@ -1801,7 +1808,7 @@ border-color: rgba(159, 194, 218, 0.64);
   font-family: var(--yc-display);
   font-size: clamp(48px, 5vw, 88px);
   font-style: italic;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 0.82;
   letter-spacing: -0.045em;
   text-align: right;
@@ -2083,8 +2090,10 @@ border-color: rgba(159, 194, 218, 0.64);
   .yc-manifesto-copy h2,
   .yc-role-copy h2,
   .public-saya-copy h2 {
-    font-size: clamp(42px, 4vw, 68px) !important;
-  }
+    font-size: clamp(36px, 3.6vw, 56px) !important;
+  font-weight: 600 !important;
+  line-height: 0.98;
+}
 
   .yc-module-stage,
   .public-role-showcase,
@@ -2675,21 +2684,22 @@ border-color: rgba(159, 194, 218, 0.64);
    Single-screen landing heroes and low-cost rendering
 --------------------------------------------------------------------- */
 .public-page-hero {
-  height: calc(100svh - var(--yc-header-height));
-  min-height: 0;
-  max-height: calc(100svh - var(--yc-header-height));
+  height: auto;
+  min-height: calc(100svh - var(--yc-header-height));
+  max-height: none;
   padding: clamp(18px, 2.6vh, 34px) 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .public-page-hero-grid {
-  height: 100%;
-  min-height: 0;
+  min-height: calc(100svh - var(--yc-header-height) - clamp(36px, 5.2vh, 68px));
+  height: auto;
   align-items: center;
 }
 
 .public-page-hero-copy h1 {
   font-size: clamp(42px, min(5.2vw, 8.5vh), 86px);
+  line-height: 1.08;
 }
 
 .public-page-hero-copy > p {
@@ -2719,8 +2729,9 @@ border-color: rgba(159, 194, 218, 0.64);
 
 .yc-hero-visual-frame {
   width: calc(100% - clamp(12px, 1.4vw, 22px));
-  height: calc(100% - clamp(14px, 2.2vh, 28px));
-  max-height: calc(100% - clamp(14px, 2.2vh, 28px));
+  height: auto;
+  min-height: clamp(440px, 62vh, 680px);
+  max-height: none;
 }
 
 @media (max-width: 980px) {
@@ -2751,7 +2762,7 @@ border-color: rgba(159, 194, 218, 0.64);
   .public-page-hero-copy h1 {
     margin-top: 10px;
     font-size: clamp(32px, min(7.8vw, 6.6vh), 48px);
-    line-height: 0.91;
+    line-height: 1.08;
   }
 
   .public-page-hero-copy > p {
@@ -2779,14 +2790,14 @@ border-color: rgba(159, 194, 218, 0.64);
   .public-page-hero-visual {
     width: 100%;
     height: auto;
-    min-height: clamp(520px, 126vw, 700px);
+    min-height: 0;
   }
 
   .yc-hero-visual-frame {
     width: 100%;
-    height: clamp(520px, 126vw, 700px);
+    height: auto;
     max-height: none;
-    min-height: clamp(520px, 126vw, 700px);
+    min-height: 0;
     padding: clamp(10px, 2.6vw, 16px);
     border-radius: clamp(20px, 5vw, 28px);
     transform: none !important;
@@ -2796,8 +2807,8 @@ border-color: rgba(159, 194, 218, 0.64);
   .feature-workbench,
   .yc-sayanant-group-scene {
     width: 100%;
-    height: 100%;
-    min-height: 0;
+    height: auto;
+    min-height: clamp(360px, 88vw, 520px);
     padding: clamp(12px, 3vw, 18px);
     border-radius: clamp(16px, 4vw, 22px);
   }
@@ -2814,12 +2825,12 @@ border-color: rgba(159, 194, 218, 0.64);
   }
 
   .public-page-hero-visual {
-    min-height: clamp(500px, 142vw, 640px);
+    min-height: 0;
   }
 
   .yc-hero-visual-frame {
-    height: clamp(500px, 142vw, 640px);
-    min-height: clamp(500px, 142vw, 640px);
+    height: auto;
+    min-height: 0;
   }
 
   .public-page-hero-copy h1 {

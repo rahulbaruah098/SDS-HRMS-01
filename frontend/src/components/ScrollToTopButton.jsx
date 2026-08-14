@@ -1,19 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Icon from "./Icon";
 
 export default function ScrollToTopButton() {
   const [visible, setVisible] = useState(false);
-  const [deckIndex, setDeckIndex] = useState(0);
+  const deckIndexRef = useRef(0);
 
   useEffect(() => {
     const updateVisibility = () => {
-      setVisible(window.scrollY > 120 || deckIndex > 0);
+      setVisible(window.scrollY > 120 || deckIndexRef.current > 0);
     };
 
     const handleState = (event) => {
-      const nextIndex = Number(event.detail?.index || 0);
-      setDeckIndex(nextIndex);
-      setVisible(window.scrollY > 120 || nextIndex > 0);
+      deckIndexRef.current = Number(event.detail?.index || 0);
+      updateVisibility();
     };
 
     updateVisibility();
@@ -24,7 +23,7 @@ export default function ScrollToTopButton() {
       window.removeEventListener("scroll", updateVisibility);
       window.removeEventListener("yc-page-deck-state", handleState);
     };
-  }, [deckIndex]);
+  }, []);
 
   const returnToStart = () => {
     window.dispatchEvent(new CustomEvent("yc-page-deck-go", { detail: { index: 0 } }));

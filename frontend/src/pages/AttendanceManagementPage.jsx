@@ -48,28 +48,6 @@ const page = {
   "Leave uses generated Comp-Off credits.",
   "Reports and payroll consume attendance, approved leave and LWP context."
 ],
-  controls: [
-  "Do not mark holiday attendance without an approved holiday work request.",
-  "Capture field place, photo and location truthfully where the workflow requires them.",
-  "Provide a meaningful reason for late entry or early checkout.",
-  "Check-out is required to complete the attendance and holiday credit sequence.",
-  "Do not manually duplicate a Comp-Off credit created by the system.",
-  "Use correction or review processes rather than editing records outside the authorised workflow."
-],
-  checklist: [
-  "Confirm employee, state and work schedule configuration.",
-  "Confirm allowed attendance modes.",
-  "Confirm browser/device permission for field location and photo where needed.",
-  "Confirm holiday calendar and weekend rules.",
-  "Confirm TL/RO mappings for team review.",
-  "Reconcile exceptions before payroll attendance synchronisation."
-],
-  notes: [
-  "Comp-Off can be claimed from the next working day within 7 working days after it is generated.",
-  "The exact action shown to a user depends on the live role, employee profile and configured attendance rules.",
-  "Location and photo evidence should be processed according to the Customer's privacy and retention requirements."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Attendance.jsx; frontend/src/pages/HolidayWorkRequests.jsx; frontend/src/pages/AttendanceLogs.jsx.",
 };
 
 export default function AttendanceManagementPage() {

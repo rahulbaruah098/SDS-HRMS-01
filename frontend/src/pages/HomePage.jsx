@@ -66,178 +66,9 @@ const dayMoments = [
   ["17:42", "sparkle", "Saya closes the loop", "The next useful action is ready before tomorrow begins."],
 ];
 
-const sayaCards = [
-  {
-    id: "workday-note",
-    tone: "sky",
-    imageSrc: "/images/yourcomate3.png",
-    imageAlt: "YourComate Saya AI assistant workday illustration",
-    mark: "S",
-    title: "SAYA AI",
-    eyebrow: "WORKDAY NOTE",
-    status: "Context ready",
-    questionLabel: "YOU ASKED",
-    question: "What should I finish before I log off?",
-    answerLabel: "SAYA SUGGESTS",
-    answer:
-      "One attendance exception, two leave decisions and one project update are still open.",
-    actionsLabel: "AVAILABLE NEXT STEPS",
-    actions: ["Review attendance", "Open approvals", "Update project"],
-    footer:
-      "Suggestions are limited to actions available to the signed-in user.",
-  },
-  {
-    id: "manager-brief",
-    tone: "violet",
-    imageSrc: "/images/yourcomate.png",
-    imageAlt: "YourComate Saya AI assistant manager illustration",
-    mark: "M",
-    title: "SAYA AI",
-    eyebrow: "MANAGER BRIEF",
-    status: "Team context ready",
-    questionLabel: "YOU ASKED",
-    question: "Which team decisions need attention first?",
-    answerLabel: "SAYA SUGGESTS",
-    answer:
-      "Two leave requests, one attendance exception and one milestone need a decision today.",
-    actionsLabel: "AVAILABLE NEXT STEPS",
-    actions: ["Review requests", "Check exception", "Open milestone"],
-    footer:
-      "The brief only includes people and projects available to this manager.",
-  },
-  {
-    id: "people-pulse",
-    tone: "amber",
-    imageSrc: "/images/yourcomate2.png",
-    imageAlt: "YourComate Saya AI assistant people operations illustration",
-    mark: "P",
-    title: "SAYA AI",
-    eyebrow: "PEOPLE PULSE",
-    status: "Organisation in sync",
-    questionLabel: "YOU ASKED",
-    question: "What changed across people operations today?",
-    answerLabel: "SAYA SUGGESTS",
-    answer:
-      "A new employee is ready, policy acknowledgement reached 96% and payroll inputs are complete.",
-    actionsLabel: "AVAILABLE NEXT STEPS",
-    actions: ["Open employee", "Review policy", "Check payroll"],
-    footer:
-      "Every summary respects the signed-in user's role and permitted records.",
-  },
-];
-
-function SayaStackCard({
-  card,
-  stackPosition,
-  onActivate,
-}) {
-  const isFront = stackPosition === 0;
-
-  const handleKeyDown = (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onActivate();
-    }
-  };
-
-  return (
-    <article
-      className={`yc-soft-saya-note stack-position-${stackPosition} tone-${card.tone}${card.imageSrc ? " has-image" : ""}`}
-      role="button"
-      tabIndex={0}
-      aria-label={`${isFront ? "Current" : "Open"} ${card.eyebrow.toLowerCase()} card`}
-      aria-pressed={isFront}
-      title={
-        isFront
-          ? "Click to move this card behind the other cards"
-          : "Click to bring this card to the front"
-      }
-      onClick={onActivate}
-      onKeyDown={handleKeyDown}
-    >
-      {card.imageSrc ? (
-        <span className="yc-soft-saya-phone">
-          <span className="yc-soft-saya-phone-speaker" aria-hidden="true" />
-          <span className="yc-soft-saya-phone-camera" aria-hidden="true" />
-          <span className="yc-soft-saya-phone-screen">
-            <img
-              src={card.imageSrc}
-              alt={card.imageAlt}
-              loading={isFront ? "eager" : "lazy"}
-              decoding="async"
-              draggable="false"
-            />
-          </span>
-        </span>
-      ) : (
-        <>
-          <header>
-           <span className="yc-soft-saya-mark" aria-hidden="true">
-  <Icon name="sparkle" />
-</span>
-            <p>
-              <strong>{card.title}</strong>
-              <small>{card.eyebrow}</small>
-            </p>
-            <span className="yc-soft-saya-status">
-              <i />
-              {card.status}
-            </span>
-          </header>
-
-          <div className="yc-soft-saya-question">
-            <small>{card.questionLabel}</small>
-            <strong>{card.question}</strong>
-          </div>
-
-          <div className="yc-soft-saya-answer">
-            <small>{card.answerLabel}</small>
-            <p>{card.answer}</p>
-          </div>
-
-          <div className="yc-soft-saya-actions">
-            <small>{card.actionsLabel}</small>
-
-            {card.actions.map((action, index) => (
-              <span key={action}>
-                <b>0{index + 1}</b>
-                {action}
-              </span>
-            ))}
-          </div>
-
-          <footer>{card.footer}</footer>
-        </>
-      )}
-    </article>
-  );
-}
-
-
 export default function HomePage() {
   const [roleKey, setRoleKey] = useState("employee");
-  const [sayaCardOrder, setSayaCardOrder] = useState(() => sayaCards.map((_, index) => index));
   const role = roleViews[roleKey];
-
-  const activateSayaCard = (cardIndex) => {
-    setSayaCardOrder((currentOrder) => {
-      const currentPosition = currentOrder.indexOf(cardIndex);
-
-      if (currentPosition === 0) {
-        return [
-          ...currentOrder.slice(1),
-          currentOrder[0],
-        ];
-      }
-
-      return [
-        cardIndex,
-        ...currentOrder.filter(
-          (currentIndex) => currentIndex !== cardIndex,
-        ),
-      ];
-    });
-  };
 
   return (
     <main className="public-main yc-premium-home yc-horizontal-enabled yc-editorial-home yc-restored-home">
@@ -396,16 +227,21 @@ export default function HomePage() {
 
     <div
       className="yc-soft-saya-desk"
-      aria-label="Interactive Saya AI cards"
+      aria-label="Saya AI workspace preview"
     >
-      {sayaCardOrder.map((cardIndex, stackPosition) => (
-        <SayaStackCard
-          card={sayaCards[cardIndex]}
-          stackPosition={stackPosition}
-          onActivate={() => activateSayaCard(cardIndex)}
-          key={sayaCards[cardIndex].id}
+      <div className="yc-soft-saya-visual-frame">
+        <img
+          className="yc-soft-saya-visual"
+          src="/images/5.jpg"
+          alt="Role-aware Saya AI guidance inside the signed-in YourComate workspace"
+          width="926"
+          height="1647"
+          loading="eager"
+          decoding="async"
+          fetchPriority="high"
+          draggable="false"
         />
-      ))}
+      </div>
     </div>
   </div>
 </section>

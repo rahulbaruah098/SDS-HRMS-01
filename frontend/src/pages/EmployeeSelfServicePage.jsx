@@ -48,28 +48,6 @@ const page = {
   "Projects and approvals use employee and manager scope.",
   "Policies, IT Support, Assets, Grievance and Payslips supply employee service records."
 ],
-  controls: [
-  "Employees should use only their own credentials and keep passwords confidential.",
-  "A submission should be checked before confirmation because it creates an operational record.",
-  "Status should be reviewed before submitting duplicate leave, support or grievance requests.",
-  "Sensitive screenshots, passwords, OTPs and banking secrets should not be added to ordinary support text.",
-  "TL/RO actions appear only when the employee has the required capability and mappings.",
-  "Access may vary by tenant plan, role and live configuration."
-],
-  checklist: [
-  "Confirm the employee account is linked to the correct active profile.",
-  "Confirm reporting relationships and department are current.",
-  "Explain attendance, leave and request status workflows during onboarding.",
-  "Explain where policies, payslips and support records are found.",
-  "Test the main actions at desktop and mobile widths.",
-  "Provide a clear route for access, data or workflow corrections."
-],
-  notes: [
-  "Self-service does not remove approval controls; it gives employees a direct and traceable way to initiate and monitor work.",
-  "The authorised screen is the source of truth for actions currently available to a particular employee.",
-  "Responsive access is part of the supplied web experience; native app scope is addressed separately in the Mobile Workforce guide."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/publicSiteData.js; frontend/src/data/modules.js; frontend/src/pages/EmployeeDashboard.jsx; frontend/src/pages/Profile.jsx.",
 };
 
 export default function EmployeeSelfServicePage() {

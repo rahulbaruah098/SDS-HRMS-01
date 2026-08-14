@@ -48,28 +48,6 @@ const page = {
   "Performance reviews can use mapped team relationships but remain a separate weekly review workflow.",
   "Reports and dashboard analytics summarise project status and progress."
 ],
-  controls: [
-  "Create projects only under the authorised TL/RO capability.",
-  "Keep assigned members distinct from collaborators.",
-  "Use progress updates that are evidence-based and understandable to the team.",
-  "Do not mark Completed until the responsible owner confirms closure.",
-  "Review access after team, department or reporting-line changes.",
-  "Do not create a project assignment inside the employee onboarding form."
-],
-  checklist: [
-  "Confirm project name, department, status and priority.",
-  "Confirm Reporting Officer and Team Leader.",
-  "Confirm assigned members and collaborators.",
-  "Define who can update progress and status.",
-  "Review dashboard visibility for each role.",
-  "Close or place inactive work On Hold instead of leaving misleading Active records."
-],
-  notes: [
-  "Project visibility is derived from role, employee capability and relationship scope.",
-  "Analytics reflect the saved project and progress data; they do not independently prove delivery quality.",
-  "The authorised screen and backend permissions govern the actions available to each user."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Projects.jsx; frontend/src/pages/EmployeeDashboard.jsx.",
 };
 
 export default function ProjectsTeamDeliveryPage() {

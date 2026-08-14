@@ -74,9 +74,10 @@
   max-width: 980px;
   margin: 0;
   color: var(--yc-ink) !important;
-  font-size: clamp(46px, 5.8vw, 88px);
-  line-height: 0.91;
-  letter-spacing: -0.062em;
+  font-size: clamp(36px, 4.2vw, 62px);
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  font-weight: 600;
 }
 
 .yc-editorial-heading h2 em {
@@ -94,7 +95,8 @@
 }
 
 .yc-editorial-heading-compact h2 {
-  font-size: clamp(42px, 4.6vw, 72px);
+  font-size: clamp(34px, 3.8vw, 56px);
+  font-weight: 600;
 }
 
 .yc-editorial-link {
@@ -238,16 +240,16 @@
   margin: 0;
   color: #10163f;
   font-family: var(--yc-display, var(--heading));
-  font-size: clamp(38px, 4.15vw, 68px);
-  font-weight: 760;
-  line-height: 0.93;
-  letter-spacing: -0.055em;
+  font-size: clamp(32px, 3.5vw, 54px);
+  font-weight: 600;
+  line-height: 0.98;
+  letter-spacing: -0.04em;
 }
 
 .yc-shift-official-copy h2 em {
   display: block;
   color: #6254da;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .yc-shift-official-before {
@@ -1137,8 +1139,7 @@
    Shared soft vocabulary for homepage Sections 03–05
 --------------------------------------------------------------------- */
 .yc-soft-modules-panel,
-.yc-soft-roles-panel,
-.yc-soft-saya-panel {
+.yc-soft-roles-panel {
   position: relative;
   isolation: isolate;
   width: 100%;
@@ -1154,6 +1155,17 @@
     --yc-deck-height,
     calc(100svh - var(--yc-header-height, 96px))
   );
+  overflow: hidden;
+  color: #10163f;
+}
+
+.yc-soft-saya-panel {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
   color: #10163f;
 }
@@ -1183,11 +1195,11 @@
 
   color: #10163f;
   font-family: var(--yc-display, var(--heading));
-  font-size: clamp(38px, 4.2vw, 68px);
+  font-size: clamp(32px, 3.6vw, 54px);
   font-style: normal;
-  font-weight: 760;
-  line-height: 0.92;
-  letter-spacing: -0.056em;
+  font-weight: 600;
+  line-height: 0.98;
+  letter-spacing: -0.038em;
 }
 
 .yc-soft-modules-header h2 > em,
@@ -1753,7 +1765,9 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 
 .yc-soft-role-metrics > span {
   display: grid;
-  align-content: space-between;
+  text-align: center;
+  align-items: center;
+  justify-items: center;
   min-width: 0;
   min-height: clamp(104px, 13vh, 138px);
   padding: clamp(10px, 1vw, 14px);
@@ -1885,18 +1899,25 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(350px, 0.82fr) minmax(560px, 1.18fr);
+  grid-template-columns: minmax(430px, 1fr) minmax(500px, 1fr);
   align-items: center;
-  gap: clamp(30px, 4.5vw, 78px);
-  width: min(1540px, calc(100% - clamp(30px, 4vw, 74px)));
-  height: 100%;
+  gap: clamp(18px, 2.2vw, 38px);
+  width: min(1540px, calc(100% - clamp(40px, 5vw, 96px)));
+  height: auto;
   min-height: 0;
   margin-inline: auto;
-  padding-block: clamp(20px, 3.2vh, 40px);
+  padding-block: clamp(28px, 4vh, 52px);
 }
 
 .yc-soft-saya-copy {
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  align-content: center;
+  gap: 0;
   min-width: 0;
+  width: 100%;
+  max-width: 780px;
+  padding-inline: clamp(4px, 0.6vw, 12px);
 }
 
 .yc-soft-saya-kicker {
@@ -1915,31 +1936,35 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 
 .yc-soft-saya-points {
   display: grid;
-  gap: 7px;
-  margin-top: clamp(14px, 2vh, 23px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(9px, 1vw, 14px);
+  width: 100%;
+  margin-top: clamp(20px, 2.6vh, 30px);
 }
 
 .yc-soft-saya-points > span {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
-  min-height: 40px;
-  padding: 8px 11px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 12px;
   border: 1px solid rgba(151, 161, 197, 0.42);
-  border-radius: 13px;
+  border-radius: 15px;
   color: #263054;
   background: rgba(255, 255, 255, 0.76);
-  font-size: clamp(8px, 0.68vw, 10px);
+  font-size: clamp(8px, 0.7vw, 11px);
   font-weight: 850;
+  line-height: 1.28;
 }
 
 .yc-soft-saya-points b {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 9px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   color: #4137a1;
   background: #ece9ff;
   font-size: 7px;
@@ -1973,13 +1998,99 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 .yc-soft-saya-desk {
   position: relative;
   isolation: isolate;
-
+  display: flex;
   min-width: 0;
- min-height: clamp(560px, 74vh, 760px);
-
-  display: grid;
-  place-items: center;
+  min-height: 0;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: visible;
 }
+
+/*
+ * SAYA IMAGE EDGE BLENDING
+ * ------------------------
+ * The wrapper owns ONLY the top-edge fade.
+ * The image owns ONLY the left-edge fade.
+ * Keeping the fades on nested elements makes the blend reliable
+ * and keeps the screenshot content fully readable.
+ */
+.yc-soft-saya-visual-frame {
+  display: flex;
+  flex: 0 1 auto;
+  width: max-content;
+  max-width: 100%;
+  max-height: 100%;
+  line-height: 0;
+
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.10) 1.2%,
+    rgba(0, 0, 0, 0.36) 2.4%,
+    rgba(0, 0, 0, 0.68) 3.8%,
+    rgba(0, 0, 0, 0.92) 5.2%,
+    #000 6.6%,
+    #000 100%
+  );
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: 100% 100%;
+
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.10) 1.2%,
+    rgba(0, 0, 0, 0.36) 2.4%,
+    rgba(0, 0, 0, 0.68) 3.8%,
+    rgba(0, 0, 0, 0.92) 5.2%,
+    #000 6.6%,
+    #000 100%
+  );
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 100% 100%;
+}
+
+.yc-soft-saya-visual {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: min(76vh, 740px);
+  max-height: 100%;
+  object-fit: contain;
+  object-position: right center;
+
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 0, 0, 0.10) 1.6%,
+    rgba(0, 0, 0, 0.34) 3.4%,
+    rgba(0, 0, 0, 0.62) 5.5%,
+    rgba(0, 0, 0, 0.84) 7.6%,
+    rgba(0, 0, 0, 0.96) 9.4%,
+    #000 11%,
+    #000 100%
+  );
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: 100% 100%;
+
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 0, 0, 0.10) 1.6%,
+    rgba(0, 0, 0, 0.34) 3.4%,
+    rgba(0, 0, 0, 0.62) 5.5%,
+    rgba(0, 0, 0, 0.84) 7.6%,
+    rgba(0, 0, 0, 0.96) 9.4%,
+    #000 11%,
+    #000 100%
+  );
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 100% 100%;
+}
+
 
 .yc-soft-saya-note {
   --saya-card-bg:
@@ -2366,7 +2477,7 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   color: #263054;
 
   font-size: clamp(10px, 0.8vw, 13px);
-  font-weight: 800;
+  font-weight: 400;
   line-height: 1.35;
 }
 
@@ -2421,8 +2532,7 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 --------------------------------------------------------------------- */
 @media (min-width: 761px) and (min-height: 560px) {
   .yc-horizontal-mode .yc-soft-modules-panel,
-  .yc-horizontal-mode .yc-soft-roles-panel,
-  .yc-horizontal-mode .yc-soft-saya-panel {
+  .yc-horizontal-mode .yc-soft-roles-panel {
     height: var(--yc-deck-height);
     min-height: var(--yc-deck-height);
     max-height: var(--yc-deck-height);
@@ -2431,9 +2541,12 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 
 @media (min-width: 761px) and (min-height: 560px) and (max-height: 820px) {
   .yc-soft-modules-shell,
-  .yc-soft-roles-shell,
-  .yc-soft-saya-shell {
+  .yc-soft-roles-shell {
     padding-block: 12px;
+  }
+
+  .yc-soft-saya-shell {
+    padding-block: clamp(18px, 3vh, 28px);
   }
 
   .yc-soft-modules-header h2,
@@ -2459,7 +2572,11 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-desk {
-    min-height: 450px;
+    min-height: 0;
+  }
+
+  .yc-soft-saya-visual {
+    height: min(68vh, 610px);
   }
 
  .yc-soft-saya-note {
@@ -2477,10 +2594,14 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 /* Compact desktop height: preserve the horizontal deck and fit each panel. */
 @media (min-width: 761px) and (min-height: 560px) and (max-height: 699px) {
   .yc-soft-modules-shell,
-  .yc-soft-roles-shell,
-  .yc-soft-saya-shell {
+  .yc-soft-roles-shell {
     gap: clamp(8px, 1.6vh, 14px);
     padding-block: clamp(6px, 1.4vh, 10px);
+  }
+
+  .yc-soft-saya-shell {
+    gap: clamp(10px, 1.6vw, 22px);
+    padding-block: clamp(14px, 2.4vh, 22px);
   }
 
   .yc-soft-modules-header h2,
@@ -2507,7 +2628,7 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-shell {
-    gap: clamp(20px, 3vw, 38px);
+    gap: clamp(10px, 1.7vw, 24px);
   }
 
   .yc-soft-saya-kicker {
@@ -2516,13 +2637,14 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-points {
-    gap: 5px;
-    margin-top: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 10px;
   }
 
   .yc-soft-saya-points > span {
-    min-height: 32px;
-    padding: 5px 9px;
+    min-height: 42px;
+    padding: 6px 8px;
   }
 
   .yc-soft-saya-cta {
@@ -2534,6 +2656,11 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
     height: calc(var(--yc-deck-height) - 20px);
     min-height: 0;
     max-height: 100%;
+  }
+
+  .yc-soft-saya-visual {
+    height: min(68vh, 560px);
+    max-height: calc(100% - 8px);
   }
 
   .yc-soft-saya-note,
@@ -2571,8 +2698,9 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-shell {
-    grid-template-columns: minmax(320px, 0.78fr) minmax(520px, 1.22fr);
-    gap: 34px;
+    grid-template-columns: minmax(380px, 0.96fr) minmax(460px, 1.04fr);
+    gap: 22px;
+    width: calc(100% - clamp(36px, 4vw, 56px));
   }
 }
 
@@ -2588,11 +2716,16 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-modules-shell,
-  .yc-soft-roles-shell,
-  .yc-soft-saya-shell {
+  .yc-soft-roles-shell {
     height: auto;
     min-height: 0;
     padding-block: 64px;
+  }
+
+  .yc-soft-saya-shell {
+    height: auto;
+    min-height: 0;
+    padding-block: clamp(30px, 6vh, 48px);
   }
 
   .yc-soft-modules-track {
@@ -2646,17 +2779,31 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-shell {
-    gap: 34px;
+    gap: 24px;
   }
 
   .yc-soft-saya-copy {
-    max-width: 690px;
+    width: 100%;
+    max-width: 100%;
+    padding-left: 0;
+  }
+
+  .yc-soft-saya-points {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .yc-soft-saya-desk {
-  min-height: 520px;
-  margin-top: 22px;
-}
+    min-height: 0;
+    margin-top: 18px;
+    justify-content: center;
+  }
+
+  .yc-soft-saya-visual {
+    width: min(100%, 520px);
+    height: auto;
+    max-height: none;
+    object-position: right center;
+  }
 }
 
 @media (max-width: 680px) {
@@ -2706,21 +2853,49 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-modules-shell,
-  .yc-soft-roles-shell,
-  .yc-soft-saya-shell {
+  .yc-soft-roles-shell {
     gap: clamp(22px, 5vw, 30px);
     width: min(760px, calc(100% - 28px));
     padding-block: clamp(32px, 8vw, 48px);
   }
 
+  .yc-soft-saya-shell {
+    gap: clamp(18px, 4.5vw, 26px);
+    width: min(760px, calc(100% - 32px));
+    padding-block: clamp(28px, 7vw, 40px);
+  }
+
+  .yc-soft-saya-points {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    width: min(100%, 440px);
+    justify-self: start;
+  }
+
+  .yc-soft-saya-points > span {
+    width: 100%;
+    min-height: 48px;
+    padding: 8px 10px;
+  }
+
   .yc-soft-saya-desk {
-  margin-top: 26px;
-}
+    margin-top: 22px;
+  }
 
   .yc-soft-modules-header h2,
-  .yc-soft-roles-heading h2,
-  .yc-soft-saya-copy h2 {
+  .yc-soft-roles-heading h2 {
     font-size: clamp(34px, 10vw, 52px);
+  }
+
+  .yc-soft-saya-copy h2 {
+    width: 100%;
+    max-width: 470px;
+    font-size: clamp(29px, 8vw, 41px);
+    line-height: 0.96;
+  }
+
+  .yc-soft-saya-copy h2 > em {
+    max-width: 100%;
   }
 
   .yc-soft-modules-header {
@@ -2895,8 +3070,12 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   }
 
   .yc-soft-saya-desk {
-  min-height: clamp(590px, 142vw, 720px);
-}
+    min-height: 0;
+  }
+
+  .yc-soft-saya-visual {
+    width: min(100%, 460px);
+  }
 
   .yc-soft-saya-note {
     width: min(78%, 350px);
@@ -2974,6 +3153,25 @@ max-height: 680px;
     padding-block: 28px 36px;
   }
 
+  .yc-soft-saya-shell {
+    width: calc(100% - 32px);
+    gap: 18px;
+    padding-block: 24px 30px;
+  }
+
+  .yc-soft-saya-copy {
+    padding-inline: 2px;
+  }
+
+  .yc-soft-saya-copy h2 {
+    max-width: 100%;
+    font-size: clamp(27px, 8vw, 34px);
+  }
+
+  .yc-soft-saya-points {
+    width: 100%;
+  }
+
   .yc-soft-modules-board {
     padding: 14px;
 
@@ -3032,11 +3230,16 @@ max-height: 680px;
   }
 
   .yc-soft-saya-points > span {
-    font-size: 7px;
+    min-height: 46px;
+    font-size: 8px;
   }
 
   .yc-soft-saya-desk {
-    min-height: clamp(500px, 142vw, 590px);
+    min-height: 0;
+  }
+
+  .yc-soft-saya-visual {
+    width: min(100%, 410px);
   }
 
   .yc-soft-saya-note {
@@ -3076,9 +3279,12 @@ max-height: 680px;
 
 @media (max-width: 760px) and (max-height: 559px) {
   .yc-soft-modules-shell,
-  .yc-soft-roles-shell,
-  .yc-soft-saya-shell {
+  .yc-soft-roles-shell {
     padding-block: 28px;
+  }
+
+  .yc-soft-saya-shell {
+    padding-block: 22px 26px;
   }
 
   .yc-soft-modules-header h2,
@@ -3100,7 +3306,7 @@ max-height: 680px;
   }
 
   .yc-soft-saya-desk {
-    min-height: 460px;
+    min-height: 0;
   }
 }
 
@@ -3805,6 +4011,14 @@ max-height: 680px;
 }
 
 @media (max-width: 680px) {
+  .yc-soft-saya-visual {
+    height: auto;
+    max-height: none;
+    object-position: center top;
+  }
+}
+
+@media (max-width: 680px) {
   .yc-app-showcase-panel {
     background:
       linear-gradient(155deg, #eefaff 0%, #fffdf9 52%, #f5efff 100%) !important;
@@ -3951,12 +4165,19 @@ max-height: 680px;
    intentionally unchanged.
 ===================================================================== */
 @media (min-width: 761px) and (min-height: 560px) {
-  .yc-horizontal-mode .yc-app-showcase-panel,
-  .yc-horizontal-mode .yc-soft-saya-panel {
+  .yc-horizontal-mode .yc-app-showcase-panel {
     width: 100%;
     height: var(--yc-deck-height);
     min-height: var(--yc-deck-height);
     max-height: var(--yc-deck-height);
+    overflow: hidden;
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-panel {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    max-height: none;
     overflow: hidden;
   }
 
@@ -4070,57 +4291,67 @@ max-height: 680px;
   --------------------------------------------------------------- */
   .yc-horizontal-mode .yc-soft-saya-shell {
     grid-template-columns:
-      minmax(245px, 0.78fr)
-      minmax(0, 1.22fr);
-    grid-template-rows: minmax(0, 1fr);
+      minmax(500px, 1.06fr)
+      minmax(420px, 0.94fr);
+    grid-template-rows: auto;
     align-items: center;
-    gap: clamp(18px, 3.5vw, 68px);
-    width: min(1540px, calc(100% - clamp(22px, 3.4vw, 64px)));
-    height: 100%;
+    gap: clamp(16px, 2vw, 34px);
+    width: min(1540px, calc(100% - clamp(44px, 5vw, 96px)));
+    height: auto;
     min-height: 0;
-    max-height: 100%;
-    padding-block: clamp(10px, 2.2vh, 28px);
+    max-height: none;
+    padding-block: clamp(24px, 3.6vh, 46px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-copy {
     align-self: center;
+    justify-self: end;
+    display: grid;
+    grid-template-rows: auto auto auto auto;
+    align-content: center;
     min-width: 0;
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    max-width: 740px;
+    max-height: none;
+    padding: clamp(4px, 0.7vh, 8px) clamp(8px, 0.7vw, 14px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-copy h2 {
     width: auto;
-    max-width: 100%;
-    font-size: clamp(30px, 3.75vw, 62px);
+    max-width: 720px;
+    font-size: clamp(36px, 4.3vw, 68px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-kicker {
-    margin-bottom: clamp(7px, 1.4vh, 14px);
-    padding: clamp(6px, 0.9vh, 9px) clamp(9px, 0.9vw, 13px);
+    margin-bottom: clamp(8px, 1.5vh, 15px);
+    padding: clamp(7px, 0.95vh, 10px) clamp(10px, 0.95vw, 14px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-points {
-    gap: clamp(4px, 0.8vh, 7px);
-    margin-top: clamp(8px, 1.7vh, 20px);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-self: center;
+    gap: clamp(9px, 0.95vw, 14px);
+    width: 100%;
+    margin-top: clamp(18px, 2.5vh, 28px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-points > span {
-    grid-template-columns: clamp(22px, 3.8vh, 28px) minmax(0, 1fr);
-    gap: clamp(6px, 0.8vw, 9px);
-    min-height: clamp(31px, 5.2vh, 40px);
-    padding: clamp(5px, 0.8vh, 8px) clamp(8px, 0.8vw, 11px);
-    font-size: clamp(7px, 0.64vw, 10px);
+    grid-template-columns: clamp(27px, 4vh, 32px) minmax(0, 1fr);
+    gap: clamp(6px, 0.75vw, 9px);
+    min-height: clamp(48px, 6.5vh, 60px);
+    padding: clamp(7px, 0.9vh, 10px) clamp(8px, 0.85vw, 11px);
+    font-size: clamp(8px, 0.66vw, 10.5px);
+    line-height: 1.25;
   }
 
   .yc-horizontal-mode .yc-soft-saya-points b {
-    width: clamp(22px, 3.8vh, 28px);
-    height: clamp(22px, 3.8vh, 28px);
+    width: clamp(27px, 4vh, 32px);
+    height: clamp(27px, 4vh, 32px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-cta {
-    margin-top: clamp(9px, 1.8vh, 22px);
-    padding: clamp(8px, 1.1vh, 12px) clamp(11px, 1vw, 16px);
+    margin-top: clamp(13px, 2vh, 24px);
+    padding: clamp(9px, 1.15vh, 12px) clamp(12px, 1.05vw, 17px);
   }
 
   .yc-horizontal-mode .yc-soft-saya-desk {
@@ -4132,40 +4363,13 @@ max-height: 680px;
     overflow: visible;
   }
 
-  .yc-horizontal-mode .yc-soft-saya-note,
-  .yc-horizontal-mode .yc-soft-saya-note.has-image {
-    width: min(72%, clamp(225px, 34vh, 390px));
-    height: min(
-      calc(100% - clamp(54px, 8vh, 84px)),
-      clamp(380px, 70vh, 680px)
-    );
-    max-width: 100%;
-    max-height: calc(100% - 24px);
+  .yc-horizontal-mode .yc-soft-saya-visual {
+    width: min(100%, 680px);
+    height: auto;
+    max-height: min(78vh, 760px);
+    object-position: right center;
   }
 
-  .yc-horizontal-mode .yc-soft-saya-note.stack-position-1 {
-    transform:
-      translate(-50%, -50%)
-      translate3d(
-        clamp(-30px, -2.5vw, -18px),
-        clamp(-24px, -2.2vh, -14px),
-        0
-      )
-      rotate(-4.5deg)
-      scale(0.965);
-  }
-
-  .yc-horizontal-mode .yc-soft-saya-note.stack-position-2 {
-    transform:
-      translate(-50%, -50%)
-      translate3d(
-        clamp(20px, 2.8vw, 36px),
-        clamp(-46px, -4.2vh, -28px),
-        0
-      )
-      rotate(5.5deg)
-      scale(0.93);
-  }
 }
 
 /* Narrow web/tablet horizontal deck. Keep two columns, but reserve more
@@ -4178,9 +4382,12 @@ max-height: 680px;
     gap: clamp(10px, 1.8vw, 18px);
   }
 
-  .yc-horizontal-mode .yc-app-editorial-heading,
-  .yc-horizontal-mode .yc-soft-saya-copy h2 {
+  .yc-horizontal-mode .yc-app-editorial-heading {
     font-size: clamp(28px, 4.6vw, 42px);
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-copy h2 {
+    font-size: clamp(30px, 4.9vw, 45px);
   }
 
   .yc-horizontal-mode .yc-app-showcase-copy > p {
@@ -4200,14 +4407,33 @@ max-height: 680px;
 
   .yc-horizontal-mode .yc-soft-saya-shell {
     grid-template-columns:
-      minmax(220px, 0.76fr)
-      minmax(0, 1.24fr);
-    gap: clamp(12px, 2vw, 22px);
+      minmax(360px, 1.04fr)
+      minmax(330px, 0.96fr);
+    gap: clamp(12px, 1.7vw, 20px);
+    width: calc(100% - 36px);
+    padding-block: clamp(18px, 3vh, 28px);
   }
 
-  .yc-horizontal-mode .yc-soft-saya-note,
-  .yc-horizontal-mode .yc-soft-saya-note.has-image {
-    width: min(70%, clamp(215px, 31vh, 340px));
+  .yc-horizontal-mode .yc-soft-saya-copy {
+    justify-self: center;
+    max-width: 100%;
+    padding-inline: clamp(8px, 1.2vw, 14px);
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-points {
+    gap: 6px;
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-points > span {
+    grid-template-columns: 24px minmax(0, 1fr);
+    min-height: 46px;
+    padding: 6px 7px;
+    font-size: clamp(7px, 0.8vw, 9px);
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-points b {
+    width: 24px;
+    height: 24px;
   }
 }
 
@@ -4223,7 +4449,7 @@ max-height: 680px;
   }
 
   .yc-horizontal-mode .yc-soft-saya-shell {
-    padding-block: clamp(5px, 1vh, 9px);
+    padding-block: clamp(12px, 2vh, 18px);
   }
 
   .yc-horizontal-mode .yc-app-showcase-copy {
@@ -4243,9 +4469,12 @@ max-height: 680px;
     padding-block: 6px;
   }
 
-  .yc-horizontal-mode .yc-app-editorial-heading,
-  .yc-horizontal-mode .yc-soft-saya-copy h2 {
+  .yc-horizontal-mode .yc-app-editorial-heading {
     font-size: clamp(25px, 3.2vw, 42px);
+  }
+
+  .yc-horizontal-mode .yc-soft-saya-copy h2 {
+    font-size: clamp(28px, 3.6vw, 46px);
   }
 
   .yc-horizontal-mode .yc-app-showcase-copy > p {
@@ -4278,22 +4507,17 @@ max-height: 680px;
   }
 
   .yc-horizontal-mode .yc-soft-saya-points {
-    margin-top: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 7px;
   }
 
   .yc-horizontal-mode .yc-soft-saya-points > span {
-    min-height: 28px;
-    padding-block: 4px;
+    min-height: 38px;
+    padding-block: 5px;
   }
 
   .yc-horizontal-mode .yc-soft-saya-cta {
-    margin-top: 7px;
+    margin-top: 8px;
     padding-block: 7px;
-  }
-
-  .yc-horizontal-mode .yc-soft-saya-note,
-  .yc-horizontal-mode .yc-soft-saya-note.has-image {
-    width: min(68%, clamp(190px, 31vh, 300px));
-    height: min(calc(100% - 42px), clamp(330px, 69vh, 500px));
   }
 }

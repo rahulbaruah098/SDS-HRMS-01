@@ -48,28 +48,6 @@ const page = {
   "Attendance, leave, loans, reimbursements, tax and banking supply period snapshots.",
   "Employee self-service provides secure personal access."
 ],
-  controls: [
-  "Release only the payslip belonging to the authenticated employee or authorised tenant scope.",
-  "Do not treat a Draft record as proof of final payment.",
-  "Verify period, employee, status and net amount before sharing or downloading.",
-  "Protect salary, bank and tax information as confidential personal data.",
-  "Use the corrected payroll process if a value is wrong; do not edit the downloaded PDF as the source record.",
-  "Use the Disbursed state and transfer record when confirming salary payment."
-],
-  checklist: [
-  "Confirm employee and period.",
-  "Confirm payroll stage.",
-  "Confirm earnings, deductions, payable days and LWP.",
-  "Confirm tax, reimbursement, recovery and bank context.",
-  "Confirm PDF preview and download.",
-  "Escalate discrepancies to authorised HR/Finance without exposing banking secrets."
-],
-  notes: [
-  "Payslip access does not itself prove that funds reached the bank; use the recorded disbursement and reconciliation process.",
-  "The exact fields shown depend on the saved payroll record and configured salary/statutory components.",
-  "Retention and sharing should follow the Customer's privacy, employment and tax obligations."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Payslips.jsx; frontend/src/pages/Payroll.jsx.",
 };
 
 export default function PayslipsSalaryAccessPage() {

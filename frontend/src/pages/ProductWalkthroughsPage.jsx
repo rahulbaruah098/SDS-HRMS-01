@@ -670,14 +670,6 @@ const workflows = [
     "meta": null
   }
 ];
-const sourceItems = [
-  "frontend/src/data/modules.js - roles, module purposes, statuses and key workflow rules",
-  "frontend/src/pages/ApplyDemoRegistration.jsx and backend/app/routes/demo_requests.py - trial/OTP/approval flow",
-  "frontend/src/pages/Recruitment.jsx and backend recruitment routes/services - hiring sequence",
-  "frontend/src/pages/Payroll.jsx and payroll services - eligibility and payroll state sequence",
-  "frontend/src/pages/Billing.jsx and backend billing/razorpay services - payment and activation flow",
-  "frontend/src/pages/SayaPage.jsx - role-aware in-product assistance boundary"
-];
 
 export default function ProductWalkthroughsPage() {
   useEffect(() => {
@@ -694,7 +686,8 @@ export default function ProductWalkthroughsPage() {
     <main className="public-main yc-resource-document yc-resource-walkthrough-document">
       <PageHero
         eyebrow="Product walkthroughs"
-        title="See the workflow before you perform the action."
+        title="See the workflow"
+        titleAccent="before you perform the action."
         description="Follow role-by-role sequences for trial activation, attendance, leave, projects, recruitment, payroll, support and Saya."
         icon="play"
         tone="violet"
@@ -778,15 +771,6 @@ export default function ProductWalkthroughsPage() {
             ))}
           </div>
 
-          <section className="yc-resource-source-note">
-            <h2>Source and maintenance note</h2>
-            <p>The following project sources were used to verify the document. Review this resource whenever roles, module names, workflow states, pricing, trial rules or screen behaviour changes.</p>
-            <ol>{sourceItems.map((item) => <li key={item}>{item}</li>)}</ol>
-            <aside className="yc-resource-callout tone-cyan">
-              <strong>Resource owner</strong>
-              <p>Sayanant Development Services Pvt. Ltd. / YourComate HRMS. Questions or correction requests: <a href="mailto:hr@sayanant.com">hr@sayanant.com</a>.</p>
-            </aside>
-          </section>
 
           <div className="yc-resource-end-actions">
             <Link className="button button-ghost" to="/resources"><Icon name="arrowLeft" /> All Resources</Link>

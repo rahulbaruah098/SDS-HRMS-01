@@ -140,6 +140,14 @@ export default function AboutSayanantPage() {
               <Link className="button button-ghost" to="/about">
                 Explore YourComate
               </Link>
+              <a
+                className="button button-ghost yc-sayanant-website-button"
+                href="https://sayanant.com/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Visit SDS Website <Icon name="arrow" />
+              </a>
             </div>
           </div>
 
@@ -147,9 +155,14 @@ export default function AboutSayanantPage() {
             className="yc-profile-hero-board yc-profile-hero-board-sayanant"
             aria-label="Sayanant Group profile summary"
           >
-            <span className="yc-profile-hero-icon" aria-hidden="true">
-              <Icon name="building" />
-            </span>
+            <figure className="yc-sayanant-hero-logo">
+              <img
+                src="/logo.png"
+                alt="Sayanant Group"
+                loading="eager"
+                decoding="async"
+              />
+            </figure>
             <small>A CONNECTED VIEW OF</small>
             <strong>PURPOSE</strong>
             <strong>PEOPLE</strong>

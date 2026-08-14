@@ -153,7 +153,8 @@ export default function SecurityPage() {
     <main className="public-main yc-security-page">
       <PageHero
         eyebrow="Security and Access"
-        title="Controlled access begins with clear identity and role boundaries."
+        title="Controlled access begins with "
+        titleAccent="clear identity and role boundaries."
         description="YourComate combines verified company onboarding, role-aware workspaces, controlled administrative permissions and traceable operations to support responsible platform access."
         icon="shield"
         tone="cyan"
@@ -290,19 +291,6 @@ export default function SecurityPage() {
             ))}
           </div>
 
-          <aside className="yc-security-callout yc-security-transparency-callout">
-            <span>Implementation transparency</span>
-            <p>
-              The supplied codebase describes itself as a working MVP foundation,
-              not a production-hardened commercial SaaS release. Before broader
-              security assurances are published, production secret management,
-              deployment hardening, advanced permission administration, automated
-              testing, monitoring, backup and recovery, incident response and
-              independent assurance should be completed and documented. This
-              overview does not claim a certification or control that is not
-              evidenced in the supplied project.
-            </p>
-          </aside>
         </div>
       </section>
     </main>

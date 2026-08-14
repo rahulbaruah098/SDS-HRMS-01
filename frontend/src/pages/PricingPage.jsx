@@ -263,7 +263,9 @@ export default function PricingPage() {
     <main className="public-main">
       <PageHero
         eyebrow="Straightforward access options"
-        title="Pricing that stays clear as your team grows."
+        title="Pricing that stays"
+        titleAccent="clear as your team grows."
+
         description="Estimate the published monthly structure by employee count, compare the available plans, or evaluate every Premium feature through a 15-day YourComate trial."
         icon="briefcase"
         tone="amber"

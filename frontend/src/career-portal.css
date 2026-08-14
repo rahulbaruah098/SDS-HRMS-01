@@ -973,7 +973,7 @@
   gap: clamp(18px, 2vw, 28px) !important;
   width: 100%;
   min-width: 0;
-  align-items: stretch;
+  align-items: start;
   padding: 2px 8px 12px 2px;
 }
 
@@ -984,7 +984,9 @@
   position: relative;
   display: flex !important;
   min-width: 0;
-  min-height: 100%;
+  min-height: 0;
+  height: auto;
+  align-self: start;
   flex-direction: column;
   gap: 18px !important;
   overflow: hidden;
@@ -1125,7 +1127,7 @@
   font-size: 12px;
   line-height: 1.65;
   -webkit-box-orient: vertical;
-  min-height: calc(1.65em * 3);
+  min-height: 0;
   color: #64708e !important;
   -webkit-line-clamp: 3;
 }
@@ -1148,7 +1150,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  margin-top: auto;
+  margin-top: 0;
   padding-top: 17px !important;
   border-top: 1px solid rgba(171, 181, 211, .4) !important;
 }
@@ -2292,7 +2294,10 @@ body.yc-career-submission-open .yc-career-toast-region {
 
   .yc-career-hero-highlights {
 
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(
+        auto-fit,
+        minmax(min(100%, 280px), 1fr)
+      );
 
     }
 

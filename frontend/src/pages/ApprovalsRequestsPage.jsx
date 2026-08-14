@@ -48,28 +48,6 @@ const page = {
   "Application Status consolidates employee-facing request visibility.",
   "Reports provide stage, final status and history views for authorised roles."
 ],
-  controls: [
-  "Do not decide a request outside the stage assigned to the logged-in user.",
-  "Review dates, reason, balance, location and proof before making a decision.",
-  "Avoid duplicate submissions while a matching request is pending.",
-  "Do not treat a message or verbal approval as the system's final status.",
-  "Keep TL/RO mappings current so requests do not route to the wrong person.",
-  "Use rejection or correction information that allows the employee to understand the result."
-],
-  checklist: [
-  "Confirm requester and tenant.",
-  "Confirm request type and required evidence.",
-  "Confirm current stage and approver authority.",
-  "Check history for a prior decision or duplicate.",
-  "Record the decision in the correct module.",
-  "Verify the employee can see the updated status."
-],
-  notes: [
-  "Not every request uses one identical approval chain; the live mapped stage controls the actual route.",
-  "Team Approvals is not a general unrestricted approval editor in the supplied implementation.",
-  "Availability depends on role, capability mapping, tenant and configuration."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/TeamApprovals.jsx; frontend/src/pages/ApplicationStatus.jsx; frontend/src/pages/ApplyLeave.jsx.",
 };
 
 export default function ApprovalsRequestsPage() {

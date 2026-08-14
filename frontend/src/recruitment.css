@@ -2005,43 +2005,77 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
   font-weight: 900;
 }
 
-.recruitment-page .recruitment-settings-layout {
-  display: grid;
-  grid-template-columns: minmax(210px, 0.34fr) minmax(0, 1fr);
-  gap: 16px;
-  min-width: 0;
-}
-
-.recruitment-page .recruitment-settings-nav {
-  display: grid;
-  align-content: start;
-  gap: 5px;
-}
-
-.recruitment-page .recruitment-settings-nav button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+.recruitment-page .recruitment-settings-page {
   width: 100%;
-  min-height: 40px;
-  padding: 9px 11px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--recruitment-muted);
-  font-size: 12px;
-  font-weight: 800;
-  text-align: left;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
-.recruitment-page .recruitment-settings-nav button:hover {
-  background: #f8fafc;
-  color: var(--recruitment-ink);
+.recruitment-page .recruitment-settings-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(14px, 1.6vw, 20px);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.recruitment-page .recruitment-settings-nav button.active {
-  background: var(--recruitment-primary-soft);
-  color: var(--recruitment-primary);
+.recruitment-page .recruitment-settings-form > * {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-form-section {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-form-grid {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-field,
+.recruitment-page .recruitment-settings-form .recruitment-field input,
+.recruitment-page .recruitment-settings-form .recruitment-field select,
+.recruitment-page .recruitment-settings-form .recruitment-field textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-checkbox-row {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(171, 181, 211, 0.42);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-checkbox-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.recruitment-page .recruitment-settings-rounds .recruitment-section-head {
+  margin-bottom: 0;
+}
+
+.recruitment-page .recruitment-settings-rounds .recruitment-round-editor,
+.recruitment-page .recruitment-settings-rounds .recruitment-round-row,
+.recruitment-page .recruitment-settings-rounds .recruitment-field {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.recruitment-page .recruitment-settings-form .recruitment-form-actions {
+  width: 100%;
+  min-width: 0;
 }
 
 .recruitment-page .recruitment-template-list {
@@ -2448,29 +2482,6 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
   white-space: nowrap !important;
 }
 
-.recruitment-page::before,
-.recruitment-page::after {
-  position: absolute;
-  z-index: -1;
-  width: 230px;
-  height: 230px;
-  border: 1px solid rgba(88, 52, 91, 0.09);
-  border-radius: 48% 52% 61% 39% / 43% 39% 61% 57%;
-  content: "";
-  pointer-events: none;
-}
-
-.recruitment-page::before {
-  top: 132px;
-  right: -152px;
-  transform: rotate(18deg);
-}
-
-.recruitment-page::after {
-  bottom: 92px;
-  left: -166px;
-  transform: rotate(-24deg);
-}
 
 .recruitment-page .recruitment-header::before {
   position: absolute;
@@ -3277,6 +3288,20 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
   .recruitment-page .recruitment-parser-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 900px) {
@@ -3297,6 +3322,20 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
   .recruitment-page .recruitment-form-grid-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .recruitment-page .recruitment-settings-page {
+    padding: clamp(16px, 2.8vw, 20px);
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-section-head {
+    gap: 10px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-section-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .recruitment-page .recruitment-report-grid,
 .recruitment-page .recruitment-offer-grid,
 .recruitment-page .recruitment-joining-grid,
@@ -3321,6 +3360,59 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
   .recruitment-page .recruitment-career-link-actions .recruitment-btn {
     flex: 1 1 150px;
     justify-content: center;
+  }
+
+  .recruitment-page .recruitment-settings-page {
+    padding: 15px;
+    border-radius: 18px;
+  }
+
+  .recruitment-page .recruitment-settings-form {
+    gap: 14px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-section {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-grid,
+  .recruitment-page .recruitment-settings-form .recruitment-form-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 11px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-checkbox-row {
+    align-items: flex-start;
+    min-height: 46px;
+    padding: 11px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-actions .recruitment-btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-actions .recruitment-btn {
+    width: 100%;
   }
 
 
@@ -3601,6 +3693,48 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
     width: 100%;
   }
 
+  .recruitment-page .recruitment-settings-page {
+    padding: 13px;
+    border-radius: 16px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-section {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-copy a {
+    width: 100%;
+    word-break: break-word;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-career-link-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-field input,
+  .recruitment-page .recruitment-settings-form .recruitment-field select,
+  .recruitment-page .recruitment-settings-form .recruitment-field textarea {
+    font-size: 16px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-checkbox-row {
+    min-height: 48px;
+    padding: 10px;
+    font-size: 11px;
+  }
+
 
 
   .recruitment-page {
@@ -3675,6 +3809,18 @@ body:has(.recruitment-drawer-backdrop) .recruitment-drawer-body {
 @media (orientation: landscape) and (max-height: 620px) {
   .recruitment-page .recruitment-header {
     padding-block: 15px;
+  }
+
+  .recruitment-page .recruitment-settings-page {
+    padding-block: 14px;
+  }
+
+  .recruitment-page .recruitment-settings-form {
+    gap: 12px;
+  }
+
+  .recruitment-page .recruitment-settings-form .recruitment-form-section {
+    padding-block: 12px;
   }
   .recruitment-page .recruitment-modal,
 .recruitment-page .recruitment-modal-lg,

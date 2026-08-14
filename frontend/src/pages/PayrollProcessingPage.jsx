@@ -48,28 +48,6 @@ const page = {
   "Loans, Reimbursements, Banking and Tax Declarations/TDS provide controlled adjustments.",
   "Payslips and Payroll Reports provide employee and authorised management outputs."
 ],
-  controls: [
-  "Do not calculate until required employee, salary, bank, attendance and statutory setup is complete.",
-  "Review skipped reasons rather than forcing an ineligible employee into the run.",
-  "Only approved LWP and configured rules should reduce pay.",
-  "Keep HR review and Finance approval as distinct authorised stages.",
-  "Lock only after reconciliation; a locked run is protected from ordinary recalculation.",
-  "Record a verifiable disbursement reference and resolve any loan or reimbursement retry warning."
-],
-  checklist: [
-  "Confirm period, employee scope and eligibility.",
-  "Confirm salary structures and statutory configuration.",
-  "Confirm attendance, leave and LWP.",
-  "Confirm loans, reimbursements, bank and tax context.",
-  "Reconcile Draft before HR and Finance stages.",
-  "Confirm lock, payment reference, payslip and report outputs."
-],
-  notes: [
-  "The supplied repository describes a full-module MVP foundation; the Customer must validate final statutory and payroll business rules before production use.",
-  "The state shown in the live payroll run governs which action is permitted.",
-  "Customer finance policy and applicable law remain controlling for calculation, approval and payment."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Payroll.jsx; frontend/src/pages/PayrollConfiguration.jsx; README.md.",
 };
 
 export default function PayrollProcessingPage() {

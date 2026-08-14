@@ -431,15 +431,6 @@ const categories = [
   }
 ];
 
-const sourceItems = [
-  "frontend/src/data/modules.js - roles, module purposes, statuses and operating rules",
-  "frontend/src/data/publicSiteData.js - public product descriptions",
-  "frontend/src/pages/ResourcesPage.jsx - existing public FAQ and resource positioning",
-  "frontend/src/pages/Recruitment.jsx - recruitment fields, roles and interview/offer/joining behaviour",
-  "frontend/src/pages/Payroll.jsx - payroll eligibility and state-controlled actions",
-  "frontend/src/pages/Billing.jsx plus backend billing/pricing services - plan, payment and invoice behaviour"
-];
-
 export default function FrequentlyAskedQuestionsPage() {
   useEffect(() => {
       document.documentElement.classList.add("yc-resource-page-active");
@@ -455,7 +446,8 @@ export default function FrequentlyAskedQuestionsPage() {
     <main className="public-main yc-resource-document yc-resource-faq-document">
       <PageHero
         eyebrow="Frequently asked questions"
-        title="Find practical answers without searching across the system."
+        title="Find practical answers without"
+        titleAccent="searching across the system."
         description="Browse verified answers covering setup, roles, attendance, leave, recruitment, payroll, support, billing and access."
         icon="help"
         tone="amber"
@@ -527,16 +519,6 @@ export default function FrequentlyAskedQuestionsPage() {
               </section>
             ))}
           </div>
-
-          <section className="yc-resource-source-note">
-            <h2>Source and maintenance note</h2>
-            <p>The following project sources were used to verify the document. Review this resource whenever roles, module names, workflow states, pricing, trial rules or screen behaviour changes.</p>
-            <ol>{sourceItems.map((item) => <li key={item}>{item}</li>)}</ol>
-            <aside className="yc-resource-callout tone-cyan">
-              <strong>Resource owner</strong>
-              <p>Sayanant Development Services Pvt. Ltd. / YourComate HRMS. Questions or correction requests: <a href="mailto:hr@sayanant.com">hr@sayanant.com</a>.</p>
-            </aside>
-          </section>
 
           <div className="yc-resource-end-actions">
             <Link className="button button-ghost" to="/resources"><Icon name="arrowLeft" /> All Resources</Link>

@@ -3,95 +3,154 @@ import HeroScene from "../components/HeroScenes";
 import Icon from "../components/Icon";
 import PageHero from "../components/PageHero";
 
-const stories = [
-  [
-    "Growing services team",
-    "From spreadsheet attendance to role-based daily visibility",
-    "Attendance, leave and reporting became easier to review across office and field employees.",
-    "attendance",
-    "sky",
-  ],
-  [
-    "Multi-team organisation",
-    "Clearer reporting lines and approval ownership",
-    "Employee records, manager views and request status were arranged around actual responsibilities.",
-    "hierarchy",
-    "lilac",
-  ],
-  [
-    "Project-led workforce",
-    "One place for assigned work and progress updates",
-    "Managers gained clearer visibility into owners, collaborators and active delivery status.",
-    "project",
-    "cream",
-  ],
-];
-
-const outcomes = [
-  ["Clearer", "employee self-service"],
-  ["Faster", "role-based decisions"],
-  ["Connected", "people and work records"],
-  ["Responsive", "web and mobile access"],
+const workdayAreas = [
+  {
+    number: "01",
+    label: "People Operations",
+    title: "One dependable foundation for your workforce.",
+    copy: "Keep employee records, reporting structures, policies, documents, assets and workforce information connected in one organised system.",
+    includes: [
+      "Employee Records",
+      "Employee Self-Service",
+      "Policies & Documents",
+      "Assets & Workforce Records",
+    ],
+    cta: "Explore People Operations",
+    href: "/product/core-hr",
+    icon: "people",
+    tone: "sky",
+  },
+  {
+    number: "02",
+    label: "Attendance, Leave & Approvals",
+    title: "Everyday requests move without losing context.",
+    copy: "Manage office, remote, field and offline attendance alongside leave, holidays, requests and role-based approvals.",
+    includes: [
+      "Attendance Management",
+      "Leave & Holidays",
+      "Approvals & Requests",
+      "Mobile Check-In",
+    ],
+    cta: "Explore Everyday Operations",
+    href: "/product/attendance",
+    icon: "attendance",
+    tone: "lilac",
+  },
+  {
+    number: "03",
+    label: "Projects & Team Delivery",
+    title: "Keep ownership and progress visible.",
+    copy: "Connect projects with team leaders, reporting officers, members and collaborators so assigned work and progress updates stay within the same workplace.",
+    includes: [
+      "Projects",
+      "Team Delivery",
+      "Collaborators",
+      "Progress Visibility",
+    ],
+    cta: "Explore Projects",
+    href: "/product/projects",
+    icon: "project",
+    tone: "cream",
+  },
+  {
+    number: "04",
+    label: "Recruitment & Onboarding",
+    title: "Bring new people into the same connected system.",
+    copy: "Manage job openings, candidates and recruitment workflows, then carry successful hires forward into your employee records and organisational structure.",
+    includes: [
+      "Job Openings",
+      "Candidate Pipeline",
+      "Recruitment",
+      "Employee Onboarding",
+    ],
+    cta: "Explore Recruitment",
+    href: "/product/recruitment",
+    icon: "recruitment",
+    tone: "mint",
+  },
+  {
+    number: "05",
+    label: "Payroll & Payslips",
+    title: "Move from workforce records to payday with clarity.",
+    copy: "Keep payroll processing connected with employee information, attendance inputs and salary records while giving employees secure access to their payslips.",
+    includes: [
+      "Payroll Processing",
+      "Salary Records",
+      "Payslips",
+      "Employee Access",
+    ],
+    cta: "Explore Payroll",
+    href: "/product/payroll",
+    icon: "payroll",
+    tone: "coral",
+  },
+  {
+    number: "06",
+    label: "Support, Insights & Saya AI",
+    title: "Give every role a smarter way to get things done.",
+    copy: "Bring employee support, workforce reporting and mobile access together with Saya AI — providing role-aware guidance based on the signed-in user's permitted workspace.",
+    includes: [
+      "Saya AI",
+      "IT Support & Helpdesk",
+      "Workforce Insights",
+      "Mobile Experience",
+    ],
+    cta: "Meet Saya AI",
+    href: "/saya",
+    icon: "saya",
+    tone: "amber",
+  },
 ];
 
 export default function CustomersPage() {
   return (
-    <main className="public-main">
+    <main className="public-main yc-customers-page">
       <PageHero
-        eyebrow="Customer outcomes"
-        title="Built for organisations that want everyday HR work to feel easier."
-        description="YourComate is designed around practical operating problems: disconnected records, unclear approvals, limited visibility and difficult mobile access."
+        eyebrow="Connected workdays"
+        title="Where YourComate"
+        titleAccent="fits into the workday."
+        description="From joining and attendance to projects, payroll and employee support, YourComate connects the workflows organisations manage every day."
         icon="people"
         tone="cyan"
         variant="customers"
-        secondary={["Explore Product", "/product"]}
-        note="Outcome examples describe intended workflow improvements, not guaranteed results"
       >
         <HeroScene type="customers" />
       </PageHero>
 
       <section className="public-section yc-customer-stories-section">
         <div className="page-width">
-          <div className="yc-inside-section-heading yc-customer-section-heading">
-            <span className="public-kicker">
-              <Icon name="people" /> Operating outcomes
-            </span>
-            <div>
-              <h2>Examples of where connected workflows create clarity.</h2>
-             
-            </div>
-          </div>
-
           <div className="yc-customer-story-grid">
-            {stories.map(([type, title, copy, icon, tone], index) => (
-              <article className={`tone-${tone}`} key={title}>
+            {workdayAreas.map((area) => (
+              <article className={`tone-${area.tone}`} key={area.number}>
                 <header>
-                  <b>{String(index + 1).padStart(2, "0")}</b>
+                  <div className="yc-customer-story-index">
+                    <b>{area.number}</b>
+                    <small>{area.label}</small>
+                  </div>
+
                   <span aria-hidden="true">
-                    <Icon name={icon} />
+                    <Icon name={area.icon} />
                   </span>
                 </header>
-                <small>{type}</small>
-                <h2>{title}</h2>
-                <p>{copy}</p>
-                <Link to="/demo-registration">
-                  Explore in a demo <Icon name="arrow" />
+
+                <h2>{area.title}</h2>
+                <p>{area.copy}</p>
+
+                <div className="yc-customer-story-includes">
+                  <small>Includes</small>
+                  <div>
+                    {area.includes.map((item) => (
+                      <span key={item}>{item}</span>
+                    ))}
+                  </div>
+                </div>
+
+                <Link to={area.href}>
+                  {area.cta} <Icon name="arrow" />
                 </Link>
               </article>
             ))}
           </div>
-        </div>
-      </section>
-
-      <section className="public-section yc-customer-metrics-section">
-        <div className="page-width yc-customer-metric-grid">
-          {outcomes.map(([title, copy], index) => (
-            <article key={title}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <strong>{title}</strong>
-              <span>{copy}</span>
-            </article>
-          ))}
         </div>
       </section>
     </main>

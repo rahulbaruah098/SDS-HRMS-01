@@ -48,28 +48,6 @@ const page = {
   "Tenant and role controls determine publishing and viewing scope.",
   "Audit expectations should be set by the organisation's governance process."
 ],
-  controls: [
-  "Publish only an approved and final document supplied by the policy owner.",
-  "Use a stable and unique document ID.",
-  "Write a summary that identifies purpose and audience without changing the policy meaning.",
-  "Check that the selected file opens and matches the stated title.",
-  "Avoid uploading unnecessary personal, confidential or unrelated information.",
-  "Remove or replace obsolete content through an authorised maintenance process."
-],
-  checklist: [
-  "Confirm owner and approval date.",
-  "Confirm document ID and version naming.",
-  "Confirm title and summary.",
-  "Confirm supported file type and readable content.",
-  "Confirm correct Customer tenant.",
-  "Communicate the publication to the intended employees where required."
-],
-  notes: [
-  "The platform centralises access, but the Customer remains responsible for the policy's legal and operational accuracy.",
-  "Employees should rely on the latest authorised policy and ask HR when different copies conflict.",
-  "Availability depends on role, tenant configuration and the live published records."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Policies.jsx; frontend/src/api/client.js.",
 };
 
 export default function PoliciesDocumentsPage() {

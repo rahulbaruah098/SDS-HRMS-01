@@ -48,28 +48,6 @@ const page = {
   "Leave, Approvals, Projects and IT Support provide operational actions.",
   "Notifications, Policies, Profile and Payslips provide communication and records."
 ],
-  controls: [
-  "Use device location and camera access only when required for an authorised workflow.",
-  "Protect the device with screen lock and do not share an authenticated session.",
-  "Check network completion and saved status before repeating a submission.",
-  "Do not store or share downloaded salary, policy or employee records insecurely.",
-  "Test critical pages across supported phone, tablet and desktop widths before rollout.",
-  "Use the same approval, privacy and access controls regardless of screen size."
-],
-  checklist: [
-  "Confirm supported browser and stable network.",
-  "Confirm tenant, user role and mobile navigation.",
-  "Test attendance, location and photo permissions.",
-  "Test leave, project, support and payslip actions.",
-  "Verify status synchronisation after submission.",
-  "Publish mobile-use, privacy and support guidance to employees."
-],
-  notes: [
-  "Current verified scope is the responsive web implementation supplied in the project.",
-  "The project README states that completion of a separate Flutter mobile app is still required; this PDF does not present that unfinished native app as delivered.",
-  "Actual experience depends on the device, browser, permission settings, tenant role and live configuration."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/publicSiteData.js; frontend/src/styles.css; relevant responsive page styles; README.md.",
 };
 
 export default function MobileWorkforceExperiencePage() {

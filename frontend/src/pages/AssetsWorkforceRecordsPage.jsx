@@ -48,28 +48,6 @@ const page = {
   "Reports provide employee-wise asset allocation and status information.",
   "Lifecycle processes should review assets when an employee exits or changes responsibility."
 ],
-  controls: [
-  "Use a consistent asset naming and identification standard.",
-  "Do not place passwords or reusable secrets in licence or remarks fields.",
-  "Verify employee ownership before changing an allocation.",
-  "Record return, loss or damage promptly instead of leaving the asset as Assigned.",
-  "Use rejection reasons that are specific and useful for correction.",
-  "Restrict exported reports to authorised asset and HR personnel."
-],
-  checklist: [
-  "Confirm employee and tenant.",
-  "Confirm hardware or software type.",
-  "Confirm name, identifier and relevant dates.",
-  "Confirm status, condition and verification state.",
-  "Confirm remarks without sensitive secrets.",
-  "Review outstanding returns, expired licences and rejected records."
-],
-  notes: [
-  "The module records assignment and status; the organisation should still maintain its physical handover and approval evidence where required.",
-  "A verified record means it passed the configured review, not that every physical or licensing fact is independently guaranteed by the system.",
-  "Current actions depend on role and permissions returned by the live service."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Assets.jsx; frontend/src/api/client.js asset constants.",
 };
 
 export default function AssetsWorkforceRecordsPage() {

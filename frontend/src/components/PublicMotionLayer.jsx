@@ -101,6 +101,8 @@ export default function PublicMotionLayer() {
     const enabledForRoute =
       location.pathname === "/" && main.classList.contains("yc-horizontal-enabled");
 
+    if (!enabledForRoute) return undefined;
+
     let desktop = false;
     let deckHeight = 1;
     let panelWidth = 1;

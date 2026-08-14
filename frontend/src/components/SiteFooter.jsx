@@ -154,143 +154,145 @@ export default function SiteFooter() {
         <FooterFlowFrame />
 
         <div className="yc-flow-footer-shell">
-        <section className="yc-flow-footer-lead">
-          <div className="yc-flow-footer-intro">
-            <Brand />
+          <section className="yc-flow-footer-lead">
+            <div className="yc-flow-footer-intro">
+              <Brand />
 
-            <span className="yc-flow-footer-kicker">
-              Connected workday infrastructure
-            </span>
-
-            <h2>
-              Keep every people process
-              <em>moving together.</em>
-            </h2>
-
-            <p>
-              One practical HRMS workspace for records,
-              attendance, leave, projects, recruitment, payroll,
-              approvals and everyday employee support.
-            </p>
-
-            <AppStoreBadges
-              compact
-              disabled
-              className="yc-footer-store-badges"
-            />
-          </div>
-        </section>
-
-        <div
-          className="yc-flow-footer-modules"
-          aria-label="Core YourComate workflow"
-        >
-          {workflowModules.map(([icon, label, tone, href]) => (
-            <Link
-              className={`tone-${tone}`}
-              to={href}
-              aria-label={`Open ${label}`}
-              key={label}
-            >
-              <WorkflowIcon name={icon} />
-              <strong>{label}</strong>
-            </Link>
-          ))}
-        </div>
-
-        <div className="yc-flow-footer-information">
-          <section className="yc-flow-footer-about">
-            <span className="yc-flow-footer-section-label">
-              About YourComate
-            </span>
-
-            <h3>Built for real operating work</h3>
-
-            <p>
-              YourComate is developed by Sayanant Development
-              Services to connect people, process and performance in
-              one clear workspace.
-            </p>
-
-            <div className="yc-flow-footer-contact-list">
-              <a href="mailto:hr@sayanant.com">
-                <Icon name="email" />
-                hr@sayanant.com
-              </a>
-
-              <span>
-                <Icon name="shield" />
-                Secure role-based access
+              <span className="yc-flow-footer-kicker">
+                Connected workday infrastructure
               </span>
+
+              <h2>
+                Keep every people process
+                <em>moving together.</em>
+              </h2>
+
+              <p>
+                One practical HRMS workspace for records,
+                attendance, leave, projects, recruitment, payroll,
+                approvals and everyday employee support.
+              </p>
+
+              <AppStoreBadges
+                compact
+                disabled
+                className="yc-footer-store-badges"
+              />
             </div>
           </section>
 
-          <nav
-            className="yc-flow-footer-directory"
-            aria-label="Footer navigation"
+          <div
+            className="yc-flow-footer-modules"
+            aria-label="Core YourComate workflow"
           >
-            {footerGroups.map((group) => (
-              <section key={group.title}>
-                <header>
-                  <h3>{group.title}</h3>
-                </header>
-
-                <div>
-                  {group.links.map(([label, href]) => (
-                    <Link
-                      to={href}
-                      key={`${group.title}-${href}`}
-                    >
-                      <span>{label}</span>
-                    </Link>
-                  ))}
-                </div>
-              </section>
+            {workflowModules.map(([icon, label, tone, href]) => (
+              <Link
+                className={`tone-${tone}`}
+                to={href}
+                aria-label={`Open ${label}`}
+                key={label}
+              >
+                <WorkflowIcon name={icon} />
+                <strong>{label}</strong>
+              </Link>
             ))}
-          </nav>
-        </div>
+          </div>
 
-        <div className="yc-flow-footer-bottom">
-          <span>
-            © {currentYear} YourComate HRMS.
-            All rights reserved.
-          </span>
+          <div className="yc-flow-footer-information">
+            <section className="yc-flow-footer-about">
+              <span className="yc-flow-footer-section-label">
+                About YourComate
+              </span>
 
-          <div>
-            <button
-              type="button"
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent(
-                    "yc-open-policy-consent",
-                  ),
-                )
-              }
+              <h3>Built for real operating work</h3>
+
+              <p>
+                YourComate is developed by Sayanant Development
+                Services to connect people, process and performance in
+                one clear workspace.
+              </p>
+
+              <div className="yc-flow-footer-contact-list">
+                <a href="mailto:hr@sayanant.com">
+                  <Icon name="email" />
+                  hr@sayanant.com
+                </a>
+
+                <span>
+                  <Icon name="shield" />
+                  Secure role-based access
+                </span>
+              </div>
+            </section>
+
+            <nav
+              className="yc-flow-footer-directory"
+              aria-label="Footer navigation"
             >
-              Manage privacy
-            </button>
+              {footerGroups.map((group) => (
+                <section key={group.title}>
+                  <header>
+                    <h3>{group.title}</h3>
+                  </header>
 
-            <Link to="/cookies">Cookie Policy</Link>
+                  <div>
+                    {group.links.map(([label, href]) => (
+                      <Link
+                        to={href}
+                        key={`${group.title}-${href}`}
+                      >
+                        <span>{label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </nav>
+          </div>
 
-         
+          <div className="yc-flow-footer-bottom">
+            <span>
+              © {currentYear} YourComate HRMS.
+              All rights reserved.
+            </span>
+
+            <div>
+              <button
+                type="button"
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent(
+                      "yc-open-policy-consent",
+                    ),
+                  )
+                }
+              >
+                Manage privacy
+              </button>
+
+              <Link to="/cookies">Cookie Policy</Link>
+            </div>
+          </div>
+
+          <div className="yc-flow-footer-credit">
+            <span>
+              Powered by{" "}
+              <a
+                href="https://sayanant.com"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Sayanant
+              </a>{" "}
+              Group
+            </span>
+
+            <span className="yc-flow-footer-origin">
+              Built in Assam ❤️
+            </span>
           </div>
         </div>
-
-        <div className="yc-flow-footer-credit">
-          <span>
-            Powered by{" "}
-            <a
-              href="https://sayanant.com"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Sayanant
-            </a>{" "}
-            Group
-          </span>
-        </div>
       </div>
-    </div>
-  </footer>
+    </footer>
   );
 }

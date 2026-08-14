@@ -48,28 +48,6 @@ const page = {
   "Projects dashboards provide project status, progress and workload insights outside the core Reports tabs.",
   "Payroll Reports provides separate registers, statutory, department, variance, trend and CSV outputs."
 ],
-  controls: [
-  "Apply the correct tenant, period and employee scope before interpreting totals.",
-  "Use source records to investigate an exception; a summary is not the complete audit trail.",
-  "Do not expose field photos, location or employee data to unauthorised recipients.",
-  "Treat filters and status labels consistently across repeated reporting periods.",
-  "Export only the fields required for the authorised purpose.",
-  "Reconcile attendance and leave reports before payroll processing."
-],
-  checklist: [
-  "Confirm role and reporting purpose.",
-  "Confirm entity, state, employee and period.",
-  "Confirm status, mode, leave type and approval-stage filters.",
-  "Review summary and underlying detail together.",
-  "Investigate exceptions in the source module.",
-  "Protect, retain and dispose of exports according to Customer policy."
-],
-  notes: [
-  "Report accuracy depends on complete and correct source records.",
-  "Project, payroll and asset reporting are not all contained in the core Reports page; their modules provide specialised views.",
-  "The live role and tenant configuration determine which reports and exports are available."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/Reports.jsx; frontend/src/pages/Projects.jsx; frontend/src/pages/PayrollReports.jsx.",
 };
 
 export default function ReportsWorkforceInsightsPage() {

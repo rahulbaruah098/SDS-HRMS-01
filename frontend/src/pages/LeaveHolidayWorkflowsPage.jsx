@@ -48,28 +48,6 @@ const page = {
   "Projects and employee records supply handover options.",
   "Reports and payroll use approved leave and LWP context."
 ],
-  controls: [
-  "Select Comp-Off only from a valid available credit.",
-  "Do not submit overlapping or duplicate requests.",
-  "Enter complete handover information before a planned absence.",
-  "Approvers should use the live stage and history instead of informal messages as the final record.",
-  "Leave balance should change only through the authorised final approval process.",
-  "Holiday work must be approved before attendance; attendance alone should not create an unauthorised entitlement."
-],
-  checklist: [
-  "Confirm leave type and balance.",
-  "Confirm dates and day type.",
-  "Confirm reason and work handover.",
-  "Confirm reporting mappings and displayed approval path.",
-  "Review Application Status before retrying a submission.",
-  "Reconcile approved leave before payroll processing."
-],
-  notes: [
-  "Comp-Off becomes claimable from the next working day and remains claimable within 7 working days under the supplied implementation.",
-  "Final business policy, entitlement rules and exceptional approval authority remain the Customer's responsibility.",
-  "The live screen and configured workflow determine the exact stages for a particular user."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/ApplyLeave.jsx; frontend/src/pages/Leave.jsx; frontend/src/pages/HolidayCalendar.jsx; frontend/src/pages/HolidayWorkRequests.jsx.",
 };
 
 export default function LeaveHolidayWorkflowsPage() {

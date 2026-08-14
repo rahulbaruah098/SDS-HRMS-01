@@ -8,7 +8,8 @@ export default function ProductPage() {
     <main className="public-main yc-product-overview-page">
       <PageHero
         eyebrow="YourComate platform"
-        title="One connected HR workspace for people, operations and workforce services."
+      title="One connected HR workspace for "
+titleAccent="people, operations and workforce services."
         description="Bring employee records, attendance, leave, projects, approvals, recruitment, payroll, payslips, policies, support, reporting, mobile work and Saya into one role-based platform."
         icon="hierarchy"
         tone="violet"

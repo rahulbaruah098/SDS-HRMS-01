@@ -1,6 +1,55 @@
 import Icon from "../components/Icon";
 import PageHero from "../components/PageHero";
 
+/*
+ * Creates the two-tone hero-title treatment used across the public website.
+ *
+ * Feature titles containing "&" are split naturally around that separator:
+ * "Core HR & Employee Records"
+ *    -> "Core HR &" + "Employee Records"
+ *
+ * Titles without "&" are split toward the end so the full original wording
+ * remains unchanged.
+ *
+ * Only the PageHero title receives this formatting. The original string
+ * `title` is still used everywhere else in the feature page.
+ */
+function splitFeatureHeroTitle(title = "") {
+  const cleanTitle = String(title || "").trim();
+
+  if (!cleanTitle) {
+    return {
+      title: "",
+      titleAccent: "",
+    };
+  }
+
+  if (cleanTitle.includes(" & ")) {
+    const [firstPart, ...remainingParts] = cleanTitle.split(" & ");
+
+    return {
+      title: `${firstPart} &`,
+      titleAccent: remainingParts.join(" & "),
+    };
+  }
+
+  const words = cleanTitle.split(/\s+/);
+
+  if (words.length === 1) {
+    return {
+      title: cleanTitle,
+      titleAccent: "",
+    };
+  }
+
+  const splitIndex = Math.max(1, Math.ceil(words.length / 2));
+
+  return {
+    title: words.slice(0, splitIndex).join(" "),
+    titleAccent: words.slice(splitIndex).join(" "),
+  };
+}
+
 function FeatureHeading({ eyebrow, title, copy }) {
   return (
     <header className="yc-feature-guide-heading">
@@ -32,16 +81,15 @@ export default function FeatureGuideLayout({
   workflow,
   rules,
   modules,
-  controls,
-  checklist,
-  notes,
-  basis,
 }) {
+  const heroTitle = splitFeatureHeroTitle(title);
+
   return (
     <main className={`public-main yc-feature-guide-page tone-${tone}`}>
       <PageHero
         eyebrow={category}
-        title={title}
+        title={heroTitle.title}
+        titleAccent={heroTitle.titleAccent}
         description={purpose}
         icon={icon}
         tone={tone}
@@ -82,7 +130,9 @@ export default function FeatureGuideLayout({
           <div className="yc-feature-cover-grid">
             {covers.map((item) => (
               <TextCard key={item}>
-                <span className="yc-feature-card-icon"><Icon name="check" /></span>
+                <span className="yc-feature-card-icon">
+                  <Icon name="check" />
+                </span>
                 <p>{item}</p>
               </TextCard>
             ))}
@@ -95,7 +145,10 @@ export default function FeatureGuideLayout({
 
           <div className="yc-feature-user-grid">
             {users.map((item) => (
-              <TextCard className="yc-feature-user-card" key={item}>
+              <TextCard
+                className="yc-feature-user-card"
+                key={item}
+              >
                 <p>{item}</p>
               </TextCard>
             ))}
@@ -112,7 +165,10 @@ export default function FeatureGuideLayout({
 
           <div className="yc-feature-step-grid">
             {workflow.map((item, index) => (
-              <article className="yc-feature-step-card" key={item}>
+              <article
+                className="yc-feature-step-card"
+                key={item}
+              >
                 <b>{String(index + 1).padStart(2, "0")}</b>
                 <p>{item}</p>
               </article>
@@ -124,92 +180,45 @@ export default function FeatureGuideLayout({
       <section className="public-section yc-feature-guide-section yc-feature-rules-section">
         <div className="page-width yc-feature-guide-shell">
           <div className="yc-feature-split-grid">
-            <div>
+            <div className="yc-feature-split-heading yc-feature-split-heading-rules">
               <FeatureHeading
                 eyebrow="Key records, states and rules"
                 title="The records and states that keep the workflow clear"
               />
-              <div className="yc-feature-rule-list">
-                {rules.map((item) => (
-                  <TextCard key={item}>
-                    <span className="yc-feature-card-icon"><Icon name="shield" /></span>
-                    <p>{item}</p>
-                  </TextCard>
-                ))}
-              </div>
             </div>
 
-            <div>
+            <div className="yc-feature-split-heading yc-feature-split-heading-modules">
               <FeatureHeading
                 eyebrow="Connected YourComate modules"
                 title="The surrounding modules that supply or consume context"
               />
-              <div className="yc-feature-module-list">
-                {modules.map((item) => (
-                  <TextCard key={item}>
-                    <span className="yc-feature-card-icon"><Icon name="hierarchy" /></span>
-                    <p>{item}</p>
-                  </TextCard>
-                ))}
-              </div>
+            </div>
+
+            <div className="yc-feature-rule-list">
+              {rules.map((item) => (
+                <TextCard key={item}>
+                  <span className="yc-feature-card-icon">
+                    <Icon name="shield" />
+                  </span>
+                  <p>{item}</p>
+                </TextCard>
+              ))}
+            </div>
+
+            <div className="yc-feature-module-list">
+              {modules.map((item) => (
+                <TextCard key={item}>
+                  <span className="yc-feature-card-icon">
+                    <Icon name="hierarchy" />
+                  </span>
+                  <p>{item}</p>
+                </TextCard>
+              ))}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="public-section yc-feature-guide-section yc-feature-controls-section">
-        <div className="page-width yc-feature-guide-shell">
-          <FeatureHeading
-            eyebrow="Operational controls"
-            title="Guardrails for responsible day-to-day use"
-          />
-
-          <div className="yc-feature-control-grid">
-            {controls.map((item) => (
-              <TextCard className="yc-feature-control-card" key={item}>
-                <span className="yc-feature-card-icon"><Icon name="shield" /></span>
-                <p>{item}</p>
-              </TextCard>
-            ))}
-          </div>
-
-          <FeatureHeading
-            eyebrow="Practical rollout checklist"
-            title="What to confirm before teams depend on the workflow"
-          />
-
-          <div className="yc-feature-checklist-grid">
-            {checklist.map((item) => (
-              <TextCard className="yc-feature-check-card" key={item}>
-                <span className="yc-feature-card-icon"><Icon name="check" /></span>
-                <p>{item}</p>
-              </TextCard>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="public-section yc-feature-guide-section yc-feature-notes-section">
-        <div className="page-width yc-feature-guide-shell">
-          <FeatureHeading
-            eyebrow="Important operating notes"
-            title="Keep these implementation details visible"
-          />
-
-          <div className="yc-feature-note-grid">
-            {notes.map((item) => (
-              <TextCard className="yc-feature-note-card" key={item}>
-                <p>{item}</p>
-              </TextCard>
-            ))}
-          </div>
-
-          <div className="yc-feature-basis-card">
-            <span>Implementation basis</span>
-            <p>{basis}</p>
-          </div>
-        </div>
-      </section>
     </main>
   );
 }

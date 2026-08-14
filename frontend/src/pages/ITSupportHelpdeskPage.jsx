@@ -48,28 +48,6 @@ const page = {
   "Notifications may alert relevant users about ticket activity.",
   "Platform administration receives only explicit major escalations."
 ],
-  controls: [
-  "Never place passwords, OTPs, UPI PINs, CVVs or full banking credentials in a ticket.",
-  "Use the correct category and priority; Critical should reflect genuine business or security impact.",
-  "Assign only to an appropriate tenant IT Department member.",
-  "Keep status and resolution notes factual and useful.",
-  "Escalate only supported major issues with a clear technical reason.",
-  "Reopen only when the original issue remains unresolved or has immediately recurred."
-],
-  checklist: [
-  "Confirm requester, tenant and contact route.",
-  "Confirm category, priority and impact.",
-  "Capture reproducible details without secrets.",
-  "Assign an accountable IT owner.",
-  "Record progress, resolution and employee review.",
-  "Use Platform escalation only for eligible major issues."
-],
-  notes: [
-  "A normal ticket does not automatically go to Platform Superadmin.",
-  "Admin/HR access to raise tickets is not the same as IT-team management authority.",
-  "The live profile and capability mappings determine the available assignment and escalation controls."
-],
-  basis: "This guide reflects the supplied YourComate project implementation. Actual availability depends on the Customer tenant, plan, logged-in role, employee capability mappings and live configuration. Verified against: frontend/src/data/modules.js; frontend/src/pages/ITSupport.jsx; frontend/src/api/client.js IT support services.",
 };
 
 export default function ITSupportHelpdeskPage() {

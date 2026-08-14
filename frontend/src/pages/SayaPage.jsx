@@ -186,7 +186,9 @@ export default function SayaPage() {
     <main className="public-main yc-saya-guide-page">
       <PageHero
         eyebrow="Saya AI Assistant"
-        title="Practical help inside YourComate."
+        
+        title="Practical help"
+titleAccent="inside YourComate."
         description="Saya is the in-product HR assistant designed to use the signed-in user's role, permissions and workspace context before offering guidance. It helps people understand where to go, what to do next and how an HRMS workflow fits together."
         icon="sparkle"
         tone="violet"
