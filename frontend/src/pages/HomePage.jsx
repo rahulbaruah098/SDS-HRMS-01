@@ -182,7 +182,7 @@ export default function HomePage() {
                 </span>
                 <span className="yc-app-device yc-app-iphone-front">
                   <span className="yc-app-dynamic-island" />
-                  <img src="/images/yourcomate-app-screen.png" alt="YourComate mobile app on iPhone" loading="lazy" decoding="async" />
+                  <img src="/images/appview.png" alt="YourComate mobile app on iPhone" loading="lazy" decoding="async" />
                 </span>
               </div>
             </article>
@@ -191,7 +191,7 @@ export default function HomePage() {
               <span className="yc-app-device-label"><b>Android</b><small>Available on Google Play</small></span>
               <span className="yc-app-device yc-app-android-phone">
                 <span className="yc-app-android-camera" />
-                <img src="/images/yourcomate-app-screen.png" alt="YourComate mobile app on Android" loading="lazy" decoding="async" />
+                <img src="/images/appview2.png" alt="YourComate mobile app on Android" loading="lazy" decoding="async" />
               </span>
             </article>
           </div>
