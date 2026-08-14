@@ -231,6 +231,19 @@ titleAccent="inside YourComate."
             copy="Saya is most useful at the moment a user is unsure. Instead of searching menus or waiting for a basic how-to answer, the user can ask a direct question and receive guidance shaped by the signed-in workspace."
           />
 
+          <figure className="yc-saya-guide-product-visual">
+            <img
+              src="/images/5.jpg"
+              alt="Role-aware Saya AI guidance inside the signed-in YourComate workspace"
+              width="926"
+              height="1647"
+              loading="eager"
+              decoding="async"
+              fetchPriority="high"
+              draggable="false"
+            />
+          </figure>
+
           <div className="yc-saya-four-grid">
             {everydayAdvantages.map((item) => (
               <SayaInfoCard item={item} key={item.title} />
