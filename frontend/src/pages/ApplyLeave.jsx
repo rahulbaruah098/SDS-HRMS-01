@@ -37,7 +37,19 @@ const HR_ROLES = new Set([
   'hr',
 ]);
 
-const today = new Date().toISOString().slice(0, 10);
+function localDateInputValue(value = new Date()) {
+  const localValue = new Date(
+    value.getTime() - value.getTimezoneOffset() * 60 * 1000,
+  );
+
+  return localValue.toISOString().slice(0, 10);
+}
+
+function preventDateWheelChange(event) {
+  event.currentTarget.blur();
+}
+
+const today = localDateInputValue();
 
 const EMPTY_FORM = {
   leave_type: 'CL',
@@ -1440,18 +1452,20 @@ async function handleSubmit(event) {
                 min={today}
                 value={form.from_date}
                 onChange={(event) => updateForm('from_date', event.target.value)}
+                onWheel={preventDateWheelChange}
               />
             </div>
 
             <div className="apply-leave-field">
               <label>To Date</label>
-              <input
-                type="date"
-                min={form.from_date || today}
-                value={form.to_date}
-                disabled={form.day_type === 'half_day'}
-                onChange={(event) => updateForm('to_date', event.target.value)}
-              />
+                <input
+                  type="date"
+                  min={form.from_date || today}
+                  value={form.to_date}
+                  disabled={form.day_type === 'half_day'}
+                  onChange={(event) => updateForm('to_date', event.target.value)}
+                  onWheel={preventDateWheelChange}
+                />
             </div>
 
             {isHrAdminUser ? (

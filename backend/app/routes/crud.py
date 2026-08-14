@@ -4706,7 +4706,16 @@ def update_collection_item(collection, item_id):
 
         remove_employee_auth_fields(payload)
 
-    validation_error = "" if self_photo_update else validate_required_fields(collection, payload)
+    validation_payload = (
+        merged_employee
+        if collection == "employees"
+        else payload
+    )
+    validation_error = (
+        ""
+        if self_photo_update
+        else validate_required_fields(collection, validation_payload)
+    )
 
     if validation_error:
         return jsonify({"message": validation_error}), 400

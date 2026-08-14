@@ -626,8 +626,21 @@ def add_leave_overlap_date_filter(q):
         start_str = start.isoformat() if start else "0000-01-01"
         end_str = end.isoformat() if end else "9999-12-31"
 
-        q["from_date"] = {"$lte": end_str}
-        q["to_date"] = {"$gte": start_str}
+        q.setdefault("$and", []).append({
+            "$or": [
+                {
+                    "from_date": {"$lte": end_str},
+                    "to_date": {"$gte": start_str},
+                },
+                {
+                    "from_date": {"$lte": end_str},
+                    "upto_date": {"$gte": start_str},
+                },
+                {
+                    "date": {"$gte": start_str, "$lte": end_str},
+                },
+            ],
+        })
 
     return q
 

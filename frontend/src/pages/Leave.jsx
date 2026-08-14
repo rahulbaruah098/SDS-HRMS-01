@@ -19,7 +19,7 @@ import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 const today = new Date().toISOString().slice(0, 10);
 
 const EMPTY_FILTERS = {
-  period: 'today',
+  period: 'all',
   on_date: today,
   date_from: '',
   date_to: '',
@@ -874,11 +874,11 @@ function handleCsvExport() {
         <div>
           <span className="kicker">HR Leave Management</span>
           <h1>Leave Records & Daily Availability</h1>
-      <p>
-        Review today&apos;s leave records by default, track approval status,
-        comp-off claims, holiday work references, and filter historical leave
-        records by employee, leave type, date range, status, and approval stage.
-      </p>
+            <p>
+              Review all leave records by default, track approval status, comp-off
+              claims, holiday work references, and filter leave records by employee,
+              leave type, date range, status, and approval stage.
+            </p>
         </div>
 
         <button
@@ -934,10 +934,10 @@ function handleCsvExport() {
         <div className="toolbar">
           <div>
             <h3>Leave Filters</h3>
-            <p>
-              Today&apos;s leave is shown by default. Change the period or use
-              custom dates to view previous records.
-            </p>
+              <p>
+                All leave records are shown by default. Select a period or use
+                custom dates to narrow the results.
+              </p>
           </div>
 
           <button
@@ -958,6 +958,7 @@ function handleCsvExport() {
               value={filters.period}
               onChange={(e) => updateFilter('period', e.target.value)}
             >
+              <option value="all">All Records</option>
               <option value="today">Today</option>
               <option value="day">Specific Day</option>
               <option value="week">Week</option>
@@ -967,14 +968,15 @@ function handleCsvExport() {
             </select>
           </label>
 
-          {filters.period !== 'custom' && (
+          {['today', 'day', 'week', 'month', 'year'].includes(filters.period) && (
             <label>
               Reference Date
-              <input
-                type="date"
-                value={filters.on_date}
-                onChange={(e) => updateFilter('on_date', e.target.value)}
-              />
+                <input
+                  type="date"
+                  value={filters.on_date}
+                  onChange={(e) => updateFilter('on_date', e.target.value)}
+                  onWheel={preventDateWheelChange}
+                />
             </label>
           )}
 
@@ -986,16 +988,18 @@ function handleCsvExport() {
                   type="date"
                   value={filters.date_from}
                   onChange={(e) => updateFilter('date_from', e.target.value)}
+                  onWheel={preventDateWheelChange}
                 />
               </label>
 
               <label>
                 Date To
-                <input
-                  type="date"
-                  value={filters.date_to}
-                  onChange={(e) => updateFilter('date_to', e.target.value)}
-                />
+                  <input
+                    type="date"
+                    value={filters.date_to}
+                    onChange={(e) => updateFilter('date_to', e.target.value)}
+                    onWheel={preventDateWheelChange}
+                  />
               </label>
             </>
           )}
@@ -1094,7 +1098,7 @@ function handleCsvExport() {
             disabled={loading}
           >
             <Filter size={16} />
-            Reset Today
+            Reset Filters
           </button>
         </form>
       </section>
@@ -1104,9 +1108,11 @@ function handleCsvExport() {
           <div>
             <h3>Leave Records</h3>
             <p>
-              {filters.period === 'today'
-                ? 'Showing leave records for today.'
-                : 'Showing leave records based on selected filters.'}
+              {filters.period === 'all'
+                ? 'Showing all leave records.'
+                : filters.period === 'today'
+                  ? 'Showing leave records for today.'
+                  : 'Showing leave records based on selected filters.'}
             </p>
           </div>
         </div>
