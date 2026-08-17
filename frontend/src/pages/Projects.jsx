@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import {
   addProjectProgress,
-  assignProject,
+  updateProjectMembers,
   updateProjectCollaborators,
   createProject,
   currentEmployee,
@@ -939,12 +939,38 @@ function ProjectCard({
 }) {
   const projectId = String(getId(project));
   const status = normalizeStatus(project.status);
-  const canAssignThisProject = Boolean(canManageProjectSetup && project.can_create_assign_collaborate !== false);
+  const hasProjectManagementFlag = [
+    'can_manage_project_team',
+    'can_add_project_members',
+    'can_remove_project_members',
+    'can_reassign_primary_member',
+  ].some((key) => Object.prototype.hasOwnProperty.call(project, key));
+  const canAssignThisProject = hasProjectManagementFlag
+    ? Boolean(
+        project.can_manage_project_team ||
+        project.can_add_project_members ||
+        project.can_remove_project_members ||
+        project.can_reassign_primary_member,
+      )
+    : Boolean(
+        canManageProjectSetup &&
+        project.can_create_assign_collaborate !== false,
+      );
   const canUpdateStatusProgress = Boolean(project.can_update_status_progress !== false);
   const selfId = currentEmployeeOption ? String(getId(currentEmployeeOption)) : '';
 
   const [assignedIds, setAssignedIds] = useState((project.assigned_employee_ids || []).map(String));
   const [collaboratorIds, setCollaboratorIds] = useState((project.collaborator_ids || []).map(String));
+  const [primaryAssigneeId, setPrimaryAssigneeId] = useState(
+    String(
+      project.primary_assignee_id ||
+      project.assigned_to_id ||
+      project.doing_person_id ||
+      '',
+    ),
+  );
+  const [assignmentReason, setAssignmentReason] = useState('');
+  const [statusReason, setStatusReason] = useState('');
   const [progressPercent, setProgressPercent] = useState(
     project.latest_progress || project.progress_percent || '',
   );
@@ -959,18 +985,57 @@ function ProjectCard({
 
   const selfAssigned = Boolean(selfId && assignedIds.includes(selfId));
   const selfCollaborator = Boolean(selfId && collaboratorIds.includes(selfId));
+  const primaryAssigneeOptions = employees.filter((employee) =>
+    assignedIds.includes(String(getId(employee))),
+  );
 
   useEffect(() => {
     setAssignedIds((project.assigned_employee_ids || []).map(String));
     setCollaboratorIds((project.collaborator_ids || []).map(String));
+    setPrimaryAssigneeId(
+      String(
+        project.primary_assignee_id ||
+        project.assigned_to_id ||
+        project.doing_person_id ||
+        '',
+      ),
+    );
+    setAssignmentReason('');
+    setStatusReason('');
     setProgressPercent(project.latest_progress || project.progress_percent || '');
     setProgressNote('');
   }, [project]);
 
-  async function saveAssignment(nextAssignedIds = assignedIds, nextCollaboratorIds = collaboratorIds) {
+  async function saveAssignment(
+    nextAssignedIds = assignedIds,
+    nextCollaboratorIds = collaboratorIds,
+    nextPrimaryAssigneeId = primaryAssigneeId,
+  ) {
     await onAssign(projectId, {
       assigned_employee_ids: nextAssignedIds,
       collaborator_ids: nextCollaboratorIds,
+      primary_assignee_id: nextPrimaryAssigneeId,
+      assignment_reason: assignmentReason.trim(),
+    });
+  }
+
+  function changeAssignedMembers(nextAssignedIds) {
+    const normalizedIds = nextAssignedIds.map(String);
+
+    setAssignedIds(normalizedIds);
+
+    if (
+      primaryAssigneeId &&
+      !normalizedIds.includes(String(primaryAssigneeId))
+    ) {
+      setPrimaryAssigneeId('');
+    }
+  }
+
+  function changeProjectStatus(nextStatus) {
+    return onStatusChange(projectId, {
+      status: nextStatus,
+      status_reason: statusReason.trim(),
     });
   }
 
@@ -980,10 +1045,16 @@ function ProjectCard({
     const nextAssignedIds = selfAssigned
       ? assignedIds
       : [...assignedIds, selfId];
+    const nextPrimaryAssigneeId = primaryAssigneeId || selfId;
 
     setAssignedIds(nextAssignedIds);
+    setPrimaryAssigneeId(nextPrimaryAssigneeId);
 
-    await saveAssignment(nextAssignedIds, collaboratorIds);
+    await saveAssignment(
+      nextAssignedIds,
+      collaboratorIds,
+      nextPrimaryAssigneeId,
+    );
   }
 
   async function addSelfAsCollaborator() {
@@ -1109,8 +1180,8 @@ function ProjectCard({
               label="Assigned Team Members"
               value={assignedIds}
               options={employees}
-              onChange={setAssignedIds}
-              helper="Only Team Leaders and Reporting Officers can assign employees. Your own name is also available here."
+              onChange={changeAssignedMembers}
+              helper="Add or remove members from this ongoing project. Only employees from your mapped team are shown."
             />
 
             <MultiSelect
@@ -1122,28 +1193,40 @@ function ProjectCard({
             />
           </div>
 
+          <div className="project-grid-two">
+            <div className="project-field">
+              <label>Primary Responsible Person</label>
+              <select
+                value={primaryAssigneeId}
+                onChange={(event) => setPrimaryAssigneeId(event.target.value)}
+              >
+                <option value="">Select from assigned members</option>
+                {primaryAssigneeOptions.map((employee) => (
+                  <option value={String(getId(employee))} key={String(getId(employee))}>
+                    {getName(employee)}
+                  </option>
+                ))}
+              </select>
+              <p className="project-helper">
+                Changing this person reassigns responsibility for the project.
+              </p>
+            </div>
+
+            <div className="project-field">
+              <label>Assignment / Reassignment Reason</label>
+              <textarea
+                value={assignmentReason}
+                onChange={(event) => setAssignmentReason(event.target.value)}
+                placeholder="Example: Workload changed; assigning this project to another team member."
+                rows={3}
+              />
+            </div>
+          </div>
+
           <div className="project-actions">
             <button type="button" className="project-btn project-btn-soft" onClick={() => saveAssignment()}>
-              Save Assignment / Collaborators
+              Save Team and Responsibility Changes
             </button>
-
-            {status !== 'completed' ? (
-              <button
-                type="button"
-                className="project-btn project-btn-danger-soft"
-                onClick={() => onStatusChange(projectId, 'completed')}
-              >
-                Mark Completed
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="project-btn project-btn-soft"
-                onClick={() => onStatusChange(projectId, 'active')}
-              >
-                Reopen Active
-              </button>
-            )}
           </div>
         </>
       ) : (
@@ -1166,27 +1249,53 @@ function ProjectCard({
 
       {canUpdateStatusProgress && (
         <>
-          {!canAssignThisProject && (
-            <div className="project-actions">
-              {status !== 'completed' ? (
-                <button
-                  type="button"
-                  className="project-btn project-btn-danger-soft"
-                  onClick={() => onStatusChange(projectId, 'completed')}
-                >
-                  Mark Completed
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="project-btn project-btn-soft"
-                  onClick={() => onStatusChange(projectId, 'active')}
-                >
-                  Reopen Active
-                </button>
-              )}
-            </div>
-          )}
+          <div className="project-field">
+            <label>Status Change Reason</label>
+            <textarea
+              value={statusReason}
+              onChange={(event) => setStatusReason(event.target.value)}
+              placeholder="Required when putting a project on hold."
+              rows={2}
+            />
+          </div>
+
+          <div className="project-actions">
+            {status === 'on_hold' ? (
+              <button
+                type="button"
+                className="project-btn project-btn-soft"
+                onClick={() => changeProjectStatus('active')}
+              >
+                Resume Active
+              </button>
+            ) : status !== 'completed' ? (
+              <button
+                type="button"
+                className="project-btn project-btn-soft"
+                onClick={() => changeProjectStatus('on_hold')}
+              >
+                Put On Hold
+              </button>
+            ) : null}
+
+            {status !== 'completed' ? (
+              <button
+                type="button"
+                className="project-btn project-btn-danger-soft"
+                onClick={() => changeProjectStatus('completed')}
+              >
+                Mark Completed
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="project-btn project-btn-soft"
+                onClick={() => changeProjectStatus('active')}
+              >
+                Reopen Active
+              </button>
+            )}
+          </div>
 
           {status !== 'completed' && (
             <div className="project-progress-form">
@@ -1628,21 +1737,66 @@ if (key === 'department') {
     }
   }
 
-  async function handleStatusChange(projectId, status) {
+  async function handleStatusChange(projectId, statusOrPayload) {
     if (!projectId) {
       alerts.warning('Project id not found.', 'Invalid Project');
       return;
     }
 
-    const nextStatusLabel = status === 'completed' ? 'mark this project as completed' : 'reopen this project as active';
+    const payload =
+      statusOrPayload && typeof statusOrPayload === 'object'
+        ? { ...statusOrPayload }
+        : { status: statusOrPayload };
+    const status = normalizeStatus(payload.status);
+    const statusReason = String(
+      payload.status_reason || payload.hold_reason || payload.reason || '',
+    ).trim();
+
+    if (status === 'on_hold' && !statusReason) {
+      alerts.warning(
+        'Please enter a reason before putting this project on hold.',
+        'Hold Reason Required',
+      );
+      return;
+    }
+
+    const statusActions = {
+      active: {
+        question: 'resume this project as active',
+        title: 'Resume Project',
+        confirmText: 'Yes, Resume',
+        success: 'Project is active again.',
+        tone: 'info',
+      },
+      on_hold: {
+        question: 'put this project on hold',
+        title: 'Put Project On Hold',
+        confirmText: 'Yes, Put On Hold',
+        success: 'Project placed on hold.',
+        tone: 'warning',
+      },
+      completed: {
+        question: 'mark this project as completed',
+        title: 'Complete Project',
+        confirmText: 'Yes, Complete',
+        success: 'Project marked as completed.',
+        tone: 'warning',
+      },
+    };
+    const action = statusActions[status];
+
+    if (!action) {
+      alerts.warning('Invalid project status selected.', 'Invalid Status');
+      return;
+    }
 
     const confirmed = await alerts.confirm(
-      `Are you sure you want to ${nextStatusLabel}?`,
-      status === 'completed' ? 'Complete Project' : 'Reopen Project',
+      `Are you sure you want to ${action.question}?`,
+      action.title,
       {
-        confirmText: status === 'completed' ? 'Yes, Complete' : 'Yes, Reopen',
+        confirmText: action.confirmText,
         cancelText: 'Cancel',
-        tone: status === 'completed' ? 'warning' : 'info',
+        tone: action.tone,
       },
     );
 
@@ -1653,11 +1807,12 @@ if (key === 'department') {
     setSaving(true);
 
     try {
-      await updateProjectStatus(projectId, status);
-      alerts.success(
-        status === 'completed' ? 'Project marked as completed.' : 'Project reopened as active.',
-        'Project Status Updated',
-      );
+      await updateProjectStatus(projectId, {
+        ...payload,
+        status,
+        status_reason: statusReason,
+      });
+      alerts.success(action.success, 'Project Status Updated');
       await loadData();
     } catch (err) {
       alerts.error(err.message || 'Unable to update project status.', 'Status Update Failed');
@@ -1667,13 +1822,76 @@ if (key === 'department') {
   }
 
 async function handleAssign(projectId, payload) {
-  if (!canManageProjectSetup) {
-    alerts.warning('Only Team Leaders and Reporting Officers can assign members or collaborators.', 'Access Restricted');
+  if (!projectId) {
+    alerts.warning('Project id not found.', 'Invalid Project');
     return;
   }
 
-  if (!projectId) {
-    alerts.warning('Project id not found.', 'Invalid Project');
+  const selectedProject = projects.find(
+    (project) => String(getId(project)) === String(projectId),
+  );
+  const hasProjectManagementFlag = selectedProject && [
+    'can_manage_project_team',
+    'can_add_project_members',
+    'can_remove_project_members',
+    'can_reassign_primary_member',
+  ].some((key) => Object.prototype.hasOwnProperty.call(selectedProject, key));
+  const canManageSelectedProject = hasProjectManagementFlag
+    ? Boolean(
+        selectedProject.can_manage_project_team ||
+        selectedProject.can_add_project_members ||
+        selectedProject.can_remove_project_members ||
+        selectedProject.can_reassign_primary_member,
+      )
+    : canManageProjectSetup;
+
+  if (!canManageSelectedProject) {
+    alerts.warning(
+      "Only this project's Team Leader, Reporting Officer, or Admin can change its team.",
+      'Access Restricted',
+    );
+    return;
+  }
+
+  const assignedEmployeeIds = (payload.assigned_employee_ids || []).map(String);
+  const collaboratorIds = (payload.collaborator_ids || []).map(String);
+  const primaryAssigneeId = String(payload.primary_assignee_id || '').trim();
+  const assignmentReason = String(payload.assignment_reason || '').trim();
+  const previousPrimaryAssigneeId = String(
+    selectedProject?.primary_assignee_id ||
+    selectedProject?.assigned_to_id ||
+    selectedProject?.doing_person_id ||
+    '',
+  ).trim();
+
+  if (assignedEmployeeIds.length && !primaryAssigneeId) {
+    alerts.warning(
+      'Select the primary responsible person from the assigned members.',
+      'Responsible Person Required',
+    );
+    return;
+  }
+
+  if (
+    primaryAssigneeId &&
+    !assignedEmployeeIds.includes(primaryAssigneeId)
+  ) {
+    alerts.warning(
+      'The primary responsible person must also be an assigned team member.',
+      'Invalid Responsible Person',
+    );
+    return;
+  }
+
+  if (
+    previousPrimaryAssigneeId &&
+    primaryAssigneeId !== previousPrimaryAssigneeId &&
+    !assignmentReason
+  ) {
+    alerts.warning(
+      'Please enter a reason before changing the primary responsible person.',
+      'Reassignment Reason Required',
+    );
     return;
   }
 
@@ -1681,16 +1899,17 @@ async function handleAssign(projectId, payload) {
 
   try {
     const assignedPayload = {
-      assigned_employee_ids: payload.assigned_employee_ids || [],
-      assigned_members: payload.assigned_employee_ids || [],
+      assigned_employee_ids: assignedEmployeeIds,
+      primary_assignee_id: primaryAssigneeId,
+      assignment_reason: assignmentReason,
     };
 
     const collaboratorPayload = {
-      collaborator_ids: payload.collaborator_ids || [],
-      collaborators: payload.collaborator_ids || [],
+      collaborator_ids: collaboratorIds,
+      collaborators: collaboratorIds,
     };
 
-    await assignProject(projectId, assignedPayload);
+    await updateProjectMembers(projectId, assignedPayload);
     await updateProjectCollaborators(projectId, collaboratorPayload);
 
     alerts.success('Project assignment and collaborators updated successfully.', 'Assignment Updated');

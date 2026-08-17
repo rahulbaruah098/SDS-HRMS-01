@@ -464,6 +464,49 @@ def can_view_project(db, project):
 
     return bool(project_member_ids(project).intersection(set(identifier_values)))
 
+
+def can_manage_project_team(db, project):
+    """
+    Allow project-team changes only to platform/company admins or to the
+    Team Leader / Reporting Officer who manages this project.
+
+    A capability user who is only an assigned member or collaborator on a
+    different manager's project must not be able to change that project's
+    responsibility or membership.
+    """
+    if is_admin_view_user():
+        return True
+
+    employee = get_current_employee(db)
+
+    if not employee:
+        return False
+
+    if not (
+        employee_is_team_leader(employee)
+        or employee_is_reporting_officer(employee)
+    ):
+        return False
+
+    identifier_values = {
+        normalize_text(value)
+        for value in employee_identifier_values(employee)
+        if normalize_text(value)
+    }
+
+    manager_values = {
+        normalize_text(project.get(key))
+        for key in [
+            "created_by_employee_id",
+            "created_by",
+            "team_leader_id",
+            "reporting_officer_id",
+        ]
+        if normalize_text(project.get(key))
+    }
+
+    return bool(identifier_values.intersection(manager_values))
+
 def can_update_project_status_or_progress(db, project):
     """
     Assigned project members, collaborators, TL, RO, and project creator
@@ -720,6 +763,199 @@ def resolve_member_list(db, tenant_id, employee_ids, relation="assigned_member",
         members.append(employee_member_payload(employee, relation, include_avatar=False))
 
     return resolved_ids, members
+
+
+def existing_assigned_employee_ids(project):
+    values = []
+
+    for value in project.get("assigned_employee_ids", []) or []:
+        employee_id = normalize_text(value)
+
+        if employee_id and employee_id not in values:
+            values.append(employee_id)
+
+    for member in project.get("assigned_members", []) or []:
+        if not isinstance(member, dict):
+            continue
+
+        employee_id = normalize_text(
+            member.get("employee_id")
+            or member.get("_id")
+            or member.get("id")
+        )
+
+        if employee_id and employee_id not in values:
+            values.append(employee_id)
+
+    assigned_to_id = normalize_text(
+        project.get("assigned_to_id")
+        or project.get("primary_assignee_id")
+        or project.get("doing_person_id")
+    )
+
+    if assigned_to_id and assigned_to_id not in values:
+        values.insert(0, assigned_to_id)
+
+    return values
+
+
+def requested_primary_assignee_id(data, self_employee_id=""):
+    raw_value = (
+        data.get("primary_assignee_id")
+        or data.get("assigned_to_id")
+        or data.get("responsible_employee_id")
+        or data.get("doing_employee_id")
+        or data.get("doing_person_id")
+    )
+
+    if isinstance(raw_value, dict):
+        raw_value = (
+            raw_value.get("employee_id")
+            or raw_value.get("_id")
+            or raw_value.get("id")
+        )
+
+    normalized = normalize_employee_id_list(
+        [raw_value] if raw_value not in [None, ""] else [],
+        self_employee_id,
+    )
+
+    return normalized[0] if normalized else ""
+
+
+def assignment_request_employee_ids(project, data, self_employee_id=""):
+    replace_members = (
+        "assigned_employee_ids" in data
+        or "assigned_members" in data
+    )
+
+    if replace_members:
+        source = (
+            data.get("assigned_employee_ids")
+            if "assigned_employee_ids" in data
+            else data.get("assigned_members")
+        )
+        employee_ids = normalize_employee_id_list(source or [], self_employee_id)
+    else:
+        employee_ids = existing_assigned_employee_ids(project)
+
+    for key in [
+        "add_employee_ids",
+        "add_member_ids",
+        "members_to_add",
+    ]:
+        for employee_id in normalize_employee_id_list(
+            data.get(key) or [],
+            self_employee_id,
+        ):
+            if employee_id not in employee_ids:
+                employee_ids.append(employee_id)
+
+    remove_ids = set()
+
+    for key in [
+        "remove_employee_ids",
+        "remove_member_ids",
+        "members_to_remove",
+    ]:
+        remove_ids.update(
+            normalize_employee_id_list(
+                data.get(key) or [],
+                self_employee_id,
+            )
+        )
+
+    if remove_ids:
+        employee_ids = [
+            employee_id
+            for employee_id in employee_ids
+            if employee_id not in remove_ids
+        ]
+
+    return employee_ids
+
+
+def employee_is_assignable_by_current_user(db, employee, current_employee):
+    if is_admin_view_user():
+        return True
+
+    if not current_employee or not employee:
+        return False
+
+    scoped_query = project_assignable_employee_query(current_employee)
+
+    return bool(db.employees.find_one({
+        "$and": [
+            scoped_query,
+            {"_id": employee["_id"]},
+        ]
+    }, {"_id": 1}))
+
+
+def resolve_assignable_member_list(
+    db,
+    tenant_id,
+    employee_ids,
+    relation="assigned_member",
+    current_employee=None,
+    self_employee_id="",
+):
+    resolved_ids = []
+    members = []
+
+    for employee_id in normalize_employee_id_list(
+        employee_ids,
+        self_employee_id,
+    ):
+        employee = resolve_employee(db, employee_id, tenant_id)
+
+        if not employee:
+            raise ValueError("One or more selected employees were not found")
+
+        if not employee_is_assignable_by_current_user(
+            db,
+            employee,
+            current_employee,
+        ):
+            raise ValueError(
+                f"{employee_display_name(employee)} is outside your mapped team and cannot be assigned to this project"
+            )
+
+        resolved_ids.append(str(employee["_id"]))
+        members.append(
+            employee_member_payload(
+                employee,
+                relation,
+                include_avatar=False,
+            )
+        )
+
+    return resolved_ids, members
+
+
+def move_primary_assignee_first(employee_ids, members, primary_assignee_id):
+    primary_assignee_id = normalize_text(primary_assignee_id)
+
+    if not primary_assignee_id:
+        return employee_ids, members
+
+    paired = list(zip(employee_ids, members))
+    primary_rows = [
+        row
+        for row in paired
+        if normalize_text(row[0]) == primary_assignee_id
+    ]
+    supporting_rows = [
+        row
+        for row in paired
+        if normalize_text(row[0]) != primary_assignee_id
+    ]
+    ordered = [*primary_rows, *supporting_rows]
+
+    return (
+        [row[0] for row in ordered],
+        [row[1] for row in ordered],
+    )
 
 
 def same_department_value(left, right):
@@ -988,6 +1224,44 @@ def build_project_team_tree(db, project, latest=None):
         if isinstance(member, dict)
     ]
 
+    primary_assignee_id = normalize_text(
+        project.get("assigned_to_id")
+        or project.get("primary_assignee_id")
+        or project.get("doing_person_id")
+    )
+
+    for member in assigned_members:
+        member_id = normalize_text(
+            member.get("employee_id")
+            or member.get("_id")
+            or member.get("id")
+        )
+        is_primary = bool(
+            primary_assignee_id
+            and member_id == primary_assignee_id
+        )
+        member["is_primary_assignee"] = is_primary
+        member["responsibility"] = "primary" if is_primary else "supporting"
+
+    assigned_members.sort(
+        key=lambda member: (
+            not bool(member.get("is_primary_assignee")),
+            normalize_text(
+                member.get("employee_name")
+                or member.get("name")
+            ).lower(),
+        )
+    )
+
+    primary_assignee = next(
+        (
+            member
+            for member in assigned_members
+            if member.get("is_primary_assignee")
+        ),
+        assigned_members[0] if assigned_members else {},
+    )
+
     collaborators = [
         enrich_member_from_db(db, tenant_id, member, "collaborator")
         for member in project.get("collaborators", [])
@@ -1036,6 +1310,7 @@ def build_project_team_tree(db, project, latest=None):
     project_team_tree = {
         "reporting_officer": reporting_officer_payload,
         "team_leader": team_leader_payload,
+        "primary_assignee": primary_assignee,
         "assigned_members": assigned_members,
         "collaborators": collaborators,
         "doing_people": doing_people,
@@ -1054,7 +1329,7 @@ def build_project_team_tree(db, project, latest=None):
             },
             {
                 "level": 3,
-                "label": "Team Members Doing Project",
+                "label": "Primary & Assigned Team Members",
                 "people": assigned_members,
             },
             {
@@ -1067,6 +1342,194 @@ def build_project_team_tree(db, project, latest=None):
     }
 
     return project_team_tree
+
+
+def member_name_map(members):
+    result = {}
+
+    for member in members or []:
+        if not isinstance(member, dict):
+            continue
+
+        employee_id = normalize_text(
+            member.get("employee_id")
+            or member.get("_id")
+            or member.get("id")
+        )
+
+        if employee_id:
+            result[employee_id] = (
+                member.get("employee_name")
+                or member.get("name")
+                or member.get("email")
+                or "Employee"
+            )
+
+    return result
+
+
+def record_project_assignment_history(
+    db,
+    project,
+    before_ids,
+    before_members,
+    before_primary_id,
+    after_ids,
+    after_members,
+    after_primary_id,
+    reason="",
+    action="team_updated",
+    assignment_version=1,
+):
+    before_ids = [normalize_text(value) for value in before_ids if normalize_text(value)]
+    after_ids = [normalize_text(value) for value in after_ids if normalize_text(value)]
+    before_name_map = member_name_map(before_members)
+    after_name_map = member_name_map(after_members)
+
+    added_ids = [value for value in after_ids if value not in before_ids]
+    removed_ids = [value for value in before_ids if value not in after_ids]
+
+    before_primary_id = normalize_text(before_primary_id)
+    after_primary_id = normalize_text(after_primary_id)
+
+    history = {
+        "tenant_id": project.get("tenant_id") or current_tenant_id(),
+        "project_id": str(project.get("_id") or ""),
+        "project_name": project_name(project),
+        "action": action,
+        "reason": normalize_text(reason),
+        "assignment_version": assignment_version,
+        "before_assigned_employee_ids": before_ids,
+        "after_assigned_employee_ids": after_ids,
+        "added_employee_ids": added_ids,
+        "added_employee_names": [
+            after_name_map.get(employee_id, "Employee")
+            for employee_id in added_ids
+        ],
+        "removed_employee_ids": removed_ids,
+        "removed_employee_names": [
+            before_name_map.get(employee_id, "Employee")
+            for employee_id in removed_ids
+        ],
+        "previous_primary_assignee_id": before_primary_id,
+        "previous_primary_assignee_name": before_name_map.get(
+            before_primary_id,
+            project.get("assigned_to_name", ""),
+        ),
+        "new_primary_assignee_id": after_primary_id,
+        "new_primary_assignee_name": after_name_map.get(
+            after_primary_id,
+            "",
+        ),
+        "primary_assignee_changed": before_primary_id != after_primary_id,
+        "changed_by": current_user_id(),
+        "changed_by_name": current_user_name(),
+        "created_at": now_utc(),
+        "is_deleted": False,
+    }
+
+    result = db.project_assignment_history.insert_one(history)
+    history["_id"] = result.inserted_id
+
+    return history
+
+
+def notification_user_ids_for_employees(db, tenant_id, employee_ids):
+    user_ids = []
+
+    for employee_id in employee_ids or []:
+        employee = resolve_employee(db, employee_id, tenant_id)
+        user_id = normalize_text(employee.get("user_id")) if employee else ""
+
+        if user_id and user_id not in user_ids:
+            user_ids.append(user_id)
+
+    return user_ids
+
+
+def project_notification_employee_ids(project):
+    employee_ids = existing_assigned_employee_ids(project)
+
+    for value in [
+        project.get("team_leader_id"),
+        project.get("reporting_officer_id"),
+    ]:
+        employee_id = normalize_text(value)
+
+        if employee_id and employee_id not in employee_ids:
+            employee_ids.append(employee_id)
+
+    for value in project.get("collaborator_ids", []) or []:
+        employee_id = normalize_text(value)
+
+        if employee_id and employee_id not in employee_ids:
+            employee_ids.append(employee_id)
+
+    return employee_ids
+
+
+def notify_project_employees(
+    db,
+    project,
+    employee_ids,
+    title,
+    body,
+    notification_type="project_assignment",
+    extra_meta=None,
+):
+    tenant_id = project.get("tenant_id") or current_tenant_id()
+    user_ids = notification_user_ids_for_employees(
+        db,
+        tenant_id,
+        employee_ids,
+    )
+
+    if not user_ids:
+        return []
+
+    now = now_utc()
+    project_id = str(project.get("_id") or "")
+    meta = {
+        "notification_type": notification_type,
+        "target": "projects",
+        "page": "projects",
+        "project_id": project_id,
+        "project_name": project_name(project),
+        **(extra_meta or {}),
+    }
+    docs = []
+
+    for user_id in user_ids:
+        docs.append({
+            "tenant_id": tenant_id,
+            "target_tenant_id": tenant_id,
+            "user_id": user_id,
+            "user_ids": [user_id],
+            "title": title,
+            "body": body,
+            "message": body,
+            "notification_type": notification_type,
+            "priority": "normal",
+            "target": "projects",
+            "target_scope": "selected_users",
+            "audience": "selected_users",
+            "show_popup": True,
+            "popup_seen": False,
+            "popup_seen_at": "",
+            "read": False,
+            "status": "unread",
+            "meta": meta,
+            "created_at": now,
+            "updated_at": now,
+            "created_by": current_user_id(),
+            "created_by_name": current_user_name(),
+            "is_deleted": False,
+        })
+
+    if docs:
+        db.notifications.insert_many(docs)
+
+    return docs
 
 
 # -----------------------------------------------------------------------------
@@ -1154,6 +1617,25 @@ def project_card(project, latest=None, include_tree=True):
         if item.get("employee_name") or item.get("name")
     ]
 
+    primary_assignee = (
+        project_team_tree.get("primary_assignee", {})
+        if project_team_tree
+        else {}
+    )
+    primary_assignee_id = normalize_text(
+        project.get("assigned_to_id")
+        or project.get("primary_assignee_id")
+        or primary_assignee.get("employee_id")
+    )
+    primary_assignee_name = (
+        project.get("assigned_to_name")
+        or project.get("primary_assignee_name")
+        or primary_assignee.get("employee_name")
+        or primary_assignee.get("name")
+        or ""
+    )
+    can_manage_team = can_manage_project_team(db, project)
+
     return {
         "_id": str(project["_id"]),
         "name": project_name(project),
@@ -1174,8 +1656,13 @@ def project_card(project, latest=None, include_tree=True):
         "team_leader_name": project.get("team_leader_name", "") or team_leader.get("employee_name", ""),
         "team_leader": team_leader,
 
-        "assigned_to_id": project.get("assigned_to_id", ""),
-        "assigned_to_name": project.get("assigned_to_name", ""),
+        "assigned_to_id": primary_assignee_id,
+        "assigned_to_name": primary_assignee_name,
+        "primary_assignee_id": primary_assignee_id,
+        "primary_assignee_name": primary_assignee_name,
+        "primary_assignee": primary_assignee,
+        "doing_person_id": primary_assignee_id,
+        "doing_person_name": primary_assignee_name,
         "assigned_employee_ids": project.get("assigned_employee_ids", []),
         "assigned_members": project_team_tree.get("assigned_members", project.get("assigned_members", [])) if project_team_tree else project.get("assigned_members", []),
 
@@ -1184,8 +1671,10 @@ def project_card(project, latest=None, include_tree=True):
 
         "doing_people": doing_people,
         "doing_people_names": doing_people_names,
-        "doing_person_name": doing_people_names[0] if doing_people_names else project.get("assigned_to_name", ""),
         "project_team_tree": project_team_tree,
+
+        "assignment_version": int(project.get("assignment_version") or 0),
+        "last_assignment_change": project.get("last_assignment_change", {}),
 
         "created_by_employee_id": project.get("created_by_employee_id", ""),
         "created_by_employee_name": project.get("created_by_employee_name", ""),
@@ -1201,6 +1690,10 @@ def project_card(project, latest=None, include_tree=True):
         "latest_progress_person": project_team_tree.get("latest_progress_person", {}) if project_team_tree else {},
 
         "can_create_assign_collaborate": False,
+        "can_manage_project_team": can_manage_team,
+        "can_add_project_members": can_manage_team,
+        "can_remove_project_members": can_manage_team,
+        "can_reassign_primary_member": can_manage_team,
     }
 
 
@@ -1648,6 +2141,7 @@ def fetch_project_options(db):
         "current_employee": clean_doc(current_emp_payload),
         "assignable_employees": clean_doc([employee_option_payload(row, "assignable") for row in assignable]),
         "assigned_member_options": clean_doc([employee_option_payload(row, "assignable") for row in assignable]),
+        "primary_assignee_options": clean_doc([employee_option_payload(row, "primary_assignee") for row in assignable]),
         "collaborator_options": clean_doc([employee_option_payload(row, "collaborator") for row in assignable]),
         "team_leader_options": clean_doc([employee_option_payload(row, "team_leader") for row in team_leaders]),
         "reporting_officer_options": clean_doc([employee_option_payload(row, "reporting_officer") for row in reporting_officers]),
@@ -1672,6 +2166,7 @@ def project_options():
             "current_employee": clean_doc(employee_option_payload(get_current_employee(db), "self") if get_current_employee(db) else {}),
             "assignable_employees": [],
             "assigned_member_options": [],
+            "primary_assignee_options": [],
             "collaborator_options": [],
             "team_leader_options": [],
             "reporting_officer_options": [],
@@ -1680,6 +2175,9 @@ def project_options():
             "can_create_projects": False,
             "can_assign_projects": False,
             "can_add_collaborators": False,
+            "can_add_project_members": False,
+            "can_remove_project_members": False,
+            "can_reassign_primary_member": False,
         })
 
     options = fetch_project_options(db)
@@ -1688,6 +2186,9 @@ def project_options():
         "can_create_projects": True,
         "can_assign_projects": True,
         "can_add_collaborators": True,
+        "can_add_project_members": True,
+        "can_remove_project_members": True,
+        "can_reassign_primary_member": True,
     })
 
     return jsonify(options)
@@ -1773,6 +2274,9 @@ def list_projects():
         "can_create_projects": can_manage,
         "can_assign_projects": can_manage,
         "can_add_collaborators": can_manage,
+        "can_add_project_members": can_manage,
+        "can_remove_project_members": can_manage,
+        "can_reassign_primary_member": can_manage,
     })
 
 
@@ -1817,19 +2321,57 @@ def create_project():
         if truthy(data.get("assign_to_self")) or truthy(data.get("self_assign")):
             assigned_source = [*normalize_employee_id_list(assigned_source), str(creator_employee["_id"])]
 
-        assigned_employee_ids, assigned_members = resolve_member_list(
+        requested_primary_id = requested_primary_assignee_id(
+            data,
+            str(creator_employee["_id"]),
+        )
+
+        if requested_primary_id:
+            assigned_source = [
+                *normalize_employee_id_list(assigned_source),
+                requested_primary_id,
+            ]
+
+        assigned_employee_ids, assigned_members = resolve_assignable_member_list(
             db,
             tenant_id,
             assigned_source,
             "assigned_member",
-            str(creator_employee["_id"]),
+            current_employee=creator_employee,
+            self_employee_id=str(creator_employee["_id"]),
         )
-        collaborator_ids, collaborators = resolve_member_list(
+
+        if requested_primary_id:
+            primary_employee = resolve_employee(
+                db,
+                requested_primary_id,
+                tenant_id,
+            )
+            primary_assignee_id = (
+                str(primary_employee["_id"])
+                if primary_employee
+                else ""
+            )
+        else:
+            primary_assignee_id = (
+                assigned_employee_ids[0]
+                if assigned_employee_ids
+                else ""
+            )
+
+        assigned_employee_ids, assigned_members = move_primary_assignee_first(
+            assigned_employee_ids,
+            assigned_members,
+            primary_assignee_id,
+        )
+
+        collaborator_ids, collaborators = resolve_assignable_member_list(
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
             "collaborator",
-            str(creator_employee["_id"]),
+            current_employee=creator_employee,
+            self_employee_id=str(creator_employee["_id"]),
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -1860,8 +2402,12 @@ def create_project():
         "team_leader_id": team_leader_id,
         "team_leader_name": team_leader_name,
 
-        "assigned_to_id": assigned_employee_ids[0] if assigned_employee_ids else "",
+        "assigned_to_id": primary_assignee_id,
         "assigned_to_name": assigned_members[0]["employee_name"] if assigned_members else "",
+        "primary_assignee_id": primary_assignee_id,
+        "primary_assignee_name": assigned_members[0]["employee_name"] if assigned_members else "",
+        "doing_person_id": primary_assignee_id,
+        "doing_person_name": assigned_members[0]["employee_name"] if assigned_members else "",
         "assigned_employee_ids": assigned_employee_ids,
         "assigned_members": assigned_members,
 
@@ -1883,6 +2429,8 @@ def create_project():
         "created_at": now,
         "updated_at": now,
         "completed_at": now if status == "completed" else "",
+        "assignment_version": 1,
+        "last_assignment_change": {},
         "is_deleted": False,
     }
 
@@ -1898,6 +2446,49 @@ def create_project():
 
         raise
     doc["_id"] = result.inserted_id
+
+    initial_assignment_history = record_project_assignment_history(
+        db,
+        doc,
+        [],
+        [],
+        "",
+        assigned_employee_ids,
+        assigned_members,
+        primary_assignee_id,
+        reason=normalize_text(
+            data.get("assignment_reason")
+            or data.get("reason")
+            or "Initial project assignment"
+        ),
+        action="initial_assignment",
+        assignment_version=1,
+    )
+    last_assignment_change = {
+        key: value
+        for key, value in initial_assignment_history.items()
+        if key not in {"_id", "is_deleted"}
+    }
+
+    db.projects.update_one(
+        {"_id": result.inserted_id},
+        {"$set": {"last_assignment_change": last_assignment_change}},
+    )
+    doc["last_assignment_change"] = last_assignment_change
+
+    if assigned_employee_ids:
+        notify_project_employees(
+            db,
+            doc,
+            assigned_employee_ids,
+            "New Project Assignment",
+            f"You were assigned to {name}.",
+            notification_type="project_assignment",
+            extra_meta={
+                "primary_assignee_id": primary_assignee_id,
+                "assignment_version": 1,
+            },
+        )
 
     audit("create_project", "projects", result.inserted_id, {
         "name": name,
@@ -1926,9 +2517,9 @@ def update_project(project_id):
     if error:
         return error
 
-    if not can_create_assign_or_collaborate_projects(db):
+    if not can_manage_project_team(db, project):
         return jsonify({
-            "message": "Only Team Leaders and Reporting Officers can edit project details"
+            "message": "Only this project's Team Leader, Reporting Officer, or Admin can edit project details"
         }), 403
 
     data = request.get_json(silent=True) or {}
@@ -2009,36 +2600,155 @@ def assign_project(project_id):
     if error:
         return error
 
-    if not can_create_assign_or_collaborate_projects(db):
+    if not can_manage_project_team(db, project):
         return jsonify({
-            "message": "Only Team Leaders and Reporting Officers can assign team members"
+            "message": "Only this project's Team Leader, Reporting Officer, or Admin can manage project members"
         }), 403
 
     data = request.get_json(silent=True) or {}
     tenant_id = project.get("tenant_id") or current_tenant_id()
+    current_emp = get_current_employee(db)
+
+    before_ids = existing_assigned_employee_ids(project)
+    before_members = project.get("assigned_members", []) or []
+    before_primary_id = normalize_text(
+        project.get("assigned_to_id")
+        or project.get("primary_assignee_id")
+        or project.get("doing_person_id")
+    )
 
     try:
-        current_emp = get_current_employee(db)
-        assigned_source = data.get("assigned_employee_ids") or data.get("assigned_members") or []
+        assigned_source = assignment_request_employee_ids(
+            project,
+            data,
+            str(current_emp["_id"]) if current_emp else "",
+        )
 
         if current_emp and (truthy(data.get("assign_to_self")) or truthy(data.get("self_assign"))):
             assigned_source = [*normalize_employee_id_list(assigned_source), str(current_emp["_id"])]
 
-        assigned_employee_ids, assigned_members = resolve_member_list(
+        requested_primary_id = requested_primary_assignee_id(
+            data,
+            str(current_emp["_id"]) if current_emp else "",
+        )
+
+        if requested_primary_id:
+            primary_employee = resolve_employee(
+                db,
+                requested_primary_id,
+                tenant_id,
+            )
+
+            if not primary_employee:
+                raise ValueError("Selected primary responsible employee was not found")
+
+            if not employee_is_assignable_by_current_user(
+                db,
+                primary_employee,
+                current_emp,
+            ):
+                raise ValueError(
+                    f"{employee_display_name(primary_employee)} is outside your mapped team and cannot be made responsible for this project"
+                )
+
+            primary_assignee_id = str(primary_employee["_id"])
+
+            if primary_assignee_id not in assigned_source:
+                assigned_source.append(primary_assignee_id)
+        elif before_primary_id in assigned_source:
+            primary_assignee_id = before_primary_id
+        else:
+            primary_assignee_id = ""
+
+        assigned_employee_ids, assigned_members = resolve_assignable_member_list(
             db,
             tenant_id,
             assigned_source,
             "assigned_member",
-            str(current_emp["_id"]) if current_emp else "",
+            current_employee=current_emp,
+            self_employee_id=str(current_emp["_id"]) if current_emp else "",
+        )
+
+        if not primary_assignee_id and assigned_employee_ids:
+            primary_assignee_id = assigned_employee_ids[0]
+
+        assigned_employee_ids, assigned_members = move_primary_assignee_first(
+            assigned_employee_ids,
+            assigned_members,
+            primary_assignee_id,
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
 
+    primary_assignee_name = (
+        assigned_members[0]["employee_name"]
+        if assigned_members
+        else ""
+    )
+    added_ids = [
+        employee_id
+        for employee_id in assigned_employee_ids
+        if employee_id not in before_ids
+    ]
+    removed_ids = [
+        employee_id
+        for employee_id in before_ids
+        if employee_id not in assigned_employee_ids
+    ]
+    primary_changed = before_primary_id != primary_assignee_id
+
+    if primary_changed:
+        assignment_action = "primary_reassigned"
+    elif added_ids and removed_ids:
+        assignment_action = "team_reconfigured"
+    elif added_ids:
+        assignment_action = "members_added"
+    elif removed_ids:
+        assignment_action = "members_removed"
+    else:
+        assignment_action = "team_updated"
+
+    try:
+        assignment_version = int(project.get("assignment_version") or 0) + 1
+    except Exception:
+        assignment_version = 1
+
+    assignment_reason = normalize_text(
+        data.get("assignment_reason")
+        or data.get("reason")
+        or data.get("remarks")
+    )
+
+    assignment_history = record_project_assignment_history(
+        db,
+        project,
+        before_ids,
+        before_members,
+        before_primary_id,
+        assigned_employee_ids,
+        assigned_members,
+        primary_assignee_id,
+        reason=assignment_reason,
+        action=assignment_action,
+        assignment_version=assignment_version,
+    )
+    last_assignment_change = {
+        key: value
+        for key, value in assignment_history.items()
+        if key not in {"_id", "is_deleted"}
+    }
+
     update = {
-        "assigned_to_id": assigned_employee_ids[0] if assigned_employee_ids else "",
-        "assigned_to_name": assigned_members[0]["employee_name"] if assigned_members else "",
+        "assigned_to_id": primary_assignee_id,
+        "assigned_to_name": primary_assignee_name,
+        "primary_assignee_id": primary_assignee_id,
+        "primary_assignee_name": primary_assignee_name,
+        "doing_person_id": primary_assignee_id,
+        "doing_person_name": primary_assignee_name,
         "assigned_employee_ids": assigned_employee_ids,
         "assigned_members": assigned_members,
+        "assignment_version": assignment_version,
+        "last_assignment_change": last_assignment_change,
         "updated_at": now_utc(),
         "updated_by": current_user_id(),
         "updated_by_name": current_user_name(),
@@ -2051,11 +2761,125 @@ def assign_project(project_id):
 
     updated = db.projects.find_one({"_id": project["_id"]})
 
-    audit("assign_project", "projects", project_id, update)
+    if removed_ids:
+        notify_project_employees(
+            db,
+            updated,
+            removed_ids,
+            "Removed from Project",
+            f"You were removed from {project_name(updated)} by {current_user_name()}.",
+            notification_type="project_assignment_removed",
+            extra_meta={
+                "assignment_version": assignment_version,
+                "assignment_reason": assignment_reason,
+            },
+        )
+
+    added_non_primary_ids = [
+        employee_id
+        for employee_id in added_ids
+        if employee_id != primary_assignee_id
+    ]
+
+    if added_non_primary_ids:
+        notify_project_employees(
+            db,
+            updated,
+            added_non_primary_ids,
+            "Added to Project",
+            f"You were added to {project_name(updated)} by {current_user_name()}.",
+            notification_type="project_assignment_added",
+            extra_meta={
+                "assignment_version": assignment_version,
+                "assignment_reason": assignment_reason,
+            },
+        )
+
+    if primary_changed and primary_assignee_id:
+        notify_project_employees(
+            db,
+            updated,
+            [primary_assignee_id],
+            "Project Responsibility Assigned",
+            f"You are now the primary person responsible for {project_name(updated)}.",
+            notification_type="project_primary_reassigned",
+            extra_meta={
+                "previous_primary_assignee_id": before_primary_id,
+                "new_primary_assignee_id": primary_assignee_id,
+                "assignment_version": assignment_version,
+                "assignment_reason": assignment_reason,
+            },
+        )
+
+    if (
+        primary_changed
+        and before_primary_id
+        and before_primary_id not in removed_ids
+    ):
+        notify_project_employees(
+            db,
+            updated,
+            [before_primary_id],
+            "Project Responsibility Updated",
+            f"Primary responsibility for {project_name(updated)} was reassigned by {current_user_name()}.",
+            notification_type="project_primary_reassigned",
+            extra_meta={
+                "previous_primary_assignee_id": before_primary_id,
+                "new_primary_assignee_id": primary_assignee_id,
+                "assignment_version": assignment_version,
+                "assignment_reason": assignment_reason,
+            },
+        )
+
+    audit("assign_project", "projects", project_id, {
+        "action": assignment_action,
+        "assignment_version": assignment_version,
+        "added_employee_ids": added_ids,
+        "removed_employee_ids": removed_ids,
+        "previous_primary_assignee_id": before_primary_id,
+        "new_primary_assignee_id": primary_assignee_id,
+        "assignment_reason": assignment_reason,
+    })
 
     return jsonify({
-        "message": "Project members assigned successfully",
+        "message": (
+            "Project responsibility reassigned successfully"
+            if primary_changed
+            else "Project members updated successfully"
+        ),
         "item": clean_doc(project_card(updated)),
+        "assignment_change": clean_doc(last_assignment_change),
+    })
+
+
+@projects_bp.get("/<project_id>/assignment-history")
+@tenant_module_required("projects")
+def project_assignment_history(project_id):
+    db = get_db()
+
+    if is_hr_project_blocked_user():
+        return hr_project_access_denied_response()
+
+    project, error = get_project_or_404(db, project_id)
+
+    if error:
+        return error
+
+    rows = list(
+        db.project_assignment_history
+        .find({
+            "tenant_id": project.get("tenant_id") or current_tenant_id(),
+            "project_id": str(project["_id"]),
+            "is_deleted": {"$ne": True},
+        })
+        .sort("created_at", -1)
+        .limit(100)
+    )
+
+    return jsonify({
+        "items": clean_doc(rows),
+        "total": len(rows),
+        "assignment_version": int(project.get("assignment_version") or 0),
     })
 
 
@@ -2071,9 +2895,9 @@ def update_project_collaborators(project_id):
     if error:
         return error
 
-    if not can_create_assign_or_collaborate_projects(db):
+    if not can_manage_project_team(db, project):
         return jsonify({
-            "message": "Only Team Leaders and Reporting Officers can add collaborators"
+            "message": "Only this project's Team Leader, Reporting Officer, or Admin can manage collaborators"
         }), 403
 
     data = request.get_json(silent=True) or {}
@@ -2081,12 +2905,13 @@ def update_project_collaborators(project_id):
 
     try:
         current_emp = get_current_employee(db)
-        collaborator_ids, collaborators = resolve_member_list(
+        collaborator_ids, collaborators = resolve_assignable_member_list(
             db,
             tenant_id,
             data.get("collaborator_ids") or data.get("collaborators") or [],
             "collaborator",
-            str(current_emp["_id"]) if current_emp else "",
+            current_employee=current_emp,
+            self_employee_id=str(current_emp["_id"]) if current_emp else "",
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
@@ -2137,13 +2962,45 @@ def update_project_status(project_id):
     if status not in PROJECT_WRITE_STATUSES:
         return jsonify({"message": "Project status must be active, on_hold, or completed"}), 400
 
+    previous_status = normalize_status(project.get("status"))
+    status_reason = normalize_text(
+        data.get("status_reason")
+        or data.get("hold_reason")
+        or data.get("reason")
+        or data.get("remarks")
+    )
+    status_changed_at = now_utc()
+    status_change = {
+        "from_status": previous_status,
+        "to_status": status,
+        "reason": status_reason,
+        "changed_by": current_user_id(),
+        "changed_by_name": current_user_name(),
+        "changed_at": status_changed_at,
+    }
+
     update = {
         "status": status,
-        "completed_at": now_utc() if status == "completed" else "",
-        "updated_at": now_utc(),
+        "completed_at": status_changed_at if status == "completed" else "",
+        "last_status_change": status_change,
+        "updated_at": status_changed_at,
         "updated_by": current_user_id(),
         "updated_by_name": current_user_name(),
     }
+
+    if status == "on_hold":
+        update.update({
+            "on_hold_at": status_changed_at,
+            "on_hold_by": current_user_id(),
+            "on_hold_by_name": current_user_name(),
+            "on_hold_reason": status_reason,
+        })
+    elif previous_status == "on_hold":
+        update.update({
+            "resumed_at": status_changed_at,
+            "resumed_by": current_user_id(),
+            "resumed_by_name": current_user_name(),
+        })
 
     db.projects.update_one(
         {"_id": project["_id"]},
@@ -2152,7 +3009,32 @@ def update_project_status(project_id):
 
     updated = db.projects.find_one({"_id": project["_id"]})
 
-    audit("update_project_status", "projects", project_id, update)
+    if previous_status != status:
+        status_history = {
+            "tenant_id": updated.get("tenant_id") or current_tenant_id(),
+            "project_id": str(updated["_id"]),
+            "project_name": project_name(updated),
+            **status_change,
+            "created_at": status_changed_at,
+            "is_deleted": False,
+        }
+        db.project_status_history.insert_one(status_history)
+
+        notify_project_employees(
+            db,
+            updated,
+            project_notification_employee_ids(updated),
+            "Project Status Updated",
+            f"{project_name(updated)} was changed from {previous_status.replace('_', ' ').title()} to {status.replace('_', ' ').title()} by {current_user_name()}.",
+            notification_type="project_status_changed",
+            extra_meta={
+                "from_status": previous_status,
+                "to_status": status,
+                "status_reason": status_reason,
+            },
+        )
+
+    audit("update_project_status", "projects", project_id, status_change)
 
     return jsonify({
         "message": "Project status updated successfully",
@@ -2272,6 +3154,9 @@ def project_analytics():
             "can_create_projects": can_create_assign_or_collaborate_projects(db),
             "can_assign_projects": can_create_assign_or_collaborate_projects(db),
             "can_add_collaborators": can_create_assign_or_collaborate_projects(db),
+            "can_add_project_members": can_create_assign_or_collaborate_projects(db),
+            "can_remove_project_members": can_create_assign_or_collaborate_projects(db),
+            "can_reassign_primary_member": can_create_assign_or_collaborate_projects(db),
         },
     })
 

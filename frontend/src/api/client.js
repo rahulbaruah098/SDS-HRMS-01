@@ -3620,10 +3620,22 @@ export function updateProject(projectId, payload = {}) {
   });
 }
 
-export function updateProjectStatus(projectId, status) {
+export function updateProjectStatus(
+  projectId,
+  statusOrPayload,
+  extraPayload = {},
+) {
+  const payload =
+    statusOrPayload && typeof statusOrPayload === 'object'
+      ? { ...statusOrPayload }
+      : {
+          ...extraPayload,
+          status: statusOrPayload,
+        };
+
   return api(`/projects/${projectId}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -3632,6 +3644,53 @@ export function assignProject(projectId, payload = {}) {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+}
+
+
+export function updateProjectMembers(projectId, payload = {}) {
+  return assignProject(projectId, payload);
+}
+
+export function addProjectMembers(
+  projectId,
+  employeeIds = [],
+  extraPayload = {},
+) {
+  return assignProject(projectId, {
+    ...extraPayload,
+    add_employee_ids: employeeIds,
+  });
+}
+
+export function removeProjectMembers(
+  projectId,
+  employeeIds = [],
+  extraPayload = {},
+) {
+  return assignProject(projectId, {
+    ...extraPayload,
+    remove_employee_ids: employeeIds,
+  });
+}
+
+export function reassignProjectPrimary(
+  projectId,
+  primaryAssigneeId,
+  extraPayload = {},
+) {
+  return assignProject(projectId, {
+    ...extraPayload,
+    primary_assignee_id: primaryAssigneeId,
+  });
+}
+
+export function getProjectAssignmentHistory(
+  projectId,
+  params = {},
+) {
+  return api(
+    `/projects/${projectId}/assignment-history${buildQuery(params)}`,
+  );
 }
 
 export function assignProjectToSelf(projectId, extraPayload = {}) {
