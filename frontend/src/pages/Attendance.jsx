@@ -761,17 +761,41 @@ export default function Attendance({ user = {}, setPage } = {}) {
     isTeamLeader() ||
     isReportingOfficer() ||
     userRoles.some((role) =>
-      ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
+      [
+        'super_admin',
+        'admin',
+        'hr_admin',
+        'hr_manager',
+        'hr',
+        'finance',
+        'accounts_finance',
+      ].includes(role),
     );
 
   const isHrAdminAttendanceView = userRoles.some((role) =>
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
+    [
+      'super_admin',
+      'admin',
+      'hr_admin',
+      'hr_manager',
+      'hr',
+      'finance',
+      'accounts_finance',
+    ].includes(role),
   );
 
   const showEmployeeSelfAttendancePanel = !isHrAdminAttendanceView;
 
   const canManageHoliday = userRoles.some((role) =>
-    ['super_admin', 'admin', 'hr_admin', 'hr_manager', 'hr'].includes(role),
+    [
+      'super_admin',
+      'admin',
+      'hr_admin',
+      'hr_manager',
+      'hr',
+      'finance',
+      'accounts_finance',
+    ].includes(role),
   );
 
   const hasActiveReportFilters = useMemo(() => {

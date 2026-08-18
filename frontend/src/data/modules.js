@@ -218,12 +218,18 @@ export const PAYROLL_TAX_ROLES = ALL_COMMON_ROLES;
 
 export const ATTENDANCE_ROLES = EMPLOYEE_PORTAL_ROLES;
 
+export const ATTENDANCE_PAGE_ROLES = [
+  ...ATTENDANCE_ROLES,
+  'finance',
+  'accounts_finance',
+];
+
 export const ATTENDANCE_MANAGER_ROLES = [
   ...HR_ROLES,
   ...CAPABILITY_ROLES,
 ];
 
-export const REPORT_ROLES = HR_ROLES;
+export const REPORT_ROLES = ADMIN_HR_FINANCE_ROLES;
 
 export const LEAVE_BALANCE_MANAGER_ROLES = HR_ROLES;
 
@@ -572,7 +578,7 @@ export const coreModules = [
   'Attendance',
   Clock,
   'Office/WFH/Field check-in, field place/photo capture, holiday work request, team field tracking, holiday calendar and comp-off.',
-  ATTENDANCE_ROLES,
+  ATTENDANCE_PAGE_ROLES,
 ],
 [
   'leave_requests',

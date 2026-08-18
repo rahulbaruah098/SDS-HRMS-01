@@ -45,6 +45,8 @@ REPORT_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
 )
 
 
@@ -54,6 +56,8 @@ AUDIT_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
 )
 
 
@@ -63,6 +67,8 @@ HR_ADMIN_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
 }
 
 

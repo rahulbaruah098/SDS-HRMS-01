@@ -48,6 +48,8 @@ ATTENDANCE_MANAGER_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
     "team_leader",
     "reporting_officer",
     "ro",
@@ -59,6 +61,8 @@ HOLIDAY_MANAGER_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
 )
 
 HOLIDAY_VIEWER_ROLES = (
@@ -66,6 +70,8 @@ HOLIDAY_VIEWER_ROLES = (
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
     "employee",
     "team_leader",
     "reporting_officer",
@@ -79,6 +85,8 @@ FULL_TENANT_REPORT_ROLES = {
     "hr_admin",
     "hr_manager",
     "hr",
+    "finance",
+    "accounts_finance",
 }
 
 TEAM_SCOPE_ROLES = {
