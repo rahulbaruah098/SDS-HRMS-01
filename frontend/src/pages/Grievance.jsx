@@ -135,8 +135,17 @@ export default function Grievance({ user }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
+  const [activeSection, setActiveSection] = useState('raise');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(6);
 
   const visibleItems = canManage ? manageItems : myItems;
+  const totalPages = Math.max(1, Math.ceil(visibleItems.length / itemsPerPage));
+  const paginatedItems = useMemo(() => {
+    const safePage = Math.min(Math.max(currentPage, 1), totalPages);
+    const startIndex = (safePage - 1) * itemsPerPage;
+    return visibleItems.slice(startIndex, startIndex + itemsPerPage);
+  }, [visibleItems, currentPage, totalPages]);
 
   const stats = useMemo(() => {
     const rows = visibleItems || [];
@@ -203,6 +212,7 @@ export default function Grievance({ user }) {
     try {
       const data = await getGrievances(filters);
       setManageItems(data.grievances || []);
+      setCurrentPage(1);
     } catch (err) {
       alerts.error(err.message || 'Unable to load HR grievance list.', 'Grievance List Failed');
     } finally {
@@ -281,6 +291,10 @@ export default function Grievance({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
 
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(Math.max(page, 1), totalPages));
+  }, [totalPages]);
+
   const profileRows = buildProfileRows(profile);
 
   return (
@@ -307,6 +321,42 @@ export default function Grievance({ user }) {
           box-sizing: border-box;
         }
 
+        .grievance-page,
+        .grievance-page > *,
+        .grievance-page .panel,
+        .grievance-page .grievance-hero,
+        .grievance-page .ticket-card,
+        .grievance-page .profile-prefill-card,
+        .grievance-page .filter-bar,
+        .grievance-page .drawer-summary {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .grievance-page img,
+        .grievance-page input,
+        .grievance-page select,
+        .grievance-page textarea,
+        .grievance-page button {
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+
+        .grievance-page::before,
+        .grievance-page::after,
+        .grievance-page .panel::before,
+        .grievance-page .panel::after,
+        .grievance-page .mini-stat-card::before,
+        .grievance-page .mini-stat-card::after,
+        .grievance-page .ticket-card::before,
+        .grievance-page .ticket-card::after,
+        .grievance-page .profile-prefill-card::before,
+        .grievance-page .profile-prefill-card::after {
+          content: none !important;
+          display: none !important;
+        }
+
         .grievance-hero {
           position: relative;
           isolation: isolate;
@@ -319,30 +369,10 @@ export default function Grievance({ user }) {
           padding: clamp(25px, 3vw, 42px);
           border: 1px solid rgba(154, 164, 205, .58);
           border-radius: clamp(28px, 2.7vw, 40px);
-          background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          background: linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
           box-shadow:
             12px 14px 0 #c6d8f7,
             0 28px 48px rgba(34, 38, 110, .13);
-        }
-
-        .grievance-hero::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 175px;
-          height: 175px;
-          right: 8%;
-          bottom: -98px;
-          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-          background: linear-gradient(
-            145deg,
-            rgba(105, 217, 208, .30),
-            rgba(132, 181, 241, .28)
-          );
-          transform: rotate(-18deg);
         }
 
         .grievance-eyebrow,
@@ -467,10 +497,79 @@ export default function Grievance({ user }) {
             0 14px 25px rgba(36,74,128,.16);
         }
 
+        .grievance-submit-btn {
+          width: fit-content;
+          min-width: 0;
+          min-height: 40px;
+          justify-self: start;
+          padding: 8px 14px;
+          border-radius: 12px;
+          font-size: 11px;
+          box-shadow:
+            3px 4px 0 #a9d6f5,
+            0 10px 18px rgba(36,74,128,.13);
+        }
+
+        .grievance-submit-btn:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow:
+            4px 5px 0 #a9d6f5,
+            0 13px 22px rgba(36,74,128,.16);
+        }
+
         .grievance-stats {
           display: grid;
           grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 14px;
+        }
+
+        .grievance-section-toggle {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          padding: 8px;
+          border: 1px solid rgba(171,181,211,.54);
+          border-radius: 20px;
+          background: rgba(255,255,255,.86);
+          box-shadow: 4px 5px 0 rgba(52,43,120,.07);
+        }
+
+        .grievance-section-toggle button {
+          min-width: 0;
+          min-height: 50px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 10px 14px;
+          border: 0;
+          border-radius: 14px;
+          color: #5d6785;
+          background: transparent;
+          font: inherit;
+          font-size: 11px;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            background 180ms ease,
+            color 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .grievance-section-toggle button:hover {
+          transform: translateY(-1px);
+        }
+
+        .grievance-section-toggle button.is-active {
+          color: #fff;
+          background: linear-gradient(135deg, #342b78, #5669d9);
+          box-shadow: 3px 4px 0 rgba(185,215,255,.78);
+        }
+
+        .grievance-toggle-panel {
+          width: 100%;
+          min-width: 0;
         }
 
         .mini-stat-card {
@@ -538,9 +637,10 @@ export default function Grievance({ user }) {
 
         .grievance-grid {
           display: grid;
-          grid-template-columns: minmax(360px, .9fr) minmax(0, 1.1fr);
+          grid-template-columns: minmax(0, 1fr);
           gap: 22px;
           align-items: start;
+          min-width: 0;
         }
 
         .grievance-page .panel {
@@ -568,15 +668,29 @@ export default function Grievance({ user }) {
 
         .section-heading {
           display: flex;
-          justify-content: space-between;
-          gap: 16px;
           align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
           margin-bottom: 18px;
         }
 
+        .section-heading > div {
+          min-width: 0;
+          flex: 1 1 auto;
+        }
+
         .section-heading > svg {
-          flex: 0 0 auto;
+          width: 26px;
+          height: 26px;
+          padding: 4px;
+          flex: 0 0 26px;
+          margin-top: 0;
+          margin-left: auto;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 8px;
           color: var(--gr-violet);
+          background: rgba(255,255,255,.92);
+          box-shadow: 2px 3px 0 rgba(52,43,120,.08);
           animation: grievance-icon-float 3.2s ease-in-out infinite;
         }
 
@@ -741,7 +855,7 @@ export default function Grievance({ user }) {
 
         .filter-bar {
           display: grid;
-          grid-template-columns: auto repeat(3, minmax(130px, .8fr)) minmax(150px, 1fr) auto;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
           gap: 9px;
           align-items: center;
           margin-bottom: 17px;
@@ -892,7 +1006,7 @@ export default function Grievance({ user }) {
 
         .ticket-meta-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
           gap: 9px;
           margin-top: 14px;
         }
@@ -924,6 +1038,90 @@ export default function Grievance({ user }) {
           display: flex;
           justify-content: flex-end;
           margin-top: 14px;
+        }
+
+        .grievance-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-top: 18px;
+          padding-top: 14px;
+          border-top: 1px solid rgba(171,181,211,.42);
+          flex-wrap: wrap;
+        }
+
+        .grievance-pagination-info {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: var(--gr-copy);
+          font-size: 11px;
+          font-weight: 800;
+          flex-wrap: wrap;
+        }
+
+        .grievance-page-size {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          white-space: nowrap;
+        }
+
+        .grievance-page-size select {
+          min-height: 36px;
+          padding: 0 28px 0 9px;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 10px;
+          color: #40348d;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .grievance-pagination-controls {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          flex-wrap: wrap;
+        }
+
+        .grievance-pagination-controls button {
+          min-width: 38px;
+          min-height: 38px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 7px 10px;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 11px;
+          color: #40348d;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 170ms ease,
+            background 170ms ease,
+            color 170ms ease,
+            opacity 170ms ease;
+        }
+
+        .grievance-pagination-controls button:hover:not(:disabled) {
+          transform: translateY(-1px);
+        }
+
+        .grievance-pagination-controls button.is-active {
+          color: #fff;
+          background: linear-gradient(135deg, #342b78, #5669d9);
+        }
+
+        .grievance-pagination-controls button:disabled {
+          opacity: .45;
+          cursor: not-allowed;
         }
 
         .empty-state {
@@ -965,10 +1163,7 @@ export default function Grievance({ user }) {
           height: 100%;
           overflow-y: auto;
           padding: 24px;
-          background:
-            radial-gradient(circle at 0% 0%, rgba(105,217,208,.12), transparent 26%),
-            radial-gradient(circle at 100% 0%, rgba(102,88,220,.10), transparent 28%),
-            #fff;
+          background: #fff;
           box-shadow: -18px 0 60px rgba(9,16,35,.22);
           animation: grievance-drawer-enter .22s ease-out;
         }
@@ -1057,6 +1252,26 @@ export default function Grievance({ user }) {
           to { transform: translateX(0); opacity: 1; }
         }
 
+        @media (max-width: 980px) {
+          .grievance-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .grievance-hero-actions,
+          .grievance-refresh-btn {
+            width: 100%;
+          }
+
+          .grievance-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .profile-prefill-grid,
+          .form-row.two {
+            grid-template-columns: 1fr;
+          }
+        }
+
         @media (max-width: 1180px) {
           .grievance-stats {
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1078,6 +1293,45 @@ export default function Grievance({ user }) {
         @media (max-width: 760px) {
           .grievance-page {
             gap: 18px;
+          }
+
+          .ticket-list {
+            display: flex;
+            gap: 14px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-snap-type: x mandatory;
+            overscroll-behavior-x: contain;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
+            padding: 2px 2px 10px;
+            scrollbar-width: none;
+          }
+
+          .ticket-list::-webkit-scrollbar {
+            display: none;
+          }
+
+          .ticket-card {
+            flex: 0 0 min(88%, 390px);
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+          }
+
+          .grievance-pagination {
+            align-items: stretch;
+          }
+
+          .grievance-pagination-info {
+            width: 100%;
+          }
+
+          .grievance-pagination-controls {
+            width: 100%;
+          }
+
+          .grievance-pagination-controls button {
+            flex: 1 1 38px;
           }
 
           .grievance-hero {
@@ -1125,10 +1379,16 @@ export default function Grievance({ user }) {
             width: 100%;
           }
 
-          .ticket-topline,
-          .section-heading {
+          .ticket-topline {
             align-items: stretch;
             flex-direction: column;
+          }
+
+          .section-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
           }
 
           .ticket-actions .ghost-btn {
@@ -1138,6 +1398,43 @@ export default function Grievance({ user }) {
           .side-drawer {
             width: 100%;
             padding: 19px;
+          }
+        }
+
+        @media (max-width: 560px) {
+          .grievance-submit-btn {
+            width: auto;
+            max-width: 100%;
+            min-height: 40px;
+            padding: 8px 13px;
+          }
+
+          .grievance-section-toggle {
+            grid-template-columns: 1fr;
+          }
+
+          .grievance-section-toggle button {
+            width: 100%;
+          }
+
+          .grievance-stats {
+            grid-template-columns: 1fr;
+          }
+
+          .ticket-badges {
+            width: 100%;
+          }
+
+          .pill {
+            max-width: 100%;
+            white-space: normal;
+            text-align: center;
+          }
+
+          .side-drawer {
+            width: 100%;
+            max-width: 100%;
+            padding: 16px;
           }
         }
 
@@ -1223,15 +1520,42 @@ export default function Grievance({ user }) {
         </div>
       </section>
 
+      <div className="grievance-section-toggle" role="tablist" aria-label="Grievance sections">
+        <button
+          type="button"
+          className={activeSection === 'raise' ? 'is-active' : ''}
+          onClick={() => setActiveSection('raise')}
+          role="tab"
+          aria-selected={activeSection === 'raise'}
+        >
+          <MessageSquare size={17} />
+          Raise a Grievance
+        </button>
+
+        <button
+          type="button"
+          className={activeSection === 'list' ? 'is-active' : ''}
+          onClick={() => {
+            setActiveSection('list');
+            setCurrentPage(1);
+          }}
+          role="tab"
+          aria-selected={activeSection === 'list'}
+        >
+          <FileText size={17} />
+          {canManage ? 'HR Grievance Inbox' : 'My Grievances'}
+        </button>
+      </div>
+
       <div className="grievance-grid">
-        <section className="panel grievance-form-panel">
+        {activeSection === 'raise' ? (
+        <section className="panel grievance-form-panel grievance-toggle-panel">
           <div className="section-heading">
             <div>
               <span className="grievance-section-kicker">New Submission</span>
               <h2>Raise a Grievance</h2>
               <p>Your employee details are pre-filled automatically.</p>
             </div>
-            <MessageSquare size={22} />
           </div>
 
           <div className="profile-prefill-card">
@@ -1317,14 +1641,16 @@ export default function Grievance({ user }) {
               <EyeOff size={18} />
             </label>
 
-            <button type="submit" className="primary" disabled={saving}>
-              {saving ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+            <button type="submit" className="primary grievance-submit-btn" disabled={saving}>
+              {saving ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
               Submit Grievance
             </button>
           </form>
         </section>
+        ) : null}
 
-        <section className="panel grievance-list-panel">
+        {activeSection === 'list' ? (
+        <section className="panel grievance-list-panel grievance-toggle-panel">
           <div className="section-heading">
             <div>
               <span className="grievance-section-kicker">
@@ -1337,7 +1663,6 @@ export default function Grievance({ user }) {
                   : 'Track the status of grievances submitted by you.'}
               </p>
             </div>
-            <FileText size={22} />
           </div>
 
           {canManage ? (
@@ -1401,8 +1726,9 @@ export default function Grievance({ user }) {
               <p>Loading grievances...</p>
             </div>
           ) : visibleItems.length ? (
-            <div className="ticket-list">
-              {visibleItems.map((item) => (
+            <>
+              <div className="ticket-list">
+                {paginatedItems.map((item) => (
                 <article key={item._id || item.id || item.ticket_no} className="ticket-card">
                   <div className="ticket-topline">
                     <div>
@@ -1471,8 +1797,71 @@ export default function Grievance({ user }) {
                     </div>
                   ) : null}
                 </article>
-              ))}
-            </div>
+                ))}
+              </div>
+
+              {visibleItems.length > itemsPerPage ? (
+              <div className="grievance-pagination" aria-label="Grievance pagination">
+                <div className="grievance-pagination-info">
+                  <span>
+                    Showing {(currentPage - 1) * itemsPerPage + 1}
+                    {' - '}
+                    {Math.min(currentPage * itemsPerPage, visibleItems.length)}
+                    {' of '}
+                    {visibleItems.length}
+                  </span>
+
+                  <label className="grievance-page-size">
+                    <span>Per page</span>
+                    <select
+                      value={itemsPerPage}
+                      onChange={(event) => {
+                        setItemsPerPage(Number(event.target.value));
+                        setCurrentPage(1);
+                      }}
+                      aria-label="Grievances per page"
+                    >
+                      {[6, 10, 20, 50].map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grievance-pagination-controls">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    disabled={currentPage <= 1}
+                  >
+                    Previous
+                  </button>
+
+                  {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      className={currentPage === page ? 'is-active' : ''}
+                      onClick={() => setCurrentPage(page)}
+                      aria-current={currentPage === page ? 'page' : undefined}
+                    >
+                      {page}
+                    </button>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                    disabled={currentPage >= totalPages}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+              ) : null}
+            </>
           ) : (
             <div className="empty-state">
               <MessageSquare size={30} />
@@ -1480,6 +1869,7 @@ export default function Grievance({ user }) {
             </div>
           )}
         </section>
+        ) : null}
       </div>
 
       {canManage && selectedGrievance ? (

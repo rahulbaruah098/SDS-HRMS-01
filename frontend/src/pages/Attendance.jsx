@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowUpRight,
   Building2,
   CalendarDays,
   CheckCircle2,
   Filter,
+  LayoutGrid,
   MapPin,
+  Maximize2,
   RefreshCcw,
   Search,
+  Table2,
   ShieldCheck,
   Sparkles,
   UserRound,
@@ -440,7 +444,13 @@ function normalizeCompOffRows(rows = []) {
 }
 
 
-function AttendanceReportList({ rows = [], loading = false }) {
+function AttendanceReportList({
+  rows = [],
+  loading = false,
+  selectedIds = [],
+  onToggleSelection,
+  bulkVerifying = false,
+}) {
   if (loading) {
     return (
       <div className="attendance-record-list">
@@ -472,8 +482,25 @@ function AttendanceReportList({ rows = [], loading = false }) {
   return (
     <div className="attendance-record-list">
       {rows.map((row) => (
-        <article key={row._id || `${row.employee_id}-${row.raw_date}`} className="attendance-record-card">
+        <article
+          key={row._id || `${row.employee_id}-${row.raw_date}`}
+          className={`attendance-record-card${selectedIds.includes(row._id) ? ' is-selected' : ''}`}
+        >
           <div className="attendance-record-top">
+            <label
+              className={`attendance-record-select${!row._id || row.verified_by_ro ? ' is-disabled' : ''}`}
+              title={!row._id ? 'This generated row has no attendance record to verify' : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(row._id && selectedIds.includes(row._id))}
+                disabled={!row._id || row.verified_by_ro || bulkVerifying}
+                onChange={() => row._id && onToggleSelection?.(row._id)}
+                aria-label={`Select ${cleanText(row.employee_name)} attendance`}
+              />
+              <span>Select</span>
+            </label>
+
             <div className="attendance-employee-block">
               <div className="attendance-avatar">
                 <UserRound size={18} />
@@ -597,6 +624,292 @@ function AttendanceReportList({ rows = [], loading = false }) {
   );
 }
 
+
+
+function AttendanceReportTable({
+  rows = [],
+  loading = false,
+  expanded = false,
+  selectedIds = [],
+  onToggleSelection,
+  bulkVerifying = false,
+}) {
+  const scrollRef = useRef(null);
+  const dragStateRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startScrollLeft: 0,
+  });
+
+  function stopTableDrag(event) {
+    const scroller = scrollRef.current;
+    const pointerId = dragStateRef.current.pointerId;
+
+    dragStateRef.current.active = false;
+    dragStateRef.current.pointerId = null;
+    scroller?.classList.remove('is-dragging');
+
+    if (
+      scroller &&
+      pointerId !== null &&
+      scroller.hasPointerCapture?.(pointerId)
+    ) {
+      try {
+        scroller.releasePointerCapture(pointerId);
+      } catch {
+        // Pointer capture may already be released by the browser.
+      }
+    }
+
+    if (event?.currentTarget) {
+      event.currentTarget.classList.remove('is-dragging');
+    }
+  }
+
+  function startTableDrag(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+    const interactiveTarget = event.target.closest?.(
+      'a, button, input, select, textarea, label, [role="button"]',
+    );
+
+    if (interactiveTarget) return;
+
+    const scroller = scrollRef.current;
+    if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+
+    dragStateRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startScrollLeft: scroller.scrollLeft,
+    };
+
+    scroller.classList.add('is-dragging');
+
+    try {
+      scroller.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is an enhancement; scrolling still works without it.
+    }
+
+    if (event.pointerType === 'mouse') {
+      event.preventDefault();
+    }
+  }
+
+  function moveTableDrag(event) {
+    const scroller = scrollRef.current;
+    const dragState = dragStateRef.current;
+
+    if (
+      !scroller ||
+      !dragState.active ||
+      dragState.pointerId !== event.pointerId
+    ) {
+      return;
+    }
+
+    const distance = event.clientX - dragState.startX;
+
+    if (Math.abs(distance) > 2) {
+      event.preventDefault();
+      scroller.scrollLeft = dragState.startScrollLeft - distance;
+    }
+  }
+
+  if (loading) {
+    return (
+      <div
+        className={`attendance-report-table-shell is-loading${expanded ? ' is-expanded' : ''}`}
+        aria-hidden="true"
+      >
+        <div className="attendance-report-table-loading-head" />
+        {[1, 2, 3, 4].map((item) => (
+          <div className="attendance-report-table-loading-row" key={item}>
+            {Array.from({ length: 8 }).map((_, index) => (
+              <span key={`${item}-${index}`} />
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="attendance-empty-state">
+        <CalendarDays size={34} />
+        <strong>No attendance records found</strong>
+        <span>Today’s attendance will appear here. Use filters to view past records.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`attendance-report-table-shell${expanded ? ' is-expanded' : ''}`}>
+      <div
+        ref={scrollRef}
+        className="attendance-report-table-scroll"
+        onPointerDown={startTableDrag}
+        onPointerMove={moveTableDrag}
+        onPointerUp={stopTableDrag}
+        onPointerCancel={stopTableDrag}
+        onLostPointerCapture={stopTableDrag}
+        onDragStart={(event) => event.preventDefault()}
+        aria-label="Attendance table. Swipe or drag left and right to view more columns."
+      >
+        <table className="attendance-report-table">
+          <thead>
+            <tr>
+              <th className="attendance-table-select-head">Select</th>
+              <th>Employee</th>
+              <th>Employee ID</th>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Department</th>
+              <th>Designation</th>
+              <th>Organisation</th>
+              <th>State</th>
+              <th>Check In</th>
+              <th>Check Out</th>
+              <th>Check-in Location</th>
+              <th>Check-out Location</th>
+              <th>Late Reason</th>
+              <th>Early Checkout Reason</th>
+              <th>Verified</th>
+              <th>Field Details</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row._id || `${row.employee_id}-${row.raw_date}`}
+                className={selectedIds.includes(row._id) ? 'is-selected' : ''}
+              >
+                <td className="attendance-table-select-cell">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(row._id && selectedIds.includes(row._id))}
+                    disabled={!row._id || row.verified_by_ro || bulkVerifying}
+                    onChange={() => row._id && onToggleSelection?.(row._id)}
+                    aria-label={`Select ${cleanText(row.employee_name)} attendance`}
+                    title={!row._id ? 'This generated row has no attendance record to verify' : undefined}
+                  />
+                </td>
+                <td className="attendance-table-employee-cell">
+                  <span className="attendance-table-employee">
+                    <span className="attendance-table-avatar" aria-hidden="true">
+                      <UserRound size={15} />
+                    </span>
+                    <strong>{cleanText(row.employee_name)}</strong>
+                  </span>
+                </td>
+                <td>{cleanText(row.employee_id)}</td>
+                <td>{cleanText(row.date)}</td>
+                <td>
+                  <span className={`attendance-status-pill ${attendanceStatusClass(row.status)}`}>
+                    {cleanText(row.status)}
+                  </span>
+                </td>
+                <td>{cleanText(row.mode)}</td>
+                <td>{cleanText(row.department)}</td>
+                <td>{cleanText(row.designation)}</td>
+                <td>{cleanText(row.organisation)}</td>
+                <td>{cleanText(row.state)}</td>
+                <td>{cleanText(row.check_in)}</td>
+                <td>{cleanText(row.check_out)}</td>
+                <td className="attendance-table-location-cell">
+                  <span>{cleanText(row.check_in_location_text)}</span>
+                  {row.check_in_map_url && (
+                    <a href={row.check_in_map_url} target="_blank" rel="noreferrer">Open map</a>
+                  )}
+                </td>
+                <td className="attendance-table-location-cell">
+                  <span>{cleanText(row.check_out_location_text)}</span>
+                  {row.check_out_map_url && (
+                    <a href={row.check_out_map_url} target="_blank" rel="noreferrer">Open map</a>
+                  )}
+                </td>
+                <td className="attendance-table-wrap-cell">{cleanText(row.late_reason)}</td>
+                <td className="attendance-table-wrap-cell">{cleanText(row.early_checkout_reason)}</td>
+                <td>{cleanText(row.verified)}</td>
+                <td className="attendance-table-field-cell">
+                  {String(row.raw_mode || '').toLowerCase() === 'field' ? (
+                    <>
+                      <span>{cleanText(row.field_location)}</span>
+                      <FieldPhotoPreview row={row} />
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td className="attendance-table-action-cell">{row.action}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+function AttendanceBulkVerifyControls({
+  rows = [],
+  selectedIds = [],
+  onToggleAll,
+  onVerifySelected,
+  onVerifyAll,
+  bulkVerifying = false,
+}) {
+  const verifiableRows = rows.filter((row) => row?._id && !row.verified_by_ro);
+  const verifiableIds = verifiableRows.map((row) => row._id);
+  const selectedVerifiableCount = selectedIds.filter((id) => verifiableIds.includes(id)).length;
+  const allSelected =
+    verifiableIds.length > 0 &&
+    verifiableIds.every((id) => selectedIds.includes(id));
+
+  return (
+    <div className="attendance-bulk-verify-toolbar">
+      <label className="attendance-select-all-control">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          disabled={!verifiableIds.length || bulkVerifying}
+          onChange={() => onToggleAll?.(verifiableIds, !allSelected)}
+        />
+        <span>
+          Select All
+          {selectedVerifiableCount > 0 ? ` (${selectedVerifiableCount})` : ''}
+        </span>
+      </label>
+
+      <div className="attendance-bulk-verify-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onVerifySelected}
+          disabled={!selectedVerifiableCount || bulkVerifying}
+        >
+          {bulkVerifying ? 'Verifying...' : `Verify Selected${selectedVerifiableCount ? ` (${selectedVerifiableCount})` : ''}`}
+        </button>
+
+        <button
+          type="button"
+          className="primary"
+          onClick={onVerifyAll}
+          disabled={!verifiableIds.length || bulkVerifying}
+        >
+          {bulkVerifying ? 'Verifying...' : `Verify All (${verifiableIds.length})`}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function getSaasTenant(user = {}) {
   return user.tenant || user.company || {};
@@ -722,9 +1035,14 @@ export default function Attendance({ user = {}, setPage } = {}) {
   const [decidingHolidayWorkId, setDecidingHolidayWorkId] = useState('');
   const [loadingTeamField, setLoadingTeamField] = useState(false);
   const [verifyingId, setVerifyingId] = useState('');
+  const [selectedAttendanceIds, setSelectedAttendanceIds] = useState([]);
+  const [bulkVerifying, setBulkVerifying] = useState(false);
   const [claimingCompOff, setClaimingCompOff] = useState(false);
 
+  const pageRef = useRef(null);
   const [filters, setFilters] = useState({ ...EMPTY_REPORT_FILTERS });
+  const [reportViewMode, setReportViewMode] = useState('cards');
+  const [isReportTableExpanded, setIsReportTableExpanded] = useState(false);
   const [holidayForm, setHolidayForm] = useState({ ...EMPTY_HOLIDAY_FORM });
   const [holidayWorkFilters, setHolidayWorkFilters] = useState({
     ...EMPTY_HOLIDAY_WORK_FILTERS,
@@ -909,6 +1227,64 @@ async function refreshAttendance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const availableIds = new Set(
+      report
+        .filter((row) => row?._id && !row.verified_by_ro)
+        .map((row) => row._id),
+    );
+
+    setSelectedAttendanceIds((current) =>
+      current.filter((id) => availableIds.has(id)),
+    );
+  }, [report]);
+
+  useEffect(() => {
+    if (!isReportTableExpanded) return undefined;
+
+    const pageElement = pageRef.current;
+    const backgroundElement = pageElement?.closest('#root, #app') || pageElement;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const hadInert = backgroundElement?.hasAttribute('inert') || false;
+    const previousAriaHidden = backgroundElement?.getAttribute('aria-hidden');
+
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
+    if (backgroundElement) {
+      backgroundElement.setAttribute('inert', '');
+      backgroundElement.setAttribute('aria-hidden', 'true');
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setIsReportTableExpanded(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+
+      if (backgroundElement) {
+        if (!hadInert) {
+          backgroundElement.removeAttribute('inert');
+        }
+
+        if (previousAriaHidden === null) {
+          backgroundElement.removeAttribute('aria-hidden');
+        } else {
+          backgroundElement.setAttribute('aria-hidden', previousAriaHidden);
+        }
+      }
+
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isReportTableExpanded]);
+
   async function searchReport(event) {
     event.preventDefault();
 
@@ -962,6 +1338,112 @@ async function refreshAttendance() {
     } finally {
       setVerifyingId('');
     }
+  }
+
+
+  function toggleAttendanceSelection(attendanceId) {
+    if (!attendanceId) return;
+
+    setSelectedAttendanceIds((current) =>
+      current.includes(attendanceId)
+        ? current.filter((id) => id !== attendanceId)
+        : [...current, attendanceId],
+    );
+  }
+
+  function toggleAllAttendanceSelection(verifiableIds = [], shouldSelect = true) {
+    setSelectedAttendanceIds((current) => {
+      if (!shouldSelect) {
+        return current.filter((id) => !verifiableIds.includes(id));
+      }
+
+      return Array.from(new Set([...current, ...verifiableIds]));
+    });
+  }
+
+  async function verifyAttendanceBatch(attendanceIds = [], mode = 'selected') {
+    const uniqueIds = Array.from(new Set(attendanceIds.filter(Boolean)));
+
+    if (!uniqueIds.length) {
+      alerts.warning(
+        mode === 'all'
+          ? 'There are no unverified attendance records available to verify.'
+          : 'Select at least one attendance record first.',
+        mode === 'all' ? 'Nothing to Verify' : 'No Records Selected',
+      );
+      return;
+    }
+
+    const ok = await alerts.confirm(
+      mode === 'all'
+        ? `Verify all ${uniqueIds.length} available attendance records?`
+        : `Verify ${uniqueIds.length} selected attendance record${uniqueIds.length === 1 ? '' : 's'}?`,
+      {
+        title: mode === 'all' ? 'Verify All Attendance' : 'Verify Selected Attendance',
+        confirmText: mode === 'all' ? 'Yes, Verify All' : 'Yes, Verify Selected',
+        cancelText: 'Cancel',
+        type: 'warning',
+      },
+    );
+
+    if (!ok) return;
+
+    try {
+      setBulkVerifying(true);
+
+      let verifiedCount = 0;
+      const failedIds = [];
+
+      for (const attendanceId of uniqueIds) {
+        try {
+          await api(`/attendance/${attendanceId}/verify`, {
+            method: 'PATCH',
+            body: JSON.stringify({}),
+          });
+          verifiedCount += 1;
+        } catch {
+          failedIds.push(attendanceId);
+        }
+      }
+
+      await loadReport(filters);
+      setSelectedAttendanceIds((current) =>
+        current.filter((id) => failedIds.includes(id)),
+      );
+
+      if (failedIds.length) {
+        alerts.warning(
+          `${verifiedCount} attendance record${verifiedCount === 1 ? '' : 's'} verified. ${failedIds.length} could not be verified.`,
+          'Verification Partially Completed',
+        );
+      } else {
+        alerts.success(
+          `${verifiedCount} attendance record${verifiedCount === 1 ? '' : 's'} verified successfully.`,
+          mode === 'all' ? 'All Attendance Verified' : 'Selected Attendance Verified',
+        );
+      }
+    } finally {
+      setBulkVerifying(false);
+    }
+  }
+
+  async function verifySelectedAttendance() {
+    const currentVerifiableIds = report
+      .filter((row) => row?._id && !row.verified_by_ro)
+      .map((row) => row._id);
+
+    await verifyAttendanceBatch(
+      selectedAttendanceIds.filter((id) => currentVerifiableIds.includes(id)),
+      'selected',
+    );
+  }
+
+  async function verifyAllAttendance() {
+    const allVerifiableIds = report
+      .filter((row) => row?._id && !row.verified_by_ro)
+      .map((row) => row._id);
+
+    await verifyAttendanceBatch(allVerifiableIds, 'all');
   }
 
 async function createHoliday(event) {
@@ -1131,7 +1613,7 @@ async function claimCompOff(event) {
         type="button"
         className="secondary"
         onClick={() => verifyAttendance(row)}
-        disabled={verifyingId === row._id}
+        disabled={verifyingId === row._id || bulkVerifying || !row._id}
       >
         {verifyingId === row._id ? 'Verifying...' : 'Verify'}
       </button>
@@ -1219,7 +1701,7 @@ const teamFieldRows = teamFieldAttendance.map((row) => ({
   );
 
 return (
-  <div className="page-grid attendance-page">
+  <div ref={pageRef} className="page-grid attendance-page">
     <style>{`
       .attendance-page {
         --at-ink: #101a3a;
@@ -1236,6 +1718,25 @@ return (
         color: var(--at-ink);
       }
 
+      .attendance-page,
+      .attendance-page > *,
+      .attendance-page .panel,
+      .attendance-page .attendance-page-hero {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
+      .attendance-page img,
+      .attendance-page input,
+      .attendance-page select,
+      .attendance-page textarea,
+      .attendance-page button {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
       .attendance-page .attendance-page-hero {
         position: relative;
         isolation: isolate;
@@ -1248,26 +1749,26 @@ return (
         padding: clamp(24px, 3vw, 42px);
         border: 1px solid rgba(154, 164, 205, .58);
         border-radius: clamp(28px, 2.6vw, 40px);
-        background:
-          radial-gradient(circle at 8% 5%, rgba(105, 217, 208, .26), transparent 29%),
-          radial-gradient(circle at 96% 5%, rgba(159, 169, 245, .23), transparent 32%),
-          linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+        background: linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
         box-shadow:
           12px 14px 0 #c6d8f7,
           0 28px 48px rgba(34, 38, 110, .13);
       }
 
-      .attendance-page .attendance-page-hero::before {
-        content: "";
-        position: absolute;
-        z-index: -1;
-        width: 170px;
-        height: 170px;
-        right: 8%;
-        bottom: -94px;
-        border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-        background: linear-gradient(145deg, rgba(105,217,208,.30), rgba(132,181,241,.28));
-        transform: rotate(-18deg);
+      .attendance-page::before,
+      .attendance-page::after,
+      .attendance-page .attendance-page-hero::before,
+      .attendance-page .attendance-page-hero::after,
+      .attendance-page .panel::before,
+      .attendance-page .panel::after,
+      .attendance-page .attendance-card::before,
+      .attendance-page .attendance-card::after,
+      .attendance-page .attendance-pro-card::before,
+      .attendance-page .attendance-pro-card::after,
+      .attendance-page .attendance-summary-card::before,
+      .attendance-page .attendance-summary-card::after {
+        content: none !important;
+        display: none !important;
       }
 
       .attendance-page-kicker,
@@ -1406,8 +1907,11 @@ return (
       }
 
       .attendance-page-dual {
-        gap: 24px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(16px, 2vw, 24px);
         align-items: stretch;
+        min-width: 0;
       }
 
       .attendance-page-dual > .panel {
@@ -1515,7 +2019,10 @@ return (
       }
 
       .attendance-page .attendance-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         gap: 13px;
+        min-width: 0;
       }
 
       .attendance-page .attendance-filter-grid label,
@@ -1580,42 +2087,540 @@ return (
         transform: translateY(-2px);
       }
 
-      .attendance-record-list {
-        display: grid;
-        gap: 16px;
-        margin-top: 18px;
+      .attendance-report-display-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+        min-width: 0;
+        flex-wrap: wrap;
       }
 
-      .attendance-record-card {
-        border: 1px solid rgba(171,181,211,.70);
-        border-radius: 24px;
-        padding: 18px;
-        background:
-          linear-gradient(145deg, #ffffff, #f4fbff);
-        box-shadow:
-          6px 8px 0 #c6d8f7,
-          0 18px 30px rgba(34,38,110,.09);
+      .attendance-table-expand-button,
+      .attendance-table-fullscreen-close {
+        min-height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 9px 13px;
+        border: 1px solid rgba(65,55,161,.18);
+        border-radius: 13px;
+        color: #342b78;
+        background: rgba(255,255,255,.92);
+        box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        font-size: 10px;
+        font-weight: 900;
+        cursor: pointer;
         transition:
-          transform 210ms cubic-bezier(.22,1,.36,1),
-          box-shadow 210ms ease;
+          transform 190ms cubic-bezier(.22,1,.36,1),
+          box-shadow 190ms ease;
       }
 
-      .attendance-record-card:hover {
-        transform: translateY(-4px);
+      .attendance-table-expand-button:hover,
+      .attendance-table-fullscreen-close:hover {
+        transform: translateY(-2px);
+      }
+
+      .attendance-table-expand-button:disabled {
+        opacity: .55;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .attendance-report-view-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px;
+        border: 1px solid rgba(151,161,197,.48);
+        border-radius: 15px;
+        background: rgba(255,255,255,.84);
+        box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+      }
+
+      .attendance-report-view-toggle button {
+        min-height: 38px;
+        padding: 8px 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        border: 0;
+        border-radius: 11px;
+        color: #5d6785;
+        background: transparent;
+        font-size: 10px;
+        font-weight: 900;
+        cursor: pointer;
+      }
+
+      .attendance-report-view-toggle button.is-active {
+        color: #fff;
+        background: linear-gradient(135deg, #342b78, #5669d9);
+        box-shadow: 3px 4px 0 rgba(185,215,255,.86);
+      }
+
+      .attendance-bulk-verify-toolbar {
+        width: 100%;
+        min-width: 0;
+        margin-top: 12px;
+        padding: 10px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        border: 1px solid rgba(151,161,197,.44);
+        border-radius: 15px;
+        background: rgba(255,255,255,.78);
+      }
+
+      .attendance-select-all-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--at-copy);
+        font-size: 10px;
+        font-weight: 900;
+        cursor: pointer;
+      }
+
+      .attendance-bulk-verify-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .attendance-bulk-verify-actions .primary,
+      .attendance-bulk-verify-actions .secondary {
+        min-height: 38px;
+        padding: 8px 12px;
+        font-size: 10px;
+      }
+
+      .attendance-table-select-head,
+      .attendance-table-select-cell {
+        width: 74px;
+        min-width: 74px !important;
+        text-align: center;
+      }
+
+      .attendance-report-table tbody tr.is-selected td {
+        background: rgba(102,88,220,.045);
+      }
+
+      .attendance-report-table-shell {
+        width: 100%;
+        min-width: 0;
+        margin-top: 10px;
+        overflow: hidden;
+        border: 1px solid rgba(171,181,211,.60);
+        border-radius: 20px;
+        background: #fff;
         box-shadow:
-          8px 10px 0 #c6d8f7,
-          0 24px 38px rgba(34,38,110,.13);
+          5px 6px 0 rgba(52,43,120,.08),
+          0 16px 28px rgba(34,38,110,.07);
       }
 
-      .attendance-avatar {
+      .attendance-report-table-scroll {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+        cursor: grab;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(98,84,218,.34) transparent;
+      }
+
+      .attendance-report-table-scroll.is-dragging {
+        cursor: grabbing;
+        user-select: none;
+      }
+
+      .attendance-report-table-scroll a,
+      .attendance-report-table-scroll button,
+      .attendance-report-table-scroll input,
+      .attendance-report-table-scroll select,
+      .attendance-report-table-scroll textarea {
+        cursor: pointer;
+      }
+
+      .attendance-report-table-scroll::-webkit-scrollbar {
+        height: 8px;
+      }
+
+      .attendance-report-table-scroll::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgba(98,84,218,.34);
+      }
+
+      .attendance-report-table {
+        width: 100%;
+        min-width: 1680px;
+        border-collapse: separate;
+        border-spacing: 0;
+        color: var(--at-ink);
+        font-size: 10px;
+      }
+
+      .attendance-report-table th,
+      .attendance-report-table td {
+        padding: 12px 13px;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(171,181,211,.34);
+        border-right: 1px solid rgba(171,181,211,.22);
+        background: #fff;
+        text-align: left;
+      }
+
+      .attendance-report-table th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        color: #536381;
+        background: linear-gradient(180deg, #f8f8ff, #f2f7fb);
+        font-size: 8px;
+        font-weight: 950;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .attendance-report-table th:last-child,
+      .attendance-report-table td:last-child {
+        border-right: 0;
+      }
+
+      .attendance-report-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .attendance-report-table tbody tr:hover td {
+        background: #fafaff;
+      }
+
+      .attendance-report-table td {
+        line-height: 1.45;
+        white-space: nowrap;
+      }
+
+      .attendance-table-employee-cell {
+        min-width: 190px;
+      }
+
+      .attendance-table-employee {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+      }
+
+      .attendance-table-avatar {
+        width: 32px;
+        height: 32px;
+        flex: 0 0 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 10px;
         color: #fff;
         background: #342b78;
       }
 
+      .attendance-table-employee strong {
+        max-width: 145px;
+        overflow: hidden;
+        color: var(--at-ink);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .attendance-table-location-cell {
+        min-width: 220px;
+        max-width: 290px;
+        white-space: normal !important;
+      }
+
+      .attendance-table-location-cell span {
+        display: block;
+        color: var(--at-copy);
+        overflow-wrap: anywhere;
+      }
+
+      .attendance-table-location-cell a {
+        display: inline-block;
+        margin-top: 5px;
+        color: var(--at-violet);
+        font-weight: 900;
+      }
+
+      .attendance-table-wrap-cell {
+        min-width: 180px;
+        max-width: 250px;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+      }
+
+      .attendance-table-field-cell {
+        min-width: 220px;
+        white-space: normal !important;
+      }
+
+      .attendance-table-field-cell > span {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--at-copy);
+      }
+
+      .attendance-table-field-cell .field-photo-preview {
+        max-width: 150px;
+      }
+
+      .attendance-table-field-cell .field-photo-preview img {
+        width: 120px;
+        height: 80px;
+        border-radius: 12px;
+      }
+
+      .attendance-table-action-cell {
+        min-width: 110px;
+      }
+
+      .attendance-table-action-cell .secondary {
+        min-height: 36px;
+        padding: 7px 10px;
+      }
+
+      .attendance-report-table-shell.is-loading {
+        padding: 12px;
+      }
+
+      .attendance-report-table-loading-head {
+        height: 42px;
+        border-radius: 11px;
+        background: linear-gradient(90deg, #f1f4fb, #f8f9fd, #f1f4fb);
+      }
+
+      .attendance-report-table-loading-row {
+        display: grid;
+        grid-template-columns: repeat(8, minmax(90px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .attendance-report-table-loading-row span {
+        height: 34px;
+        border-radius: 9px;
+        background: #f4f6fb;
+      }
+
+      .attendance-record-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+        align-items: stretch;
+        gap: clamp(16px, 1.8vw, 24px);
+        margin-top: 10px;
+        min-width: 0;
+      }
+
+      .attendance-record-card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        border: 1px solid rgba(151,161,197,.52);
+        border-radius: 22px;
+        padding: 16px;
+        background: transparent;
+        box-shadow: none;
+        transition:
+          border-color 180ms ease,
+          box-shadow 180ms ease;
+      }
+
+      .attendance-record-card:hover {
+        transform: none;
+        border-color: rgba(98,84,218,.42);
+        box-shadow: none;
+      }
+
+      .attendance-record-card.is-selected {
+        border-color: rgba(82,69,190,.78);
+        box-shadow: 0 0 0 3px rgba(102,88,220,.08);
+      }
+
+      .attendance-record-select {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+        color: var(--at-copy);
+        font-size: 9px;
+        font-weight: 900;
+        cursor: pointer;
+      }
+
+      .attendance-record-select.is-disabled {
+        opacity: .45;
+        cursor: not-allowed;
+      }
+
+      .attendance-record-select input,
+      .attendance-table-select-cell input,
+      .attendance-select-all-control input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: var(--at-violet);
+        cursor: pointer;
+      }
+
+      .attendance-record-select input:disabled,
+      .attendance-table-select-cell input:disabled,
+      .attendance-select-all-control input:disabled {
+        cursor: not-allowed;
+      }
+
+      .attendance-record-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .attendance-employee-block {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        flex: 1 1 220px;
+        min-width: 0;
+      }
+
+      .attendance-employee-block > div:last-child {
+        min-width: 0;
+      }
+
+      .attendance-record-card h4,
+      .attendance-record-card p,
+      .attendance-record-card strong,
+      .attendance-location-box strong {
+        overflow-wrap: anywhere;
+      }
+
+      .attendance-meta-grid,
+      .attendance-time-grid,
+      .attendance-location-grid {
+        display: grid;
+        min-width: 0;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .attendance-meta-grid,
+      .attendance-time-grid,
+      .attendance-location-grid {
+        background: transparent !important;
+        box-shadow: none !important;
+        border: 0 !important;
+      }
+
+      .attendance-meta-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 14px;
+      }
+
+      .attendance-time-grid,
+      .attendance-location-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .attendance-meta-grid > div,
+      .attendance-time-grid > div,
+      .attendance-location-box {
+        min-width: 0;
+        padding: 12px;
+      }
+
+      .attendance-meta-grid span,
+      .attendance-time-grid span,
+      .attendance-location-box span,
+      .attendance-record-footer span {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+      }
+
+      .attendance-location-box {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+      }
+
+      .attendance-location-box > div {
+        min-width: 0;
+      }
+
+      .attendance-record-footer {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 14px;
+        margin-top: auto;
+        padding-top: 12px;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .attendance-record-footer > div {
+        min-width: 0;
+      }
+
+      .attendance-record-action {
+        margin-left: auto;
+        flex: 0 0 auto;
+      }
+
+      .attendance-avatar {
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        color: #fff;
+        background: #342b78;
+      }
+
+      .attendance-record-card h4 {
+        margin: 0;
+      }
+
+      .attendance-record-card p {
+        margin: 4px 0 0;
+      }
+
       .attendance-status-pill {
+        min-height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
         border-radius: 999px;
         font-size: 10px;
         font-weight: 900;
+        flex: 0 0 auto;
       }
 
       .attendance-meta-grid > div,
@@ -1623,8 +2628,8 @@ return (
       .attendance-location-box {
         border: 1px solid rgba(162,169,196,.45);
         border-radius: 16px;
-        background: rgba(255,255,255,.82);
-        box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+        background: #fff;
+        box-shadow: none;
       }
 
       .attendance-record-card h4 {
@@ -1694,6 +2699,103 @@ return (
       }
 
 
+      .attendance-table-fullscreen-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        display: flex;
+        width: 100vw;
+        height: 100dvh;
+        min-height: 100vh;
+        padding: 0;
+        background: rgba(10, 16, 38, .72);
+        backdrop-filter: blur(7px);
+        -webkit-backdrop-filter: blur(7px);
+        box-sizing: border-box;
+      }
+
+      .attendance-table-fullscreen {
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 0;
+        border-radius: 0;
+        background: #f8fbff;
+        box-shadow: none;
+      }
+
+      .attendance-table-fullscreen-header {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 13px 15px;
+        border-bottom: 1px solid rgba(171,181,211,.52);
+        background: #fff;
+      }
+
+      .attendance-table-fullscreen-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .attendance-table-fullscreen-title > div {
+        min-width: 0;
+      }
+
+      .attendance-table-fullscreen-title strong,
+      .attendance-table-fullscreen-title span {
+        display: block;
+      }
+
+      .attendance-table-fullscreen-title strong {
+        color: var(--at-ink);
+        font-size: 14px;
+      }
+
+      .attendance-table-fullscreen-title span {
+        margin-top: 2px;
+        color: var(--at-copy);
+        font-size: 10px;
+      }
+
+      .attendance-table-fullscreen > .attendance-bulk-verify-toolbar {
+        flex: 0 0 auto;
+        width: auto;
+        margin: 10px 12px;
+      }
+
+      .attendance-table-fullscreen .attendance-report-table-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .attendance-table-fullscreen .attendance-report-table-scroll {
+        width: 100%;
+        height: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        touch-action: pan-x pan-y;
+      }
+
+      .attendance-table-fullscreen .attendance-report-table {
+        width: 100%;
+      }
+
       .attendance-page .attendance-saas-panel {
         background: linear-gradient(145deg, #edf6ff, #f5f3ff);
         box-shadow:
@@ -1737,8 +2839,16 @@ return (
       }
 
       @media (max-width: 900px) {
+        .attendance-page-dual {
+          grid-template-columns: 1fr;
+        }
+
         .attendance-page .attendance-summary-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .attendance-record-list {
+          grid-template-columns: 1fr;
         }
       }
 
@@ -1786,12 +2896,46 @@ return (
           width: 100%;
         }
 
+        .attendance-report-actions {
+          width: 100%;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 9px;
+        }
+
+        .attendance-report-display-toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .attendance-report-view-toggle,
+        .attendance-table-expand-button {
+          width: 100%;
+        }
+
+        .attendance-report-view-toggle button {
+          flex: 1 1 0;
+          min-width: 0;
+        }
+
+        .attendance-report-table-shell {
+          border-radius: 16px;
+        }
+
+        .attendance-report-table {
+          min-width: 1320px;
+          font-size: 9px;
+        }
+
+        .attendance-report-table th,
+        .attendance-report-table td {
+          padding: 10px;
+        }
+
         .attendance-record-card {
-          padding: 14px;
-          border-radius: 20px;
-          box-shadow:
-            5px 6px 0 #c6d8f7,
-            0 14px 24px rgba(34,38,110,.09);
+          padding: 13px;
+          border-radius: 18px;
+          box-shadow: none;
         }
 
         .attendance-record-top,
@@ -1810,6 +2954,52 @@ return (
           width: 100%;
           max-width: 240px;
           height: 140px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .attendance-meta-grid,
+        .attendance-time-grid,
+        .attendance-location-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .attendance-record-top,
+        .attendance-record-footer {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .attendance-bulk-verify-toolbar {
+          align-items: stretch;
+        }
+
+        .attendance-bulk-verify-actions {
+          width: 100%;
+        }
+
+        .attendance-bulk-verify-actions .primary,
+        .attendance-bulk-verify-actions .secondary {
+          flex: 1 1 150px;
+        }
+
+        .attendance-record-action {
+          width: 100%;
+          margin-left: 0;
+        }
+
+        .attendance-record-action .secondary,
+        .attendance-record-action button {
+          width: 100%;
+        }
+
+        .attendance-table-fullscreen-header {
+          padding: 10px 11px;
+        }
+
+        .attendance-table-fullscreen-close {
+          min-height: 38px;
+          padding: 8px 10px;
         }
       }
 
@@ -1837,6 +3027,21 @@ return (
 
         .attendance-page .employee-role-pill {
           align-self: flex-start;
+        }
+
+        .attendance-report-view-toggle {
+          padding: 4px;
+          border-radius: 13px;
+        }
+
+        .attendance-report-view-toggle button {
+          min-height: 36px;
+          padding: 7px 9px;
+          font-size: 9px;
+        }
+
+        .attendance-report-table {
+          min-width: 1180px;
         }
       }
 
@@ -2043,8 +3248,8 @@ return (
               </p>
             </div>
 
-            <div className="attendance-report-actions">
-              {hasActiveReportFilters && (
+            {hasActiveReportFilters && (
+              <div className="attendance-report-actions">
                 <button
                   type="button"
                   className="secondary"
@@ -2054,8 +3259,8 @@ return (
                   <X size={16} />
                   Clear Filters
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           <div className="attendance-summary-grid">
@@ -2217,7 +3422,71 @@ return (
             </div>
           </form>
 
-          <AttendanceReportList rows={reportRows} loading={loadingReport} />
+          <div className="attendance-report-display-toolbar">
+            <div className="attendance-report-view-toggle" role="group" aria-label="Attendance record view">
+              <button
+                type="button"
+                className={reportViewMode === 'cards' ? 'is-active' : ''}
+                aria-pressed={reportViewMode === 'cards'}
+                onClick={() => {
+                  setReportViewMode('cards');
+                  setIsReportTableExpanded(false);
+                }}
+              >
+                <LayoutGrid size={15} />
+                Card View
+              </button>
+
+              <button
+                type="button"
+                className={reportViewMode === 'table' ? 'is-active' : ''}
+                aria-pressed={reportViewMode === 'table'}
+                onClick={() => setReportViewMode('table')}
+              >
+                <Table2 size={15} />
+                Table View
+              </button>
+            </div>
+
+            {reportViewMode === 'table' && (
+              <button
+                type="button"
+                className="attendance-table-expand-button"
+                onClick={() => setIsReportTableExpanded(true)}
+                disabled={loadingReport || !reportRows.length}
+              >
+                <Maximize2 size={15} />
+                Expand Table
+              </button>
+            )}
+          </div>
+
+          <AttendanceBulkVerifyControls
+            rows={reportRows}
+            selectedIds={selectedAttendanceIds}
+            onToggleAll={toggleAllAttendanceSelection}
+            onVerifySelected={verifySelectedAttendance}
+            onVerifyAll={verifyAllAttendance}
+            bulkVerifying={bulkVerifying}
+          />
+
+          {reportViewMode === 'table' ? (
+            <AttendanceReportTable
+              rows={reportRows}
+              loading={loadingReport}
+              selectedIds={selectedAttendanceIds}
+              onToggleSelection={toggleAttendanceSelection}
+              bulkVerifying={bulkVerifying}
+            />
+          ) : (
+            <AttendanceReportList
+              rows={reportRows}
+              loading={loadingReport}
+              selectedIds={selectedAttendanceIds}
+              onToggleSelection={toggleAttendanceSelection}
+              bulkVerifying={bulkVerifying}
+            />
+          )}
         </section>
       )}
 
@@ -2442,6 +3711,60 @@ return (
           <Table rows={holidays} maxColumns={8} />
         </section>
       )}
+
+      {isReportTableExpanded &&
+        reportViewMode === 'table' &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="attendance-page attendance-table-fullscreen-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Expanded attendance table"
+          >
+            <div className="attendance-table-fullscreen">
+              <div className="attendance-table-fullscreen-header">
+                <div className="attendance-table-fullscreen-title">
+                  <Table2 size={18} />
+                  <div>
+                    <strong>Attendance Table</strong>
+                    <span>{reportRows.length} record{reportRows.length === 1 ? '' : 's'} • swipe or drag left and right</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="attendance-table-fullscreen-close"
+                  onClick={() => setIsReportTableExpanded(false)}
+                  aria-label="Close expanded attendance table"
+                  autoFocus
+                >
+                  <X size={17} />
+                  Close
+                </button>
+              </div>
+
+              <AttendanceBulkVerifyControls
+                rows={reportRows}
+                selectedIds={selectedAttendanceIds}
+                onToggleAll={toggleAllAttendanceSelection}
+                onVerifySelected={verifySelectedAttendance}
+                onVerifyAll={verifyAllAttendance}
+                bulkVerifying={bulkVerifying}
+              />
+
+              <AttendanceReportTable
+                rows={reportRows}
+                loading={loadingReport}
+                expanded
+                selectedIds={selectedAttendanceIds}
+                onToggleSelection={toggleAttendanceSelection}
+                bulkVerifying={bulkVerifying}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
