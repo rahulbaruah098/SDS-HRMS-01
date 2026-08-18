@@ -1353,6 +1353,51 @@ def expire_old_compoffs(db, tenant_id=None):
     )
 
 
+def compoff_claim_window_details(db, employee, compoff):
+    """Return employee-specific claim-window details for a Comp-Off credit."""
+    status = normalize_text(compoff.get("status")).lower() or "available"
+    available_from = parse_date(compoff.get("available_from"))
+    valid_until = parse_date(compoff.get("valid_until"))
+    today = today_local()
+
+    if status != "available":
+        return {
+            "claimable_now": False,
+            "claim_window_status": status,
+            "remaining_working_days": 0,
+        }
+
+    if valid_until and today > valid_until:
+        return {
+            "claimable_now": False,
+            "claim_window_status": "expired",
+            "remaining_working_days": 0,
+        }
+
+    countdown_start = max(today, available_from) if available_from else today
+    remaining_working_days = 0
+
+    if valid_until:
+        cursor = countdown_start
+
+        while cursor <= valid_until:
+            if is_working_day_for_employee(db, employee, cursor):
+                remaining_working_days += 1
+
+            cursor += timedelta(days=1)
+
+    claimable_now = (
+        (available_from is None or today >= available_from)
+        and (valid_until is None or today <= valid_until)
+    )
+
+    return {
+        "claimable_now": claimable_now,
+        "claim_window_status": "active" if claimable_now else "upcoming",
+        "remaining_working_days": remaining_working_days,
+    }
+
+
 def can_decide_mode_request(db, request_doc):
     roles = current_user_roles()
 
@@ -3523,6 +3568,9 @@ def my_compoffs():
         .sort("created_at", -1)
         .limit(100)
     )
+
+    for item in items:
+        item.update(compoff_claim_window_details(db, e, item))
 
     return jsonify({"items": clean_doc(items)})
 

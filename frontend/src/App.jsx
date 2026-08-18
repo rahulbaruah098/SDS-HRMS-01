@@ -49,6 +49,8 @@ import TaxDeclarations from './pages/TaxDeclarations.jsx';
 import Payslips from './pages/Payslips.jsx';
 import Leave from './pages/Leave';
 import ApplyLeave from './pages/ApplyLeave';
+import LeaveBalances from './pages/LeaveBalances.jsx';
+import CompOffCredits from './pages/CompOffCredits.jsx';
 import Projects from './pages/Projects';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
@@ -1260,6 +1262,14 @@ if (normalizedPage === 'leave') {
 
   if (normalizedPage === 'leave_requests') {
     return <ApplyLeave setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'leave_balances') {
+    return <LeaveBalances setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'compoff_credits') {
+    return <CompOffCredits setPage={setPage} user={safeUser} />;
   }
 
   if (normalizedPage === 'reports') {
