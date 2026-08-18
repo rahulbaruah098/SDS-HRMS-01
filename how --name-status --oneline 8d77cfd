@@ -1,0 +1,10 @@
+[33m5c60f4f[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{Tue Aug 18 13:24:00 2026}: reset: moving to HEAD~1
+[33m8d77cfd[m[33m ([m[1;32mbackup-before-revert-8d77cfd[m[33m)[m HEAD@{Tue Aug 18 13:21:32 2026}: commit: Final push given attdence and reports roles to finance
+[33m5c60f4f[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{Tue Aug 18 12:12:42 2026}: commit: FINAL COMMIT Change the deisgn of Leave balances and comp off credit page added two dedicated webpages for them
+[33m809daec[m HEAD@{Mon Aug 17 16:08:32 2026}: commit: FINAL PUSH (Updated the proejct module)
+[33mb676e64[m HEAD@{Fri Aug 14 16:31:58 2026}: commit: fix(hrms): repair resignation and leave management workflows
+[33mf45b6a0[m HEAD@{Fri Aug 14 16:29:53 2026}: pull origin main: Fast-forward
+[33mf50dc8b[m HEAD@{Fri Aug 14 16:29:25 2026}: reset: moving to HEAD
+[33mf50dc8b[m HEAD@{Fri Aug 14 16:28:54 2026}: reset: moving to HEAD~1
+[33mdb0bb3b[m HEAD@{Fri Aug 14 16:27:00 2026}: commit: fix(hrms): repair resignation and leave management workflows
+[33mf50dc8b[m HEAD@{Fri Aug 14 14:26:55 2026}: pull origin main: Fast-forward

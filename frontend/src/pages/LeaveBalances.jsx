@@ -32,8 +32,34 @@ function getEmployeeId(employee = {}) {
       employee.id ||
       employee.employee_ref_id ||
       employee.user_id ||
+      employee.employee_id ||
+      employee.emp_code ||
+      employee.employee_code ||
       '',
   ).trim();
+}
+
+function normalizeEmployeeIdentifier(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getEmployeeIdentifiers(employee = {}) {
+  return [
+    employee._id,
+    employee.id,
+    employee.employee_ref_id,
+    employee.employee,
+    employee.employee_id,
+    employee.emp_code,
+    employee.employee_code,
+    employee.code,
+    employee.user_id,
+    employee.email,
+    employee.official_email,
+    employee.work_email,
+  ]
+    .map(normalizeEmployeeIdentifier)
+    .filter(Boolean);
 }
 
 function getEmployeeName(employee = {}) {
@@ -107,23 +133,50 @@ function normalizeTypeBalance(row = {}) {
 }
 
 function isActiveEmployee(employee = {}) {
-  const status = String(employee.status || employee.employee_status || 'active')
-    .trim()
-    .toLowerCase();
-
-  return ![
+  const inactiveStatuses = new Set([
     'inactive',
+    'disabled',
     'resigned',
+    'resign',
+    'left',
     'terminated',
+    'retired',
     'deleted',
     'alumni',
-  ].includes(status);
+    'ex-employee',
+    'ex_employee',
+  ]);
+  const statuses = [
+    employee.status,
+    employee.employment_status,
+    employee.employee_status,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  const alumniFlag = String(employee.is_alumni || '').trim().toLowerCase();
+  const activeFlag = String(employee.is_active ?? '').trim().toLowerCase();
+  const deletedFlag = String(employee.is_deleted || '').trim().toLowerCase();
+
+  if (employee.is_alumni === true || ['true', '1', 'yes'].includes(alumniFlag)) {
+    return false;
+  }
+
+  if (employee.is_active === false || ['false', '0', 'no'].includes(activeFlag)) {
+    return false;
+  }
+
+  if (employee.is_deleted === true || ['true', '1', 'yes'].includes(deletedFlag)) {
+    return false;
+  }
+
+  return !statuses.some((status) => inactiveStatuses.has(status));
 }
 
 function buildBalanceRows(employees = [], balanceItems = []) {
   const rows = new Map();
+  const employeeAliasToRowId = new Map();
 
-  employees.forEach((employee) => {
+  employees.filter(isActiveEmployee).forEach((employee) => {
     const employeeId = getEmployeeId(employee);
 
     if (!employeeId) return;
@@ -138,37 +191,28 @@ function buildBalanceRows(employees = [], balanceItems = []) {
       cl: emptyTypeBalance(),
       el: emptyTypeBalance(),
     });
+
+    getEmployeeIdentifiers(employee).forEach((identifier) => {
+      if (!employeeAliasToRowId.has(identifier)) {
+        employeeAliasToRowId.set(identifier, employeeId);
+      }
+    });
   });
 
   balanceItems.forEach((item) => {
-    const employeeId = String(
-      item.employee_id || item.employee || item.user_id || '',
-    ).trim();
+    const activeEmployeeId = getEmployeeIdentifiers(item)
+      .map((identifier) => employeeAliasToRowId.get(identifier))
+      .find(Boolean);
 
-    if (!employeeId) return;
+    // Leave balances are historical records and remain in the database after
+    // resignation. This active management page must never recreate a row for
+    // a resigned/alumni employee from an unmatched historical balance record.
+    if (!activeEmployeeId || !rows.has(activeEmployeeId)) return;
 
-    if (!rows.has(employeeId)) {
-      rows.set(employeeId, {
-        employee_id: employeeId,
-        employee: item,
-        employee_name: getEmployeeName(item),
-        employee_code: getEmployeeCode(item),
-        department: item.department || '',
-        designation: item.designation || '',
-        cl: emptyTypeBalance(),
-        el: emptyTypeBalance(),
-      });
-    }
-
-    const row = rows.get(employeeId);
+    const row = rows.get(activeEmployeeId);
     const leaveType = normalizeLeaveType(
       item.leave_type || item.leave_type_label,
     );
-
-    row.employee_name = item.employee_name || row.employee_name;
-    row.employee_code = getEmployeeCode(item) || row.employee_code;
-    row.department = item.department || row.department;
-    row.designation = item.designation || row.designation;
 
     if (leaveType === 'CL') {
       row.cl = normalizeTypeBalance(item);
@@ -324,12 +368,22 @@ export default function LeaveBalances({ user = {} }) {
           limit: 1000,
           sort_by: 'name',
           sort_dir: 'asc',
+          employee_scope: 'active',
         }),
         getLeaveBalances({ limit: 1000 }),
       ]);
 
-      setEmployees(toArray(employeeResponse).filter(isActiveEmployee));
+      const activeEmployees = toArray(employeeResponse).filter(isActiveEmployee);
+
+      setEmployees(activeEmployees);
       setBalanceItems(toArray(balanceResponse));
+      setSelectedEmployeeId((currentEmployeeId) =>
+        activeEmployees.some(
+          (employee) => getEmployeeId(employee) === currentEmployeeId,
+        )
+          ? currentEmployeeId
+          : '',
+      );
     } catch (error) {
       alerts.error(
         error.message || 'Unable to load employee leave balances.',
