@@ -694,10 +694,81 @@ def build_attendance_status(check_in_at=None, check_out_at=None):
     if check_in_at.time() >= late_cutoff:
         return "late"
 
-    if check_out_at and check_out_at.time() < office_end:
+    if (
+        check_out_at
+        and check_out_at.date() == check_in_at.date()
+        and check_out_at.time() < office_end
+    ):
         return "early_checkout"
 
     return "present"
+
+
+def build_private_correction_timeline(
+    existing,
+    check_in_at,
+    check_out_at,
+    check_in_location,
+    check_out_location,
+    correction_reason,
+):
+    existing = existing or {}
+    source_timeline = existing.get("timeline") or []
+    timeline = []
+    check_in_found = False
+    check_out_found = False
+
+    for source_item in source_timeline:
+        if not isinstance(source_item, dict):
+            continue
+
+        item = dict(source_item)
+        event_type = normalize_text(item.get("type")).lower().replace("-", "_")
+
+        if event_type == "check_in":
+            item["time"] = check_in_at
+            item["location"] = check_in_location
+            item["manually_corrected"] = True
+            check_in_found = True
+
+        if event_type == "check_out":
+            if not check_out_at:
+                continue
+
+            item["time"] = check_out_at
+            item["location"] = check_out_location
+            item["manually_corrected"] = True
+            check_out_found = True
+
+        timeline.append(item)
+
+    if not check_in_found:
+        timeline.insert(0, {
+            "type": "check_in",
+            "time": check_in_at,
+            "note": "Check-in time set through private Super Admin correction",
+            "location": check_in_location,
+            "manually_corrected": True,
+        })
+
+    if check_out_at and not check_out_found:
+        timeline.append({
+            "type": "check_out",
+            "time": check_out_at,
+            "note": "Check-out time set through private Super Admin correction",
+            "location": check_out_location,
+            "manually_corrected": True,
+        })
+
+    timeline.append({
+        "type": "manual_correction",
+        "time": now(),
+        "note": correction_reason or "Private Super Admin attendance correction",
+        "changed_by": str(g.current_user.get("_id", "")),
+        "changed_by_name": g.current_user.get("name", "Super Admin"),
+    })
+
+    return timeline
 
 
 def employee_identity_query_values(employee_doc):
@@ -823,6 +894,11 @@ def superadmin_attendance_record_payload(record_doc):
         "check_out_location": check_out_location,
         "late_reason": record_doc.get("late_reason") or "",
         "early_checkout_reason": record_doc.get("early_checkout_reason") or "",
+        "is_late": truthy(record_doc.get("is_late")),
+        "is_early_checkout": truthy(record_doc.get("is_early_checkout")),
+        "is_holiday_work": truthy(record_doc.get("is_holiday_work")),
+        "manually_corrected": truthy(record_doc.get("manually_corrected")),
+        "manual_correction_reason": record_doc.get("manual_correction_reason") or "",
         "remarks": record_doc.get("remarks") or "",
     }
 
@@ -3256,6 +3332,7 @@ def private_attendance_correction_employees():
 def private_attendance_correction_record():
     db = get_db()
 
+    attendance_id = normalize_text(request.args.get("attendance_id"))
     tenant_id = normalize_text(request.args.get("tenant_id"))
     employee_id = normalize_text(request.args.get("employee_id"))
     attendance_date = normalize_text(request.args.get("date"))
@@ -3286,7 +3363,7 @@ def private_attendance_correction_record():
 
     identity_values = employee_identity_query_values(employee)
 
-    record = db.attendance_logs.find_one({
+    record_query = {
         "tenant_id": tenant_id,
         "date": attendance_date,
         "$or": [
@@ -3295,7 +3372,20 @@ def private_attendance_correction_record():
             {"user_id": {"$in": identity_values}},
             {"email": {"$in": identity_values}},
         ],
-    })
+    }
+
+    if attendance_id:
+        attendance_obj_id = safe_object_id(attendance_id)
+
+        if not attendance_obj_id:
+            return jsonify({"message": "Invalid attendance record id"}), 400
+
+        record_query["_id"] = attendance_obj_id
+
+    record = db.attendance_logs.find_one(
+        record_query,
+        sort=[("updated_at", -1), ("created_at", -1)],
+    )
 
     return jsonify({
         "employee": superadmin_attendance_employee_payload(employee),
@@ -3309,6 +3399,7 @@ def private_attendance_correction_update():
     db = get_db()
     data = request.get_json(silent=True) or {}
 
+    attendance_id = normalize_text(data.get("attendance_id"))
     tenant_id = normalize_text(data.get("tenant_id"))
     employee_id = normalize_text(data.get("employee_id"))
     attendance_date = normalize_text(data.get("date"))
@@ -3351,8 +3442,11 @@ def private_attendance_correction_update():
         if not check_out_at:
             return jsonify({"message": "Valid check-out time is required"}), 400
 
+        # The private Super Admin tool may correct overnight attendance.
+        # A time earlier than check-in is treated as check-out on the next day,
+        # rather than being blocked by the normal same-day attendance rule.
         if check_out_at < check_in_at:
-            return jsonify({"message": "Check-out time cannot be earlier than check-in time"}), 400
+            check_out_at += timedelta(days=1)
 
     employee_obj_id = safe_object_id(employee_id)
 
@@ -3371,7 +3465,7 @@ def private_attendance_correction_update():
 
     identity_values = employee_identity_query_values(employee)
 
-    existing = db.attendance_logs.find_one({
+    attendance_identity_query = {
         "tenant_id": tenant_id,
         "date": attendance_date,
         "$or": [
@@ -3380,9 +3474,44 @@ def private_attendance_correction_update():
             {"user_id": {"$in": identity_values}},
             {"email": {"$in": identity_values}},
         ],
-    })
+    }
+
+    existing = None
+
+    if attendance_id:
+        attendance_obj_id = safe_object_id(attendance_id)
+
+        if not attendance_obj_id:
+            return jsonify({"message": "Invalid attendance record id"}), 400
+
+        existing = db.attendance_logs.find_one({
+            **attendance_identity_query,
+            "_id": attendance_obj_id,
+        })
+
+        if not existing:
+            return jsonify({
+                "message": "The selected attendance record no longer exists. Reload it and try again."
+            }), 404
+    else:
+        existing = db.attendance_logs.find_one(
+            attendance_identity_query,
+            sort=[("updated_at", -1), ("created_at", -1)],
+        )
 
     status = build_attendance_status(check_in_at, check_out_at)
+    is_holiday_work = bool(existing and truthy(existing.get("is_holiday_work")))
+    is_late = check_in_at.time() >= time(9, 50) and not is_holiday_work
+    is_early_checkout = bool(
+        check_out_at
+        and check_out_at.date() == check_in_at.date()
+        and check_out_at.time() < time(18, 0)
+        and not is_holiday_work
+    )
+
+    if is_holiday_work:
+        status = "holiday_work"
+
     employee_name = employee_display_name(employee)
     employee_code_value = employee_code(employee)
 
@@ -3409,6 +3538,12 @@ def private_attendance_correction_update():
         "location": parsed_check_in_location,
         "late_reason": late_reason,
         "early_checkout_reason": early_checkout_reason,
+        "is_late": is_late,
+        "is_early_checkout": is_early_checkout,
+        "is_holiday_work": is_holiday_work,
+        "office_start": "09:30",
+        "late_cutoff": "09:50",
+        "office_end": "18:00",
         "remarks": remarks,
         "manually_corrected": True,
         "manual_correction_source": "super_admin_private_attendance_correction",
@@ -3431,13 +3566,25 @@ def private_attendance_correction_update():
             "check_out_location": None,
         })
 
+    update_payload["timeline"] = build_private_correction_timeline(
+        existing,
+        check_in_at,
+        check_out_at,
+        parsed_check_in_location,
+        parsed_check_out_location,
+        correction_reason,
+    )
+
     old_payload = superadmin_attendance_record_payload(existing)
 
     if existing:
-        db.attendance_logs.update_one(
+        update_result = db.attendance_logs.update_one(
             {"_id": existing["_id"]},
             {"$set": update_payload},
         )
+
+        if update_result.matched_count != 1:
+            return jsonify({"message": "Attendance record could not be updated"}), 409
 
         attendance_id = existing["_id"]
         action = "updated"
@@ -3454,25 +3601,52 @@ def private_attendance_correction_update():
 
     updated = db.attendance_logs.find_one({"_id": attendance_id})
 
-    db.attendance_private_corrections.insert_one({
-        "tenant_id": tenant_id,
-        "attendance_id": str(attendance_id),
-        "employee_ref_id": str(employee["_id"]),
-        "employee_ref_id": str(employee["_id"]),
-        "employee_id": employee_code_value,
-        "employee_name": employee_name,
-        "date": attendance_date,
-        "action": action,
-        "old_values": old_payload,
-        "new_values": superadmin_attendance_record_payload(updated),
-        "reason": correction_reason,
-        "changed_by": str(g.current_user["_id"]),
-        "changed_by_name": g.current_user.get("name", "Super Admin"),
-        "changed_by_email": normalize_email(g.current_user.get("email")),
-        "created_at": now(),
-    })
+    if not updated:
+        return jsonify({"message": "Saved attendance record could not be reloaded"}), 500
+
+    verified_check_in = get_attendance_datetime(updated, "check_in")
+    verified_check_out = get_attendance_datetime(updated, "check_out")
+
+    if verified_check_in != check_in_at or verified_check_out != check_out_at:
+        return jsonify({"message": "Attendance correction could not be verified after saving"}), 500
+
+    correction_audit_saved = True
+
+    try:
+        db.attendance_private_corrections.insert_one({
+            "tenant_id": tenant_id,
+            "attendance_id": str(attendance_id),
+            "employee_ref_id": str(employee["_id"]),
+            "employee_id": employee_code_value,
+            "employee_name": employee_name,
+            "date": attendance_date,
+            "action": action,
+            "old_values": old_payload,
+            "new_values": superadmin_attendance_record_payload(updated),
+            "reason": correction_reason,
+            "changed_by": str(g.current_user["_id"]),
+            "changed_by_name": g.current_user.get("name", "Super Admin"),
+            "changed_by_email": normalize_email(g.current_user.get("email")),
+            "created_at": now(),
+        })
+    except Exception:
+        # The attendance record has already been saved and verified. A secondary
+        # audit-collection problem must not make the UI report that saving failed.
+        correction_audit_saved = False
+        audit(
+            "private_attendance_correction_audit_fallback",
+            "attendance_logs",
+            attendance_id,
+            {
+                "tenant_id": tenant_id,
+                "employee_ref_id": str(employee["_id"]),
+                "date": attendance_date,
+                "reason": correction_reason,
+            },
+        )
 
     return jsonify({
         "message": "Attendance correction saved successfully",
         "record": superadmin_attendance_record_payload(updated),
+        "audit_logged": correction_audit_saved,
     })
