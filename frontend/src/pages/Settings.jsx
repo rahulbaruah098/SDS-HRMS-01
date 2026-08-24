@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   Building2,
+  Clock,
   Globe2,
   CheckCircle2,
   ImagePlus,
   LoaderCircle,
+  Lock,
+  LogIn,
+  LogOut,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   ShieldCheck,
   Type,
@@ -20,6 +28,33 @@ const MAX_LOGO_BYTES = 3 * 1024 * 1024;
 const MAX_PLATFORM_LOGO_BYTES = 3 * 1024 * 1024;
 const DEFAULT_PLATFORM_TAGLINE = 'People, Process and Performance';
 const MAX_PLATFORM_TAGLINE_LENGTH = 160;
+const MAX_ATTENDANCE_REASON_OPTIONS = 25;
+const OTHER_REASON_CODE = 'other';
+const ATTENDANCE_REASON_MANAGER_ROLES = new Set([
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+]);
+const DEFAULT_LATE_REASON_OPTIONS = [
+  { code: 'traffic_congestion', label: 'Traffic congestion' },
+  { code: 'public_transport_delay', label: 'Public transport delay' },
+  { code: 'vehicle_breakdown', label: 'Vehicle breakdown' },
+  { code: 'bad_weather', label: 'Bad weather or heavy rain' },
+  { code: 'medical_issue', label: 'Medical or health issue' },
+  { code: 'family_emergency', label: 'Family emergency' },
+  { code: 'official_duty', label: 'Official work or field duty' },
+];
+const DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS = [
+  { code: 'medical_appointment', label: 'Medical appointment' },
+  { code: 'health_issue', label: 'Health issue' },
+  { code: 'family_emergency', label: 'Family emergency' },
+  { code: 'personal_emergency', label: 'Personal emergency' },
+  { code: 'official_duty', label: 'Official work or field visit' },
+  { code: 'transport_issue', label: 'Transport issue' },
+  { code: 'manager_approval', label: 'Approved by manager or HR' },
+];
 const ALLOWED_LOGO_TYPES = new Set([
   'image/jpeg',
   'image/jpg',
@@ -109,6 +144,219 @@ function formatFileSize(bytes = 0) {
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function copyAttendanceReasons(options = []) {
+  return options.map((option) => ({
+    code: safeText(option?.code).toLowerCase(),
+    label: safeText(option?.label),
+  }));
+}
+
+function editableAttendanceReasons(values, fallbackOptions) {
+  if (!Array.isArray(values)) {
+    return copyAttendanceReasons(fallbackOptions);
+  }
+
+  const editable = values
+    .map((item) => ({
+      code: safeText(item?.code).toLowerCase(),
+      label: safeText(item?.label),
+    }))
+    .filter(
+      (item) => item.label && item.code !== OTHER_REASON_CODE,
+    );
+
+  return editable.length
+    ? editable
+    : copyAttendanceReasons(fallbackOptions);
+}
+
+function validateAttendanceReasonOptions(values, fieldLabel) {
+  if (!Array.isArray(values) || !values.length) {
+    return {
+      error: `Add at least one ${fieldLabel.toLowerCase()}.`,
+      values: [],
+    };
+  }
+
+  if (values.length > MAX_ATTENDANCE_REASON_OPTIONS) {
+    return {
+      error:
+        `A maximum of ${MAX_ATTENDANCE_REASON_OPTIONS} ` +
+        `${fieldLabel.toLowerCase()} can be saved.`,
+      values: [],
+    };
+  }
+
+  const normalized = [];
+  const usedLabels = new Set();
+
+  for (let index = 0; index < values.length; index += 1) {
+    const item = values[index] || {};
+    const label = safeText(item.label).replace(/\s+/g, ' ');
+
+    if (!label) {
+      return {
+        error: `${fieldLabel} item ${index + 1} cannot be blank.`,
+        values: [],
+      };
+    }
+
+    if (label.length < 3 || label.length > 80) {
+      return {
+        error:
+          `${fieldLabel} item ${index + 1} must contain between ` +
+          '3 and 80 characters.',
+        values: [],
+      };
+    }
+
+    const letters = label.match(/\p{L}/gu) || [];
+
+    if (letters.length < 2) {
+      return {
+        error: `${fieldLabel} item ${index + 1} must contain a readable reason.`,
+        values: [],
+      };
+    }
+
+    const normalizedLabel = label.toLocaleLowerCase();
+
+    if (normalizedLabel === OTHER_REASON_CODE) {
+      return {
+        error: 'Other is added automatically and must not be added manually.',
+        values: [],
+      };
+    }
+
+    if (usedLabels.has(normalizedLabel)) {
+      return {
+        error: `Duplicate ${fieldLabel.toLowerCase()} are not allowed.`,
+        values: [],
+      };
+    }
+
+    usedLabels.add(normalizedLabel);
+    normalized.push({
+      code: safeText(item.code).toLowerCase(),
+      label,
+    });
+  }
+
+  return { error: '', values: normalized };
+}
+
+function formatSettingsTimestamp(value) {
+  if (!value) {
+    return '';
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return parsed.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function AttendanceReasonListEditor({
+  title,
+  description,
+  icon: Icon,
+  options,
+  disabled,
+  onAdd,
+  onChange,
+  onMove,
+  onRemove,
+}) {
+  return (
+    <section className="attendance-reason-list-card">
+      <div className="attendance-reason-list-heading">
+        <span className="attendance-reason-list-icon">
+          <Icon size={20} />
+        </span>
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+      </div>
+
+      <div className="attendance-reason-list">
+        {options.map((option, index) => (
+          <div className="attendance-reason-edit-row" key={`${option.code}-${index}`}>
+            <span className="attendance-reason-number">{index + 1}</span>
+            <input
+              type="text"
+              value={option.label}
+              onChange={(event) => onChange(index, event.target.value)}
+              maxLength={80}
+              placeholder="Enter a clear reason"
+              disabled={disabled}
+              aria-label={`${title} item ${index + 1}`}
+            />
+            <div className="attendance-reason-row-actions">
+              <button
+                type="button"
+                onClick={() => onMove(index, index - 1)}
+                disabled={disabled || index === 0}
+                title="Move reason up"
+                aria-label={`Move ${option.label || `item ${index + 1}`} up`}
+              >
+                <ArrowUp size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onMove(index, index + 1)}
+                disabled={disabled || index === options.length - 1}
+                title="Move reason down"
+                aria-label={`Move ${option.label || `item ${index + 1}`} down`}
+              >
+                <ArrowDown size={15} />
+              </button>
+              <button
+                type="button"
+                className="attendance-reason-delete"
+                onClick={() => onRemove(index)}
+                disabled={disabled || options.length <= 1}
+                title="Remove reason"
+                aria-label={`Remove ${option.label || `item ${index + 1}`}`}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+        ))}
+
+        <div className="attendance-reason-edit-row is-locked">
+          <span className="attendance-reason-number">
+            <Lock size={14} />
+          </span>
+          <input type="text" value="Other" disabled aria-label="Other reason" />
+          <span className="attendance-reason-locked-label">Fixed</span>
+        </div>
+      </div>
+
+      <div className="attendance-reason-list-footer">
+        <span>{options.length} editable reasons + Other</span>
+        <button
+          type="button"
+          onClick={onAdd}
+          disabled={disabled || options.length >= MAX_ATTENDANCE_REASON_OPTIONS}
+        >
+          <Plus size={16} /> Add Reason
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function Settings({ user }) {
   const fileInputRef = useRef(null);
   const previewUrlRef = useRef('');
@@ -146,6 +394,22 @@ export default function Settings({ user }) {
   const [platformMessage, setPlatformMessage] = useState('');
   const [platformError, setPlatformError] = useState('');
 
+  const [lateReasons, setLateReasons] = useState(() =>
+    copyAttendanceReasons(DEFAULT_LATE_REASON_OPTIONS),
+  );
+  const [earlyCheckoutReasons, setEarlyCheckoutReasons] = useState(() =>
+    copyAttendanceReasons(DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS),
+  );
+  const [canManageAttendanceReasons, setCanManageAttendanceReasons] =
+    useState(false);
+  const [attendanceReasonSource, setAttendanceReasonSource] = useState('default');
+  const [attendanceReasonUpdatedAt, setAttendanceReasonUpdatedAt] = useState('');
+  const [attendanceReasonUpdatedBy, setAttendanceReasonUpdatedBy] = useState('');
+  const [attendanceReasonsLoading, setAttendanceReasonsLoading] = useState(true);
+  const [attendanceReasonsSaving, setAttendanceReasonsSaving] = useState(false);
+  const [attendanceReasonMessage, setAttendanceReasonMessage] = useState('');
+  const [attendanceReasonError, setAttendanceReasonError] = useState('');
+
   const userRoles = useMemo(() => {
     const normalizedRoles = [
       ...normalizeRoleList(user?.roles),
@@ -159,6 +423,13 @@ export default function Settings({ user }) {
 
   const isPlatformSuperadmin =
     Boolean(user?.is_platform_superadmin) || userRoles.includes('super_admin');
+  const hasAttendanceReasonManagerRole =
+    isPlatformSuperadmin ||
+    userRoles.some((role) => ATTENDANCE_REASON_MANAGER_ROLES.has(role));
+  const canEditAttendanceReasons =
+    canManageAttendanceReasons && hasAttendanceReasonManagerRole;
+  const attendanceReasonsBusy =
+    attendanceReasonsLoading || attendanceReasonsSaving;
 
   const savedLogoUrl = useMemo(
     () => normalizeProfilePhotoUrl(branding.logo),
@@ -257,8 +528,47 @@ export default function Settings({ user }) {
     }
   }
 
+  async function loadAttendanceReasonSettings({ silent = false } = {}) {
+    if (!silent) {
+      setAttendanceReasonsLoading(true);
+      setAttendanceReasonMessage('');
+    }
+
+    setAttendanceReasonError('');
+
+    try {
+      const data = await api('/attendance/reason-settings');
+
+      setLateReasons(
+        editableAttendanceReasons(
+          data?.late_reasons,
+          DEFAULT_LATE_REASON_OPTIONS,
+        ),
+      );
+      setEarlyCheckoutReasons(
+        editableAttendanceReasons(
+          data?.early_checkout_reasons,
+          DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS,
+        ),
+      );
+      setCanManageAttendanceReasons(Boolean(data?.can_manage));
+      setAttendanceReasonSource(safeText(data?.source, 'default'));
+      setAttendanceReasonUpdatedAt(safeText(data?.updated_at));
+      setAttendanceReasonUpdatedBy(safeText(data?.updated_by_name));
+    } catch (requestError) {
+      setCanManageAttendanceReasons(false);
+      setAttendanceReasonError(
+        requestError?.message ||
+          'Unable to load attendance reasons. Please refresh and try again.',
+      );
+    } finally {
+      setAttendanceReasonsLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadBranding();
+    loadAttendanceReasonSettings();
 
     if (isPlatformSuperadmin) {
       loadPlatformBranding();
@@ -278,6 +588,145 @@ export default function Settings({ user }) {
       }
     };
   }, [isPlatformSuperadmin]);
+
+  function updateAttendanceReason(setter, index, value) {
+    setter((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, label: value } : item,
+      ),
+    );
+    setAttendanceReasonMessage('');
+    setAttendanceReasonError('');
+  }
+
+  function addAttendanceReason(setter) {
+    setter((current) => {
+      if (current.length >= MAX_ATTENDANCE_REASON_OPTIONS) {
+        return current;
+      }
+
+      return [...current, { code: '', label: '' }];
+    });
+    setAttendanceReasonMessage('');
+    setAttendanceReasonError('');
+  }
+
+  function removeAttendanceReason(setter, index) {
+    setter((current) => {
+      if (current.length <= 1) {
+        return current;
+      }
+
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+    setAttendanceReasonMessage('');
+    setAttendanceReasonError('');
+  }
+
+  function moveAttendanceReason(setter, fromIndex, toIndex) {
+    setter((current) => {
+      if (
+        fromIndex < 0 ||
+        fromIndex >= current.length ||
+        toIndex < 0 ||
+        toIndex >= current.length
+      ) {
+        return current;
+      }
+
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setAttendanceReasonMessage('');
+    setAttendanceReasonError('');
+  }
+
+  function restoreDefaultAttendanceReasons() {
+    setLateReasons(copyAttendanceReasons(DEFAULT_LATE_REASON_OPTIONS));
+    setEarlyCheckoutReasons(
+      copyAttendanceReasons(DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS),
+    );
+    setAttendanceReasonError('');
+    setAttendanceReasonMessage(
+      'Default reasons restored in the editor. Select Save Attendance Reasons to apply them.',
+    );
+  }
+
+  async function saveAttendanceReasons(event) {
+    event.preventDefault();
+
+    if (!canEditAttendanceReasons) {
+      setAttendanceReasonError(
+        'Only tenant HR/Admin can change attendance reasons.',
+      );
+      return;
+    }
+
+    const normalizedLateReasons = validateAttendanceReasonOptions(
+      lateReasons,
+      'Late check-in reasons',
+    );
+
+    if (normalizedLateReasons.error) {
+      setAttendanceReasonError(normalizedLateReasons.error);
+      setAttendanceReasonMessage('');
+      return;
+    }
+
+    const normalizedEarlyReasons = validateAttendanceReasonOptions(
+      earlyCheckoutReasons,
+      'Early checkout reasons',
+    );
+
+    if (normalizedEarlyReasons.error) {
+      setAttendanceReasonError(normalizedEarlyReasons.error);
+      setAttendanceReasonMessage('');
+      return;
+    }
+
+    setAttendanceReasonsSaving(true);
+    setAttendanceReasonMessage('');
+    setAttendanceReasonError('');
+
+    try {
+      const data = await api('/attendance/reason-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          late_reasons: normalizedLateReasons.values,
+          early_checkout_reasons: normalizedEarlyReasons.values,
+        }),
+      });
+
+      setLateReasons(
+        editableAttendanceReasons(
+          data?.late_reasons,
+          DEFAULT_LATE_REASON_OPTIONS,
+        ),
+      );
+      setEarlyCheckoutReasons(
+        editableAttendanceReasons(
+          data?.early_checkout_reasons,
+          DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS,
+        ),
+      );
+      setCanManageAttendanceReasons(Boolean(data?.can_manage));
+      setAttendanceReasonSource(safeText(data?.source, 'tenant'));
+      setAttendanceReasonUpdatedAt(safeText(data?.updated_at));
+      setAttendanceReasonUpdatedBy(safeText(data?.updated_by_name));
+      setAttendanceReasonMessage(
+        data?.message || 'Attendance reasons updated successfully.',
+      );
+    } catch (requestError) {
+      setAttendanceReasonError(
+        requestError?.message ||
+          'Unable to save attendance reasons. Please try again.',
+      );
+    } finally {
+      setAttendanceReasonsSaving(false);
+    }
+  }
 
   function handleFileChange(event) {
     const file = event.target.files?.[0];
@@ -922,6 +1371,391 @@ export default function Settings({ user }) {
           gap: 9px;
         }
 
+        .attendance-settings-panel {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(22, 101, 52, .22);
+          border-radius: 28px;
+          background:
+            radial-gradient(circle at 4% 0%, rgba(34, 197, 94, .15), transparent 30%),
+            radial-gradient(circle at 96% 4%, rgba(14, 165, 233, .11), transparent 28%),
+            linear-gradient(145deg, #ffffff 0%, #f6fbf8 100%);
+          box-shadow: 0 22px 55px rgba(15, 23, 42, .09);
+          padding: clamp(20px, 3vw, 32px);
+        }
+
+        .attendance-settings-panel::after {
+          content: '';
+          position: absolute;
+          width: 230px;
+          height: 230px;
+          right: -125px;
+          bottom: -150px;
+          border-radius: 50%;
+          background: rgba(34, 197, 94, .07);
+          pointer-events: none;
+        }
+
+        .attendance-settings-heading {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          margin-bottom: 20px;
+        }
+
+        .attendance-settings-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
+          color: #15803d;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .11em;
+          text-transform: uppercase;
+        }
+
+        .attendance-settings-heading h1 {
+          margin: 0;
+          color: #0f172a;
+          font-size: clamp(25px, 3vw, 34px);
+          line-height: 1.1;
+        }
+
+        .attendance-settings-heading p {
+          max-width: 780px;
+          margin: 10px 0 0;
+          color: #64748b;
+          line-height: 1.65;
+        }
+
+        .attendance-settings-refresh {
+          width: 42px;
+          height: 42px;
+          flex: 0 0 42px;
+          display: grid;
+          place-items: center;
+          border: 1px solid #d1e7d7;
+          border-radius: 14px;
+          background: rgba(255, 255, 255, .92);
+          color: #15803d;
+          cursor: pointer;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, .07);
+        }
+
+        .attendance-settings-refresh:disabled {
+          cursor: not-allowed;
+          opacity: .55;
+        }
+
+        .attendance-settings-form {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          gap: 18px;
+        }
+
+        .attendance-settings-meta {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          flex-wrap: wrap;
+          border: 1px solid #dcfce7;
+          border-radius: 17px;
+          background: rgba(240, 253, 244, .84);
+          padding: 12px 14px;
+          color: #166534;
+          font-size: 13px;
+          font-weight: 750;
+          line-height: 1.5;
+        }
+
+        .attendance-settings-source {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          border-radius: 999px;
+          background: #dcfce7;
+          padding: 6px 10px;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: .04em;
+          text-transform: uppercase;
+        }
+
+        .attendance-reason-editor-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+          align-items: start;
+        }
+
+        .attendance-reason-list-card {
+          min-width: 0;
+          display: grid;
+          gap: 15px;
+          border: 1px solid rgba(203, 213, 225, .82);
+          border-radius: 22px;
+          background: rgba(255, 255, 255, .92);
+          padding: 18px;
+          box-shadow: 0 15px 34px rgba(15, 23, 42, .06);
+        }
+
+        .attendance-reason-list-heading {
+          display: grid;
+          grid-template-columns: 44px minmax(0, 1fr);
+          gap: 12px;
+          align-items: start;
+        }
+
+        .attendance-reason-list-icon {
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          border-radius: 15px;
+          background: #dcfce7;
+          color: #15803d;
+        }
+
+        .attendance-reason-list-heading h3 {
+          margin: 1px 0 0;
+          color: #0f172a;
+          font-size: 18px;
+        }
+
+        .attendance-reason-list-heading p {
+          margin: 5px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .attendance-reason-list {
+          display: grid;
+          gap: 9px;
+        }
+
+        .attendance-reason-edit-row {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: 30px minmax(0, 1fr) auto;
+          gap: 8px;
+          align-items: center;
+        }
+
+        .attendance-reason-number {
+          width: 30px;
+          height: 30px;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+          background: #f1f5f9;
+          color: #475569;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .attendance-reason-edit-row input {
+          width: 100%;
+          min-width: 0;
+          min-height: 42px;
+          border: 1px solid #cbd5e1;
+          border-radius: 12px;
+          background: #ffffff;
+          padding: 9px 11px;
+          color: #0f172a;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 700;
+          outline: none;
+        }
+
+        .attendance-reason-edit-row input:focus {
+          border-color: #22c55e;
+          box-shadow: 0 0 0 4px rgba(34, 197, 94, .11);
+        }
+
+        .attendance-reason-edit-row input:disabled {
+          cursor: not-allowed;
+          background: #f8fafc;
+          color: #64748b;
+        }
+
+        .attendance-reason-row-actions {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .attendance-reason-row-actions button {
+          width: 32px;
+          height: 32px;
+          display: grid;
+          place-items: center;
+          border: 1px solid #dbe3eb;
+          border-radius: 10px;
+          background: #ffffff;
+          color: #475569;
+          cursor: pointer;
+        }
+
+        .attendance-reason-row-actions button:hover:not(:disabled) {
+          border-color: #86efac;
+          color: #15803d;
+        }
+
+        .attendance-reason-row-actions .attendance-reason-delete {
+          border-color: #fecaca;
+          background: #fff1f2;
+          color: #be123c;
+        }
+
+        .attendance-reason-row-actions button:disabled {
+          cursor: not-allowed;
+          opacity: .38;
+        }
+
+        .attendance-reason-edit-row.is-locked {
+          border-top: 1px dashed #cbd5e1;
+          margin-top: 3px;
+          padding-top: 11px;
+        }
+
+        .attendance-reason-edit-row.is-locked .attendance-reason-number {
+          background: #e0f2fe;
+          color: #0369a1;
+        }
+
+        .attendance-reason-locked-label {
+          border: 1px solid #bae6fd;
+          border-radius: 999px;
+          background: #f0f9ff;
+          padding: 5px 9px;
+          color: #0369a1;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .attendance-reason-list-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          color: #64748b;
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .attendance-reason-list-footer button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          border: 1px solid #bbf7d0;
+          border-radius: 12px;
+          background: #f0fdf4;
+          padding: 8px 11px;
+          color: #166534;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .attendance-reason-list-footer button:disabled {
+          cursor: not-allowed;
+          opacity: .5;
+        }
+
+        .attendance-settings-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .attendance-settings-actions button {
+          min-height: 43px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border-radius: 14px;
+          padding: 10px 16px;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .attendance-reasons-reset {
+          border: 1px solid #cbd5e1;
+          background: #ffffff;
+          color: #475569;
+        }
+
+        .attendance-reasons-save {
+          border: 1px solid #15803d;
+          background: linear-gradient(135deg, #15803d, #22c55e);
+          color: #ffffff;
+          box-shadow: 0 12px 24px rgba(21, 128, 61, .22);
+        }
+
+        .attendance-settings-actions button:disabled {
+          cursor: not-allowed;
+          opacity: .55;
+          box-shadow: none;
+        }
+
+        .attendance-reason-message,
+        .attendance-reason-permission {
+          display: flex;
+          align-items: flex-start;
+          gap: 9px;
+          border-radius: 14px;
+          padding: 12px 14px;
+          font-size: 14px;
+          font-weight: 700;
+          line-height: 1.5;
+        }
+
+        .attendance-reason-message.success {
+          border: 1px solid #bbf7d0;
+          background: #f0fdf4;
+          color: #166534;
+        }
+
+        .attendance-reason-message.error {
+          border: 1px solid #fecaca;
+          background: #fff1f2;
+          color: #b91c1c;
+        }
+
+        .attendance-reason-permission {
+          border: 1px solid #dbeafe;
+          background: #eff6ff;
+          color: #1e40af;
+        }
+
+        .attendance-settings-loading {
+          position: relative;
+          z-index: 1;
+          min-height: 240px;
+          display: grid;
+          place-items: center;
+          color: #64748b;
+          font-weight: 800;
+        }
+
+        .attendance-settings-loading span {
+          display: inline-flex;
+          align-items: center;
+          gap: 9px;
+        }
+
         .tenant-branding-panel {
           position: relative;
           overflow: hidden;
@@ -1276,21 +2110,43 @@ export default function Settings({ user }) {
 
         @media (max-width: 880px) {
           .platform-branding-layout,
-          .tenant-branding-layout {
+          .tenant-branding-layout,
+          .attendance-reason-editor-grid {
             grid-template-columns: 1fr;
           }
         }
 
         @media (max-width: 560px) {
           .platform-branding-panel,
-          .tenant-branding-panel {
+          .tenant-branding-panel,
+          .attendance-settings-panel {
             border-radius: 22px;
             padding: 18px;
           }
 
           .platform-branding-heading,
-          .tenant-branding-heading {
+          .tenant-branding-heading,
+          .attendance-settings-heading {
             align-items: center;
+          }
+
+          .attendance-reason-list-card {
+            border-radius: 18px;
+            padding: 15px;
+          }
+
+          .attendance-reason-edit-row {
+            grid-template-columns: 28px minmax(0, 1fr);
+          }
+
+          .attendance-reason-row-actions,
+          .attendance-reason-locked-label {
+            grid-column: 2;
+            justify-content: flex-end;
+          }
+
+          .attendance-settings-actions button {
+            flex: 1 1 100%;
           }
 
           .platform-brand-preview,
@@ -1552,6 +2408,159 @@ export default function Settings({ user }) {
         </section>
 
       )}
+
+      <section className="attendance-settings-panel">
+        <div className="attendance-settings-heading">
+          <div>
+            <span className="attendance-settings-kicker">
+              <Clock size={15} /> Attendance Rules
+            </span>
+            <h1>Late and Early Checkout Reasons</h1>
+            <p>
+              Manage the dropdown reasons employees see for late check-in after
+              09:50 AM and early checkout before 06:00 PM. These settings apply
+              only to {branding.companyName}.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="attendance-settings-refresh"
+            onClick={() => loadAttendanceReasonSettings()}
+            disabled={attendanceReasonsBusy}
+            title="Refresh attendance reasons"
+            aria-label="Refresh attendance reasons"
+          >
+            <RefreshCw
+              size={18}
+              className={attendanceReasonsLoading ? 'tenant-brand-spin' : ''}
+            />
+          </button>
+        </div>
+
+        {attendanceReasonsLoading ? (
+          <div className="attendance-settings-loading">
+            <span>
+              <LoaderCircle size={21} className="tenant-brand-spin" />
+              Loading tenant attendance reasons...
+            </span>
+          </div>
+        ) : (
+          <form className="attendance-settings-form" onSubmit={saveAttendanceReasons}>
+            <div className="attendance-settings-meta">
+              <span>
+                Employees receive these lists automatically from their tenant
+                attendance settings.
+                {attendanceReasonUpdatedAt && (
+                  <>
+                    {' '}Last updated {formatSettingsTimestamp(attendanceReasonUpdatedAt)}
+                    {attendanceReasonUpdatedBy
+                      ? ` by ${attendanceReasonUpdatedBy}`
+                      : ''}.
+                  </>
+                )}
+              </span>
+              <span className="attendance-settings-source">
+                <CheckCircle2 size={14} />
+                {attendanceReasonSource === 'tenant'
+                  ? 'Tenant customised'
+                  : 'Using defaults'}
+              </span>
+            </div>
+
+            <div className="attendance-reason-editor-grid">
+              <AttendanceReasonListEditor
+                title="Late Check-in Reasons"
+                description="Displayed when an employee checks in at or after 09:50 AM."
+                icon={LogIn}
+                options={lateReasons}
+                disabled={!canEditAttendanceReasons || attendanceReasonsBusy}
+                onAdd={() => addAttendanceReason(setLateReasons)}
+                onChange={(index, value) =>
+                  updateAttendanceReason(setLateReasons, index, value)
+                }
+                onMove={(fromIndex, toIndex) =>
+                  moveAttendanceReason(setLateReasons, fromIndex, toIndex)
+                }
+                onRemove={(index) =>
+                  removeAttendanceReason(setLateReasons, index)
+                }
+              />
+
+              <AttendanceReasonListEditor
+                title="Early Checkout Reasons"
+                description="Displayed when an employee checks out before 06:00 PM."
+                icon={LogOut}
+                options={earlyCheckoutReasons}
+                disabled={!canEditAttendanceReasons || attendanceReasonsBusy}
+                onAdd={() => addAttendanceReason(setEarlyCheckoutReasons)}
+                onChange={(index, value) =>
+                  updateAttendanceReason(setEarlyCheckoutReasons, index, value)
+                }
+                onMove={(fromIndex, toIndex) =>
+                  moveAttendanceReason(
+                    setEarlyCheckoutReasons,
+                    fromIndex,
+                    toIndex,
+                  )
+                }
+                onRemove={(index) =>
+                  removeAttendanceReason(setEarlyCheckoutReasons, index)
+                }
+              />
+            </div>
+
+            {!canEditAttendanceReasons && (
+              <div className="attendance-reason-permission">
+                <ShieldCheck size={19} />
+                Only the tenant HR/Admin can add, rename, reorder, remove or save
+                attendance reasons. Other is fixed because employees must write a
+                complete explanation when they select it.
+              </div>
+            )}
+
+            {attendanceReasonMessage && (
+              <div className="attendance-reason-message success">
+                <CheckCircle2 size={18} />
+                <span>{attendanceReasonMessage}</span>
+              </div>
+            )}
+
+            {attendanceReasonError && (
+              <div className="attendance-reason-message error">
+                <span>{attendanceReasonError}</span>
+              </div>
+            )}
+
+            {canEditAttendanceReasons && (
+              <div className="attendance-settings-actions">
+                <button
+                  type="button"
+                  className="attendance-reasons-reset"
+                  onClick={restoreDefaultAttendanceReasons}
+                  disabled={attendanceReasonsBusy}
+                >
+                  <RotateCcw size={17} /> Restore Defaults
+                </button>
+                <button
+                  type="submit"
+                  className="attendance-reasons-save"
+                  disabled={attendanceReasonsBusy}
+                >
+                  {attendanceReasonsSaving ? (
+                    <LoaderCircle size={17} className="tenant-brand-spin" />
+                  ) : (
+                    <Save size={17} />
+                  )}
+                  {attendanceReasonsSaving
+                    ? 'Saving Attendance Reasons...'
+                    : 'Save Attendance Reasons'}
+                </button>
+              </div>
+            )}
+          </form>
+        )}
+      </section>
 
       <section className="tenant-branding-panel">
         <div className="tenant-branding-heading">

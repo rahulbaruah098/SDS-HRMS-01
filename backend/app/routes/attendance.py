@@ -42,6 +42,33 @@ SUPPORTED_HOLIDAY_STATES = [
 
 ATTENDANCE_MODES = ["office", "wfh", "field"]
 
+ATTENDANCE_REASON_SETTING_GROUP = "attendance"
+ATTENDANCE_REASON_SETTING_KEY = "late_and_early_checkout_reasons"
+ATTENDANCE_OTHER_REASON_CODE = "other"
+ATTENDANCE_OTHER_REASON_MIN_LENGTH = 12
+ATTENDANCE_OTHER_REASON_MAX_LENGTH = 300
+ATTENDANCE_REASON_OPTION_LIMIT = 25
+
+DEFAULT_LATE_REASON_OPTIONS = (
+    {"code": "traffic_congestion", "label": "Traffic congestion"},
+    {"code": "public_transport_delay", "label": "Public transport delay"},
+    {"code": "vehicle_breakdown", "label": "Vehicle breakdown"},
+    {"code": "bad_weather", "label": "Bad weather or heavy rain"},
+    {"code": "medical_issue", "label": "Medical or health issue"},
+    {"code": "family_emergency", "label": "Family emergency"},
+    {"code": "official_duty", "label": "Official work or field duty"},
+)
+
+DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS = (
+    {"code": "medical_appointment", "label": "Medical appointment"},
+    {"code": "health_issue", "label": "Health issue"},
+    {"code": "family_emergency", "label": "Family emergency"},
+    {"code": "personal_emergency", "label": "Personal emergency"},
+    {"code": "official_duty", "label": "Official work or field visit"},
+    {"code": "transport_issue", "label": "Transport issue"},
+    {"code": "manager_approval", "label": "Approved by manager or HR"},
+)
+
 ATTENDANCE_MANAGER_ROLES = (
     "super_admin",
     "admin",
@@ -54,6 +81,14 @@ ATTENDANCE_MANAGER_ROLES = (
     "reporting_officer",
     "ro",
     "manager",
+)
+
+ATTENDANCE_REASON_MANAGER_ROLES = (
+    "super_admin",
+    "admin",
+    "hr_admin",
+    "hr_manager",
+    "hr",
 )
 
 HOLIDAY_MANAGER_ROLES = (
@@ -440,6 +475,367 @@ def current_employee_state(db):
 def has_role(*allowed_roles):
     roles = current_user_roles()
     return bool(roles.intersection(set(allowed_roles)))
+
+
+def normalize_attendance_reason_code(value):
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        normalize_text(value).lower(),
+    ).strip("_")
+
+
+def copy_reason_options(options):
+    return [
+        {
+            "code": normalize_attendance_reason_code(option.get("code")),
+            "label": normalize_text(option.get("label")),
+        }
+        for option in options
+    ]
+
+
+def normalize_reason_option_list(values, field_label):
+    if not isinstance(values, list):
+        return None, f"{field_label} must be a list"
+
+    if not values:
+        return None, f"Add at least one {field_label.lower()}"
+
+    if len(values) > ATTENDANCE_REASON_OPTION_LIMIT:
+        return None, (
+            f"A maximum of {ATTENDANCE_REASON_OPTION_LIMIT} "
+            f"{field_label.lower()} can be saved"
+        )
+
+    normalized = []
+    used_codes = set()
+    used_labels = set()
+
+    for index, item in enumerate(values):
+        if isinstance(item, str):
+            item = {"label": item}
+
+        if not isinstance(item, dict):
+            return None, f"{field_label} item {index + 1} is invalid"
+
+        label = " ".join(normalize_text(item.get("label")).split())
+
+        if not label:
+            return None, f"{field_label} item {index + 1} cannot be blank"
+
+        if len(label) < 3 or len(label) > 80:
+            return None, (
+                f"{field_label} item {index + 1} must contain "
+                "between 3 and 80 characters"
+            )
+
+        if sum(1 for character in label if character.isalpha()) < 2:
+            return None, (
+                f"{field_label} item {index + 1} must contain a readable reason"
+            )
+
+        normalized_label = label.casefold()
+
+        if normalized_label == "other":
+            return None, (
+                "Other is added automatically and must not be added to the list"
+            )
+
+        if normalized_label in used_labels:
+            return None, f"Duplicate {field_label.lower()} are not allowed"
+
+        code = normalize_attendance_reason_code(item.get("code") or label)
+
+        if not code or code == ATTENDANCE_OTHER_REASON_CODE:
+            code = f"reason_{index + 1}"
+
+        base_code = code
+        suffix = 2
+
+        while code in used_codes:
+            code = f"{base_code}_{suffix}"
+            suffix += 1
+
+        used_codes.add(code)
+        used_labels.add(normalized_label)
+        normalized.append({"code": code, "label": label})
+
+    return normalized, ""
+
+
+def attendance_reason_settings_id(tenant_id):
+    return f"attendance-reasons:{normalize_text(tenant_id)}"
+
+
+def attendance_reason_settings_for_tenant(db, tenant_id):
+    tenant_id = normalize_text(tenant_id)
+    settings_id = attendance_reason_settings_id(tenant_id)
+    stored = db.system_settings.find_one({
+        "_id": settings_id,
+        "tenant_id": tenant_id,
+        "setting_group": ATTENDANCE_REASON_SETTING_GROUP,
+        "setting_key": ATTENDANCE_REASON_SETTING_KEY,
+        "is_deleted": {"$ne": True},
+    })
+
+    default_late = copy_reason_options(DEFAULT_LATE_REASON_OPTIONS)
+    default_early = copy_reason_options(DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS)
+
+    late_reasons = default_late
+    early_checkout_reasons = default_early
+
+    if stored:
+        stored_late, late_error = normalize_reason_option_list(
+            stored.get("late_reasons"),
+            "Late check-in reasons",
+        )
+        stored_early, early_error = normalize_reason_option_list(
+            stored.get("early_checkout_reasons"),
+            "Early checkout reasons",
+        )
+
+        if not late_error:
+            late_reasons = stored_late
+
+        if not early_error:
+            early_checkout_reasons = stored_early
+
+    other_option = {
+        "code": ATTENDANCE_OTHER_REASON_CODE,
+        "label": "Other",
+        "requires_details": True,
+    }
+
+    return {
+        "tenant_id": tenant_id,
+        "source": "tenant" if stored else "default",
+        "late_reasons": [*late_reasons, dict(other_option)],
+        "early_checkout_reasons": [
+            *early_checkout_reasons,
+            dict(other_option),
+        ],
+        "other_reason_min_length": ATTENDANCE_OTHER_REASON_MIN_LENGTH,
+        "other_reason_max_length": ATTENDANCE_OTHER_REASON_MAX_LENGTH,
+        "can_manage": has_role(*ATTENDANCE_REASON_MANAGER_ROLES),
+        "updated_at": stored.get("updated_at") if stored else None,
+        "updated_by_name": stored.get("updated_by_name", "") if stored else "",
+    }
+
+
+OBVIOUS_REASON_PLACEHOLDERS = {
+    "abc",
+    "dummy",
+    "gibberish",
+    "hello",
+    "ipsum",
+    "lorem",
+    "na",
+    "nil",
+    "none",
+    "null",
+    "random",
+    "reason",
+    "sample",
+    "something",
+    "test",
+    "testing",
+    "unknown",
+    "xyz",
+}
+
+OBVIOUS_KEYBOARD_SEQUENCES = (
+    "qwerty",
+    "qwer",
+    "asdf",
+    "zxcv",
+    "hjkl",
+    "dfgh",
+    "abcdef",
+    "123456",
+)
+
+
+def meaningful_other_reason(value, reason_label):
+    reason = " ".join(normalize_text(value).split())
+    validation_message = (
+        f"Please enter a meaningful {reason_label} using at least "
+        f"{ATTENDANCE_OTHER_REASON_MIN_LENGTH} characters and 2 words. "
+        "A single dot, symbols, placeholder text, and gibberish are not accepted."
+    )
+
+    if (
+        len(reason) < ATTENDANCE_OTHER_REASON_MIN_LENGTH
+        or len(reason) > ATTENDANCE_OTHER_REASON_MAX_LENGTH
+    ):
+        return "", validation_message
+
+    words = re.findall(r"[^\W\d_]{2,}", reason.casefold(), flags=re.UNICODE)
+    letters = [character.casefold() for character in reason if character.isalpha()]
+    compact = "".join(
+        character.casefold()
+        for character in reason
+        if character.isalnum()
+    )
+
+    if len(words) < 2 or len(letters) < 8 or len(set(letters)) < 4:
+        return "", validation_message
+
+    if len(set(words)) == 1:
+        return "", validation_message
+
+    if all(word in OBVIOUS_REASON_PLACEHOLDERS for word in words):
+        return "", validation_message
+
+    if any(sequence in compact for sequence in OBVIOUS_KEYBOARD_SEQUENCES):
+        return "", validation_message
+
+    if all(
+        len(word) >= 4 and len(set(word)) <= 2
+        for word in words
+    ):
+        return "", validation_message
+
+    return reason, ""
+
+
+def resolve_attendance_reason(data, prefix, settings, required=False):
+    code = normalize_attendance_reason_code(
+        data.get(f"{prefix}_reason_code")
+        or data.get(f"{prefix}_reason_id")
+    )
+    raw_reason = normalize_text(data.get(f"{prefix}_reason"))
+    detail = normalize_text(
+        data.get(f"{prefix}_reason_detail")
+        or data.get(f"{prefix}_reason_details")
+        or data.get(f"{prefix}_other_reason")
+    )
+
+    if prefix == "early_checkout" and not raw_reason:
+        raw_reason = normalize_text(data.get("reason") or data.get("remarks"))
+
+    field_key = (
+        "late_reasons"
+        if prefix == "late"
+        else "early_checkout_reasons"
+    )
+    reason_label = (
+        "late check-in reason"
+        if prefix == "late"
+        else "early checkout reason"
+    )
+    required_message = (
+        "Late reason is required from 09:50 AM onwards"
+        if prefix == "late"
+        else "Early checkout reason is required before 06:00 PM"
+    )
+    invalid_selection_message = (
+        f"Select a valid {reason_label} from your company's current list"
+    )
+
+    options = settings.get(field_key) or []
+    options_by_code = {
+        normalize_attendance_reason_code(option.get("code")): option
+        for option in options
+        if normalize_attendance_reason_code(option.get("code"))
+    }
+    options_by_label = {
+        normalize_text(option.get("label")).casefold(): option
+        for option in options
+        if normalize_text(option.get("label"))
+    }
+
+    if code:
+        selected = options_by_code.get(code)
+
+        if not selected:
+            return None, invalid_selection_message
+
+        if code == ATTENDANCE_OTHER_REASON_CODE:
+            custom_reason = detail
+
+            if not custom_reason and raw_reason.casefold() != "other":
+                custom_reason = raw_reason
+
+            custom_reason, validation_error = meaningful_other_reason(
+                custom_reason,
+                reason_label,
+            )
+
+            if validation_error:
+                return None, validation_error
+
+            return {
+                "code": ATTENDANCE_OTHER_REASON_CODE,
+                "label": "Other",
+                "detail": custom_reason,
+                "value": custom_reason,
+            }, ""
+
+        label = normalize_text(selected.get("label"))
+        return {
+            "code": code,
+            "label": label,
+            "detail": "",
+            "value": label,
+        }, ""
+
+    if raw_reason:
+        selected = options_by_label.get(raw_reason.casefold())
+
+        if selected:
+            selected_code = normalize_attendance_reason_code(selected.get("code"))
+
+            if selected_code != ATTENDANCE_OTHER_REASON_CODE:
+                label = normalize_text(selected.get("label"))
+                return {
+                    "code": selected_code,
+                    "label": label,
+                    "detail": "",
+                    "value": label,
+                }, ""
+
+        custom_reason = detail or raw_reason
+        custom_reason, validation_error = meaningful_other_reason(
+            custom_reason,
+            reason_label,
+        )
+
+        if validation_error:
+            return None, validation_error
+
+        return {
+            "code": ATTENDANCE_OTHER_REASON_CODE,
+            "label": "Other",
+            "detail": custom_reason,
+            "value": custom_reason,
+        }, ""
+
+    if detail:
+        custom_reason, validation_error = meaningful_other_reason(
+            detail,
+            reason_label,
+        )
+
+        if validation_error:
+            return None, validation_error
+
+        return {
+            "code": ATTENDANCE_OTHER_REASON_CODE,
+            "label": "Other",
+            "detail": custom_reason,
+            "value": custom_reason,
+        }, ""
+
+    if required:
+        return None, required_message
+
+    return {
+        "code": "",
+        "label": "",
+        "detail": "",
+        "value": "",
+    }, ""
 
 
 def emp(db):
@@ -1445,6 +1841,88 @@ def can_decide_mode_request(db, request_doc):
     return False
 
 
+@attendance_bp.get("/reason-settings")
+@tenant_module_required("attendance")
+def get_attendance_reason_settings():
+    settings = attendance_reason_settings_for_tenant(
+        get_db(),
+        current_tenant_id(),
+    )
+    return jsonify(clean_doc(settings))
+
+
+@attendance_bp.put("/reason-settings")
+@roles_required(*ATTENDANCE_REASON_MANAGER_ROLES)
+@tenant_module_required("attendance")
+def update_attendance_reason_settings():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    tenant_id = normalize_text(current_tenant_id())
+
+    late_reasons, late_error = normalize_reason_option_list(
+        data.get("late_reasons"),
+        "Late check-in reasons",
+    )
+
+    if late_error:
+        return jsonify({"message": late_error}), 400
+
+    early_checkout_reasons, early_error = normalize_reason_option_list(
+        data.get("early_checkout_reasons"),
+        "Early checkout reasons",
+    )
+
+    if early_error:
+        return jsonify({"message": early_error}), 400
+
+    now = datetime.utcnow()
+    settings_id = attendance_reason_settings_id(tenant_id)
+    actor_id = normalize_text(g.current_user.get("_id") or g.current_user.get("id"))
+    actor_name = normalize_text(
+        g.current_user.get("name") or g.current_user.get("email")
+    )
+
+    db.system_settings.update_one(
+        {"_id": settings_id},
+        {
+            "$set": {
+                "tenant_id": tenant_id,
+                "setting_group": ATTENDANCE_REASON_SETTING_GROUP,
+                "setting_key": ATTENDANCE_REASON_SETTING_KEY,
+                "late_reasons": late_reasons,
+                "early_checkout_reasons": early_checkout_reasons,
+                "is_deleted": False,
+                "updated_at": now,
+                "updated_by": actor_id,
+                "updated_by_name": actor_name,
+            },
+            "$setOnInsert": {
+                "created_at": now,
+                "created_by": actor_id,
+                "created_by_name": actor_name,
+            },
+        },
+        upsert=True,
+    )
+
+    audit(
+        "update_attendance_reason_settings",
+        "system_settings",
+        settings_id,
+        {
+            "tenant_id": tenant_id,
+            "late_reason_count": len(late_reasons),
+            "early_checkout_reason_count": len(early_checkout_reasons),
+        },
+    )
+
+    settings = attendance_reason_settings_for_tenant(db, tenant_id)
+    return jsonify({
+        "message": "Attendance reasons updated successfully",
+        **clean_doc(settings),
+    })
+
+
 @attendance_bp.get("/status")
 @tenant_module_required("attendance")
 def attendance_status():
@@ -1513,6 +1991,9 @@ def attendance_status():
         "holiday_work_request": clean_doc(approved_holiday_request or pending_holiday_request),
         "holiday_work_approved": bool(approved_holiday_request),
         "holiday_check_in_blocked": bool(holiday_info.get("is_holiday") and not approved_holiday_request),
+        "reason_settings": clean_doc(
+            attendance_reason_settings_for_tenant(db, tenant_id)
+        ),
         "attendance": clean_doc(rec),
         "pending_mode_requests": clean_doc(pending_mode_requests),
         "compoffs": clean_doc(compoffs),
@@ -1539,7 +2020,6 @@ def check_in():
     client_attendance_id = offline_ctx["client_attendance_id"]
 
     mode = normalize_mode(data.get("mode") or "office")
-    late_reason = normalize_text(data.get("late_reason"))
     field_location = normalize_text(
         data.get("field_location")
         or data.get("field_place")
@@ -1598,11 +2078,18 @@ def check_in():
             }), 403
 
     is_late = now.time() >= LATE_CUTOFF and not holiday_info.get("is_holiday")
+    reason_settings = attendance_reason_settings_for_tenant(db, tenant_id)
+    late_reason_selection, late_reason_error = resolve_attendance_reason(
+        data,
+        "late",
+        reason_settings,
+        required=is_late,
+    )
 
-    if is_late and not late_reason:
-        return jsonify({
-            "message": "Late reason is required from 09:50 AM onwards"
-        }), 400
+    if late_reason_error:
+        return jsonify({"message": late_reason_error}), 400
+
+    late_reason = late_reason_selection["value"]
 
     old = db.attendance_logs.find_one({
         "tenant_id": tenant_id,
@@ -1672,7 +2159,13 @@ def check_in():
         "field_photo": field_photo,
         "field_photo_url": field_photo if isinstance(field_photo, str) else "",
         "late_reason": late_reason,
+        "late_reason_code": late_reason_selection["code"],
+        "late_reason_label": late_reason_selection["label"],
+        "late_reason_detail": late_reason_selection["detail"],
         "early_checkout_reason": "",
+        "early_checkout_reason_code": "",
+        "early_checkout_reason_label": "",
+        "early_checkout_reason_detail": "",
 
         "check_in_location": location,
         "check_out_location": None,
@@ -1708,6 +2201,8 @@ def check_in():
                 "note": f"{mode.upper()} check-in",
                 "location": location,
                 "field_location": field_location,
+                "late_reason": late_reason,
+                "late_reason_code": late_reason_selection["code"],
                 "created_offline": created_offline,
                 "offline_marked_at": offline_marked_at,
                 "synced_at": server_received_at if created_offline else None,
@@ -1749,6 +2244,7 @@ def check_in():
     audit("check_in", "attendance_logs", res.inserted_id, {
         "mode": mode,
         "late": is_late,
+        "late_reason_code": late_reason_selection["code"],
         "holiday_work": bool(holiday_info.get("is_holiday")),
         "created_offline": created_offline,
         "client_attendance_id": client_attendance_id,
@@ -1783,12 +2279,6 @@ def check_out():
     today_date = now.date()
     today = today_date.isoformat()
     tenant_id = e.get("tenant_id") or current_tenant_id()
-
-    early_checkout_reason = normalize_text(
-        data.get("early_checkout_reason")
-        or data.get("reason")
-        or data.get("remarks")
-    )
 
     location = extract_location(data)
 
@@ -1828,11 +2318,18 @@ def check_out():
 
     holiday_info = holiday_info_for_employee(db, e, today_date)
     is_early_checkout = now.time() < OFFICE_END_TIME and not holiday_info.get("is_holiday")
+    reason_settings = attendance_reason_settings_for_tenant(db, tenant_id)
+    early_reason_selection, early_reason_error = resolve_attendance_reason(
+        data,
+        "early_checkout",
+        reason_settings,
+        required=is_early_checkout,
+    )
 
-    if is_early_checkout and not early_checkout_reason:
-        return jsonify({
-            "message": "Early checkout reason is required before 06:00 PM"
-        }), 400
+    if early_reason_error:
+        return jsonify({"message": early_reason_error}), 400
+
+    early_checkout_reason = early_reason_selection["value"]
 
     set_data = {
         "check_out": now,
@@ -1843,6 +2340,9 @@ def check_out():
         ),
         "is_early_checkout": is_early_checkout,
         "early_checkout_reason": early_checkout_reason,
+        "early_checkout_reason_code": early_reason_selection["code"],
+        "early_checkout_reason_label": early_reason_selection["label"],
+        "early_checkout_reason_detail": early_reason_selection["detail"],
         "updated_at": server_received_at,
 
         "check_out_created_offline": created_offline,
@@ -1863,6 +2363,8 @@ def check_out():
                 "time": now,
                 "note": "Day closed",
                 "location": location,
+                "early_checkout_reason": early_checkout_reason,
+                "early_checkout_reason_code": early_reason_selection["code"],
                 "created_offline": created_offline,
                 "offline_marked_at": offline_marked_at,
                 "synced_at": server_received_at if created_offline else None,
@@ -1890,6 +2392,7 @@ def check_out():
 
     audit("check_out", "attendance_logs", rec["_id"], {
         "early_checkout": is_early_checkout,
+        "early_checkout_reason_code": early_reason_selection["code"],
         "holiday_work": bool(updated.get("is_holiday_work")) if updated else False,
         "created_offline": created_offline,
         "client_attendance_id": client_attendance_id,

@@ -10,6 +10,174 @@ import {
 import { useCustomAlert } from './CustomAlertProvider.jsx';
 
 const HOLD_DURATION = 1600;
+const OTHER_REASON_CODE = 'other';
+const DEFAULT_OTHER_REASON_MIN_LENGTH = 12;
+const DEFAULT_OTHER_REASON_MAX_LENGTH = 300;
+
+const DEFAULT_LATE_REASON_OPTIONS = [
+  { code: 'traffic_congestion', label: 'Traffic congestion' },
+  { code: 'public_transport_delay', label: 'Public transport delay' },
+  { code: 'vehicle_breakdown', label: 'Vehicle breakdown' },
+  { code: 'bad_weather', label: 'Bad weather or heavy rain' },
+  { code: 'medical_issue', label: 'Medical or health issue' },
+  { code: 'family_emergency', label: 'Family emergency' },
+  { code: 'official_duty', label: 'Official work or field duty' },
+  { code: OTHER_REASON_CODE, label: 'Other', requires_details: true },
+];
+
+const DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS = [
+  { code: 'medical_appointment', label: 'Medical appointment' },
+  { code: 'health_issue', label: 'Health issue' },
+  { code: 'family_emergency', label: 'Family emergency' },
+  { code: 'personal_emergency', label: 'Personal emergency' },
+  { code: 'official_duty', label: 'Official work or field visit' },
+  { code: 'transport_issue', label: 'Transport issue' },
+  { code: 'manager_approval', label: 'Approved by manager or HR' },
+  { code: OTHER_REASON_CODE, label: 'Other', requires_details: true },
+];
+
+const OBVIOUS_REASON_PLACEHOLDERS = new Set([
+  'abc',
+  'dummy',
+  'gibberish',
+  'hello',
+  'ipsum',
+  'lorem',
+  'na',
+  'nil',
+  'none',
+  'null',
+  'random',
+  'reason',
+  'sample',
+  'something',
+  'test',
+  'testing',
+  'unknown',
+  'xyz',
+]);
+
+const OBVIOUS_KEYBOARD_SEQUENCES = [
+  'qwerty',
+  'qwer',
+  'asdf',
+  'zxcv',
+  'hjkl',
+  'dfgh',
+  'abcdef',
+  '123456',
+];
+
+
+function normalizeReasonOptions(values, fallbackOptions) {
+  const source = Array.isArray(values) && values.length ? values : fallbackOptions;
+  const options = [];
+  const usedCodes = new Set();
+
+  source.forEach((item) => {
+    const code = String(item?.code || '').trim().toLowerCase();
+    const label = String(item?.label || '').trim();
+
+    if (!code || !label || usedCodes.has(code)) {
+      return;
+    }
+
+    usedCodes.add(code);
+    options.push({
+      code,
+      label,
+      requires_details:
+        code === OTHER_REASON_CODE || Boolean(item?.requires_details),
+    });
+  });
+
+  if (!usedCodes.has(OTHER_REASON_CODE)) {
+    options.push({
+      code: OTHER_REASON_CODE,
+      label: 'Other',
+      requires_details: true,
+    });
+  }
+
+  return options.length ? options : fallbackOptions;
+}
+
+function normalizedReasonLimits(reasonSettings = {}) {
+  const configuredMin = Number(reasonSettings.other_reason_min_length);
+  const configuredMax = Number(reasonSettings.other_reason_max_length);
+
+  const minLength = Number.isFinite(configuredMin) && configuredMin >= 1
+    ? Math.floor(configuredMin)
+    : DEFAULT_OTHER_REASON_MIN_LENGTH;
+  const maxLength = Number.isFinite(configuredMax) && configuredMax >= minLength
+    ? Math.floor(configuredMax)
+    : DEFAULT_OTHER_REASON_MAX_LENGTH;
+
+  return { minLength, maxLength };
+}
+
+function meaningfulOtherReasonError(
+  value,
+  reasonLabel,
+  minLength = DEFAULT_OTHER_REASON_MIN_LENGTH,
+  maxLength = DEFAULT_OTHER_REASON_MAX_LENGTH,
+) {
+  const reason = String(value || '').trim().replace(/\s+/g, ' ');
+  const validationMessage =
+    `Enter a meaningful ${reasonLabel} using at least ${minLength} characters ` +
+    'and 2 words. A single dot, symbols, placeholder text, and gibberish are not accepted.';
+
+  if (reason.length < minLength || reason.length > maxLength) {
+    return validationMessage;
+  }
+
+  const words = reason.toLocaleLowerCase().match(/\p{L}{2,}/gu) || [];
+  const letters = reason.toLocaleLowerCase().match(/\p{L}/gu) || [];
+  const compact = reason
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+
+  if (words.length < 2 || letters.length < 8 || new Set(letters).size < 4) {
+    return validationMessage;
+  }
+
+  if (new Set(words).size === 1) {
+    return validationMessage;
+  }
+
+  if (words.every((word) => OBVIOUS_REASON_PLACEHOLDERS.has(word))) {
+    return validationMessage;
+  }
+
+  if (OBVIOUS_KEYBOARD_SEQUENCES.some((sequence) => compact.includes(sequence))) {
+    return validationMessage;
+  }
+
+  if (
+    words.every(
+      (word) => word.length >= 4 && new Set(Array.from(word)).size <= 2,
+    )
+  ) {
+    return validationMessage;
+  }
+
+  return '';
+}
+
+function selectedReasonPayload(prefix, code, customReason, options) {
+  const selectedOption = options.find((option) => option.code === code);
+  const isOther = code === OTHER_REASON_CODE;
+
+  return {
+    [`${prefix}_reason_code`]: code || '',
+    [`${prefix}_reason`]: isOther
+      ? 'Other'
+      : String(selectedOption?.label || '').trim(),
+    [`${prefix}_reason_detail`]: isOther
+      ? String(customReason || '').trim().replace(/\s+/g, ' ')
+      : '',
+  };
+}
 
 
 function formatTodayLabel() {
@@ -241,8 +409,10 @@ export default function AttendanceWidget({ onSuccess }) {
   const [fieldLocation, setFieldLocation] = useState('');
   const [fieldPhotoFile, setFieldPhotoFile] = useState(null);
   const [fieldPhotoPreview, setFieldPhotoPreview] = useState('');
-  const [lateReason, setLateReason] = useState('');
-  const [earlyCheckoutReason, setEarlyCheckoutReason] = useState('');
+  const [lateReasonCode, setLateReasonCode] = useState('');
+  const [lateOtherReason, setLateOtherReason] = useState('');
+  const [earlyCheckoutReasonCode, setEarlyCheckoutReasonCode] = useState('');
+  const [earlyCheckoutOtherReason, setEarlyCheckoutOtherReason] = useState('');
 
   const [holidayRequestDate, setHolidayRequestDate] = useState(todayISO());
   const [holidayReason, setHolidayReason] = useState('');
@@ -264,6 +434,7 @@ export default function AttendanceWidget({ onSuccess }) {
   const holidayCheckInBlocked = Boolean(statusData?.holiday_check_in_blocked);
   const compOffs = statusData?.compoffs || [];
   const employee = statusData?.employee || statusData?.employee_summary || {};
+  const reasonSettings = statusData?.reason_settings || {};
 
   const checkedIn = Boolean(attendance?.check_in);
   const checkedOut = Boolean(attendance?.check_out);
@@ -272,6 +443,46 @@ export default function AttendanceWidget({ onSuccess }) {
 
   const todayLabel = useMemo(() => formatTodayLabel(), []);
   const availableCompOffCount = compOffs.filter((item) => item.status === 'available').length;
+  const lateReasonOptions = useMemo(
+    () => normalizeReasonOptions(
+      reasonSettings.late_reasons,
+      DEFAULT_LATE_REASON_OPTIONS,
+    ),
+    [reasonSettings.late_reasons],
+  );
+  const earlyCheckoutReasonOptions = useMemo(
+    () => normalizeReasonOptions(
+      reasonSettings.early_checkout_reasons,
+      DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS,
+    ),
+    [reasonSettings.early_checkout_reasons],
+  );
+  const { minLength: otherReasonMinLength, maxLength: otherReasonMaxLength } =
+    useMemo(
+      () => normalizedReasonLimits(reasonSettings),
+      [
+        reasonSettings.other_reason_min_length,
+        reasonSettings.other_reason_max_length,
+      ],
+    );
+
+  const lateOtherReasonError = lateReasonCode === OTHER_REASON_CODE
+    ? meaningfulOtherReasonError(
+      lateOtherReason,
+      'late check-in reason',
+      otherReasonMinLength,
+      otherReasonMaxLength,
+    )
+    : '';
+  const earlyCheckoutOtherReasonError =
+    earlyCheckoutReasonCode === OTHER_REASON_CODE
+      ? meaningfulOtherReasonError(
+        earlyCheckoutOtherReason,
+        'early checkout reason',
+        otherReasonMinLength,
+        otherReasonMaxLength,
+      )
+      : '';
 
   const approverText = useMemo(() => {
     const teamLeaderName = employee?.team_leader_name || statusData?.team_leader_name || '';
@@ -319,6 +530,28 @@ async function loadStatus() {
     loadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (
+      lateReasonCode &&
+      !lateReasonOptions.some((option) => option.code === lateReasonCode)
+    ) {
+      setLateReasonCode('');
+      setLateOtherReason('');
+    }
+  }, [lateReasonCode, lateReasonOptions]);
+
+  useEffect(() => {
+    if (
+      earlyCheckoutReasonCode &&
+      !earlyCheckoutReasonOptions.some(
+        (option) => option.code === earlyCheckoutReasonCode,
+      )
+    ) {
+      setEarlyCheckoutReasonCode('');
+      setEarlyCheckoutOtherReason('');
+    }
+  }, [earlyCheckoutReasonCode, earlyCheckoutReasonOptions]);
 
   async function refreshAfterSuccess() {
     await loadStatus();
@@ -401,12 +634,23 @@ async function submitAttendance(type) {
       return;
     }
 
-    if (lateNow && !lateReason.trim() && !holiday?.is_holiday) {
-      alerts.warning(
-        'Late reason is required from 09:50 AM onwards.',
-        'Late Check-in Reason Required',
+    if (lateNow && !holiday?.is_holiday) {
+      const selectedLateReason = lateReasonOptions.find(
+        (option) => option.code === lateReasonCode,
       );
-      return;
+
+      if (!selectedLateReason) {
+        alerts.warning(
+          'Select a late check-in reason from the dropdown.',
+          'Late Check-in Reason Required',
+        );
+        return;
+      }
+
+      if (lateReasonCode === OTHER_REASON_CODE && lateOtherReasonError) {
+        alerts.warning(lateOtherReasonError, 'Valid Late Reason Required');
+        return;
+      }
     }
   }
 
@@ -421,12 +665,29 @@ async function submitAttendance(type) {
       return;
     }
 
-    if (earlyCheckoutNow && !earlyCheckoutReason.trim() && !holiday?.is_holiday) {
-      alerts.warning(
-        'Early checkout reason is required before 06:00 PM.',
-        'Early Checkout Reason Required',
+    if (earlyCheckoutNow && !holiday?.is_holiday) {
+      const selectedEarlyCheckoutReason = earlyCheckoutReasonOptions.find(
+        (option) => option.code === earlyCheckoutReasonCode,
       );
-      return;
+
+      if (!selectedEarlyCheckoutReason) {
+        alerts.warning(
+          'Select an early checkout reason from the dropdown.',
+          'Early Checkout Reason Required',
+        );
+        return;
+      }
+
+      if (
+        earlyCheckoutReasonCode === OTHER_REASON_CODE &&
+        earlyCheckoutOtherReasonError
+      ) {
+        alerts.warning(
+          earlyCheckoutOtherReasonError,
+          'Valid Early Checkout Reason Required',
+        );
+        return;
+      }
     }
   }
 
@@ -440,7 +701,12 @@ async function submitAttendance(type) {
         mode,
         field_location: fieldLocation.trim(),
         field_photo_file: fieldPhotoFile,
-        late_reason: lateReason.trim(),
+        ...selectedReasonPayload(
+          'late',
+          lateReasonCode,
+          lateOtherReason,
+          lateReasonOptions,
+        ),
       });
 
       const data = await submitCheckIn(payload);
@@ -457,17 +723,24 @@ async function submitAttendance(type) {
       setFieldLocation('');
       setFieldPhotoFile(null);
       setFieldPhotoPreview('');
-      setLateReason('');
+      setLateReasonCode('');
+      setLateOtherReason('');
     } else {
       const payload = await buildAttendancePayload({
         ...savedGpsPayload(),
-        early_checkout_reason: earlyCheckoutReason.trim(),
+        ...selectedReasonPayload(
+          'early_checkout',
+          earlyCheckoutReasonCode,
+          earlyCheckoutOtherReason,
+          earlyCheckoutReasonOptions,
+        ),
       });
 
       const data = await submitCheckOut(payload);
 
       alerts.success(data.message || 'Check-out successful.', 'Check-out Successful');
-      setEarlyCheckoutReason('');
+      setEarlyCheckoutReasonCode('');
+      setEarlyCheckoutOtherReason('');
     }
 
     await refreshAfterSuccess();
@@ -536,6 +809,125 @@ async function submitHolidayWorkRequest(event) {
 
   return (
     <div className="attendance-card attendance-pro-card">
+      <style>{`
+        .attendance-reason-panel {
+          display: grid;
+          gap: 10px;
+          width: 100%;
+          border: 1px solid #dbe5df;
+          border-radius: 18px;
+          background: linear-gradient(145deg, #fbfefc 0%, #f4faf6 100%);
+          padding: 14px;
+          box-sizing: border-box;
+        }
+
+        .attendance-reason-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .attendance-reason-heading label {
+          color: #17252a;
+          font-size: 14px;
+          font-weight: 900;
+          line-height: 1.4;
+        }
+
+        .attendance-reason-required {
+          flex: 0 0 auto;
+          border: 1px solid #fecaca;
+          border-radius: 999px;
+          background: #fff1f2;
+          padding: 4px 9px;
+          color: #be123c;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: .04em;
+          text-transform: uppercase;
+        }
+
+        .attendance-reason-panel select {
+          min-height: 48px;
+          cursor: pointer;
+          font-weight: 750;
+        }
+
+        .attendance-reason-panel select:disabled {
+          cursor: not-allowed;
+          background: #f8fafc;
+          color: #64748b;
+        }
+
+        .attendance-other-reason {
+          display: grid;
+          gap: 8px;
+          border-top: 1px dashed #cbd5e1;
+          padding-top: 11px;
+          animation: attendanceReasonReveal .2s ease-out;
+        }
+
+        .attendance-other-reason label {
+          color: #334155;
+          font-size: 13px;
+          font-weight: 850;
+        }
+
+        .attendance-other-reason textarea {
+          min-height: 88px;
+          margin: 0;
+          resize: vertical;
+        }
+
+        .attendance-other-reason textarea[aria-invalid='true'] {
+          border-color: #f59e0b;
+        }
+
+        .attendance-reason-help {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1.5;
+        }
+
+        .attendance-reason-help.is-error {
+          color: #b45309;
+        }
+
+        .attendance-reason-help strong {
+          flex: 0 0 auto;
+          color: inherit;
+          white-space: nowrap;
+        }
+
+        @keyframes attendanceReasonReveal {
+          from {
+            opacity: 0;
+            transform: translateY(-4px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @media (max-width: 560px) {
+          .attendance-reason-heading,
+          .attendance-reason-help {
+            align-items: flex-start;
+          }
+
+          .attendance-reason-help {
+            display: grid;
+          }
+        }
+      `}</style>
+
       <div className="attendance-head">
         <div>
           <p className="attendance-kicker">Today&apos;s Attendance</p>
@@ -665,21 +1057,142 @@ async function submitHolidayWorkRequest(event) {
       )}
 
       {lateNow && !holiday?.is_holiday && !checkedIn && (
-        <textarea
-          placeholder="Late reason required from 09:50 AM onwards"
-          value={lateReason}
-          onChange={(e) => setLateReason(e.target.value)}
-          disabled={loadingType !== ''}
-        />
+        <div className="attendance-reason-panel">
+          <div className="attendance-reason-heading">
+            <label htmlFor="late-attendance-reason">Late check-in reason</label>
+            <span className="attendance-reason-required">Required</span>
+          </div>
+
+          <select
+            id="late-attendance-reason"
+            value={lateReasonCode}
+            onChange={(event) => {
+              const nextCode = event.target.value;
+              setLateReasonCode(nextCode);
+
+              if (nextCode !== OTHER_REASON_CODE) {
+                setLateOtherReason('');
+              }
+            }}
+            disabled={loadingType !== '' || loadingStatus}
+          >
+            <option value="">Select why you are late</option>
+            {lateReasonOptions.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+
+          {lateReasonCode === OTHER_REASON_CODE && (
+            <div className="attendance-other-reason">
+              <label htmlFor="late-attendance-other-reason">
+                Write the complete reason
+              </label>
+              <textarea
+                id="late-attendance-other-reason"
+                placeholder="Explain the genuine reason for the late check-in"
+                value={lateOtherReason}
+                onChange={(event) => setLateOtherReason(event.target.value)}
+                minLength={otherReasonMinLength}
+                maxLength={otherReasonMaxLength}
+                disabled={loadingType !== ''}
+                required
+                aria-invalid={Boolean(
+                  lateOtherReason.trim() && lateOtherReasonError,
+                )}
+              />
+              <div
+                className={`attendance-reason-help${
+                  lateOtherReason.trim() && lateOtherReasonError
+                    ? ' is-error'
+                    : ''
+                }`}
+              >
+                <span>
+                  {lateOtherReason.trim() && lateOtherReasonError
+                    ? lateOtherReasonError
+                    : `Use at least ${otherReasonMinLength} characters and 2 meaningful words. Dots, symbols, placeholder text, and gibberish are rejected.`}
+                </span>
+                <strong>
+                  {lateOtherReason.length}/{otherReasonMaxLength}
+                </strong>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {earlyCheckoutNow && !holiday?.is_holiday && checkedIn && !checkedOut && (
-        <textarea
-          placeholder="Early checkout reason required before 06:00 PM"
-          value={earlyCheckoutReason}
-          onChange={(e) => setEarlyCheckoutReason(e.target.value)}
-          disabled={loadingType !== ''}
-        />
+        <div className="attendance-reason-panel">
+          <div className="attendance-reason-heading">
+            <label htmlFor="early-checkout-attendance-reason">
+              Early checkout reason
+            </label>
+            <span className="attendance-reason-required">Required</span>
+          </div>
+
+          <select
+            id="early-checkout-attendance-reason"
+            value={earlyCheckoutReasonCode}
+            onChange={(event) => {
+              const nextCode = event.target.value;
+              setEarlyCheckoutReasonCode(nextCode);
+
+              if (nextCode !== OTHER_REASON_CODE) {
+                setEarlyCheckoutOtherReason('');
+              }
+            }}
+            disabled={loadingType !== '' || loadingStatus}
+          >
+            <option value="">Select why you are checking out early</option>
+            {earlyCheckoutReasonOptions.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+
+          {earlyCheckoutReasonCode === OTHER_REASON_CODE && (
+            <div className="attendance-other-reason">
+              <label htmlFor="early-checkout-attendance-other-reason">
+                Write the complete reason
+              </label>
+              <textarea
+                id="early-checkout-attendance-other-reason"
+                placeholder="Explain the genuine reason for checking out early"
+                value={earlyCheckoutOtherReason}
+                onChange={(event) => setEarlyCheckoutOtherReason(event.target.value)}
+                minLength={otherReasonMinLength}
+                maxLength={otherReasonMaxLength}
+                disabled={loadingType !== ''}
+                required
+                aria-invalid={Boolean(
+                  earlyCheckoutOtherReason.trim() &&
+                  earlyCheckoutOtherReasonError,
+                )}
+              />
+              <div
+                className={`attendance-reason-help${
+                  earlyCheckoutOtherReason.trim() &&
+                  earlyCheckoutOtherReasonError
+                    ? ' is-error'
+                    : ''
+                }`}
+              >
+                <span>
+                  {earlyCheckoutOtherReason.trim() &&
+                  earlyCheckoutOtherReasonError
+                    ? earlyCheckoutOtherReasonError
+                    : `Use at least ${otherReasonMinLength} characters and 2 meaningful words. Dots, symbols, placeholder text, and gibberish are rejected.`}
+                </span>
+                <strong>
+                  {earlyCheckoutOtherReason.length}/{otherReasonMaxLength}
+                </strong>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       <div className="attendance-hold-grid">

@@ -814,7 +814,7 @@ export const coreModules = [
     'System Settings',
     Settings,
     'Rule engine settings.',
-    ['super_admin', 'admin'],
+     HR_ROLES,
   ],
   [
     'audit_logs',
