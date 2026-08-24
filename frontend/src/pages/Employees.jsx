@@ -834,12 +834,38 @@ function EmployeeForm({
   );
 }
 
+function handleTableMouseDragStart(event) {
+  if (event.button !== 0) return;
+  if (event.target.closest('button, a, input, select, textarea, label')) return;
+
+  const wrapper = event.currentTarget;
+  const startX = event.clientX;
+  const startScrollLeft = wrapper.scrollLeft;
+
+  wrapper.classList.add('is-dragging');
+  event.preventDefault();
+
+  const handleMouseMove = (moveEvent) => {
+    const deltaX = moveEvent.clientX - startX;
+    wrapper.scrollLeft = startScrollLeft - deltaX;
+  };
+
+  const handleMouseUp = () => {
+    wrapper.classList.remove('is-dragging');
+    window.removeEventListener('mousemove', handleMouseMove);
+    window.removeEventListener('mouseup', handleMouseUp);
+  };
+
+  window.addEventListener('mousemove', handleMouseMove);
+  window.addEventListener('mouseup', handleMouseUp);
+}
+
 function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
   if (loading) return <div className="hrms-empty-state">Loading employees...</div>;
   if (!rows.length) return <div className="hrms-empty-state">No active employees found.</div>;
 
   return (
-    <div className="hrms-table-wrap">
+    <div className="hrms-table-wrap" onMouseDown={handleTableMouseDragStart}>
       <table className="hrms-table">
         <thead>
           <tr>
@@ -847,7 +873,6 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
             <th>Code</th>
             <th>Organisation</th>
             <th>Department</th>
-            <th>Designation</th>
             <th>Designation</th>
             <th>Contact</th>
             <th>Joining</th>
@@ -914,7 +939,7 @@ function AlumniTable({ rows, loading }) {
   if (!rows.length) return <div className="hrms-empty-state">No alumni employees found.</div>;
 
   return (
-    <div className="hrms-table-wrap">
+    <div className="hrms-table-wrap" onMouseDown={handleTableMouseDragStart}>
       <table className="hrms-table">
         <thead>
           <tr>
@@ -1135,6 +1160,7 @@ function formatSaasDate(value) {
 
 export default function Employees({ user = {}, setPage } = {}) {
   const [activeTab, setActiveTab] = useState('master');
+  const [activeAlumniSection, setActiveAlumniSection] = useState('employees');
   const [employees, setEmployees] = useState([]);
   const [alumni, setAlumni] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -1342,6 +1368,7 @@ export default function Employees({ user = {}, setPage } = {}) {
       }));
       setAlumniForm(EMPTY_ALUMNI_FORM);
       await loadAlumni();
+      setActiveAlumniSection('employees');
       showMessage('success', 'Past employee added to alumni successfully.');
     } catch (error) {
       showMessage('error', error.message || 'Unable to add past employee.');
@@ -1461,20 +1488,24 @@ export default function Employees({ user = {}, setPage } = {}) {
           font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .hrms-hero {
-          position: relative;
-          isolation: isolate;
-          overflow: hidden;
-          padding: clamp(24px, 2.8vw, 36px);
-          border: 1px solid rgba(171,181,211,.72);
-          border-radius: clamp(28px, 2.5vw, 40px);
-          color: var(--emp-ink);
-          background:
-            radial-gradient(circle at 8% 8%, rgba(121,219,238,.34), transparent 31%),
-            radial-gradient(circle at 92% 12%, rgba(191,190,249,.3), transparent 34%),
-            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
-          box-shadow: 12px 14px 0 var(--emp-flat-blue), 0 28px 48px rgba(34,38,110,.13);
-        }
+       .hrms-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: clamp(24px, 2.8vw, 36px);
+  border: 1px solid rgba(171,181,211,.72);
+  border-radius: clamp(28px, 2.5vw, 40px);
+  color: var(--emp-ink);
+
+  background: linear-gradient(
+    135deg,
+    #f1fbff 0%,
+    #fffdf8 48%,
+    #f8f2ff 100%
+  );
+
+  box-shadow: 12px 14px 0 var(--emp-flat-blue), 0 28px 48px rgba(34,38,110,.13);
+}
 
         .hrms-hero::before {
           content: "";
@@ -1489,18 +1520,7 @@ export default function Employees({ user = {}, setPage } = {}) {
           background-size: 42px 42px;
         }
 
-        .hrms-hero::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: clamp(165px,20vw,290px);
-          aspect-ratio: 1;
-          right: clamp(-110px,-7vw,-55px);
-          top: clamp(-118px,-8vw,-60px);
-          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
-          background: linear-gradient(145deg,rgba(105,217,208,.72),rgba(121,189,242,.72));
-          transform: rotate(18deg);
-        }
+       
 
         .hrms-hero-content {
           position: relative;
@@ -1660,19 +1680,31 @@ export default function Employees({ user = {}, setPage } = {}) {
         .hrms-danger-soft-btn{min-height:40px;padding:10px 13px;border-color:rgba(182,47,85,.16);border-radius:13px;color:#b62f55;background:#ffe4ec}
         .compact{min-height:34px!important;padding:8px 10px!important;font-size:11px}
 
-        .hrms-table-wrap{width:100%;overflow-x:auto;border:1px solid rgba(171,181,211,.62);border-radius:18px;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:rgba(98,84,218,.35) transparent;-webkit-overflow-scrolling:touch}
+        .hrms-table-wrap{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;border:1px solid rgba(171,181,211,.62);border-radius:18px;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:rgba(98,84,218,.35) transparent;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;cursor:grab}
+        .hrms-table-wrap.is-dragging{cursor:grabbing;user-select:none}
         .hrms-table-wrap::-webkit-scrollbar{height:8px}.hrms-table-wrap::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(98,84,218,.35)}
-        .hrms-table{width:100%;min-width:1050px;border-collapse:separate;border-spacing:0;background:rgba(255,255,255,.72)}
-        .hrms-table th{position:sticky;top:0;z-index:2;padding:14px 16px;border-bottom:1px solid rgba(65,55,161,.12);color:#4f5e7f;background:rgba(241,239,255,.94);font-size:10px;font-weight:900;letter-spacing:.07em;text-align:left;text-transform:uppercase;backdrop-filter:blur(12px)}
-        .hrms-table td{padding:15px 16px;border-bottom:1px solid rgba(65,55,161,.09);color:#334164;background:rgba(255,255,255,.64);vertical-align:middle;transition:background 180ms ease}
+        .hrms-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;background:rgba(255,255,255,.72)}
+        .hrms-table th{position:sticky;top:0;z-index:2;padding:14px 16px;border-bottom:1px solid rgba(65,55,161,.12);color:#4f5e7f;background:rgba(241,239,255,.94);font-size:10px;font-weight:900;letter-spacing:.07em;text-align:left;text-transform:uppercase;backdrop-filter:blur(12px);white-space:nowrap}
+       .hrms-table th:first-child{
+  padding-left:72px;
+}
+        .hrms-table td{padding:15px 16px;border-bottom:1px solid rgba(65,55,161,.09);color:#334164;background:rgba(255,255,255,.64);vertical-align:middle;transition:background 180ms ease;white-space:nowrap}
         .hrms-table tbody tr:hover td{background:rgba(237,246,255,.82)}
         .hrms-table tr:last-child td{border-bottom:0}
-        .hrms-person-cell{display:flex;align-items:center;gap:12px;min-width:230px}.hrms-person-cell>div{min-width:0}
-        .hrms-person-cell strong,.hrms-table td strong{display:block;color:var(--emp-ink);font-weight:900;overflow-wrap:anywhere}
-        .hrms-person-cell small,.hrms-table td small{display:block;margin-top:4px;color:var(--emp-soft);font-size:11px;overflow-wrap:anywhere}
+.hrms-person-cell{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width:230px;
+}
+        .hrms-person-cell strong,.hrms-table td strong{display:block;color:var(--emp-ink);font-weight:900;white-space:nowrap;overflow-wrap:normal}
+        .hrms-person-cell small,.hrms-table td small{display:block;margin-top:4px;color:var(--emp-soft);font-size:11px;white-space:nowrap;overflow-wrap:normal}
         .hrms-employee-avatar{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:44px;height:44px;border:3px solid #fff;border-radius:15px;color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(98,84,218,.16),0 10px 20px rgba(34,38,110,.1);font-weight:900;object-fit:cover}
         .hrms-pill{display:inline-flex;align-items:center;width:fit-content;padding:7px 10px;border-radius:999px;font-size:10px;font-weight:900;line-height:1}.hrms-pill-green{color:#13736f;background:#dff8f3}.hrms-pill-red{color:#b62f55;background:#ffe4ec}
-        .hrms-table-action{text-align:right!important;white-space:nowrap}
+       .hrms-table-action{
+  text-align:left!important;
+  white-space:nowrap
+}
         .hrms-empty-state{padding:30px 22px;border:1px dashed rgba(98,84,218,.35);border-radius:20px;color:var(--emp-soft);background:linear-gradient(145deg,rgba(237,248,255,.76),rgba(248,241,255,.72));font-weight:900;text-align:center}
 
         .hrms-form-section{margin-top:16px;padding:16px;border:1px solid rgba(171,181,211,.55);border-radius:20px;background:rgba(255,255,255,.68);transition:transform 220ms var(--emp-ease),border-color 180ms ease,box-shadow 220ms var(--emp-ease)}
@@ -1685,7 +1717,13 @@ export default function Employees({ user = {}, setPage } = {}) {
         .hrms-checkbox{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid rgba(159,169,205,.55);border-radius:15px;color:#334164;background:rgba(255,255,255,.72);font-size:12px;font-weight:900;transition:transform 180ms ease,border-color 180ms ease,background 180ms ease}.hrms-checkbox:hover{transform:translateY(-1px);border-color:rgba(98,84,218,.25);background:#fff}.hrms-checkbox input{width:18px;height:18px;accent-color:var(--emp-violet)}
         .hrms-form-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px;padding-top:15px;border-top:1px solid rgba(65,55,161,.11)}
         .hrms-form-note{color:var(--emp-soft);font-size:12px;font-weight:750;line-height:1.5}
-        .hrms-alumni-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(360px,.9fr);gap:20px;align-items:start}
+        .hrms-alumni-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start;min-width:0;width:100%}
+        .hrms-alumni-subtabs{display:flex;gap:7px;overflow-x:auto;padding:8px;border:1px solid rgba(171,181,211,.7);border-radius:20px;background:rgba(255,255,255,.88);box-shadow:7px 9px 0 #d1dcfa,0 18px 32px rgba(34,38,110,.09);scrollbar-width:none;scroll-snap-type:x proximity;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+        .hrms-alumni-subtabs::-webkit-scrollbar{display:none}
+        .hrms-alumni-subtab-btn{flex:0 0 auto;min-height:42px;padding:10px 14px;border:1px solid transparent;border-radius:13px;color:#4f5e7f;background:transparent;font:inherit;font-weight:900;cursor:pointer;scroll-snap-align:start;transition:transform 220ms var(--emp-ease),box-shadow 220ms var(--emp-ease),border-color 180ms ease,background 180ms ease,color 180ms ease}
+        .hrms-alumni-subtab-btn:hover{color:var(--emp-deep);background:#f1efff;border-color:rgba(98,84,218,.16);transform:translateY(-1px)}
+        .hrms-alumni-subtab-btn.active{color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(52,43,120,.72)}
+        .hrms-alumni-section{min-width:0;width:100%}
 
         .hrms-modal-backdrop{--emp-ink:#101a3a;--emp-soft:#596483;--emp-violet:#6254da;--emp-deep:#342b78;--emp-blue:#3766db;--emp-teal:#18aaa8;--emp-flat-blue:#b9d7ff;--emp-flat-violet:#c9c0ff;--emp-flat-teal:#aee6d9;--emp-ease:cubic-bezier(.22,1,.36,1);position:fixed;inset:0;z-index:10000;width:100vw;height:100dvh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));background:rgba(15,23,42,.48);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:hrmsBackdropIn 260ms ease both}
         .hrms-modal{width:min(1120px,100%);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;padding:20px;border:1px solid rgba(171,181,211,.72);border-radius:26px;background:linear-gradient(145deg,#fff 0%,#f4fbff 52%,#f8f1ff 100%);box-shadow:0 30px 80px rgba(34,38,110,.24),10px 12px 0 rgba(185,215,255,.56);animation:hrmsModalIn 420ms var(--emp-ease) both;transform-origin:50% 14%;-webkit-overflow-scrolling:touch}
@@ -1695,12 +1733,14 @@ export default function Employees({ user = {}, setPage } = {}) {
         .hrms-modal h3{margin:0 0 6px;color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:24px;letter-spacing:-.03em}.hrms-modal p{margin:0 0 16px;color:var(--emp-soft)}
         .hrms-modal-grid{display:grid;gap:12px}.hrms-modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px}
 
-        @media(min-width:1600px){.hrms-stats-grid{gap:20px}.hrms-form-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.hrms-alumni-layout{grid-template-columns:minmax(0,1.45fr) minmax(430px,.75fr)}}
-        @media(max-width:1180px){.hrms-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-alumni-layout{grid-template-columns:1fr}.hrms-checkbox-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(min-width:1600px){.hrms-stats-grid{gap:20px}.hrms-form-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+        @media(max-width:1180px){.hrms-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-checkbox-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:820px){.hrms-hero-content,.hrms-section-heading{flex-direction:column}.hrms-refresh-btn{width:100%}.hrms-actions{width:100%}.hrms-actions button{flex:1 1 auto}.hrms-filter-grid{grid-template-columns:1fr}.hrms-filter-grid .hrms-secondary-btn{width:100%}.hrms-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:640px){
           .hrms-employees-page{gap:15px}.hrms-hero{padding:20px;border-radius:24px;box-shadow:7px 8px 0 var(--emp-flat-blue),0 18px 30px rgba(34,38,110,.1)}.hrms-hero h1{font-size:clamp(31px,9.5vw,43px)}
           .hrms-tabs{top:max(6px,env(safe-area-inset-top));padding:7px;border-radius:17px}.hrms-tab-btn{min-height:42px;padding:10px 12px;font-size:10px}
+          .hrms-alumni-subtabs{padding:7px;border-radius:17px}.hrms-alumni-subtab-btn{min-height:42px;padding:10px 12px;font-size:10px}
+          .hrms-table-wrap{border-radius:15px}.hrms-table th,.hrms-table td{padding:13px 14px}
           .hrms-stat-card{padding:14px;border-radius:17px;box-shadow:4px 5px 0 var(--emp-flat-blue),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(2){box-shadow:4px 5px 0 var(--emp-flat-violet),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(3){box-shadow:4px 5px 0 var(--emp-flat-teal),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(4){box-shadow:4px 5px 0 #ffe0a5,0 12px 20px rgba(15,20,75,.07)}
           .hrms-panel,.hrms-form-card{padding:16px;border-radius:22px;box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08)}.hrms-form-card{box-shadow:6px 7px 0 #c9ddf5,0 16px 28px rgba(34,38,110,.08)}
           .hrms-form-grid,.hrms-checkbox-grid{grid-template-columns:1fr}.hrms-form-section{padding:14px}.hrms-actions,.hrms-row-actions,.hrms-form-actions,.hrms-modal-actions{width:100%;justify-content:stretch}.hrms-actions button,.hrms-form-actions button,.hrms-modal-actions button{width:100%}
@@ -1851,7 +1891,7 @@ export default function Employees({ user = {}, setPage } = {}) {
           </div>
 
           <div className="hrms-filter-grid">
-            <input name="q" value={filters.q} onChange={handleFilterChange} placeholder="Search by name, email, department, designation, phone..." />
+            <input name="q" value={filters.q} onChange={handleFilterChange} placeholder="Search Employee here" />
             <select name="department" value={filters.department} onChange={handleFilterChange}>
               <option value="">All Departments</option>
               {employeeDepartments.map((item) => <option key={item} value={item}>{item}</option>)}
@@ -1901,63 +1941,87 @@ export default function Employees({ user = {}, setPage } = {}) {
 
       {activeTab === 'alumni' ? (
         <div className="hrms-alumni-layout">
-          <div className="hrms-panel">
-            <div className="hrms-section-heading">
-              <div>
-                <h3>Alumni Employees</h3>
-                <p>Employees who resigned, left, retired, or were manually added as past employees are listed here.</p>
-              </div>
-              <div className="hrms-actions">
-                <button type="button" className="hrms-secondary-btn" onClick={() => downloadAlumniCsv(filteredAlumni)}>Download Alumni CSV</button>
-              </div>
-            </div>
-
-            <div className="hrms-filter-grid">
-              <input name="q" value={alumniFilters.q} onChange={handleAlumniFilterChange} placeholder="Search alumni by name, department, reason, status..." />
-              <select name="department" value={alumniFilters.department} onChange={handleAlumniFilterChange}>
-                <option value="">All Departments</option>
-                {alumniDepartments.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
-              <select name="designation" value={alumniFilters.designation} onChange={handleAlumniFilterChange}>
-                <option value="">All Designations</option>
-                {alumniDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
-              <select name="branch" value={alumniFilters.branch} onChange={handleAlumniFilterChange}>
-                <option value="">All Branches</option>
-                {alumniBranches.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
-              <select name="employment_status" value={alumniFilters.employment_status} onChange={handleAlumniFilterChange}>
-                <option value="">All Status</option>
-                <option value="Resigned">Resigned</option>
-                <option value="Terminated">Terminated</option>
-                <option value="Retired">Retired</option>
-                <option value="Left">Left</option>
-              </select>
-              <button type="button" className="hrms-secondary-btn" onClick={resetAlumniFilters}>Reset</button>
-            </div>
-            <AlumniTable rows={filteredAlumni} loading={loadingAlumni} />
+          <div className="hrms-alumni-subtabs" role="tablist" aria-label="Alumni sections">
+            <button
+              type="button"
+              className={`hrms-alumni-subtab-btn ${activeAlumniSection === 'employees' ? 'active' : ''}`}
+              onClick={() => setActiveAlumniSection('employees')}
+            >
+              Alumni Employees
+            </button>
+            <button
+              type="button"
+              className={`hrms-alumni-subtab-btn ${activeAlumniSection === 'add' ? 'active' : ''}`}
+              onClick={() => setActiveAlumniSection('add')}
+            >
+              Add Past Employee
+            </button>
           </div>
 
-          <EmployeeForm
-            title="Add Past Employee"
-            subtitle="Add employees who already left the company. No login account will be created."
-            form={alumniForm}
-            setForm={setAlumniForm}
-            onSubmit={handleCreatePastEmployee}
-            submitLabel="Add To Alumni"
-            loading={saving}
-            isAlumniForm
-            organisations={organisations}
-            departments={departments}
-            designations={designations}
-            states={states}
-            teamLeaders={teamLeaders}
-            reportingOfficers={reportingOfficers}
-            teamLeaderSearch={teamLeaderSearch}
-            setTeamLeaderSearch={setTeamLeaderSearch}
-            reportingOfficerSearch={reportingOfficerSearch}
-            setReportingOfficerSearch={setReportingOfficerSearch}
-          />
+          {activeAlumniSection === 'employees' ? (
+            <div className="hrms-panel hrms-alumni-section">
+              <div className="hrms-section-heading">
+                <div>
+                  <h3>Alumni Employees</h3>
+                  <p>Employees who resigned, left, retired, or were manually added as past employees are listed here.</p>
+                </div>
+                <div className="hrms-actions">
+                  <button type="button" className="hrms-secondary-btn" onClick={() => downloadAlumniCsv(filteredAlumni)}>Download Alumni CSV</button>
+                </div>
+              </div>
+
+              <div className="hrms-filter-grid">
+                <input name="q" value={alumniFilters.q} onChange={handleAlumniFilterChange} placeholder="Search alumni here" />
+                <select name="department" value={alumniFilters.department} onChange={handleAlumniFilterChange}>
+                  <option value="">All Departments</option>
+                  {alumniDepartments.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <select name="designation" value={alumniFilters.designation} onChange={handleAlumniFilterChange}>
+                  <option value="">All Designations</option>
+                  {alumniDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <select name="branch" value={alumniFilters.branch} onChange={handleAlumniFilterChange}>
+                  <option value="">All Branches</option>
+                  {alumniBranches.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <select name="employment_status" value={alumniFilters.employment_status} onChange={handleAlumniFilterChange}>
+                  <option value="">All Status</option>
+                  <option value="Resigned">Resigned</option>
+                  <option value="Terminated">Terminated</option>
+                  <option value="Retired">Retired</option>
+                  <option value="Left">Left</option>
+                </select>
+                <button type="button" className="hrms-secondary-btn" onClick={resetAlumniFilters}>Reset</button>
+              </div>
+
+              <AlumniTable rows={filteredAlumni} loading={loadingAlumni} />
+            </div>
+          ) : null}
+
+          {activeAlumniSection === 'add' ? (
+            <div className="hrms-alumni-section">
+              <EmployeeForm
+                title="Add Past Employee"
+                subtitle="Add employees who already left the company. No login account will be created."
+                form={alumniForm}
+                setForm={setAlumniForm}
+                onSubmit={handleCreatePastEmployee}
+                submitLabel="Add To Alumni"
+                loading={saving}
+                isAlumniForm
+                organisations={organisations}
+                departments={departments}
+                designations={designations}
+                states={states}
+                teamLeaders={teamLeaders}
+                reportingOfficers={reportingOfficers}
+                teamLeaderSearch={teamLeaderSearch}
+                setTeamLeaderSearch={setTeamLeaderSearch}
+                reportingOfficerSearch={reportingOfficerSearch}
+                setReportingOfficerSearch={setReportingOfficerSearch}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

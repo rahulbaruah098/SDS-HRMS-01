@@ -1194,10 +1194,7 @@ export default function AdminDashboard({ setPage }) {
           border: 1px solid var(--line);
           border-radius: 30px;
           padding: 26px;
-          background:
-            radial-gradient(circle at 8% 0%, rgba(79,70,229,.16), transparent 34%),
-            radial-gradient(circle at 92% 6%, rgba(5,150,105,.14), transparent 34%),
-            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+          background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
           box-shadow: var(--shadow);
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
@@ -1234,17 +1231,6 @@ export default function AdminDashboard({ setPage }) {
           background: #fff;
           padding: 16px;
           box-shadow: 0 12px 30px rgba(15,23,42,.06);
-        }
-
-        .admin-project-metric::after {
-          content: "";
-          position: absolute;
-          width: 74px;
-          height: 74px;
-          right: -28px;
-          top: -26px;
-          border-radius: 999px;
-          background: rgba(79,70,229,.12);
         }
 
         .admin-project-metric.green::after { background: rgba(5,150,105,.13); }
@@ -1325,9 +1311,7 @@ export default function AdminDashboard({ setPage }) {
           overflow: hidden;
           border: 1px solid var(--line);
           border-radius: 26px;
-          background:
-            radial-gradient(circle at 0 0, rgba(79,70,229,.08), transparent 32%),
-            #fff;
+        background: #fff;
           padding: 18px;
           box-shadow: var(--shadow);
         }
@@ -1769,10 +1753,7 @@ export default function AdminDashboard({ setPage }) {
           overflow: hidden;
           border: 1px solid var(--line);
           border-radius: 24px;
-          background:
-            radial-gradient(circle at 10% 0%, rgba(79,70,229,.10), transparent 32%),
-            radial-gradient(circle at 90% 4%, rgba(5,150,105,.10), transparent 32%),
-            #fff;
+         background: #fff;
           padding: 16px;
           box-shadow: 0 14px 36px rgba(15,23,42,.07);
         }
@@ -1947,9 +1928,7 @@ export default function AdminDashboard({ setPage }) {
           border: 1px solid var(--line);
           border-radius: 28px;
           padding: 20px;
-          background:
-            radial-gradient(circle at top left, rgba(37, 99, 235, .14), transparent 34%),
-            linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
           box-shadow: var(--shadow);
         }
 
@@ -2163,10 +2142,7 @@ export default function AdminDashboard({ setPage }) {
           padding: clamp(22px, 2.8vw, 36px);
           border: 1px solid rgba(171, 181, 211, .72);
           border-radius: clamp(28px, 2.5vw, 40px);
-          background:
-            radial-gradient(circle at 8% 8%, rgba(121, 219, 238, .34), transparent 31%),
-            radial-gradient(circle at 92% 12%, rgba(191, 190, 249, .3), transparent 34%),
-            linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%);
+          background: linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%);
           box-shadow:
             12px 14px 0 var(--dash-flat-blue),
             0 28px 48px rgba(34, 38, 110, .13);
@@ -2185,18 +2161,6 @@ export default function AdminDashboard({ setPage }) {
           background-size: 42px 42px;
         }
 
-        .admin-dashboard-page .hero.admin-dashboard-hero::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: clamp(170px, 20vw, 300px);
-          aspect-ratio: 1;
-          right: clamp(-115px, -7vw, -60px);
-          top: clamp(-120px, -8vw, -65px);
-          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
-          background: linear-gradient(145deg, rgba(105, 217, 208, .72), rgba(121, 189, 242, .72));
-          transform: rotate(18deg);
-        }
 
         .admin-dashboard-page .kicker {
           display: inline-flex;
@@ -2807,40 +2771,16 @@ export default function AdminDashboard({ setPage }) {
           padding: clamp(22px, 3vw, 38px);
           border-radius: 34px;
           border: 1px solid rgba(99, 102, 241, .15);
-          background:
-            radial-gradient(circle at 13% 6%, rgba(147, 218, 246, .24), transparent 30%),
-            radial-gradient(circle at 90% 8%, rgba(122, 224, 211, .18), transparent 28%),
-            linear-gradient(145deg, rgba(255,255,255,.99), rgba(247,248,255,.98));
+         background: linear-gradient(
+  145deg,
+  rgba(255,255,255,.99),
+  rgba(247,248,255,.98)
+);
           box-shadow:
             0 24px 70px rgba(46, 48, 112, .10),
             inset 0 1px 0 rgba(255,255,255,.96);
         }
 
-        .employee-hero::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 330px;
-          height: 330px;
-          right: -160px;
-          bottom: -190px;
-          border-radius: 999px;
-          border: 44px solid rgba(96, 82, 232, .055);
-          pointer-events: none;
-        }
-
-        .employee-hero::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 150px;
-          height: 150px;
-          top: -74px;
-          left: 48%;
-          border-radius: 999px;
-          background: rgba(116, 221, 211, .08);
-          pointer-events: none;
-        }
 
         .employee-identity {
           min-width: 0;
@@ -2964,9 +2904,7 @@ export default function AdminDashboard({ setPage }) {
           border: 1px solid rgba(99, 102, 241, .13);
           border-radius: 20px;
           color: #172554;
-          background:
-            radial-gradient(circle at 92% 12%, var(--action-soft), transparent 32%),
-            rgba(255,255,255,.88);
+          background: rgba(255,255,255,.88);
           box-shadow:
             0 12px 28px rgba(35, 42, 105, .07),
             inset 0 1px 0 rgba(255,255,255,.96);
@@ -2977,18 +2915,7 @@ export default function AdminDashboard({ setPage }) {
             border-color .25s ease;
         }
 
-        .employee-quick-action::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 76px;
-          height: 76px;
-          right: -48px;
-          bottom: -50px;
-          border-radius: 999px;
-          background: var(--action-soft);
-          transition: transform .35s ease;
-        }
+       
 
         .employee-quick-action:hover {
           border-color: color-mix(in srgb, var(--action-accent) 28%, transparent);

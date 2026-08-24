@@ -1244,13 +1244,20 @@ async function refreshAttendance() {
 
     const pageElement = pageRef.current;
     const backgroundElement = pageElement?.closest('#root, #app') || pageElement;
+    const scrollY = window.scrollY;
     const previousBodyOverflow = document.body.style.overflow;
+    const previousBodyPosition = document.body.style.position;
+    const previousBodyTop = document.body.style.top;
+    const previousBodyWidth = document.body.style.width;
     const previousHtmlOverflow = document.documentElement.style.overflow;
     const hadInert = backgroundElement?.hasAttribute('inert') || false;
     const previousAriaHidden = backgroundElement?.getAttribute('aria-hidden');
 
-    document.body.style.overflow = 'hidden';
     document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = '100%';
 
     if (backgroundElement) {
       backgroundElement.setAttribute('inert', '');
@@ -1266,8 +1273,12 @@ async function refreshAttendance() {
     window.addEventListener('keydown', handleEscape);
 
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overflow = previousBodyOverflow;
+      document.body.style.position = previousBodyPosition;
+      document.body.style.top = previousBodyTop;
+      document.body.style.width = previousBodyWidth;
+      window.scrollTo(0, scrollY);
 
       if (backgroundElement) {
         if (!hadInert) {
@@ -1314,12 +1325,36 @@ async function refreshAttendance() {
       return;
     }
 
-    const ok = await alerts.confirm('Verify this attendance record?', {
-      title: 'Verify Attendance',
-      confirmText: 'Yes, Verify',
-      cancelText: 'Cancel',
-      type: 'warning',
-    });
+    const verifyPopupScrollY = window.scrollY;
+    const verifyPopupPreviousBodyOverflow = document.body.style.overflow;
+    const verifyPopupPreviousBodyPosition = document.body.style.position;
+    const verifyPopupPreviousBodyTop = document.body.style.top;
+    const verifyPopupPreviousBodyWidth = document.body.style.width;
+    const verifyPopupPreviousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${verifyPopupScrollY}px`;
+    document.body.style.width = '100%';
+
+    let ok;
+
+    try {
+      ok = await alerts.confirm('Verify this attendance record?', {
+        title: 'Verify Attendance',
+        confirmText: 'Yes, Verify',
+        cancelText: 'Cancel',
+        type: 'warning',
+      });
+    } finally {
+      document.documentElement.style.overflow = verifyPopupPreviousHtmlOverflow;
+      document.body.style.overflow = verifyPopupPreviousBodyOverflow;
+      document.body.style.position = verifyPopupPreviousBodyPosition;
+      document.body.style.top = verifyPopupPreviousBodyTop;
+      document.body.style.width = verifyPopupPreviousBodyWidth;
+      window.scrollTo(0, verifyPopupScrollY);
+    }
 
     if (!ok) return;
 
@@ -1374,17 +1409,41 @@ async function refreshAttendance() {
       return;
     }
 
-    const ok = await alerts.confirm(
-      mode === 'all'
-        ? `Verify all ${uniqueIds.length} available attendance records?`
-        : `Verify ${uniqueIds.length} selected attendance record${uniqueIds.length === 1 ? '' : 's'}?`,
-      {
-        title: mode === 'all' ? 'Verify All Attendance' : 'Verify Selected Attendance',
-        confirmText: mode === 'all' ? 'Yes, Verify All' : 'Yes, Verify Selected',
-        cancelText: 'Cancel',
-        type: 'warning',
-      },
-    );
+    const verifyPopupScrollY = window.scrollY;
+    const verifyPopupPreviousBodyOverflow = document.body.style.overflow;
+    const verifyPopupPreviousBodyPosition = document.body.style.position;
+    const verifyPopupPreviousBodyTop = document.body.style.top;
+    const verifyPopupPreviousBodyWidth = document.body.style.width;
+    const verifyPopupPreviousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${verifyPopupScrollY}px`;
+    document.body.style.width = '100%';
+
+    let ok;
+
+    try {
+      ok = await alerts.confirm(
+        mode === 'all'
+          ? `Verify all ${uniqueIds.length} available attendance records?`
+          : `Verify ${uniqueIds.length} selected attendance record${uniqueIds.length === 1 ? '' : 's'}?`,
+        {
+          title: mode === 'all' ? 'Verify All Attendance' : 'Verify Selected Attendance',
+          confirmText: mode === 'all' ? 'Yes, Verify All' : 'Yes, Verify Selected',
+          cancelText: 'Cancel',
+          type: 'warning',
+        },
+      );
+    } finally {
+      document.documentElement.style.overflow = verifyPopupPreviousHtmlOverflow;
+      document.body.style.overflow = verifyPopupPreviousBodyOverflow;
+      document.body.style.position = verifyPopupPreviousBodyPosition;
+      document.body.style.top = verifyPopupPreviousBodyTop;
+      document.body.style.width = verifyPopupPreviousBodyWidth;
+      window.scrollTo(0, verifyPopupScrollY);
+    }
 
     if (!ok) return;
 
