@@ -455,6 +455,47 @@ def ensure_indexes(database):
             ("meta.celebration_id", ASCENDING),
         ],
     )
+
+    # Employee Stories
+    # Tenant-first indexes keep company-wide story loading efficient, while the
+    # TTL index removes expired story documents automatically in the background.
+    # API queries still filter expires_at > now so expiry is immediate even
+    # before MongoDB's TTL monitor performs its cleanup pass.
+    create_index_safe(
+        database.employee_stories,
+        [
+            ("tenant_id", ASCENDING),
+            ("expires_at", ASCENDING),
+        ],
+        name="employee_stories_tenant_expiry_idx",
+    )
+
+    create_index_safe(
+        database.employee_stories,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_user_id", ASCENDING),
+            ("expires_at", ASCENDING),
+        ],
+        name="employee_stories_tenant_user_expiry_idx",
+    )
+
+    create_index_safe(
+        database.employee_stories,
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_mongo_id", ASCENDING),
+            ("created_at", ASCENDING),
+        ],
+        name="employee_stories_tenant_employee_created_idx",
+    )
+
+    create_index_safe(
+        database.employee_stories,
+        [("expires_at", ASCENDING)],
+        name="employee_stories_expiry_ttl",
+        expireAfterSeconds=0,
+    )
     
         # Payroll configuration and processing indexes
 

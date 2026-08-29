@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
 
@@ -17,9 +17,10 @@ from .routes.grievances import grievances_bp
 from .routes.it_support import it_support_bp
 from .routes.policies import policies_bp
 from .routes.celebrations import celebrations_bp
+from .routes.stories import stories_bp
 from .routes.crud import crud_bp
 from .routes.reports import reports_bp
-from .routes.superadmin import superadmin_bp
+from .routes.superadmin import superadmin_bp, get_platform_maintenance_state
 from .routes.profile_photos import profile_photos_bp
 from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
@@ -27,6 +28,7 @@ from app.routes.ai_assistant import ai_assistant_bp
 from .routes.recruitment import recruitment_bp
 from .routes.account_access import account_access_bp
 from .services.recruitment_service import ensure_recruitment_indexes
+from .utils.auth import request_has_super_admin_role
 
 
 def _get_allowed_origins():
@@ -116,6 +118,49 @@ def create_app():
 
     database = init_db(app)
     ensure_recruitment_indexes(database)
+
+    @app.before_request
+    def enforce_platform_maintenance():
+        # Browser CORS pre-flight must always pass through.
+        if request.method == "OPTIONS":
+            return None
+
+        path = request.path.rstrip("/") or "/"
+
+        # Keep the health/status endpoints and authentication path reachable.
+        # Authentication remains available so the Platform Superadmin can log in
+        # and restore service. Normal users are still blocked from all app APIs.
+        if (
+            path == "/"
+            or path == "/api/v1/health"
+            or path == "/api/v1/superadmin/maintenance/status"
+            or path == "/api/v1/superadmin/maintenance"
+            or path.startswith("/api/v1/auth/")
+        ):
+            return None
+
+        try:
+            maintenance = get_platform_maintenance_state(database)
+        except Exception:
+            # Fail open if the maintenance-state read itself is unavailable.
+            # A database/transient error must never accidentally lock the platform.
+            return None
+
+        if not maintenance.get("enabled"):
+            return None
+
+        if request_has_super_admin_role():
+            return None
+
+        return jsonify({
+            "ok": False,
+            "maintenance_mode": True,
+            "message": maintenance.get("message"),
+            "maintenance": {
+                "enabled": True,
+                "message": maintenance.get("message"),
+            },
+        }), 503
 
     # Auth/session APIs:
     # login, current user, employee profile snapshot, capability sync.
@@ -239,6 +284,12 @@ def create_app():
     #
     # Keep this before generic CRUD so /celebrations routes are not captured by CRUD fallback.
     app.register_blueprint(celebrations_bp, url_prefix="/api/v1/celebrations")
+
+    # Employee Stories APIs:
+    # Tenant-isolated text stories for active employees. Stories expire after
+    # 24 hours and employees may delete only their own stories.
+    # Keep this before workflow/generic CRUD so /stories routes stay explicit.
+    app.register_blueprint(stories_bp, url_prefix="/api/v1/stories")
     
     # Workflow APIs:
     # leave apply/approval, combined CL + EL leave balance updates,

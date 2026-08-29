@@ -37,7 +37,6 @@ TEAM_ROLES = {
 FULL_TENANT_ROLES = {"admin", "hr", "hr_admin", "hr_manager"}
 ALLOWED_PICTURE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_PICTURE_SIZE_BYTES = 8 * 1024 * 1024
-MAX_PICTURES_PER_VISIT = 10
 
 
 def normalize_text(value):
@@ -428,12 +427,6 @@ def upload_visit_picture(visit_id):
     if visit.get("status") in HISTORY_STATUSES:
         return jsonify({"message": "Pictures cannot be added to a completed or cancelled visit"}), 409
 
-    pictures = visit.get("pictures") if isinstance(visit.get("pictures"), list) else []
-    if len(pictures) >= MAX_PICTURES_PER_VISIT:
-        return jsonify({
-            "message": f"A visit can contain a maximum of {MAX_PICTURES_PER_VISIT} pictures"
-        }), 409
-
     picture = request.files.get("picture") or request.files.get("image") or request.files.get("file")
     if not picture or not normalize_text(picture.filename):
         return jsonify({"message": "A picture file is required"}), 400
@@ -518,7 +511,14 @@ def serve_visit_picture(tenant_folder, visit_folder, filename):
         safe_tenant,
         safe_visit,
     )
-    return send_from_directory(directory, safe_filename)
+    download = truthy_value(request.args.get("download"))
+    download_name = secure_filename(request.args.get("name") or safe_filename)
+    return send_from_directory(
+        directory,
+        safe_filename,
+        as_attachment=download,
+        download_name=download_name if download else None,
+    )
 
 
 @field_visits_bp.get("/<visit_id>")
@@ -653,6 +653,9 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         timestamp_field: now,
         "updated_at": now,
     }
+    if next_status == "completed" and "visit_notes" in payload:
+        updates["visit_notes"] = normalize_text(payload.get("visit_notes"))
+
     db.field_visits.update_one({"_id": visit["_id"]}, {"$set": updates})
     updated = db.field_visits.find_one({"_id": visit["_id"]})
     return jsonify({

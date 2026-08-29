@@ -2216,6 +2216,18 @@ def enrich_mode_request_docs(items):
 # Leave helpers
 # -----------------------------------------------------------------------------
 
+def leave_application_now_local():
+    """Return the local business time used for same-day leave cutoffs."""
+    try:
+        offset_minutes = int(
+            os.getenv("ATTENDANCE_TIMEZONE_OFFSET_MINUTES", "330")
+        )
+    except (TypeError, ValueError):
+        offset_minutes = 330
+
+    return datetime.utcnow() + timedelta(minutes=offset_minutes)
+
+
 def calculate_leave_days(data):
     leave_type = normalize_leave_type(data.get("leave_type"))
 
@@ -5211,6 +5223,24 @@ def apply_leave_request():
 
     if from_date < date.today():
         return jsonify({"message": "Leave date cannot be in the past"}), 400
+
+    is_half_day_request = (
+        leave_type == "HALF-DAY"
+        or leave_days == 0.5
+        or truthy(data.get("is_half_day"))
+        or normalize_text(data.get("day_type")).lower() == "half_day"
+    )
+
+    local_now = leave_application_now_local()
+
+    if (
+        is_half_day_request
+        and from_date == local_now.date()
+        and local_now.hour >= 11
+    ):
+        return jsonify({
+            "message": "Half-day leave for today can only be applied before 11:00 AM."
+        }), 400
 
     if not reason:
         return jsonify({"message": "Leave reason is required"}), 400

@@ -27,6 +27,14 @@ from app.services.pricing_service import (
 
 superadmin_bp = Blueprint("superadmin", __name__)
 
+PLATFORM_MAINTENANCE_SETTING_ID = "platform_maintenance"
+DEFAULT_MAINTENANCE_MESSAGE = (
+    "Yourcomate is currently undergoing a system update. "
+    "Yourcomate will be up and running smoother than ever. "
+    "Sorry for any inconvenience!"
+)
+
+
 SUPPORTED_HOLIDAY_STATES = [
     "Assam(HO)",
     "Manipur",
@@ -1454,6 +1462,101 @@ def seed_company_masters(db, tenant_id):
             },
             upsert=True,
         )
+
+
+def get_platform_maintenance_state(db):
+    doc = db.system_settings.find_one(
+        {"_id": PLATFORM_MAINTENANCE_SETTING_ID},
+        {
+            "enabled": 1,
+            "message": 1,
+            "updated_at": 1,
+            "updated_by": 1,
+            "updated_by_name": 1,
+        },
+    ) or {}
+
+    updated_at = doc.get("updated_at")
+    if isinstance(updated_at, datetime):
+        updated_at = updated_at.isoformat() + "Z"
+
+    return {
+        "enabled": truthy(doc.get("enabled")),
+        "message": normalize_text(doc.get("message")) or DEFAULT_MAINTENANCE_MESSAGE,
+        "updated_at": updated_at,
+        "updated_by": normalize_text(doc.get("updated_by")) or None,
+        "updated_by_name": normalize_text(doc.get("updated_by_name")) or None,
+    }
+
+
+@superadmin_bp.get("/maintenance/status")
+def maintenance_status():
+    db = get_db()
+    state = get_platform_maintenance_state(db)
+    return jsonify({
+        "ok": True,
+        "maintenance": {
+            "enabled": state.get("enabled", False),
+            "message": state.get("message") or DEFAULT_MAINTENANCE_MESSAGE,
+        },
+    })
+
+
+@superadmin_bp.patch("/maintenance")
+@roles_required("super_admin")
+def update_platform_maintenance():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    if "enabled" not in data:
+        return jsonify({"message": "Maintenance enabled state is required"}), 400
+
+    raw_enabled = data.get("enabled")
+    if not isinstance(raw_enabled, bool):
+        return jsonify({"message": "Maintenance enabled state must be true or false"}), 400
+
+    user = getattr(g, "current_user", {}) or {}
+    message = normalize_text(data.get("message")) or DEFAULT_MAINTENANCE_MESSAGE
+    updated_at = now()
+
+    db.system_settings.update_one(
+        {"_id": PLATFORM_MAINTENANCE_SETTING_ID},
+        {
+            "$set": {
+                "tenant_id": "__platform__",
+                "scope": "platform",
+                "setting_group": "platform",
+                "setting_key": "maintenance_mode",
+                "enabled": raw_enabled,
+                "message": message,
+                "updated_at": updated_at,
+                "updated_by": str(user.get("_id", "")),
+                "updated_by_name": normalize_text(user.get("name")),
+                "is_deleted": False,
+            },
+            "$setOnInsert": {
+                "created_at": updated_at,
+            },
+        },
+        upsert=True,
+    )
+
+    audit(
+        "platform_maintenance_enabled" if raw_enabled else "platform_maintenance_disabled",
+        "platform_maintenance",
+        PLATFORM_MAINTENANCE_SETTING_ID,
+        {"enabled": raw_enabled},
+    )
+
+    return jsonify({
+        "ok": True,
+        "message": (
+            "YourComate maintenance mode enabled."
+            if raw_enabled
+            else "YourComate maintenance mode disabled."
+        ),
+        "maintenance": get_platform_maintenance_state(db),
+    })
 
 
 @superadmin_bp.get("/companies")

@@ -231,6 +231,42 @@ def issue_token(user):
     return issue_access_token(user)
 
 
+def request_has_super_admin_role():
+    """
+    Returns True when the current request carries a valid, signed access token
+    whose JWT role list contains the platform Superadmin role.
+
+    This helper is intentionally lightweight so it can be used by app-level
+    middleware before route decorators run. Protected routes still perform the
+    normal database-backed current_user_required validation afterwards.
+    """
+    auth = request.headers.get("Authorization", "")
+
+    if not auth.startswith("Bearer "):
+        return False
+
+    token = auth.replace("Bearer ", "", 1).strip()
+
+    if not token:
+        return False
+
+    try:
+        payload = jwt.decode(
+            token,
+            current_app.config["JWT_SECRET_KEY"],
+            algorithms=["HS256"],
+        )
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return False
+    except Exception:
+        return False
+
+    if payload.get("token_type", "access") != "access":
+        return False
+
+    return "super_admin" in set(normalize_roles(payload.get("roles", [])))
+
+
 def current_user_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
