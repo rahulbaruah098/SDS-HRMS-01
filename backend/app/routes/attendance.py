@@ -18,9 +18,16 @@ ATTENDANCE_LOCAL_TIMEZONE = timezone(
     timedelta(minutes=int(os.getenv("ATTENDANCE_TIMEZONE_OFFSET_MINUTES", "330")))
 )
 
-OFFICE_START_TIME = time(9, 30)
-LATE_CUTOFF = time(9, 50)
-OFFICE_END_TIME = time(18, 0)
+DEFAULT_ATTENDANCE_SCHEDULE = {
+    "check_in_time": "09:30",
+    "late_cutoff_time": "09:50",
+    "break_start_time": "13:00",
+    "break_end_time": "14:00",
+    "check_out_time": "18:00",
+}
+
+ATTENDANCE_SCHEDULE_SETTING_GROUP = "attendance"
+ATTENDANCE_SCHEDULE_SETTING_KEY = "attendance_schedule"
 
 ATTENDANCE_MAX_GPS_ACCURACY_METERS = int(
     os.getenv("ATTENDANCE_MAX_GPS_ACCURACY_METERS", "60")
@@ -477,6 +484,174 @@ def has_role(*allowed_roles):
     return bool(roles.intersection(set(allowed_roles)))
 
 
+def normalize_attendance_schedule_time(value):
+    value = normalize_text(value)
+
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+        return ""
+
+    return value
+
+
+def attendance_schedule_time_to_minutes(value):
+    value = normalize_attendance_schedule_time(value)
+
+    if not value:
+        return None
+
+    hours, minutes = [int(part) for part in value.split(":", 1)]
+    return (hours * 60) + minutes
+
+
+def attendance_schedule_time_value(value, fallback):
+    normalized = normalize_attendance_schedule_time(value)
+    return normalized or fallback
+
+
+def attendance_schedule_settings_id(tenant_id):
+    return f"attendance-schedule:{normalize_text(tenant_id)}"
+
+
+def validate_attendance_schedule_payload(data):
+    data = data or {}
+    schedule = {
+        "check_in_time": normalize_attendance_schedule_time(
+            data.get("check_in_time") or data.get("office_start")
+        ),
+        "late_cutoff_time": normalize_attendance_schedule_time(
+            data.get("late_cutoff_time") or data.get("late_cutoff")
+        ),
+        "break_start_time": normalize_attendance_schedule_time(
+            data.get("break_start_time") or data.get("break_start")
+        ),
+        "break_end_time": normalize_attendance_schedule_time(
+            data.get("break_end_time") or data.get("break_end")
+        ),
+        "check_out_time": normalize_attendance_schedule_time(
+            data.get("check_out_time") or data.get("office_end")
+        ),
+    }
+
+    labels = {
+        "check_in_time": "Check-in time",
+        "late_cutoff_time": "Late check-in cutoff",
+        "break_start_time": "Break start time",
+        "break_end_time": "Break end time",
+        "check_out_time": "Checkout time",
+    }
+
+    for key, label in labels.items():
+        if not schedule[key]:
+            return None, f"{label} is required in HH:MM format"
+
+    check_in = attendance_schedule_time_to_minutes(schedule["check_in_time"])
+    late_cutoff = attendance_schedule_time_to_minutes(schedule["late_cutoff_time"])
+    break_start = attendance_schedule_time_to_minutes(schedule["break_start_time"])
+    break_end = attendance_schedule_time_to_minutes(schedule["break_end_time"])
+    check_out = attendance_schedule_time_to_minutes(schedule["check_out_time"])
+
+    if check_out <= check_in:
+        return None, "Checkout time must be later than check-in time"
+
+    if late_cutoff < check_in or late_cutoff >= check_out:
+        return None, (
+            "Late check-in cutoff must be at or after check-in and before checkout"
+        )
+
+    if break_start <= check_in or break_start >= check_out:
+        return None, "Break start must be after check-in and before checkout"
+
+    if break_end <= break_start or break_end >= check_out:
+        return None, "Break end must be after break start and before checkout"
+
+    return schedule, ""
+
+
+def attendance_schedule_for_tenant(db, tenant_id):
+    tenant_id = normalize_text(tenant_id)
+    settings_id = attendance_schedule_settings_id(tenant_id)
+    stored = db.system_settings.find_one({
+        "_id": settings_id,
+        "tenant_id": tenant_id,
+        "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+        "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+        "is_deleted": {"$ne": True},
+    })
+
+    stored = stored or {}
+    schedule = {
+        "check_in_time": attendance_schedule_time_value(
+            stored.get("check_in_time") or stored.get("office_start"),
+            DEFAULT_ATTENDANCE_SCHEDULE["check_in_time"],
+        ),
+        "late_cutoff_time": attendance_schedule_time_value(
+            stored.get("late_cutoff_time") or stored.get("late_cutoff"),
+            DEFAULT_ATTENDANCE_SCHEDULE["late_cutoff_time"],
+        ),
+        "break_start_time": attendance_schedule_time_value(
+            stored.get("break_start_time") or stored.get("break_start"),
+            DEFAULT_ATTENDANCE_SCHEDULE["break_start_time"],
+        ),
+        "break_end_time": attendance_schedule_time_value(
+            stored.get("break_end_time") or stored.get("break_end"),
+            DEFAULT_ATTENDANCE_SCHEDULE["break_end_time"],
+        ),
+        "check_out_time": attendance_schedule_time_value(
+            stored.get("check_out_time") or stored.get("office_end"),
+            DEFAULT_ATTENDANCE_SCHEDULE["check_out_time"],
+        ),
+    }
+
+    # If a legacy/corrupt stored record violates the ordering rules, fail safe
+    # to the current defaults instead of breaking attendance for that tenant.
+    validated, validation_error = validate_attendance_schedule_payload(schedule)
+    if validation_error:
+        schedule = dict(DEFAULT_ATTENDANCE_SCHEDULE)
+
+    schedule.update({
+        "tenant_id": tenant_id,
+        "source": "tenant" if stored and not validation_error else "default",
+        "can_manage": has_role(*ATTENDANCE_REASON_MANAGER_ROLES),
+        "updated_at": stored.get("updated_at") if stored and not validation_error else None,
+        "updated_by_name": (
+            stored.get("updated_by_name", "")
+            if stored and not validation_error
+            else ""
+        ),
+    })
+    return schedule
+
+
+def attendance_schedule_time_objects(schedule):
+    def parse_time(key):
+        raw = attendance_schedule_time_value(
+            schedule.get(key),
+            DEFAULT_ATTENDANCE_SCHEDULE[key],
+        )
+        hours, minutes = [int(part) for part in raw.split(":", 1)]
+        return time(hours, minutes)
+
+    return {
+        "check_in": parse_time("check_in_time"),
+        "late_cutoff": parse_time("late_cutoff_time"),
+        "break_start": parse_time("break_start_time"),
+        "break_end": parse_time("break_end_time"),
+        "check_out": parse_time("check_out_time"),
+    }
+
+
+def format_attendance_schedule_time(value):
+    value = normalize_attendance_schedule_time(value)
+
+    if not value:
+        return ""
+
+    hours, minutes = [int(part) for part in value.split(":", 1)]
+    suffix = "PM" if hours >= 12 else "AM"
+    display_hour = hours % 12 or 12
+    return f"{display_hour:02d}:{minutes:02d} {suffix}"
+
+
 def normalize_attendance_reason_code(value):
     return re.sub(
         r"[^a-z0-9]+",
@@ -699,7 +874,13 @@ def meaningful_other_reason(value, reason_label):
     return reason, ""
 
 
-def resolve_attendance_reason(data, prefix, settings, required=False):
+def resolve_attendance_reason(
+    data,
+    prefix,
+    settings,
+    required=False,
+    attendance_schedule=None,
+):
     code = normalize_attendance_reason_code(
         data.get(f"{prefix}_reason_code")
         or data.get(f"{prefix}_reason_id")
@@ -724,10 +905,19 @@ def resolve_attendance_reason(data, prefix, settings, required=False):
         if prefix == "late"
         else "early checkout reason"
     )
+    attendance_schedule = attendance_schedule or DEFAULT_ATTENDANCE_SCHEDULE
+    late_cutoff_label = format_attendance_schedule_time(
+        attendance_schedule.get("late_cutoff_time")
+        or DEFAULT_ATTENDANCE_SCHEDULE["late_cutoff_time"]
+    )
+    check_out_label = format_attendance_schedule_time(
+        attendance_schedule.get("check_out_time")
+        or DEFAULT_ATTENDANCE_SCHEDULE["check_out_time"]
+    )
     required_message = (
-        "Late reason is required from 09:50 AM onwards"
+        f"Late reason is required from {late_cutoff_label} onwards"
         if prefix == "late"
-        else "Early checkout reason is required before 06:00 PM"
+        else f"Early checkout reason is required before {check_out_label}"
     )
     invalid_selection_message = (
         f"Select a valid {reason_label} from your company's current list"
@@ -1841,6 +2031,83 @@ def can_decide_mode_request(db, request_doc):
     return False
 
 
+@attendance_bp.get("/schedule-settings")
+@tenant_module_required("attendance")
+def get_attendance_schedule_settings():
+    settings = attendance_schedule_for_tenant(
+        get_db(),
+        current_tenant_id(),
+    )
+    return jsonify(clean_doc(settings))
+
+
+@attendance_bp.put("/schedule-settings")
+@roles_required(*ATTENDANCE_REASON_MANAGER_ROLES)
+@tenant_module_required("attendance")
+def update_attendance_schedule_settings():
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    tenant_id = normalize_text(current_tenant_id())
+
+    schedule, validation_error = validate_attendance_schedule_payload(data)
+
+    if validation_error:
+        return jsonify({"message": validation_error}), 400
+
+    now = datetime.utcnow()
+    settings_id = attendance_schedule_settings_id(tenant_id)
+    actor_id = normalize_text(
+        g.current_user.get("_id") or g.current_user.get("id")
+    )
+    actor_name = normalize_text(
+        g.current_user.get("name") or g.current_user.get("email")
+    )
+
+    db.system_settings.update_one(
+        {"_id": settings_id},
+        {
+            "$set": {
+                "tenant_id": tenant_id,
+                "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+                "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+                **schedule,
+                # Compatibility aliases for existing web/app consumers.
+                "office_start": schedule["check_in_time"],
+                "late_cutoff": schedule["late_cutoff_time"],
+                "break_start": schedule["break_start_time"],
+                "break_end": schedule["break_end_time"],
+                "office_end": schedule["check_out_time"],
+                "is_deleted": False,
+                "updated_at": now,
+                "updated_by": actor_id,
+                "updated_by_name": actor_name,
+            },
+            "$setOnInsert": {
+                "created_at": now,
+                "created_by": actor_id,
+                "created_by_name": actor_name,
+            },
+        },
+        upsert=True,
+    )
+
+    audit(
+        "update_attendance_schedule_settings",
+        "system_settings",
+        settings_id,
+        {
+            "tenant_id": tenant_id,
+            **schedule,
+        },
+    )
+
+    settings = attendance_schedule_for_tenant(db, tenant_id)
+    return jsonify({
+        "message": "Tenant attendance timings updated successfully",
+        **clean_doc(settings),
+    })
+
+
 @attendance_bp.get("/reason-settings")
 @tenant_module_required("attendance")
 def get_attendance_reason_settings():
@@ -1974,11 +2241,16 @@ def attendance_status():
         .limit(20)
     )
 
+    attendance_schedule = attendance_schedule_for_tenant(db, tenant_id)
+
     return jsonify({
         "today": today,
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": attendance_schedule["check_in_time"],
+        "late_cutoff": attendance_schedule["late_cutoff_time"],
+        "break_start": attendance_schedule["break_start_time"],
+        "break_end": attendance_schedule["break_end_time"],
+        "office_end": attendance_schedule["check_out_time"],
+        "attendance_schedule": clean_doc(attendance_schedule),
         "employee": clean_doc(employee_snapshot(e)),
         "employee_summary": clean_doc(employee_snapshot(e)),
         "employee_state": employee_state(e),
@@ -2077,13 +2349,21 @@ def check_in():
                 "pending_holiday_work_request": clean_doc(pending_request),
             }), 403
 
-    is_late = now.time() >= LATE_CUTOFF and not holiday_info.get("is_holiday")
+    attendance_schedule = attendance_schedule_for_tenant(db, tenant_id)
+    attendance_schedule_times = attendance_schedule_time_objects(
+        attendance_schedule
+    )
+    is_late = (
+        now.time() >= attendance_schedule_times["late_cutoff"]
+        and not holiday_info.get("is_holiday")
+    )
     reason_settings = attendance_reason_settings_for_tenant(db, tenant_id)
     late_reason_selection, late_reason_error = resolve_attendance_reason(
         data,
         "late",
         reason_settings,
         required=is_late,
+        attendance_schedule=attendance_schedule,
     )
 
     if late_reason_error:
@@ -2150,9 +2430,11 @@ def check_in():
         "check_in": now,
         "check_out": None,
 
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": attendance_schedule["check_in_time"],
+        "late_cutoff": attendance_schedule["late_cutoff_time"],
+        "break_start": attendance_schedule["break_start_time"],
+        "break_end": attendance_schedule["break_end_time"],
+        "office_end": attendance_schedule["check_out_time"],
 
         "mode": mode,
         "field_location": field_location,
@@ -2317,13 +2599,21 @@ def check_out():
         }), 409
 
     holiday_info = holiday_info_for_employee(db, e, today_date)
-    is_early_checkout = now.time() < OFFICE_END_TIME and not holiday_info.get("is_holiday")
+    attendance_schedule = attendance_schedule_for_tenant(db, tenant_id)
+    attendance_schedule_times = attendance_schedule_time_objects(
+        attendance_schedule
+    )
+    is_early_checkout = (
+        now.time() < attendance_schedule_times["check_out"]
+        and not holiday_info.get("is_holiday")
+    )
     reason_settings = attendance_reason_settings_for_tenant(db, tenant_id)
     early_reason_selection, early_reason_error = resolve_attendance_reason(
         data,
         "early_checkout",
         reason_settings,
         required=is_early_checkout,
+        attendance_schedule=attendance_schedule,
     )
 
     if early_reason_error:

@@ -8,8 +8,13 @@ from app.utils.auth import roles_required
 from app.utils.serializers import clean_doc
 
 from app.services.attendance_excel import (
+    build_attendance_exception_excel_file,
+    build_attendance_exception_excel_filename,
+    build_attendance_exception_rows,
     build_attendance_excel_file,
     build_attendance_excel_filename,
+    build_employee_master_excel_file,
+    build_employee_master_excel_filename,
     build_period_dates,
 )
 
@@ -1031,15 +1036,48 @@ def active_employee_query():
             {
                 "$or": [
                     {"status": {"$exists": False}},
-                    {"status": {"$nin": ["inactive", "Inactive", "Resigned", "resigned", "Left", "left", "Terminated", "terminated", "alumni"]}},
+                    {"status": {"$nin": [
+                        "inactive", "Inactive", "Resigned", "resigned",
+                        "Left", "left", "Terminated", "terminated",
+                        "Retired", "retired", "alumni", "Alumni",
+                        "ex-employee", "ex_employee",
+                    ]}},
                 ]
             },
             {
                 "$or": [
                     {"employment_status": {"$exists": False}},
-                    {"employment_status": {"$nin": ["inactive", "Inactive", "Resigned", "resigned", "Left", "left", "Terminated", "terminated", "alumni"]}},
+                    {"employment_status": {"$nin": [
+                        "inactive", "Inactive", "Resigned", "resigned",
+                        "Left", "left", "Terminated", "terminated",
+                        "Retired", "retired", "alumni", "Alumni",
+                        "ex-employee", "ex_employee",
+                    ]}},
                 ]
             },
+            {"is_active": {"$ne": False}},
+            {
+                "$or": [
+                    {"last_working_date": {"$exists": False}},
+                    {"last_working_date": {"$in": [None, ""]}},
+                ]
+            },
+        ]
+    }
+
+
+def alumni_employee_query():
+    alumni_status = re.compile(
+        r"^(inactive|resigned|left|terminated|retired|alumni|ex-employee|ex_employee)$",
+        re.IGNORECASE,
+    )
+
+    return {
+        "$or": [
+            {"is_alumni": True},
+            {"status": alumni_status},
+            {"employment_status": alumni_status},
+            {"last_working_date": {"$exists": True, "$nin": [None, ""]}},
         ]
     }
 
@@ -1066,8 +1104,6 @@ def excel_employee_identifier_values(employee):
     add(employee.get("employee_ref_id"))
     add(employee.get("email"))
     add(employee.get("official_email"))
-    add(employee.get("phone"))
-    add(employee.get("mobile"))
 
     return values
 
@@ -1096,10 +1132,12 @@ def selected_employee_query():
         or request.args.get("name")
     )
 
-    conditions = []
-
+    # Selection is intentionally hierarchical.  When a stable employee id is
+    # supplied, name/email/code fallbacks must not broaden the query and pull a
+    # second employee with a similar name or legacy alias.
     if employee_id:
         employee_obj_id = safe_object_id(employee_id)
+        conditions = []
 
         if employee_obj_id:
             conditions.append({"_id": employee_obj_id})
@@ -1111,30 +1149,31 @@ def selected_employee_query():
             {"employee_ref_id": employee_id},
         ])
 
+        return {"$or": conditions}
+
     if employee_code:
-        conditions.extend([
+        return {"$or": [
             {"employee_code": employee_code},
             {"emp_code": employee_code},
             {"code": employee_code},
-        ])
+        ]}
 
     if employee_email:
-        conditions.extend([
+        return {"$or": [
             {"email": {"$regex": f"^{re.escape(employee_email)}$", "$options": "i"}},
             {"official_email": {"$regex": f"^{re.escape(employee_email)}$", "$options": "i"}},
-        ])
+        ]}
 
     if employee_name:
-        conditions.extend([
-            {"name": {"$regex": re.escape(employee_name), "$options": "i"}},
-            {"employee_name": {"$regex": re.escape(employee_name), "$options": "i"}},
-            {"full_name": {"$regex": re.escape(employee_name), "$options": "i"}},
-        ])
+        exact_name = f"^{re.escape(employee_name)}$"
 
-    if not conditions:
-        return {}
+        return {"$or": [
+            {"name": {"$regex": exact_name, "$options": "i"}},
+            {"employee_name": {"$regex": exact_name, "$options": "i"}},
+            {"full_name": {"$regex": exact_name, "$options": "i"}},
+        ]}
 
-    return {"$or": conditions}
+    return {}
 
 
 def selected_organisation_query():
@@ -1172,7 +1211,6 @@ def selected_organisation_query():
             {"organisation_code": organisation_code},
             {"organization_code": organisation_code},
             {"entity_code": organisation_code},
-            {"code": organisation_code},
         ])
 
     if organisation_name:
@@ -1304,8 +1342,6 @@ def employee_attendance_match_query(employee_identifiers):
             {"employee_ref_id": {"$in": identifiers}},
             {"email": {"$in": identifiers}},
             {"official_email": {"$in": identifiers}},
-            {"phone": {"$in": identifiers}},
-            {"mobile": {"$in": identifiers}},
         ]
     }
 
@@ -1330,8 +1366,6 @@ def employee_leave_match_query(employee_identifiers):
             {"employee_ref_id": {"$in": identifiers}},
             {"email": {"$in": identifiers}},
             {"official_email": {"$in": identifiers}},
-            {"phone": {"$in": identifiers}},
-            {"mobile": {"$in": identifiers}},
         ]
     }
 
@@ -1349,6 +1383,459 @@ def excel_safe_query_and(base_q, extra_q):
             extra_q,
         ]
     }
+
+
+def requested_organisation_filter_present():
+    return any(
+        normalize_text(request.args.get(key))
+        for key in (
+            "organisation_id",
+            "organization_id",
+            "entity_id",
+            "organisation_code",
+            "organization_code",
+            "entity_code",
+            "organisation",
+            "organization",
+            "entity",
+            "organisation_name",
+            "organization_name",
+        )
+    )
+
+
+def exact_employee_state_query(state):
+    state = normalize_text(state)
+
+    if not state:
+        return {}
+
+    normalized = normalize_state(state)
+    values = []
+
+    for value in (state, normalized):
+        if value and value.lower() not in {item.lower() for item in values}:
+            values.append(value)
+
+    conditions = []
+
+    for value in values:
+        state_regex = {
+            "$regex": f"^{re.escape(value)}$",
+            "$options": "i",
+        }
+        conditions.extend([
+            {"state": state_regex},
+            {"office_state": state_regex},
+            {"work_state": state_regex},
+            {"current_state": state_regex},
+            # Historical records can still contain only branch.
+            {"branch": state_regex},
+        ])
+
+    return {"$or": conditions}
+
+
+def requested_employee_scope_query(employee_scope="active"):
+    employee_scope = normalize_text(employee_scope).lower()
+
+    if employee_scope in {"all", "everyone"}:
+        return {}
+
+    if employee_scope in {"alumni", "past", "resigned", "inactive", "left"}:
+        return alumni_employee_query()
+
+    return active_employee_query()
+
+
+def selected_report_employees(db, tenant_id, employee_scope="active"):
+    employee_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }
+    employee_q = excel_safe_query_and(
+        employee_q,
+        requested_employee_scope_query(employee_scope),
+    )
+
+    organisation_q = selected_organisation_query()
+
+    if organisation_q:
+        employee_q = excel_safe_query_and(employee_q, organisation_q)
+
+    selected_employee_q = selected_employee_query()
+
+    if selected_employee_q:
+        employee_q = excel_safe_query_and(employee_q, selected_employee_q)
+
+    state_q = exact_employee_state_query(request.args.get("state"))
+
+    if state_q:
+        employee_q = excel_safe_query_and(employee_q, state_q)
+
+    department = normalize_text(request.args.get("department"))
+    designation = normalize_text(request.args.get("designation"))
+    employment_status = normalize_text(
+        request.args.get("employment_status") or request.args.get("status")
+    )
+    search_text = normalize_text(request.args.get("q") or request.args.get("search"))
+
+    if department:
+        department_regex = {
+            "$regex": f"^{re.escape(department)}$",
+            "$options": "i",
+        }
+        employee_q = excel_safe_query_and(employee_q, {
+            "$or": [
+                {"department": department_regex},
+                {"department_name": department_regex},
+            ]
+        })
+
+    if designation:
+        designation_regex = {
+            "$regex": f"^{re.escape(designation)}$",
+            "$options": "i",
+        }
+        employee_q = excel_safe_query_and(employee_q, {
+            "$or": [
+                {"designation": designation_regex},
+                {"designation_name": designation_regex},
+            ]
+        })
+
+    if employment_status:
+        status_regex = {
+            "$regex": f"^{re.escape(employment_status)}$",
+            "$options": "i",
+        }
+        employee_q = excel_safe_query_and(employee_q, {
+            "$or": [
+                {"employment_status": status_regex},
+                {"status": status_regex},
+            ]
+        })
+
+    if search_text:
+        search_regex = {
+            "$regex": re.escape(search_text),
+            "$options": "i",
+        }
+        employee_q = excel_safe_query_and(employee_q, {
+            "$or": [
+                {"name": search_regex},
+                {"employee_name": search_regex},
+                {"full_name": search_regex},
+                {"email": search_regex},
+                {"official_email": search_regex},
+                {"phone": search_regex},
+                {"mobile": search_regex},
+                {"employee_id": search_regex},
+                {"employee_code": search_regex},
+                {"emp_code": search_regex},
+                {"organisation": search_regex},
+                {"organization": search_regex},
+                {"organisation_code": search_regex},
+                {"organization_code": search_regex},
+                {"department": search_regex},
+                {"designation": search_regex},
+                {"state": search_regex},
+            ]
+        })
+
+    return list(
+        db.employees
+        .find(employee_q)
+        .sort([
+            ("organisation_code", 1),
+            ("state", 1),
+            ("name", 1),
+            ("employee_name", 1),
+        ])
+    )
+
+
+def tenant_display_name(db, tenant_id):
+    tenant = db.tenants.find_one({
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    }) or {}
+
+    return (
+        normalize_text(tenant.get("company_name"))
+        or normalize_text(tenant.get("name"))
+        or normalize_text(tenant.get("tenant_name"))
+        or tenant_id
+    )
+
+
+def report_period_from_request(allow_year=False):
+    period = normalize_text(request.args.get("period") or "month").lower()
+    allowed_periods = {"day", "week", "month"}
+
+    if allow_year:
+        allowed_periods.add("year")
+
+    if period not in allowed_periods:
+        raise ValueError(
+            "Report period must be day, week, month"
+            + (", or year." if allow_year else ".")
+        )
+
+    year = request.args.get("year")
+    month = request.args.get("month")
+    date_value = request.args.get("date") or request.args.get("on_date")
+    week_start = request.args.get("week_start") or request.args.get("date_from")
+    week_end = request.args.get("week_end") or request.args.get("date_to")
+
+    if period == "day" and not date_value:
+        date_value = today_string()
+
+    dates = build_period_dates(
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+    )
+
+    if not dates:
+        raise ValueError("Invalid report period or date range.")
+
+    return {
+        "period": period,
+        "year": year,
+        "month": month,
+        "date_value": date_value,
+        "week_start": week_start,
+        "week_end": week_end,
+        "dates": dates,
+    }
+
+
+def stable_employee_references(employee):
+    references = set()
+
+    for value in (
+        employee.get("_id"),
+        employee.get("employee_ref_id"),
+        employee.get("employee_mongo_id"),
+        employee.get("employee_record_id"),
+    ):
+        value = normalize_text(value)
+
+        if value and safe_object_id(value):
+            references.add(value.lower())
+
+    employee_id = normalize_text(employee.get("employee_id"))
+
+    if employee_id and safe_object_id(employee_id):
+        references.add(employee_id.lower())
+
+    return references
+
+
+def stable_row_employee_references(row):
+    references = set()
+
+    for value in (
+        row.get("employee_id"),
+        row.get("employee_ref_id"),
+        row.get("employee_mongo_id"),
+        row.get("employee_record_id"),
+    ):
+        value = normalize_text(value)
+
+        if value and safe_object_id(value):
+            references.add(value.lower())
+
+    return references
+
+
+def filter_rows_to_selected_employee_references(rows, employees):
+    """Reject a row whose immutable employee reference belongs elsewhere.
+
+    Legacy rows without an immutable reference are retained for the Excel
+    service's guarded code/email matching.  A row with a real Mongo employee
+    reference can never fall back to a different selected employee's code.
+    """
+    selected_references = set()
+
+    for employee in employees or []:
+        selected_references.update(stable_employee_references(employee))
+
+    filtered = []
+
+    for row in rows or []:
+        row_references = stable_row_employee_references(row)
+
+        if row_references and row_references.isdisjoint(selected_references):
+            continue
+
+        filtered.append(row)
+
+    return filtered
+
+
+def attendance_exception_dataset(db, tenant_id, employees, dates, state=""):
+    employee_identifiers = []
+
+    for employee in employees:
+        for value in excel_employee_identifier_values(employee):
+            if value not in employee_identifiers:
+                employee_identifiers.append(value)
+
+    date_q = excel_date_range_query(dates)
+    attendance_q = excel_safe_query_and(
+        {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "date": date_q,
+        },
+        employee_attendance_match_query(employee_identifiers),
+    )
+    leave_q = excel_safe_query_and(
+        {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {
+                    "from_date": {"$lte": dates[-1].isoformat()},
+                    "to_date": {"$gte": dates[0].isoformat()},
+                },
+                {
+                    "from_date": {"$lte": dates[-1].isoformat()},
+                    "upto_date": {"$gte": dates[0].isoformat()},
+                },
+                {"date": date_q},
+            ],
+        },
+        employee_leave_match_query(employee_identifiers),
+    )
+    holiday_q = {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "date": date_q,
+        "status": {"$ne": "inactive"},
+    }
+    state_q = exact_employee_state_query(state)
+
+    if state_q:
+        # Holiday documents use state/branch but not employee work-state fields.
+        holiday_state_conditions = [
+            condition
+            for condition in state_q.get("$or", [])
+            if next(iter(condition), "") in {"state", "branch"}
+        ]
+
+        if holiday_state_conditions:
+            holiday_q["$or"] = holiday_state_conditions
+
+    return {
+        "attendance_logs": filter_rows_to_selected_employee_references(
+            list(db.attendance_logs.find(attendance_q)),
+            employees,
+        ),
+        "leave_requests": filter_rows_to_selected_employee_references(
+            list(db.leave_requests.find(leave_q)),
+            employees,
+        ),
+        "holidays": list(db.holiday_calendar.find(holiday_q)),
+    }
+
+
+def report_organisation_display(db, tenant_id, employees):
+    if requested_organisation_filter_present():
+        return selected_organisation_display(db, tenant_id)
+
+    organisation_names = sorted({
+        normalize_text(
+            employee.get("organisation")
+            or employee.get("organization")
+            or employee.get("organisation_name")
+            or employee.get("organization_name")
+        )
+        for employee in employees
+        if normalize_text(
+            employee.get("organisation")
+            or employee.get("organization")
+            or employee.get("organisation_name")
+            or employee.get("organization_name")
+        )
+    })
+
+    if len(organisation_names) == 1:
+        first = employees[0] if employees else {}
+        return {
+            "name": organisation_names[0],
+            "code": normalize_text(
+                first.get("organisation_code")
+                or first.get("organization_code")
+            ),
+        }
+
+    return {"name": "All Organisations", "code": ""}
+
+
+def prepare_attendance_exception_report(db):
+    tenant_id = current_tenant_id()
+    period_data = report_period_from_request(allow_year=False)
+    employees = selected_report_employees(
+        db,
+        tenant_id,
+        employee_scope="active",
+    )
+
+    if not employees:
+        raise LookupError(
+            "No active employees found for the selected tenant, organisation, state, and employee filters."
+        )
+
+    state = normalize_text(request.args.get("state"))
+    dataset = attendance_exception_dataset(
+        db,
+        tenant_id,
+        employees,
+        period_data["dates"],
+        state=state,
+    )
+    exception_rows = build_attendance_exception_rows(
+        employees=employees,
+        attendance_logs=dataset["attendance_logs"],
+        leave_requests=dataset["leave_requests"],
+        holidays=dataset["holidays"],
+        dates=period_data["dates"],
+    )
+    organisation = report_organisation_display(db, tenant_id, employees)
+
+    return {
+        "tenant_id": tenant_id,
+        "employees": employees,
+        "dataset": dataset,
+        "exception_rows": exception_rows,
+        "organisation": organisation,
+        "state": normalize_state(state) if state else "All States",
+        **period_data,
+    }
+
+
+def normalize_exception_report_type(value):
+    value = normalize_text(value or "absent").lower().replace("-", "_").replace(" ", "_")
+
+    aliases = {
+        "absent": "absent",
+        "absence": "absent",
+        "absentees": "absent",
+        "missing_checkout": "missing_checkout",
+        "missing_check_out": "missing_checkout",
+        "not_checked_out": "missing_checkout",
+        "no_checkout": "missing_checkout",
+        "exceptions": "exceptions",
+        "all": "exceptions",
+    }
+
+    return aliases.get(value, "")
 
 # -----------------------------------------------------------------------------
 # Reports APIs
@@ -1522,6 +2009,200 @@ def summary():
         "extra": clean_doc(extra),
     })
 
+@reports_bp.get("/employees.xlsx")
+@roles_required(*AUDIT_ROLES)
+def employee_master_excel_export():
+    db = get_db()
+    tenant_id = current_tenant_id()
+    employee_scope = normalize_text(
+        request.args.get("employee_scope") or request.args.get("scope") or "active"
+    ).lower()
+
+    if employee_scope not in {
+        "active",
+        "all",
+        "everyone",
+        "alumni",
+        "past",
+        "resigned",
+        "inactive",
+        "left",
+    }:
+        return jsonify({
+            "message": "Employee scope must be active, alumni, or all."
+        }), 400
+
+    employees = selected_report_employees(
+        db,
+        tenant_id,
+        employee_scope=employee_scope,
+    )
+
+    if not employees:
+        return jsonify({
+            "message": "No employees found for the selected export filters."
+        }), 404
+
+    organisation = report_organisation_display(db, tenant_id, employees)
+    state = normalize_text(request.args.get("state"))
+    current_user = getattr(g, "current_user", {}) or {}
+    generated_by = (
+        normalize_text(current_user.get("name"))
+        or normalize_text(current_user.get("full_name"))
+        or normalize_text(current_user.get("email"))
+    )
+    applied_filters = {
+        "search": request.args.get("q") or request.args.get("search"),
+        "department": request.args.get("department"),
+        "designation": request.args.get("designation"),
+        "employment_status": (
+            request.args.get("employment_status") or request.args.get("status")
+        ),
+        "employee": (
+            request.args.get("employee_name")
+            or request.args.get("employee_code")
+            or request.args.get("employee_id")
+        ),
+    }
+    excel_stream = build_employee_master_excel_file(
+        employees=employees,
+        tenant_name=tenant_display_name(db, tenant_id),
+        organisation_name=organisation.get("name", ""),
+        organisation_code=organisation.get("code", ""),
+        state_name=normalize_state(state) if state else "All States",
+        employee_scope=employee_scope,
+        generated_by=generated_by,
+        applied_filters=applied_filters,
+    )
+    filename = build_employee_master_excel_filename(
+        organisation_name=organisation.get("name", ""),
+        organisation_code=organisation.get("code", ""),
+        state_name=normalize_state(state) if state else "All States",
+        employee_scope=employee_scope,
+    )
+
+    return send_file(
+        excel_stream,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@reports_bp.get("/attendance-exceptions")
+@roles_required(*AUDIT_ROLES)
+def attendance_exceptions_report():
+    report_type = normalize_exception_report_type(
+        request.args.get("report_type") or request.args.get("type")
+    )
+
+    if not report_type:
+        return jsonify({
+            "message": "Report type must be absent, missing_checkout, or exceptions."
+        }), 400
+
+    db = get_db()
+
+    try:
+        context = prepare_attendance_exception_report(db)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except LookupError as exc:
+        return jsonify({"message": str(exc)}), 404
+
+    exception_rows = context["exception_rows"]
+
+    if report_type == "missing_checkout":
+        items = exception_rows["missing_checkout"]
+    elif report_type == "exceptions":
+        items = [
+            *({**item, "report_type": "absent"} for item in exception_rows["absent"]),
+            *(
+                {**item, "report_type": "missing_checkout"}
+                for item in exception_rows["missing_checkout"]
+            ),
+        ]
+    else:
+        items = exception_rows["absent"]
+
+    return jsonify({
+        "items": clean_doc(items),
+        "absent_items": clean_doc(exception_rows["absent"]),
+        "missing_checkout_items": clean_doc(exception_rows["missing_checkout"]),
+        "summary": exception_rows["summary"],
+        "filters": {
+            "report_type": report_type,
+            "period": context["period"],
+            "date": context["date_value"],
+            "week_start": context["week_start"],
+            "week_end": context["week_end"],
+            "year": context["year"],
+            "month": context["month"],
+            "organisation": context["organisation"],
+            "state": context["state"],
+            "employee_count": len(context["employees"]),
+        },
+    })
+
+
+@reports_bp.get("/attendance-exceptions.xlsx")
+@roles_required(*AUDIT_ROLES)
+def attendance_exceptions_excel_export():
+    report_type = normalize_exception_report_type(
+        request.args.get("report_type") or request.args.get("type")
+    )
+
+    if not report_type:
+        return jsonify({
+            "message": "Report type must be absent, missing_checkout, or exceptions."
+        }), 400
+
+    db = get_db()
+
+    try:
+        context = prepare_attendance_exception_report(db)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except LookupError as exc:
+        return jsonify({"message": str(exc)}), 404
+
+    excel_stream = build_attendance_exception_excel_file(
+        employees=context["employees"],
+        attendance_logs=context["dataset"]["attendance_logs"],
+        leave_requests=context["dataset"]["leave_requests"],
+        holidays=context["dataset"]["holidays"],
+        period=context["period"],
+        year=context["year"],
+        month=context["month"],
+        date_value=context["date_value"],
+        week_start=context["week_start"],
+        week_end=context["week_end"],
+        organisation_name=context["organisation"].get("name", ""),
+        organisation_code=context["organisation"].get("code", ""),
+        state_name=context["state"],
+        report_type=report_type,
+    )
+    filename = build_attendance_exception_excel_filename(
+        report_type=report_type,
+        organisation_name=context["organisation"].get("name", ""),
+        organisation_code=context["organisation"].get("code", ""),
+        state_name=context["state"],
+        period=context["period"],
+        year=context["year"],
+        month=context["month"],
+        date_value=context["date_value"],
+        week_start=context["week_start"],
+        week_end=context["week_end"],
+    )
+
+    return send_file(
+        excel_stream,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
 @reports_bp.get("/attendance-register.xlsx")
 @roles_required(*AUDIT_ROLES)
 def attendance_register_excel_export():
@@ -1579,24 +2260,10 @@ def attendance_register_excel_export():
         employee_q = excel_safe_query_and(employee_q, employee_filter_q)
 
     if normalized_state:
-        state_conditions = [
-            {"state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
-            {"office_state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
-            {"work_state": {"$regex": f"^{re.escape(normalized_state)}$", "$options": "i"}},
-            {"branch": {"$regex": normalized_state, "$options": "i"}},
-        ]
-
-        if state and state.lower() != normalized_state.lower():
-            state_conditions.extend([
-                {"state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
-                {"office_state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
-                {"work_state": {"$regex": f"^{re.escape(state)}$", "$options": "i"}},
-                {"branch": {"$regex": state, "$options": "i"}},
-            ])
-
-        employee_q = excel_safe_query_and(employee_q, {
-            "$or": state_conditions
-        })
+        employee_q = excel_safe_query_and(
+            employee_q,
+            exact_employee_state_query(state or normalized_state),
+        )
 
     employees = list(
         db.employees
@@ -1673,7 +2340,10 @@ def attendance_register_excel_export():
         employee_attendance_match_query(employee_identifiers),
     )
 
-    attendance_logs = list(db.attendance_logs.find(attendance_q))
+    attendance_logs = filter_rows_to_selected_employee_references(
+        list(db.attendance_logs.find(attendance_q)),
+        employees,
+    )
 
     leave_base_q = {
         "tenant_id": tenant_id,
@@ -1698,7 +2368,10 @@ def attendance_register_excel_export():
         employee_leave_match_query(employee_identifiers),
     )
 
-    leave_requests = list(db.leave_requests.find(leave_q))
+    leave_requests = filter_rows_to_selected_employee_references(
+        list(db.leave_requests.find(leave_q)),
+        employees,
+    )
 
     holiday_q = {
         "tenant_id": tenant_id,
@@ -1724,7 +2397,10 @@ def attendance_register_excel_export():
         employee_attendance_match_query(employee_identifiers),
     )
 
-    holiday_work_requests = list(db.holiday_work_requests.find(holiday_work_q))
+    holiday_work_requests = filter_rows_to_selected_employee_references(
+        list(db.holiday_work_requests.find(holiday_work_q)),
+        employees,
+    )
 
     compoff_q = excel_safe_query_and(
         {
@@ -1741,7 +2417,10 @@ def attendance_register_excel_export():
         employee_attendance_match_query(employee_identifiers),
     )
 
-    compoff_credits = list(db.compoff_credits.find(compoff_q))
+    compoff_credits = filter_rows_to_selected_employee_references(
+        list(db.compoff_credits.find(compoff_q)),
+        employees,
+    )
 
     organisation_display = selected_organisation_display(db, tenant_id)
 

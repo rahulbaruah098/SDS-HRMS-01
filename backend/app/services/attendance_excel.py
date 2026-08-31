@@ -71,6 +71,10 @@ PRESENT_FILL = PatternFill("solid", fgColor="FFFFFF")
 SECTION_FILL = PatternFill("solid", fgColor="E2F0D9")
 DETAIL_TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
 DETAIL_HEADER_FILL = PatternFill("solid", fgColor="D9EAF7")
+REPORT_TITLE_FILL = PatternFill("solid", fgColor="17365D")
+REPORT_META_FILL = PatternFill("solid", fgColor="EAF2F8")
+REPORT_ALT_FILL = PatternFill("solid", fgColor="F7FAFC")
+MISSING_CHECKOUT_FILL = PatternFill("solid", fgColor="FCE4D6")
 
 
 def normalize_text(value):
@@ -229,10 +233,46 @@ def employee_project(employee):
 def employee_location(employee):
     return (
         normalize_text(employee.get("location"))
-        or normalize_text(employee.get("branch"))
         or normalize_text(employee.get("state"))
         or normalize_text(employee.get("office_state"))
+        or normalize_text(employee.get("work_state"))
+        or normalize_text(employee.get("branch"))
         or ""
+    )
+
+
+def employee_state(employee):
+    return (
+        normalize_text(employee.get("state"))
+        or normalize_text(employee.get("office_state"))
+        or normalize_text(employee.get("work_state"))
+        or normalize_text(employee.get("current_state"))
+        or normalize_text(employee.get("branch"))
+    )
+
+
+def employee_organisation_name(employee):
+    return (
+        normalize_text(employee.get("organisation"))
+        or normalize_text(employee.get("organization"))
+        or normalize_text(employee.get("organisation_name"))
+        or normalize_text(employee.get("organization_name"))
+        or normalize_text(employee.get("entity"))
+    )
+
+
+def employee_organisation_code(employee):
+    return (
+        normalize_text(employee.get("organisation_code"))
+        or normalize_text(employee.get("organization_code"))
+        or normalize_text(employee.get("entity_code"))
+    )
+
+
+def employee_department(employee):
+    return (
+        normalize_text(employee.get("department"))
+        or normalize_text(employee.get("department_name"))
     )
 
 
@@ -473,6 +513,65 @@ def ambiguous_fallback_identities(employees):
         }
         for group_name in ("alias", "email")
     }
+
+
+def build_employee_identity_index(employees):
+    """Build a tenant-safe identity index for attendance detail rows.
+
+    A key that belongs to more than one employee is marked ambiguous and is
+    never used.  Immutable employee references are tried before user links,
+    editable codes, or email addresses.
+    """
+    index = {
+        group_name: {}
+        for group_name in IDENTITY_MATCH_PRIORITY
+    }
+
+    for employee in employees or []:
+        groups = employee_identity_groups(employee)
+        tenant_id = identity_tenant_id(employee)
+
+        for group_name in IDENTITY_MATCH_PRIORITY:
+            for value in groups[group_name]:
+                # The tenantless key is safe here because every report route
+                # passes an already tenant-scoped employee list.  If the same
+                # key appears twice it is deliberately made unusable.
+                for tenant_key in {tenant_id, ""}:
+                    key = (tenant_key, value)
+                    current = index[group_name].get(key)
+
+                    if current is None and key in index[group_name]:
+                        continue
+
+                    if current is not None and current is not employee:
+                        index[group_name][key] = None
+                    else:
+                        index[group_name][key] = employee
+
+    return index
+
+
+def matching_employee_for_row(row, employees=None, identity_index=None):
+    """Resolve one attendance/leave row to exactly one employee master."""
+    identity_index = identity_index or build_employee_identity_index(employees)
+    groups = attendance_row_identity_groups(row)
+    tenant_id = identity_tenant_id(row)
+    tenant_candidates = [tenant_id]
+
+    if tenant_id:
+        tenant_candidates.append("")
+
+    for group_name in IDENTITY_MATCH_PRIORITY:
+        for value in groups[group_name]:
+            for tenant_key in tenant_candidates:
+                employee = identity_index.get(group_name, {}).get(
+                    (tenant_key, value)
+                )
+
+                if employee is not None:
+                    return employee
+
+    return None
 
 
 def empty_identity_lookup():
@@ -834,26 +933,83 @@ def build_holiday_lookup(holidays):
         if not day_key:
             continue
 
-        lookup[day_key] = normalize_text(row.get("title") or row.get("name") or "Holiday")
+        title = normalize_text(row.get("title") or row.get("name") or "Holiday")
+        state_key = normalize_identity_value(
+            row.get("state")
+            or row.get("office_state")
+            or row.get("work_state")
+            or row.get("branch")
+        )
+
+        lookup[(state_key, day_key)] = title
+
+        # Retain the legacy date-only key for callers that supply a single
+        # state-specific holiday list.
+        lookup.setdefault(day_key, title)
 
     return lookup
 
 
-def code_for_employee_date(employee, target_date, attendance_lookup, leave_lookup, holiday_lookup):
+def holiday_for_employee_date(employee, target_date, holiday_lookup):
     target_key = target_date.isoformat()
+    state_key = normalize_identity_value(employee_state(employee))
 
-    # Approved leave and real attendance still take precedence over employee
-    # profile dates, but matching now uses immutable employee/user references
-    # before editable legacy codes and email aliases.
-    leave_code = identity_lookup_code(
-        leave_lookup,
-        employee,
-        target_key,
+    if state_key and (state_key, target_key) in holiday_lookup:
+        return holiday_lookup[(state_key, target_key)]
+
+    if ("", target_key) in holiday_lookup:
+        return holiday_lookup[("", target_key)]
+
+    # Date-only entries are accepted only when there are no state-specific
+    # entries for that day.  This prevents a holiday from one state making all
+    # other states absent/closed in an all-state report.
+    has_state_specific_entry = any(
+        isinstance(key, tuple) and len(key) == 2 and key[1] == target_key and key[0]
+        for key in holiday_lookup
     )
 
-    if leave_code:
-        return leave_code
+    if not has_state_specific_entry:
+        return holiday_lookup.get(target_key, "")
 
+    return ""
+
+
+def is_standard_weekly_off(target_date):
+    if target_date.weekday() == 6:
+        return True
+
+    if target_date.weekday() != 5:
+        return False
+
+    saturday_number = ((target_date.day - 1) // 7) + 1
+    return saturday_number in {2, 4}
+
+
+def code_for_employee_date(
+    employee,
+    target_date,
+    attendance_lookup,
+    leave_lookup,
+    holiday_lookup,
+    today_reference=None,
+):
+    target_key = target_date.isoformat()
+    today_reference = today_reference or date.today()
+
+    joining_date = employee_joining_date(employee)
+    last_working_date = employee_last_working_date(employee)
+
+    if target_date > today_reference:
+        return ""
+
+    if joining_date and target_date < joining_date:
+        return ""
+
+    if last_working_date and target_date > last_working_date:
+        return ""
+
+    # Real attendance has priority over leave because an employee who actually
+    # checked in must never be exported as absent or only-on-leave.
     attendance_code = identity_lookup_code(
         attendance_lookup,
         employee,
@@ -863,19 +1019,19 @@ def code_for_employee_date(employee, target_date, attendance_lookup, leave_looku
     if attendance_code:
         return attendance_code
 
-    joining_date = employee_joining_date(employee)
-    last_working_date = employee_last_working_date(employee)
+    leave_code = identity_lookup_code(
+        leave_lookup,
+        employee,
+        target_key,
+    )
 
-    if joining_date and target_date < joining_date:
-        return ""
+    if leave_code:
+        return leave_code
 
-    if last_working_date and target_date > last_working_date:
-        return ""
-
-    if target_key in holiday_lookup:
+    if holiday_for_employee_date(employee, target_date, holiday_lookup):
         return "H"
 
-    if target_date.weekday() == 6:
+    if is_standard_weekly_off(target_date):
         return ""
 
     return "A"
@@ -928,6 +1084,9 @@ def clean_excel_value(value):
 
     if value is None:
         return ""
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
 
     return str(value)
 
@@ -1010,7 +1169,7 @@ def add_detail_sheet(wb, title, columns, rows):
         max_len = len(label)
 
         for row in rows or []:
-            max_len = max(max_len, len(clean_excel_value(row.get(key))))
+            max_len = max(max_len, len(str(clean_excel_value(row.get(key)))))
 
         ws.column_dimensions[get_column_letter(col_index)].width = min(max(max_len + 3, 14), 45)
 
@@ -1024,6 +1183,410 @@ def add_detail_sheet(wb, title, columns, rows):
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     return ws
+
+
+def add_professional_table_sheet(
+    wb,
+    title,
+    columns,
+    rows,
+    metadata=None,
+    sheet_title=None,
+    status_key="status",
+):
+    """Create a clean, filterable report sheet with report metadata."""
+    if (
+        wb.sheetnames == ["Sheet"]
+        and wb.active.max_row == 1
+        and wb.active.max_column == 1
+        and wb.active["A1"].value is None
+    ):
+        ws = wb.active
+        ws.title = safe_sheet_title(sheet_title or title)
+    else:
+        ws = wb.create_sheet(safe_sheet_title(sheet_title or title))
+
+    rows = list(rows or [])
+    metadata = [normalize_text(value) for value in (metadata or []) if normalize_text(value)]
+    final_col = max(len(columns), 1)
+    final_col_letter = get_column_letter(final_col)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=final_col)
+    ws.cell(1, 1).value = title
+    ws.cell(1, 1).font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+    ws.cell(1, 1).fill = REPORT_TITLE_FILL
+    ws.cell(1, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+    for column in range(1, final_col + 1):
+        ws.cell(1, column).fill = REPORT_TITLE_FILL
+        ws.cell(1, column).border = THIN_BORDER
+
+    meta_start_row = 2
+
+    for offset, value in enumerate(metadata):
+        row_number = meta_start_row + offset
+        ws.merge_cells(
+            start_row=row_number,
+            start_column=1,
+            end_row=row_number,
+            end_column=final_col,
+        )
+        ws.cell(row_number, 1).value = value
+        ws.cell(row_number, 1).font = Font(name="Calibri", size=10, bold=False, color="1F2937")
+        ws.cell(row_number, 1).fill = REPORT_META_FILL
+        ws.cell(row_number, 1).alignment = Alignment(horizontal="left", vertical="center")
+
+        for column in range(1, final_col + 1):
+            ws.cell(row_number, column).fill = REPORT_META_FILL
+            ws.cell(row_number, column).border = THIN_BORDER
+
+    header_row = max(4, meta_start_row + len(metadata) + 1)
+
+    for column_index, (label, _) in enumerate(columns, start=1):
+        cell = ws.cell(header_row, column_index)
+        cell.value = label
+        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        cell.fill = DETAIL_TITLE_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = THIN_BORDER
+
+    data_start_row = header_row + 1
+
+    if not rows:
+        ws.merge_cells(
+            start_row=data_start_row,
+            start_column=1,
+            end_row=data_start_row,
+            end_column=final_col,
+        )
+        ws.cell(data_start_row, 1).value = "No records found for the selected filters."
+        apply_cell_style(ws.cell(data_start_row, 1), align="center", bold=True)
+    else:
+        for row_index, row in enumerate(rows, start=data_start_row):
+            status = normalize_text(row.get(status_key)).lower()
+
+            for column_index, (_, key) in enumerate(columns, start=1):
+                cell = ws.cell(row_index, column_index)
+                cell.value = clean_excel_value(row.get(key))
+                apply_cell_style(cell, align="left")
+
+                if status == "absent":
+                    cell.fill = ABSENT_FILL
+                elif status in {"not checked out", "not_checked_out", "missing checkout"}:
+                    cell.fill = MISSING_CHECKOUT_FILL
+                elif (row_index - data_start_row) % 2:
+                    cell.fill = REPORT_ALT_FILL
+
+    for column_index, (label, key) in enumerate(columns, start=1):
+        max_length = len(label)
+
+        for row in rows:
+            max_length = max(
+                max_length,
+                len(str(clean_excel_value(row.get(key)))),
+            )
+
+        ws.column_dimensions[get_column_letter(column_index)].width = min(
+            max(max_length + 3, 12),
+            42,
+        )
+
+    final_data_row = max(data_start_row, data_start_row + len(rows) - 1)
+    ws.freeze_panes = f"A{data_start_row}"
+    ws.sheet_view.showGridLines = False
+    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[header_row].height = 30
+    ws.auto_filter.ref = f"A{header_row}:{final_col_letter}{final_data_row}"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = f"1:{header_row}"
+
+    return ws
+
+
+def report_period_label(dates, period="month"):
+    dates = list(dates or [])
+
+    if not dates:
+        return "Selected period"
+
+    period_key = normalize_text(period).lower()
+
+    if period_key == "day":
+        return dates[0].strftime("%d %B %Y")
+
+    if period_key == "week":
+        return (
+            f"{dates[0].strftime('%d %B %Y')} to "
+            f"{dates[-1].strftime('%d %B %Y')}"
+        )
+
+    if period_key == "year":
+        return str(dates[0].year)
+
+    return dates[0].strftime("%B %Y")
+
+
+def employee_report_identity(employee):
+    groups = employee_identity_groups(employee)
+
+    for group_name in IDENTITY_MATCH_PRIORITY:
+        if groups[group_name]:
+            return groups[group_name][0]
+
+    return employee_name(employee).lower()
+
+
+def attendance_check_in_value(row):
+    return (
+        row.get("check_in")
+        or row.get("check_in_at")
+        or row.get("check_in_time")
+        or row.get("checked_in_at")
+    )
+
+
+def attendance_check_out_value(row):
+    return (
+        row.get("check_out")
+        or row.get("check_out_at")
+        or row.get("check_out_time")
+        or row.get("checked_out_at")
+    )
+
+
+def exception_employee_fields(employee, source_row=None):
+    employee = employee or {}
+    source_row = source_row or {}
+
+    return {
+        "employee_id": str(employee.get("_id") or source_row.get("employee_id") or ""),
+        "employee_code": employee_code(employee) or normalize_text(
+            source_row.get("employee_code")
+            or source_row.get("emp_code")
+            or source_row.get("code")
+        ),
+        "employee_name": employee_name(employee) if employee else (
+            normalize_text(source_row.get("employee_name"))
+            or normalize_text(source_row.get("name"))
+            or "Employee"
+        ),
+        "organisation_code": employee_organisation_code(employee) or normalize_text(
+            source_row.get("organisation_code")
+            or source_row.get("organization_code")
+        ),
+        "organisation": employee_organisation_name(employee) or normalize_text(
+            source_row.get("organisation")
+            or source_row.get("organization")
+            or source_row.get("organisation_name")
+            or source_row.get("organization_name")
+        ),
+        "state": employee_state(employee) or normalize_text(
+            source_row.get("state")
+            or source_row.get("office_state")
+            or source_row.get("work_state")
+            or source_row.get("branch")
+        ),
+        "department": employee_department(employee) or normalize_text(
+            source_row.get("department") or source_row.get("department_name")
+        ),
+        "designation": employee_designation(employee) or normalize_text(
+            source_row.get("designation") or source_row.get("designation_name")
+        ),
+        "team_leader": normalize_text(
+            employee.get("team_leader_name") or source_row.get("team_leader_name")
+        ),
+        "reporting_officer": normalize_text(
+            employee.get("reporting_officer_name")
+            or source_row.get("reporting_officer_name")
+        ),
+    }
+
+
+def build_attendance_exception_rows(
+    employees=None,
+    attendance_logs=None,
+    leave_requests=None,
+    holidays=None,
+    dates=None,
+    today_reference=None,
+):
+    """Return day-level absent and missing-checkout rows for HR reports."""
+    employees = list(employees or [])
+    attendance_logs = list(attendance_logs or [])
+    dates = sorted(set(dates or []))
+    today_reference = today_reference or date.today()
+
+    attendance_lookup = build_attendance_lookup(
+        attendance_logs,
+        employees=employees,
+    )
+    leave_lookup = build_leave_lookup(
+        leave_requests or [],
+        employees=employees,
+    )
+    holiday_lookup = build_holiday_lookup(holidays or [])
+    identity_index = build_employee_identity_index(employees)
+
+    absent_rows = []
+
+    for employee in sorted(
+        employees,
+        key=lambda item: (
+            employee_organisation_code(item).lower(),
+            employee_state(item).lower(),
+            employee_name(item).lower(),
+        ),
+    ):
+        base_fields = exception_employee_fields(employee)
+
+        for target_date in dates:
+            code = code_for_employee_date(
+                employee,
+                target_date,
+                attendance_lookup,
+                leave_lookup,
+                holiday_lookup,
+                today_reference=today_reference,
+            )
+
+            if code != "A":
+                continue
+
+            absent_rows.append({
+                **base_fields,
+                "date": target_date.isoformat(),
+                "attendance_code": "A",
+                "status": "Absent",
+                "remarks": "No attendance, approved leave, holiday, or weekly off found.",
+            })
+
+    selected_date_keys = {item.isoformat() for item in dates}
+    grouped_logs = {}
+
+    for row in attendance_logs:
+        row_date = date_key(
+            row.get("date")
+            or row.get("attendance_date")
+            or attendance_check_in_value(row)
+        )
+
+        if not row_date or (selected_date_keys and row_date not in selected_date_keys):
+            continue
+
+        if not attendance_check_in_value(row):
+            continue
+
+        matched_employee = matching_employee_for_row(
+            row,
+            employees=employees,
+            identity_index=identity_index,
+        )
+
+        # When an employee filter is active, unmatched logs must not leak into
+        # the selected employee's report.
+        if employees and matched_employee is None:
+            continue
+
+        identity_key = (
+            employee_report_identity(matched_employee)
+            if matched_employee
+            else attendance_employee_identifier(row)
+        )
+        group_key = (identity_key, row_date)
+        grouped_logs.setdefault(group_key, []).append((row, matched_employee))
+
+    missing_checkout_rows = []
+
+    for (_, row_date), grouped_rows in grouped_logs.items():
+        if any(attendance_check_out_value(row) for row, _ in grouped_rows):
+            continue
+
+        selected_row, matched_employee = max(
+            grouped_rows,
+            key=lambda item: clean_excel_value(attendance_check_in_value(item[0])),
+        )
+        base_fields = exception_employee_fields(matched_employee, selected_row)
+
+        missing_checkout_rows.append({
+            **base_fields,
+            "date": row_date,
+            "mode": normalize_text(selected_row.get("mode") or "office"),
+            "check_in": clean_excel_value(attendance_check_in_value(selected_row)),
+            "check_out": "",
+            "check_in_location": location_text(selected_row, "check_in_location"),
+            "check_in_map_url": location_map_url(selected_row, "check_in_location"),
+            "late_reason": normalize_text(selected_row.get("late_reason")),
+            "status": "Not Checked Out",
+            "remarks": "Checked in, but no checkout was recorded.",
+        })
+
+    absent_rows.sort(key=lambda row: (row["date"], row["employee_name"].lower()))
+    missing_checkout_rows.sort(
+        key=lambda row: (row["date"], row["employee_name"].lower())
+    )
+
+    for index, row in enumerate(absent_rows, start=1):
+        row["sl_no"] = index
+
+    for index, row in enumerate(missing_checkout_rows, start=1):
+        row["sl_no"] = index
+
+    return {
+        "absent": absent_rows,
+        "missing_checkout": missing_checkout_rows,
+        "summary": {
+            "absent_records": len(absent_rows),
+            "absent_employees": len({row["employee_id"] for row in absent_rows}),
+            "missing_checkout_records": len(missing_checkout_rows),
+            "missing_checkout_employees": len({
+                row["employee_id"] for row in missing_checkout_rows
+            }),
+        },
+    }
+
+
+ABSENT_REPORT_COLUMNS = [
+    ("Sl No", "sl_no"),
+    ("Employee Code", "employee_code"),
+    ("Employee Name", "employee_name"),
+    ("Organisation Code", "organisation_code"),
+    ("Organisation / Entity", "organisation"),
+    ("State", "state"),
+    ("Department", "department"),
+    ("Designation", "designation"),
+    ("Team Leader", "team_leader"),
+    ("Reporting Officer", "reporting_officer"),
+    ("Absent Date", "date"),
+    ("Attendance Code", "attendance_code"),
+    ("Status", "status"),
+    ("Remarks", "remarks"),
+]
+
+
+MISSING_CHECKOUT_REPORT_COLUMNS = [
+    ("Sl No", "sl_no"),
+    ("Employee Code", "employee_code"),
+    ("Employee Name", "employee_name"),
+    ("Organisation Code", "organisation_code"),
+    ("Organisation / Entity", "organisation"),
+    ("State", "state"),
+    ("Department", "department"),
+    ("Designation", "designation"),
+    ("Team Leader", "team_leader"),
+    ("Reporting Officer", "reporting_officer"),
+    ("Attendance Date", "date"),
+    ("Mode", "mode"),
+    ("Check In", "check_in"),
+    ("Check Out", "check_out"),
+    ("Check-In Location", "check_in_location"),
+    ("Check-In Map", "check_in_map_url"),
+    ("Late Reason", "late_reason"),
+    ("Status", "status"),
+    ("Remarks", "remarks"),
+]
 
 def field_attendance_detail_rows(attendance_logs):
     rows = []
@@ -1530,6 +2093,51 @@ def build_attendance_workbook(
         period_label=period_label,
     )
 
+    exception_rows = build_attendance_exception_rows(
+        employees=employees or [],
+        attendance_logs=attendance_logs or [],
+        leave_requests=leave_requests or [],
+        holidays=holidays or [],
+        dates=dates,
+    )
+
+    report_metadata = [
+        f"Period: {report_period_label(dates, period_key)}",
+        (
+            "Organisation / Entity: "
+            f"{normalize_text(organisation_name) or 'All Organisations'}"
+            f"{f' ({normalize_text(organisation_code)})' if normalize_text(organisation_code) else ''}"
+        ),
+        f"State: {normalize_text(state_name) or 'All States'}",
+    ]
+
+    add_professional_table_sheet(
+        wb,
+        "Absent Employees",
+        ABSENT_REPORT_COLUMNS,
+        exception_rows["absent"],
+        metadata=[
+            *report_metadata,
+            f"Total absent records: {exception_rows['summary']['absent_records']}",
+        ],
+        sheet_title="Absent Employees",
+    )
+
+    add_professional_table_sheet(
+        wb,
+        "Employees Without Check-Out",
+        MISSING_CHECKOUT_REPORT_COLUMNS,
+        exception_rows["missing_checkout"],
+        metadata=[
+            *report_metadata,
+            (
+                "Total missing-checkout records: "
+                f"{exception_rows['summary']['missing_checkout_records']}"
+            ),
+        ],
+        sheet_title="Missing Check-Out",
+    )
+
     create_field_attendance_detail_sheet(wb, attendance_logs or [])
     create_holiday_work_detail_sheet(wb, holiday_work_requests or [])
     create_compoff_detail_sheet(wb, compoff_credits or [])
@@ -1582,6 +2190,372 @@ def build_attendance_excel_file(
     return workbook_to_bytes(workbook)
 
 
+def build_attendance_exception_workbook(
+    employees=None,
+    attendance_logs=None,
+    leave_requests=None,
+    holidays=None,
+    period="month",
+    year=None,
+    month=None,
+    date_value=None,
+    week_start=None,
+    week_end=None,
+    organisation_name="",
+    organisation_code="",
+    state_name="",
+    report_type="absent",
+    today_reference=None,
+):
+    dates = build_period_dates(
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+    )
+    exception_rows = build_attendance_exception_rows(
+        employees=employees or [],
+        attendance_logs=attendance_logs or [],
+        leave_requests=leave_requests or [],
+        holidays=holidays or [],
+        dates=dates,
+        today_reference=today_reference,
+    )
+
+    report_type = normalize_text(report_type).lower().replace("-", "_")
+
+    if report_type not in {"absent", "missing_checkout", "exceptions"}:
+        report_type = "absent"
+
+    wb = Workbook()
+    metadata = [
+        f"Period: {report_period_label(dates, period)}",
+        (
+            "Organisation / Entity: "
+            f"{normalize_text(organisation_name) or 'All Organisations'}"
+            f"{f' ({normalize_text(organisation_code)})' if normalize_text(organisation_code) else ''}"
+        ),
+        f"State: {normalize_text(state_name) or 'All States'}",
+        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+    ]
+
+    if report_type in {"absent", "exceptions"}:
+        add_professional_table_sheet(
+            wb,
+            "Absent Employees",
+            ABSENT_REPORT_COLUMNS,
+            exception_rows["absent"],
+            metadata=[
+                *metadata,
+                f"Total absent records: {exception_rows['summary']['absent_records']}",
+            ],
+            sheet_title="Absent Employees",
+        )
+
+    if report_type in {"missing_checkout", "exceptions"}:
+        add_professional_table_sheet(
+            wb,
+            "Employees Without Check-Out",
+            MISSING_CHECKOUT_REPORT_COLUMNS,
+            exception_rows["missing_checkout"],
+            metadata=[
+                *metadata,
+                (
+                    "Total missing-checkout records: "
+                    f"{exception_rows['summary']['missing_checkout_records']}"
+                ),
+            ],
+            sheet_title="Missing Check-Out",
+        )
+
+    return wb
+
+
+def build_attendance_exception_excel_file(**kwargs):
+    return workbook_to_bytes(build_attendance_exception_workbook(**kwargs))
+
+
+EMPLOYEE_MASTER_COLUMNS = [
+    ("Sl No", "sl_no"),
+    ("Employee Code", "employee_code"),
+    ("Employee Name", "employee_name"),
+    ("Official Email", "official_email"),
+    ("Personal Email", "personal_email"),
+    ("Phone", "phone"),
+    ("Organisation Code", "organisation_code"),
+    ("Organisation / Entity", "organisation"),
+    ("State", "state"),
+    ("Department", "department"),
+    ("Designation", "designation"),
+    ("Role", "role"),
+    ("Employee Type", "employee_type"),
+    ("Job Type", "job_type"),
+    ("Shift", "shift"),
+    ("Joining Date", "joining_date"),
+    ("Employment Status", "status"),
+    ("Team Leader", "team_leader"),
+    ("Reporting Officer", "reporting_officer"),
+    ("Gender", "gender"),
+    ("Date of Birth", "date_of_birth"),
+    ("Blood Group", "blood_group"),
+    ("PAN No", "pan_no"),
+    ("Aadhaar No", "aadhar_no"),
+    ("UAN No", "uan_no"),
+    ("ESIC IP", "esic_ip"),
+    ("Gross Salary", "gross_salary"),
+    ("Payment Mode", "payment_mode"),
+    ("Address", "address"),
+    ("Last Working Date", "last_working_date"),
+    ("Exit Type", "exit_type"),
+    ("Exit Reason", "exit_reason"),
+]
+
+
+def employee_master_rows(employees):
+    rows = []
+    seen_employee_ids = set()
+
+    for employee in employees or []:
+        stable_id = normalize_text(employee.get("_id") or employee.get("id"))
+
+        if stable_id and stable_id in seen_employee_ids:
+            continue
+
+        if stable_id:
+            seen_employee_ids.add(stable_id)
+
+        official_email = normalize_text(
+            employee.get("official_email") or employee.get("email")
+        )
+        personal_email = normalize_text(
+            employee.get("personal_email") or employee.get("alternate_email")
+        )
+        status = normalize_text(
+            employee.get("employment_status") or employee.get("status") or "active"
+        )
+
+        rows.append({
+            "employee_code": employee_code(employee),
+            "employee_name": employee_name(employee),
+            "official_email": official_email,
+            "personal_email": personal_email,
+            "phone": normalize_text(employee.get("phone") or employee.get("mobile")),
+            "organisation_code": employee_organisation_code(employee),
+            "organisation": employee_organisation_name(employee),
+            "state": employee_state(employee),
+            "department": employee_department(employee),
+            "designation": employee_designation(employee),
+            "role": normalize_text(employee.get("role") or "employee"),
+            "employee_type": normalize_text(employee.get("employee_type")),
+            "job_type": normalize_text(employee.get("job_type")),
+            "shift": normalize_text(employee.get("shift")),
+            "joining_date": normalize_text(
+                employee.get("joining_date") or employee.get("date_of_joining")
+            ),
+            "status": status,
+            "team_leader": normalize_text(employee.get("team_leader_name")),
+            "reporting_officer": normalize_text(employee.get("reporting_officer_name")),
+            "gender": normalize_text(employee.get("gender")),
+            "date_of_birth": normalize_text(
+                employee.get("date_of_birth") or employee.get("dob")
+            ),
+            "blood_group": normalize_text(employee.get("blood_group")),
+            "pan_no": normalize_text(employee.get("pan_no") or employee.get("pan")),
+            "aadhar_no": normalize_text(
+                employee.get("aadhar_no") or employee.get("aadhaar_no")
+            ),
+            "uan_no": normalize_text(
+                employee.get("employee_uan_no") or employee.get("uan_no")
+            ),
+            "esic_ip": normalize_text(
+                employee.get("employee_esic_ip") or employee.get("esic_ip")
+            ),
+            "gross_salary": employee.get("gross_salary", employee.get("salary", "")),
+            "payment_mode": normalize_text(employee.get("payment_mode")),
+            "address": normalize_text(
+                employee.get("address") or employee.get("current_address")
+            ),
+            "last_working_date": normalize_text(
+                employee.get("last_working_date") or employee.get("resignation_date")
+            ),
+            "exit_type": normalize_text(employee.get("exit_type")),
+            "exit_reason": normalize_text(
+                employee.get("resignation_reason") or employee.get("exit_reason")
+            ),
+        })
+
+    rows.sort(
+        key=lambda row: (
+            row["organisation_code"].lower(),
+            row["state"].lower(),
+            row["employee_name"].lower(),
+        )
+    )
+
+    for index, row in enumerate(rows, start=1):
+        row["sl_no"] = index
+
+    return rows
+
+
+def build_employee_master_workbook(
+    employees=None,
+    tenant_name="",
+    organisation_name="",
+    organisation_code="",
+    state_name="",
+    employee_scope="active",
+    generated_by="",
+    applied_filters=None,
+):
+    rows = employee_master_rows(employees or [])
+    wb = Workbook()
+    organisation_label = normalize_text(organisation_name) or "All Organisations"
+    organisation_code = normalize_text(organisation_code)
+
+    if organisation_code:
+        organisation_label = f"{organisation_label} ({organisation_code})"
+
+    metadata = [
+        f"Tenant / Company: {normalize_text(tenant_name) or 'Current Tenant'}",
+        f"Organisation / Entity: {organisation_label}",
+        f"State: {normalize_text(state_name) or 'All States'}",
+        f"Employee Scope: {normalize_text(employee_scope).title() or 'Active'}",
+        f"Total Employees: {len(rows)}",
+        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+    ]
+
+    filter_text = ", ".join(
+        f"{normalize_text(key).replace('_', ' ').title()}: {normalize_text(value)}"
+        for key, value in (applied_filters or {}).items()
+        if normalize_text(value)
+    )
+
+    if filter_text:
+        metadata.append(f"Applied Filters: {filter_text}")
+
+    if normalize_text(generated_by):
+        metadata.append(f"Generated By: {normalize_text(generated_by)}")
+
+    add_professional_table_sheet(
+        wb,
+        "Employee Master Report",
+        EMPLOYEE_MASTER_COLUMNS,
+        rows,
+        metadata=metadata,
+        sheet_title="Employee Master",
+    )
+
+    ws = wb["Employee Master"]
+    status_column = next(
+        index
+        for index, (_, key) in enumerate(EMPLOYEE_MASTER_COLUMNS, start=1)
+        if key == "status"
+    )
+    header_row = ws.auto_filter.ref.split(":", 1)[0]
+    header_row_number = int(re.sub(r"[^0-9]", "", header_row) or 1)
+
+    for row_number in range(header_row_number + 1, header_row_number + len(rows) + 1):
+        status_cell = ws.cell(row_number, status_column)
+        status = normalize_text(status_cell.value).lower()
+
+        if status in {"active", "confirmed", "probation"}:
+            status_cell.fill = WEEKEND_FILL
+        elif status in {"resigned", "left", "terminated", "inactive", "retired"}:
+            status_cell.fill = ABSENT_FILL
+
+    return wb
+
+
+def build_employee_master_excel_file(**kwargs):
+    return workbook_to_bytes(build_employee_master_workbook(**kwargs))
+
+
+def sanitize_excel_filename(filename):
+    filename = normalize_text(filename) or "report.xlsx"
+
+    for char in [" ", "/", "\\", ":", "*", "?", '"', "<", ">", "|", "(", ")"]:
+        filename = filename.replace(char, "_")
+
+    while "__" in filename:
+        filename = filename.replace("__", "_")
+
+    return filename
+
+
+def build_employee_master_excel_filename(
+    organisation_code="",
+    organisation_name="",
+    state_name="",
+    employee_scope="active",
+):
+    organisation_part = (
+        normalize_text(organisation_code)
+        or normalize_text(organisation_name)
+        or "All_Organisations"
+    )
+    state_part = normalize_text(state_name) or "All_States"
+    scope_part = normalize_text(employee_scope).title() or "Active"
+    date_part = datetime.now().strftime("%Y_%m_%d")
+
+    return sanitize_excel_filename(
+        f"{organisation_part}_{state_part}_{scope_part}_Employees_{date_part}.xlsx"
+    )
+
+
+def build_attendance_exception_excel_filename(
+    report_type="absent",
+    organisation_code="",
+    organisation_name="",
+    state_name="",
+    period="month",
+    year=None,
+    month=None,
+    date_value=None,
+    week_start=None,
+    week_end=None,
+):
+    dates = build_period_dates(
+        period=period,
+        year=year,
+        month=month,
+        date_value=date_value,
+        week_start=week_start,
+        week_end=week_end,
+    )
+    report_key = normalize_text(report_type).lower().replace("-", "_")
+    report_label = {
+        "absent": "Absent_Employees",
+        "missing_checkout": "Missing_Checkout",
+        "exceptions": "Attendance_Exceptions",
+    }.get(report_key, "Absent_Employees")
+    organisation_part = (
+        normalize_text(organisation_code)
+        or normalize_text(organisation_name)
+        or "All_Organisations"
+    )
+    state_part = normalize_text(state_name) or "All_States"
+    period_key = normalize_text(period).lower()
+
+    if period_key == "day":
+        period_part = dates[0].strftime("%Y_%m_%d")
+    elif period_key == "week":
+        period_part = (
+            f"{dates[0].strftime('%Y_%m_%d')}_to_"
+            f"{dates[-1].strftime('%Y_%m_%d')}"
+        )
+    elif period_key == "year":
+        period_part = str(dates[0].year)
+    else:
+        period_part = dates[0].strftime("%Y_%m")
+
+    return sanitize_excel_filename(
+        f"{organisation_part}_{state_part}_{report_label}_{period_part}.xlsx"
+    )
+
+
 def build_attendance_excel_filename(
     organisation_code="",
     organisation_name="",
@@ -1621,12 +2595,6 @@ def build_attendance_excel_filename(
     else:
         period_part = dates[0].strftime("%B_%Y")
 
-    filename = f"{org_part}_{state_part}_Attendance_{period_part}.xlsx"
-
-    for char in [" ", "/", "\\", ":", "*", "?", '"', "<", ">", "|", "(", ")"]:
-        filename = filename.replace(char, "_")
-
-    while "__" in filename:
-        filename = filename.replace("__", "_")
-
-    return filename
+    return sanitize_excel_filename(
+        f"{org_part}_{state_part}_Attendance_{period_part}.xlsx"
+    )

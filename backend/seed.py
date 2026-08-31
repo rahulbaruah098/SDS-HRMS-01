@@ -4,6 +4,12 @@ from werkzeug.security import generate_password_hash
 from app import create_app
 from app.extensions import get_db
 from app.routes.superadmin import seed_company_masters
+from app.routes.attendance import (
+    ATTENDANCE_SCHEDULE_SETTING_GROUP,
+    ATTENDANCE_SCHEDULE_SETTING_KEY,
+    DEFAULT_ATTENDANCE_SCHEDULE,
+    attendance_schedule_settings_id,
+)
 
 
 app = create_app()
@@ -19,6 +25,41 @@ SUPPORTED_HOLIDAY_STATES = [
 
 def now():
     return datetime.utcnow()
+
+
+def seed_attendance_schedule(db, tenant_id, created_by="seed"):
+    schedule = dict(DEFAULT_ATTENDANCE_SCHEDULE)
+    timestamp = now()
+
+    db.system_settings.update_one(
+        {"_id": attendance_schedule_settings_id(tenant_id)},
+        {
+            "$set": {
+                "tenant_id": tenant_id,
+                "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+                "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+                **schedule,
+                # Compatibility aliases used by existing web/app clients.
+                "office_start": schedule["check_in_time"],
+                "late_cutoff": schedule["late_cutoff_time"],
+                "break_start": schedule["break_start_time"],
+                "break_end": schedule["break_end_time"],
+                "office_end": schedule["check_out_time"],
+                "is_deleted": False,
+                "updated_at": timestamp,
+                "updated_by": created_by,
+                "updated_by_name": "Seed",
+            },
+            "$setOnInsert": {
+                "created_at": timestamp,
+                "created_by": created_by,
+                "created_by_name": "Seed",
+            },
+        },
+        upsert=True,
+    )
+
+    return schedule
 
 
 def normalize_text(value):
@@ -212,6 +253,11 @@ with app.app_context():
 
     seed_company_masters(db, "sds")
     seed_company_masters(db, "demo-company")
+
+    tenant_attendance_schedules = {
+        "sds": seed_attendance_schedule(db, "sds"),
+        "demo-company": seed_attendance_schedule(db, "demo-company"),
+    }
 
     users = [
         (
@@ -629,9 +675,11 @@ with app.app_context():
         "date": "2026-05-07",
         "check_in": now(),
         "check_out": None,
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": tenant_attendance_schedules[tenant_id]["check_in_time"],
+        "late_cutoff": tenant_attendance_schedules[tenant_id]["late_cutoff_time"],
+        "break_start": tenant_attendance_schedules[tenant_id]["break_start_time"],
+        "break_end": tenant_attendance_schedules[tenant_id]["break_end_time"],
+        "office_end": tenant_attendance_schedules[tenant_id]["check_out_time"],
         "mode": "office",
         "field_location": "",
         "late_reason": "",
@@ -669,9 +717,11 @@ with app.app_context():
         "date": "2026-05-07",
         "check_in": now(),
         "check_out": now(),
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": tenant_attendance_schedules[tenant_id]["check_in_time"],
+        "late_cutoff": tenant_attendance_schedules[tenant_id]["late_cutoff_time"],
+        "break_start": tenant_attendance_schedules[tenant_id]["break_start_time"],
+        "break_end": tenant_attendance_schedules[tenant_id]["break_end_time"],
+        "office_end": tenant_attendance_schedules[tenant_id]["check_out_time"],
         "mode": "office",
         "field_location": "",
         "late_reason": "Traffic delay",
@@ -847,7 +897,7 @@ with app.app_context():
         "tenant_id": tenant_id,
         "title": "Attendance Policy",
         "category": "HR",
-        "summary": "Office timing is 09:30 AM to 06:00 PM. Check-in from 09:50 AM requires a late reason.",
+        "summary": "Attendance timings, late cutoff, break window, and checkout time are configured tenant-wise in System Settings.",
         "status": "published",
         "created_at": now(),
     })

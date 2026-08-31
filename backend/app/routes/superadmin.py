@@ -8,6 +8,10 @@ from werkzeug.security import generate_password_hash
 from app.extensions import get_db
 from app.utils.auth import roles_required, audit
 from app.utils.serializers import clean_doc
+from app.routes.attendance import (
+    attendance_schedule_for_tenant,
+    attendance_schedule_time_objects,
+)
 
 from app.services.tenant_service import (
     build_subscription_summary,
@@ -692,12 +696,20 @@ def attendance_date_label(value):
     return normalize_text(value)
 
 
-def build_attendance_status(check_in_at=None, check_out_at=None):
+def build_attendance_status(
+    check_in_at=None,
+    check_out_at=None,
+    *,
+    late_cutoff=None,
+    office_end=None,
+):
     if not check_in_at:
         return "absent"
 
-    late_cutoff = time(9, 50)
-    office_end = time(18, 0)
+    # The caller supplies the selected employee tenant's configured timings.
+    # Defensive fallbacks keep this helper safe for older internal callers.
+    late_cutoff = late_cutoff or time(9, 50)
+    office_end = office_end or time(18, 0)
 
     if check_in_at.time() >= late_cutoff:
         return "late"
@@ -3602,13 +3614,24 @@ def private_attendance_correction_update():
             sort=[("updated_at", -1), ("created_at", -1)],
         )
 
-    status = build_attendance_status(check_in_at, check_out_at)
+    attendance_schedule = attendance_schedule_for_tenant(db, tenant_id)
+    attendance_schedule_times = attendance_schedule_time_objects(attendance_schedule)
+
+    status = build_attendance_status(
+        check_in_at,
+        check_out_at,
+        late_cutoff=attendance_schedule_times["late_cutoff"],
+        office_end=attendance_schedule_times["check_out"],
+    )
     is_holiday_work = bool(existing and truthy(existing.get("is_holiday_work")))
-    is_late = check_in_at.time() >= time(9, 50) and not is_holiday_work
+    is_late = (
+        check_in_at.time() >= attendance_schedule_times["late_cutoff"]
+        and not is_holiday_work
+    )
     is_early_checkout = bool(
         check_out_at
         and check_out_at.date() == check_in_at.date()
-        and check_out_at.time() < time(18, 0)
+        and check_out_at.time() < attendance_schedule_times["check_out"]
         and not is_holiday_work
     )
 
@@ -3644,9 +3667,11 @@ def private_attendance_correction_update():
         "is_late": is_late,
         "is_early_checkout": is_early_checkout,
         "is_holiday_work": is_holiday_work,
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": attendance_schedule["check_in_time"],
+        "late_cutoff": attendance_schedule["late_cutoff_time"],
+        "break_start": attendance_schedule["break_start_time"],
+        "break_end": attendance_schedule["break_end_time"],
+        "office_end": attendance_schedule["check_out_time"],
         "remarks": remarks,
         "manually_corrected": True,
         "manual_correction_source": "super_admin_private_attendance_correction",

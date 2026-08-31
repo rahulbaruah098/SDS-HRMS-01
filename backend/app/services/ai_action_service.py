@@ -4001,22 +4001,42 @@ def _attendance_reason_from_text(question):
     return _safe_str(clean)
 
 
-def _attendance_late_reason_required(now, holiday_info):
-    try:
-        from app.routes.attendance import LATE_CUTOFF
+def _attendance_schedule_context(db, tenant_id):
+    from app.routes.attendance import (
+        attendance_schedule_for_tenant,
+        attendance_schedule_time_objects,
+        format_attendance_schedule_time,
+    )
 
-        return now.time() >= LATE_CUTOFF and not holiday_info.get("is_holiday")
-    except Exception:
-        return now.time() >= datetime.strptime("09:50", "%H:%M").time() and not holiday_info.get("is_holiday")
+    schedule = attendance_schedule_for_tenant(db, tenant_id)
+    schedule_times = attendance_schedule_time_objects(schedule)
+
+    return {
+        "schedule": schedule,
+        "times": schedule_times,
+        "late_cutoff_label": format_attendance_schedule_time(
+            schedule.get("late_cutoff_time")
+        ),
+        "check_out_label": format_attendance_schedule_time(
+            schedule.get("check_out_time")
+        ),
+    }
 
 
-def _attendance_early_checkout_required(now, holiday_info):
-    try:
-        from app.routes.attendance import OFFICE_END_TIME
+def _attendance_late_reason_required(now, holiday_info, db, tenant_id):
+    schedule_context = _attendance_schedule_context(db, tenant_id)
+    return (
+        now.time() >= schedule_context["times"]["late_cutoff"]
+        and not holiday_info.get("is_holiday")
+    )
 
-        return now.time() < OFFICE_END_TIME and not holiday_info.get("is_holiday")
-    except Exception:
-        return now.time() < datetime.strptime("18:00", "%H:%M").time() and not holiday_info.get("is_holiday")
+
+def _attendance_early_checkout_required(now, holiday_info, db, tenant_id):
+    schedule_context = _attendance_schedule_context(db, tenant_id)
+    return (
+        now.time() < schedule_context["times"]["check_out"]
+        and not holiday_info.get("is_holiday")
+    )
 
 
 def _attendance_location_error_message(location):
@@ -4058,6 +4078,8 @@ def _submit_ai_check_in(data=None, user_context=None):
         raise RuntimeError(location_error)
 
     holiday_info = _attendance_holiday_info(db, employee, today_date)
+    schedule_context = _attendance_schedule_context(db, tenant_id)
+    attendance_schedule = schedule_context["schedule"]
     holiday_work_request = None
 
     if holiday_info.get("is_holiday"):
@@ -4069,11 +4091,13 @@ def _submit_ai_check_in(data=None, user_context=None):
                 raise RuntimeError("Holiday attendance requires approved holiday work request. Your request is still pending.")
             raise RuntimeError("Holiday attendance requires approved holiday work request.")
 
-    is_late = _attendance_late_reason_required(now, holiday_info)
+    is_late = _attendance_late_reason_required(now, holiday_info, db, tenant_id)
     late_reason = _safe_str(data.get("late_reason") or data.get("reason"))
 
     if is_late and not late_reason:
-        raise RuntimeError("Late reason is required from 09:50 AM onwards.")
+        raise RuntimeError(
+            f"Late reason is required from {schedule_context['late_cutoff_label']} onwards."
+        )
 
     old = db.attendance_logs.find_one({
         "tenant_id": tenant_id,
@@ -4121,9 +4145,11 @@ def _submit_ai_check_in(data=None, user_context=None):
         "check_in": now,
         "check_out": None,
 
-        "office_start": "09:30",
-        "late_cutoff": "09:50",
-        "office_end": "18:00",
+        "office_start": attendance_schedule["check_in_time"],
+        "late_cutoff": attendance_schedule["late_cutoff_time"],
+        "break_start": attendance_schedule["break_start_time"],
+        "break_end": attendance_schedule["break_end_time"],
+        "office_end": attendance_schedule["check_out_time"],
 
         "mode": mode,
         "field_location": "",
@@ -4243,7 +4269,13 @@ def _submit_ai_check_out(data=None, user_context=None):
         }
 
     holiday_info = _attendance_holiday_info(db, employee, today_date)
-    is_early_checkout = _attendance_early_checkout_required(now, holiday_info)
+    schedule_context = _attendance_schedule_context(db, tenant_id)
+    is_early_checkout = _attendance_early_checkout_required(
+        now,
+        holiday_info,
+        db,
+        tenant_id,
+    )
 
     early_checkout_reason = _safe_str(
         data.get("early_checkout_reason")
@@ -4251,7 +4283,9 @@ def _submit_ai_check_out(data=None, user_context=None):
     )
 
     if is_early_checkout and not early_checkout_reason:
-        raise RuntimeError("Early checkout reason is required before 06:00 PM.")
+        raise RuntimeError(
+            f"Early checkout reason is required before {schedule_context['check_out_label']}."
+        )
 
     update_data = {
         "check_out": now,
@@ -4329,6 +4363,7 @@ def _attendance_start(action_type, question="", user_context=None):
     now = _attendance_now_local()
     db = get_db()
     employee = _attendance_employee(user_context)
+    tenant_id = _attendance_tenant_id(employee, user_context)
     holiday_info = _attendance_holiday_info(db, employee, now.date())
     location = _attendance_location_from_payload()
 
@@ -4359,7 +4394,7 @@ def _attendance_start(action_type, question="", user_context=None):
         reason = ""
 
     if action_type == "attendance_check_in":
-        if _attendance_late_reason_required(now, holiday_info) and not reason:
+        if _attendance_late_reason_required(now, holiday_info, db, tenant_id) and not reason:
             save_pending_action(
                 user_context=user_context,
                 action_type="attendance_check_in",
@@ -4392,7 +4427,7 @@ def _attendance_start(action_type, question="", user_context=None):
     if action_type == "attendance_check_out":
         # The existing attendance route requires check-in first. If check-in is missing,
         # submit function will return that exact error.
-        if _attendance_early_checkout_required(now, holiday_info) and not reason:
+        if _attendance_early_checkout_required(now, holiday_info, db, tenant_id) and not reason:
             save_pending_action(
                 user_context=user_context,
                 action_type="attendance_check_out",

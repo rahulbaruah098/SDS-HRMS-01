@@ -30,6 +30,13 @@ const DEFAULT_PLATFORM_TAGLINE = 'People, Process and Performance';
 const MAX_PLATFORM_TAGLINE_LENGTH = 160;
 const MAX_ATTENDANCE_REASON_OPTIONS = 25;
 const OTHER_REASON_CODE = 'other';
+const DEFAULT_ATTENDANCE_SCHEDULE = Object.freeze({
+  check_in_time: '09:30',
+  late_cutoff_time: '09:50',
+  break_start_time: '13:00',
+  break_end_time: '14:00',
+  check_out_time: '18:00',
+});
 const ATTENDANCE_REASON_MANAGER_ROLES = new Set([
   'super_admin',
   'admin',
@@ -245,6 +252,125 @@ function validateAttendanceReasonOptions(values, fieldLabel) {
   return { error: '', values: normalized };
 }
 
+function normalizeAttendanceTime(value, fallback = '') {
+  const normalized = safeText(value);
+
+  if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
+    return normalized;
+  }
+
+  return fallback;
+}
+
+function getAttendanceScheduleFromResponse(data = {}) {
+  const schedule =
+    data.attendance_schedule ||
+    data.schedule ||
+    data.settings ||
+    data;
+
+  return {
+    check_in_time: normalizeAttendanceTime(
+      schedule?.check_in_time || schedule?.office_start,
+      DEFAULT_ATTENDANCE_SCHEDULE.check_in_time,
+    ),
+    late_cutoff_time: normalizeAttendanceTime(
+      schedule?.late_cutoff_time || schedule?.late_cutoff,
+      DEFAULT_ATTENDANCE_SCHEDULE.late_cutoff_time,
+    ),
+    break_start_time: normalizeAttendanceTime(
+      schedule?.break_start_time || schedule?.break_start,
+      DEFAULT_ATTENDANCE_SCHEDULE.break_start_time,
+    ),
+    break_end_time: normalizeAttendanceTime(
+      schedule?.break_end_time || schedule?.break_end,
+      DEFAULT_ATTENDANCE_SCHEDULE.break_end_time,
+    ),
+    check_out_time: normalizeAttendanceTime(
+      schedule?.check_out_time || schedule?.office_end,
+      DEFAULT_ATTENDANCE_SCHEDULE.check_out_time,
+    ),
+  };
+}
+
+function attendanceTimeToMinutes(value) {
+  const normalized = normalizeAttendanceTime(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const [hours, minutes] = normalized.split(':').map(Number);
+  return (hours * 60) + minutes;
+}
+
+function formatAttendanceTime(value) {
+  const normalized = normalizeAttendanceTime(value);
+
+  if (!normalized) {
+    return '--';
+  }
+
+  const [hours, minutes] = normalized.split(':').map(Number);
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const displayHour = hours % 12 || 12;
+
+  return `${String(displayHour).padStart(2, '0')}:${String(minutes).padStart(2, '0')} ${suffix}`;
+}
+
+function validateAttendanceSchedule(schedule = {}) {
+  const normalized = getAttendanceScheduleFromResponse(schedule);
+  const fields = [
+    ['check_in_time', 'Check-in time'],
+    ['late_cutoff_time', 'Late check-in cutoff'],
+    ['break_start_time', 'Break start time'],
+    ['break_end_time', 'Break end time'],
+    ['check_out_time', 'Checkout time'],
+  ];
+
+  for (const [key, label] of fields) {
+    if (!normalizeAttendanceTime(schedule?.[key])) {
+      return { error: `${label} is required.`, values: normalized };
+    }
+  }
+
+  const checkIn = attendanceTimeToMinutes(normalized.check_in_time);
+  const lateCutoff = attendanceTimeToMinutes(normalized.late_cutoff_time);
+  const breakStart = attendanceTimeToMinutes(normalized.break_start_time);
+  const breakEnd = attendanceTimeToMinutes(normalized.break_end_time);
+  const checkOut = attendanceTimeToMinutes(normalized.check_out_time);
+
+  if (checkOut <= checkIn) {
+    return {
+      error: 'Checkout time must be later than check-in time.',
+      values: normalized,
+    };
+  }
+
+  if (lateCutoff < checkIn || lateCutoff >= checkOut) {
+    return {
+      error: 'Late check-in cutoff must be at or after check-in and before checkout.',
+      values: normalized,
+    };
+  }
+
+  if (breakStart <= checkIn || breakStart >= checkOut) {
+    return {
+      error: 'Break start must be after check-in and before checkout.',
+      values: normalized,
+    };
+  }
+
+  if (breakEnd <= breakStart || breakEnd >= checkOut) {
+    return {
+      error: 'Break end must be after break start and before checkout.',
+      values: normalized,
+    };
+  }
+
+  return { error: '', values: normalized };
+}
+
 function formatSettingsTimestamp(value) {
   if (!value) {
     return '';
@@ -410,6 +536,19 @@ export default function Settings({ user }) {
   const [attendanceReasonMessage, setAttendanceReasonMessage] = useState('');
   const [attendanceReasonError, setAttendanceReasonError] = useState('');
 
+  const [attendanceSchedule, setAttendanceSchedule] = useState(() => ({
+    ...DEFAULT_ATTENDANCE_SCHEDULE,
+  }));
+  const [canManageAttendanceSchedule, setCanManageAttendanceSchedule] =
+    useState(false);
+  const [attendanceScheduleSource, setAttendanceScheduleSource] = useState('default');
+  const [attendanceScheduleUpdatedAt, setAttendanceScheduleUpdatedAt] = useState('');
+  const [attendanceScheduleUpdatedBy, setAttendanceScheduleUpdatedBy] = useState('');
+  const [attendanceScheduleLoading, setAttendanceScheduleLoading] = useState(true);
+  const [attendanceScheduleSaving, setAttendanceScheduleSaving] = useState(false);
+  const [attendanceScheduleMessage, setAttendanceScheduleMessage] = useState('');
+  const [attendanceScheduleError, setAttendanceScheduleError] = useState('');
+
   const userRoles = useMemo(() => {
     const normalizedRoles = [
       ...normalizeRoleList(user?.roles),
@@ -430,6 +569,10 @@ export default function Settings({ user }) {
     canManageAttendanceReasons && hasAttendanceReasonManagerRole;
   const attendanceReasonsBusy =
     attendanceReasonsLoading || attendanceReasonsSaving;
+  const canEditAttendanceSchedule =
+    canManageAttendanceSchedule && hasAttendanceReasonManagerRole;
+  const attendanceScheduleBusy =
+    attendanceScheduleLoading || attendanceScheduleSaving;
 
   const savedLogoUrl = useMemo(
     () => normalizeProfilePhotoUrl(branding.logo),
@@ -566,8 +709,36 @@ export default function Settings({ user }) {
     }
   }
 
+  async function loadAttendanceSchedule({ silent = false } = {}) {
+    if (!silent) {
+      setAttendanceScheduleLoading(true);
+      setAttendanceScheduleMessage('');
+    }
+
+    setAttendanceScheduleError('');
+
+    try {
+      const data = await api('/attendance/schedule-settings');
+
+      setAttendanceSchedule(getAttendanceScheduleFromResponse(data));
+      setCanManageAttendanceSchedule(Boolean(data?.can_manage));
+      setAttendanceScheduleSource(safeText(data?.source, 'default'));
+      setAttendanceScheduleUpdatedAt(safeText(data?.updated_at));
+      setAttendanceScheduleUpdatedBy(safeText(data?.updated_by_name));
+    } catch (requestError) {
+      setCanManageAttendanceSchedule(false);
+      setAttendanceScheduleError(
+        requestError?.message ||
+          'Unable to load tenant attendance timings. Please refresh and try again.',
+      );
+    } finally {
+      setAttendanceScheduleLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadBranding();
+    loadAttendanceSchedule();
     loadAttendanceReasonSettings();
 
     if (isPlatformSuperadmin) {
@@ -588,6 +759,69 @@ export default function Settings({ user }) {
       }
     };
   }, [isPlatformSuperadmin]);
+
+  function updateAttendanceScheduleField(name, value) {
+    setAttendanceSchedule((current) => ({
+      ...current,
+      [name]: value,
+    }));
+    setAttendanceScheduleMessage('');
+    setAttendanceScheduleError('');
+  }
+
+  function restoreDefaultAttendanceSchedule() {
+    setAttendanceSchedule({ ...DEFAULT_ATTENDANCE_SCHEDULE });
+    setAttendanceScheduleError('');
+    setAttendanceScheduleMessage(
+      'Default timings restored in the editor. Select Save Attendance Timings to apply them.',
+    );
+  }
+
+  async function saveAttendanceSchedule(event) {
+    event.preventDefault();
+
+    if (!canEditAttendanceSchedule) {
+      setAttendanceScheduleError(
+        'Only tenant HR/Admin can change attendance timings.',
+      );
+      return;
+    }
+
+    const validation = validateAttendanceSchedule(attendanceSchedule);
+
+    if (validation.error) {
+      setAttendanceScheduleError(validation.error);
+      setAttendanceScheduleMessage('');
+      return;
+    }
+
+    setAttendanceScheduleSaving(true);
+    setAttendanceScheduleMessage('');
+    setAttendanceScheduleError('');
+
+    try {
+      const data = await api('/attendance/schedule-settings', {
+        method: 'PUT',
+        body: JSON.stringify(validation.values),
+      });
+
+      setAttendanceSchedule(getAttendanceScheduleFromResponse(data));
+      setCanManageAttendanceSchedule(Boolean(data?.can_manage));
+      setAttendanceScheduleSource(safeText(data?.source, 'tenant'));
+      setAttendanceScheduleUpdatedAt(safeText(data?.updated_at));
+      setAttendanceScheduleUpdatedBy(safeText(data?.updated_by_name));
+      setAttendanceScheduleMessage(
+        data?.message || 'Tenant attendance timings updated successfully.',
+      );
+    } catch (requestError) {
+      setAttendanceScheduleError(
+        requestError?.message ||
+          'Unable to save attendance timings. Please try again.',
+      );
+    } finally {
+      setAttendanceScheduleSaving(false);
+    }
+  }
 
   function updateAttendanceReason(setter, index, value) {
     setter((current) =>
@@ -1474,6 +1708,82 @@ export default function Settings({ user }) {
           line-height: 1.5;
         }
 
+        .attendance-schedule-grid {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .attendance-time-card {
+          min-width: 0;
+          display: grid;
+          gap: 8px;
+          border: 1px solid rgba(203, 213, 225, .82);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, .94);
+          padding: 14px;
+          box-shadow: 0 12px 26px rgba(15, 23, 42, .05);
+        }
+
+        .attendance-time-card label {
+          color: #0f172a;
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .attendance-time-card p {
+          min-height: 38px;
+          margin: 0;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 650;
+          line-height: 1.45;
+        }
+
+        .attendance-time-card input[type='time'] {
+          width: 100%;
+          min-width: 0;
+          min-height: 44px;
+          border: 1px solid #cbd5e1;
+          border-radius: 12px;
+          background: #ffffff;
+          padding: 9px 10px;
+          color: #0f172a;
+          font: inherit;
+          font-size: 14px;
+          font-weight: 800;
+          outline: none;
+        }
+
+        .attendance-time-card input[type='time']:focus {
+          border-color: #22c55e;
+          box-shadow: 0 0 0 4px rgba(34, 197, 94, .11);
+        }
+
+        .attendance-time-card input[type='time']:disabled {
+          cursor: not-allowed;
+          background: #f8fafc;
+          color: #64748b;
+        }
+
+        .attendance-time-preview {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          border: 1px dashed #bbf7d0;
+          border-radius: 15px;
+          background: rgba(240, 253, 244, .72);
+          padding: 11px 13px;
+          color: #166534;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .attendance-time-preview strong {
+          color: #14532d;
+        }
+
         .attendance-settings-source {
           display: inline-flex;
           align-items: center;
@@ -2114,6 +2424,10 @@ export default function Settings({ user }) {
           .attendance-reason-editor-grid {
             grid-template-columns: 1fr;
           }
+
+          .attendance-schedule-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 560px) {
@@ -2122,6 +2436,10 @@ export default function Settings({ user }) {
           .attendance-settings-panel {
             border-radius: 22px;
             padding: 18px;
+          }
+
+          .attendance-schedule-grid {
+            grid-template-columns: 1fr;
           }
 
           .platform-branding-heading,
@@ -2413,13 +2731,165 @@ export default function Settings({ user }) {
         <div className="attendance-settings-heading">
           <div>
             <span className="attendance-settings-kicker">
+              <Clock size={15} /> Tenant Attendance Schedule
+            </span>
+            <h1>Attendance Timings</h1>
+            <p>
+              Set the attendance timings for {branding.companyName}. The existing
+              check-in and checkout workflow remains unchanged; employees simply
+              follow the schedule configured by their own tenant HR/Admin.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="attendance-settings-refresh"
+            onClick={() => loadAttendanceSchedule()}
+            disabled={attendanceScheduleBusy}
+            title="Refresh attendance timings"
+            aria-label="Refresh attendance timings"
+          >
+            <RefreshCw
+              size={18}
+              className={attendanceScheduleLoading ? 'tenant-brand-spin' : ''}
+            />
+          </button>
+        </div>
+
+        {attendanceScheduleLoading ? (
+          <div className="attendance-settings-loading">
+            <span>
+              <LoaderCircle size={21} className="tenant-brand-spin" />
+              Loading tenant attendance timings...
+            </span>
+          </div>
+        ) : (
+          <form className="attendance-settings-form" onSubmit={saveAttendanceSchedule}>
+            <div className="attendance-settings-meta">
+              <span>
+                These timings are isolated to this tenant only.
+                {attendanceScheduleUpdatedAt && (
+                  <>
+                    {' '}Last updated {formatSettingsTimestamp(attendanceScheduleUpdatedAt)}
+                    {attendanceScheduleUpdatedBy
+                      ? ` by ${attendanceScheduleUpdatedBy}`
+                      : ''}.
+                  </>
+                )}
+              </span>
+              <span className="attendance-settings-source">
+                <CheckCircle2 size={14} />
+                {attendanceScheduleSource === 'tenant'
+                  ? 'Tenant customised'
+                  : 'Using defaults'}
+              </span>
+            </div>
+
+            <div className="attendance-schedule-grid">
+              <div className="attendance-time-card">
+                <label htmlFor="attendance-check-in-time">Check-in Time</label>
+                <p>Normal office attendance start time.</p>
+                <input id="attendance-check-in-time" type="time" value={attendanceSchedule.check_in_time}
+                  onChange={(event) => updateAttendanceScheduleField('check_in_time', event.target.value)}
+                  disabled={!canEditAttendanceSchedule || attendanceScheduleBusy} required />
+              </div>
+
+              <div className="attendance-time-card">
+                <label htmlFor="attendance-late-cutoff-time">Late After</label>
+                <p>Late check-in reason is required from this time onward.</p>
+                <input id="attendance-late-cutoff-time" type="time" value={attendanceSchedule.late_cutoff_time}
+                  onChange={(event) => updateAttendanceScheduleField('late_cutoff_time', event.target.value)}
+                  disabled={!canEditAttendanceSchedule || attendanceScheduleBusy} required />
+              </div>
+
+              <div className="attendance-time-card">
+                <label htmlFor="attendance-break-start-time">Break Start</label>
+                <p>Tenant's scheduled break starting time.</p>
+                <input id="attendance-break-start-time" type="time" value={attendanceSchedule.break_start_time}
+                  onChange={(event) => updateAttendanceScheduleField('break_start_time', event.target.value)}
+                  disabled={!canEditAttendanceSchedule || attendanceScheduleBusy} required />
+              </div>
+
+              <div className="attendance-time-card">
+                <label htmlFor="attendance-break-end-time">Break End</label>
+                <p>Tenant's scheduled break ending time.</p>
+                <input id="attendance-break-end-time" type="time" value={attendanceSchedule.break_end_time}
+                  onChange={(event) => updateAttendanceScheduleField('break_end_time', event.target.value)}
+                  disabled={!canEditAttendanceSchedule || attendanceScheduleBusy} required />
+              </div>
+
+              <div className="attendance-time-card">
+                <label htmlFor="attendance-check-out-time">Checkout Time</label>
+                <p>Normal office attendance ending time.</p>
+                <input id="attendance-check-out-time" type="time" value={attendanceSchedule.check_out_time}
+                  onChange={(event) => updateAttendanceScheduleField('check_out_time', event.target.value)}
+                  disabled={!canEditAttendanceSchedule || attendanceScheduleBusy} required />
+              </div>
+            </div>
+
+            <div className="attendance-time-preview">
+              <Clock size={16} />
+              <strong>{formatAttendanceTime(attendanceSchedule.check_in_time)}</strong><span>Check-in</span>
+              <span>•</span>
+              <strong>{formatAttendanceTime(attendanceSchedule.late_cutoff_time)}</strong><span>Late after</span>
+              <span>•</span>
+              <strong>{formatAttendanceTime(attendanceSchedule.break_start_time)} – {formatAttendanceTime(attendanceSchedule.break_end_time)}</strong><span>Break</span>
+              <span>•</span>
+              <strong>{formatAttendanceTime(attendanceSchedule.check_out_time)}</strong><span>Checkout</span>
+            </div>
+
+            {!canEditAttendanceSchedule && (
+              <div className="attendance-reason-permission">
+                <ShieldCheck size={19} />
+                Only this tenant's HR/Admin can change attendance timings. Other tenants and companies are not affected.
+              </div>
+            )}
+
+            {attendanceScheduleMessage && (
+              <div className="attendance-reason-message success">
+                <CheckCircle2 size={18} />
+                <span>{attendanceScheduleMessage}</span>
+              </div>
+            )}
+
+            {attendanceScheduleError && (
+              <div className="attendance-reason-message error">
+                <span>{attendanceScheduleError}</span>
+              </div>
+            )}
+
+            {canEditAttendanceSchedule && (
+              <div className="attendance-settings-actions">
+                <button type="button" className="attendance-reasons-reset"
+                  onClick={restoreDefaultAttendanceSchedule} disabled={attendanceScheduleBusy}>
+                  <RotateCcw size={17} /> Restore Defaults
+                </button>
+                <button type="submit" className="attendance-reasons-save" disabled={attendanceScheduleBusy}>
+                  {attendanceScheduleSaving ? (
+                    <LoaderCircle size={17} className="tenant-brand-spin" />
+                  ) : (
+                    <Save size={17} />
+                  )}
+                  {attendanceScheduleSaving ? 'Saving Attendance Timings...' : 'Save Attendance Timings'}
+                </button>
+              </div>
+            )}
+          </form>
+        )}
+      </section>
+
+      <section className="attendance-settings-panel">
+        <div className="attendance-settings-heading">
+          <div>
+            <span className="attendance-settings-kicker">
               <Clock size={15} /> Attendance Rules
             </span>
             <h1>Late and Early Checkout Reasons</h1>
             <p>
-              Manage the dropdown reasons employees see for late check-in after
-              09:50 AM and early checkout before 06:00 PM. These settings apply
-              only to {branding.companyName}.
+              Manage the dropdown reasons employees see for late check-in from{' '}
+              {formatAttendanceTime(attendanceSchedule.late_cutoff_time)} and early
+              checkout before {formatAttendanceTime(attendanceSchedule.check_out_time)}.
+              These settings apply only to {branding.companyName}.
             </p>
           </div>
 
@@ -2471,7 +2941,7 @@ export default function Settings({ user }) {
             <div className="attendance-reason-editor-grid">
               <AttendanceReasonListEditor
                 title="Late Check-in Reasons"
-                description="Displayed when an employee checks in at or after 09:50 AM."
+                description={`Displayed when an employee checks in at or after ${formatAttendanceTime(attendanceSchedule.late_cutoff_time)}.`}
                 icon={LogIn}
                 options={lateReasons}
                 disabled={!canEditAttendanceReasons || attendanceReasonsBusy}
@@ -2489,7 +2959,7 @@ export default function Settings({ user }) {
 
               <AttendanceReasonListEditor
                 title="Early Checkout Reasons"
-                description="Displayed when an employee checks out before 06:00 PM."
+                description={`Displayed when an employee checks out before ${formatAttendanceTime(attendanceSchedule.check_out_time)}.`}
                 icon={LogOut}
                 options={earlyCheckoutReasons}
                 disabled={!canEditAttendanceReasons || attendanceReasonsBusy}

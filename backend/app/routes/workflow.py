@@ -7,6 +7,10 @@ from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
 from app.middleware.tenant_guard import tenant_module_required
+from app.routes.attendance import (
+    attendance_schedule_for_tenant,
+    format_attendance_schedule_time,
+)
 
 try:
     import firebase_admin
@@ -3952,10 +3956,8 @@ def run_attendance_reminder_job(kind, tenant_id="", dry_run=False):
 
     if kind == "check_in":
         title = "Check-in reminder"
-        body = "Please check in before 09:50 AM to avoid being marked late."
     else:
         title = "Checkout reminder"
-        body = "It is after 06:00 PM. You can check out now."
 
     employees = list(
         db.employees.find(
@@ -3992,6 +3994,24 @@ def run_attendance_reminder_job(kind, tenant_id="", dry_run=False):
 
     for employee in employees:
         employee_tenant_id = normalize_text(employee.get("tenant_id")) or tenant_id or "sds"
+        attendance_schedule = attendance_schedule_for_tenant(
+            db,
+            employee_tenant_id,
+        )
+
+        if kind == "check_in":
+            late_cutoff_label = format_attendance_schedule_time(
+                attendance_schedule.get("late_cutoff_time")
+            )
+            body = (
+                f"Please check in before {late_cutoff_label} "
+                "to avoid being marked late."
+            )
+        else:
+            check_out_label = format_attendance_schedule_time(
+                attendance_schedule.get("check_out_time")
+            )
+            body = f"It is after {check_out_label}. You can check out now."
 
         user = attendance_reminder_user_for_employee(db, employee)
 

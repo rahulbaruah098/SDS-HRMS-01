@@ -10,13 +10,20 @@ from app.routes.attendance import (
     ATTENDANCE_OTHER_REASON_CODE,
     ATTENDANCE_REASON_SETTING_GROUP,
     ATTENDANCE_REASON_SETTING_KEY,
+    ATTENDANCE_SCHEDULE_SETTING_GROUP,
+    ATTENDANCE_SCHEDULE_SETTING_KEY,
+    DEFAULT_ATTENDANCE_SCHEDULE,
     DEFAULT_EARLY_CHECKOUT_REASON_OPTIONS,
     DEFAULT_LATE_REASON_OPTIONS,
     attendance_reason_settings_for_tenant,
     attendance_reason_settings_id,
+    attendance_schedule_for_tenant,
+    attendance_schedule_settings_id,
+    attendance_schedule_time_objects,
     meaningful_other_reason,
     normalize_reason_option_list,
     resolve_attendance_reason,
+    validate_attendance_schedule_payload,
 )
 
 
@@ -285,6 +292,187 @@ class TenantAttendanceReasonSettingsTests(unittest.TestCase):
                 attendance_reason_settings_id(tenant_b),
             ],
         )
+
+
+class AttendanceScheduleValidationTests(unittest.TestCase):
+    def test_accepts_a_complete_tenant_schedule(self):
+        schedule, error = validate_attendance_schedule_payload(
+            {
+                "check_in_time": "10:00",
+                "late_cutoff_time": "10:15",
+                "break_start_time": "13:30",
+                "break_end_time": "14:15",
+                "check_out_time": "19:00",
+            }
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(schedule["check_in_time"], "10:00")
+        self.assertEqual(schedule["late_cutoff_time"], "10:15")
+        self.assertEqual(schedule["break_start_time"], "13:30")
+        self.assertEqual(schedule["break_end_time"], "14:15")
+        self.assertEqual(schedule["check_out_time"], "19:00")
+
+    def test_accepts_legacy_schedule_aliases_for_existing_clients(self):
+        schedule, error = validate_attendance_schedule_payload(
+            {
+                "office_start": "08:45",
+                "late_cutoff": "09:00",
+                "break_start": "12:30",
+                "break_end": "13:15",
+                "office_end": "17:30",
+            }
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(schedule["check_in_time"], "08:45")
+        self.assertEqual(schedule["late_cutoff_time"], "09:00")
+        self.assertEqual(schedule["break_start_time"], "12:30")
+        self.assertEqual(schedule["break_end_time"], "13:15")
+        self.assertEqual(schedule["check_out_time"], "17:30")
+
+    def test_rejects_invalid_schedule_ordering(self):
+        invalid_payloads = [
+            {"check_in_time": "10:00", "late_cutoff_time": "09:59", "break_start_time": "13:00", "break_end_time": "14:00", "check_out_time": "19:00"},
+            {"check_in_time": "10:00", "late_cutoff_time": "10:15", "break_start_time": "14:00", "break_end_time": "13:30", "check_out_time": "19:00"},
+            {"check_in_time": "10:00", "late_cutoff_time": "10:15", "break_start_time": "13:00", "break_end_time": "14:00", "check_out_time": "09:00"},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                schedule, error = validate_attendance_schedule_payload(payload)
+                self.assertIsNone(schedule)
+                self.assertTrue(error)
+
+
+class TenantAttendanceScheduleTests(unittest.TestCase):
+    def setUp(self):
+        self.app = Flask(__name__)
+
+    def test_default_schedule_is_used_when_tenant_has_not_configured_one(self):
+        collection = TenantSettingsCollection()
+        db = SimpleNamespace(system_settings=collection)
+        with self.app.test_request_context():
+            g.current_user = {"roles": ["employee"]}
+            settings = attendance_schedule_for_tenant(db, "tenant-default")
+        for key, value in DEFAULT_ATTENDANCE_SCHEDULE.items():
+            self.assertEqual(settings[key], value)
+        self.assertEqual(settings["source"], "default")
+        self.assertFalse(settings["can_manage"])
+        self.assertEqual(collection.queries[0]["tenant_id"], "tenant-default")
+
+    def test_custom_schedule_is_isolated_by_tenant(self):
+        tenant_a = "tenant-a"
+        tenant_b = "tenant-b"
+        collection = TenantSettingsCollection([
+            {
+                "_id": attendance_schedule_settings_id(tenant_a),
+                "tenant_id": tenant_a,
+                "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+                "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+                "check_in_time": "10:00",
+                "late_cutoff_time": "10:20",
+                "break_start_time": "13:30",
+                "break_end_time": "14:15",
+                "check_out_time": "19:00",
+                "is_deleted": False,
+            }
+        ])
+        db = SimpleNamespace(system_settings=collection)
+        with self.app.test_request_context():
+            g.current_user = {"roles": ["hr"]}
+            settings_a = attendance_schedule_for_tenant(db, tenant_a)
+            settings_b = attendance_schedule_for_tenant(db, tenant_b)
+        self.assertEqual(settings_a["source"], "tenant")
+        self.assertEqual(settings_a["check_in_time"], "10:00")
+        self.assertEqual(settings_a["late_cutoff_time"], "10:20")
+        self.assertEqual(settings_a["break_start_time"], "13:30")
+        self.assertEqual(settings_a["break_end_time"], "14:15")
+        self.assertEqual(settings_a["check_out_time"], "19:00")
+        self.assertTrue(settings_a["can_manage"])
+        self.assertEqual(settings_b["source"], "default")
+        for key, value in DEFAULT_ATTENDANCE_SCHEDULE.items():
+            self.assertEqual(settings_b[key], value)
+
+    def test_legacy_stored_aliases_are_read(self):
+        tenant_id = "tenant-legacy"
+        collection = TenantSettingsCollection([
+            {
+                "_id": attendance_schedule_settings_id(tenant_id),
+                "tenant_id": tenant_id,
+                "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+                "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+                "office_start": "08:30",
+                "late_cutoff": "08:45",
+                "break_start": "12:30",
+                "break_end": "13:00",
+                "office_end": "17:30",
+                "is_deleted": False,
+            }
+        ])
+        db = SimpleNamespace(system_settings=collection)
+        with self.app.test_request_context():
+            g.current_user = {"roles": ["admin"]}
+            settings = attendance_schedule_for_tenant(db, tenant_id)
+        self.assertEqual(settings["source"], "tenant")
+        self.assertEqual(settings["check_in_time"], "08:30")
+        self.assertEqual(settings["late_cutoff_time"], "08:45")
+        self.assertEqual(settings["break_start_time"], "12:30")
+        self.assertEqual(settings["break_end_time"], "13:00")
+        self.assertEqual(settings["check_out_time"], "17:30")
+
+    def test_corrupt_tenant_schedule_fails_safe_to_defaults(self):
+        tenant_id = "tenant-corrupt"
+        collection = TenantSettingsCollection([
+            {
+                "_id": attendance_schedule_settings_id(tenant_id),
+                "tenant_id": tenant_id,
+                "setting_group": ATTENDANCE_SCHEDULE_SETTING_GROUP,
+                "setting_key": ATTENDANCE_SCHEDULE_SETTING_KEY,
+                "check_in_time": "10:00",
+                "late_cutoff_time": "10:15",
+                "break_start_time": "15:00",
+                "break_end_time": "14:00",
+                "check_out_time": "19:00",
+                "is_deleted": False,
+            }
+        ])
+        db = SimpleNamespace(system_settings=collection)
+        with self.app.test_request_context():
+            g.current_user = {"roles": ["hr"]}
+            settings = attendance_schedule_for_tenant(db, tenant_id)
+        self.assertEqual(settings["source"], "default")
+        for key, value in DEFAULT_ATTENDANCE_SCHEDULE.items():
+            self.assertEqual(settings[key], value)
+
+    def test_runtime_clock_objects_use_tenant_values(self):
+        clock_values = attendance_schedule_time_objects({
+            "check_in_time": "10:00",
+            "late_cutoff_time": "10:20",
+            "break_start_time": "13:30",
+            "break_end_time": "14:15",
+            "check_out_time": "19:00",
+        })
+        self.assertEqual((clock_values["check_in"].hour, clock_values["check_in"].minute), (10, 0))
+        self.assertEqual((clock_values["late_cutoff"].hour, clock_values["late_cutoff"].minute), (10, 20))
+        self.assertEqual((clock_values["break_start"].hour, clock_values["break_start"].minute), (13, 30))
+        self.assertEqual((clock_values["break_end"].hour, clock_values["break_end"].minute), (14, 15))
+        self.assertEqual((clock_values["check_out"].hour, clock_values["check_out"].minute), (19, 0))
+
+
+class AttendanceReasonDynamicScheduleTests(unittest.TestCase):
+    def test_late_required_message_uses_tenant_cutoff(self):
+        result, error = resolve_attendance_reason(
+            {}, "late", reason_settings(), required=True,
+            attendance_schedule={**DEFAULT_ATTENDANCE_SCHEDULE, "late_cutoff_time": "10:20"},
+        )
+        self.assertIsNone(result)
+        self.assertEqual(error, "Late reason is required from 10:20 AM onwards")
+
+    def test_early_checkout_required_message_uses_tenant_checkout(self):
+        result, error = resolve_attendance_reason(
+            {}, "early_checkout", reason_settings(), required=True,
+            attendance_schedule={**DEFAULT_ATTENDANCE_SCHEDULE, "check_out_time": "19:00"},
+        )
+        self.assertIsNone(result)
+        self.assertEqual(error, "Early checkout reason is required before 07:00 PM")
 
 
 if __name__ == "__main__":

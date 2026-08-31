@@ -2751,7 +2751,6 @@ export const EMPLOYEE_CSV_COLUMNS = [
   ['organisation', 'Organisation / Entity'],
   ['department', 'Department'],
   ['designation', 'Designation'],
-  ['branch', 'Branch'],
   ['state', 'State'],
   ['role', 'Role'],
   ['employee_type', 'Employee Type'],
@@ -2775,7 +2774,6 @@ export const ALUMNI_CSV_COLUMNS = [
   ['organisation', 'Organisation / Entity'],
   ['department', 'Department'],
   ['designation', 'Designation'],
-  ['branch', 'Branch'],
   ['state', 'State'],
   ['joining_date', 'Joining Date'],
   ['date_of_joining', 'Date Of Joining'],
@@ -2861,7 +2859,16 @@ export function normalizeEmployee(employee = {}) {
 
   normalized.department = normalized.department || normalized.department_name || '';
   normalized.designation = normalized.designation || normalized.designation_name || '';
-  normalized.branch = normalized.branch || normalized.location || '';
+  normalized.state = firstNonEmpty(
+  normalized.state,
+  normalized.office_state,
+  normalized.work_state,
+  normalized.current_state,
+  normalized.branch,
+);
+
+// Temporary read compatibility for old employee records.
+normalized.branch = normalized.branch || normalized.state || '';
 
   normalized.is_team_leader = toBoolean(normalized.is_team_leader);
   normalized.is_reporting_officer = toBoolean(normalized.is_reporting_officer);
@@ -2966,6 +2973,28 @@ export function normalizeEmployeePayload(payload = {}) {
     normalizedPayload.organization_code ||
     normalizedPayload.organisation_code ||
     '';
+
+  normalizedPayload.state = firstNonEmpty(
+  normalizedPayload.state,
+  normalizedPayload.office_state,
+  normalizedPayload.work_state,
+  normalizedPayload.current_state,
+  normalizedPayload.branch,
+);
+
+// State is authoritative. Branch is accepted only as legacy input.
+delete normalizedPayload.branch;
+
+// Employee profile updates must never reset or modify passwords.
+[
+  'password',
+  'confirm_password',
+  'password_confirm',
+  'new_password',
+  'password_mode',
+].forEach((key) => {
+  delete normalizedPayload[key];
+});
 
 
   if (normalizedPayload.date_of_joining && !normalizedPayload.joining_date) {
@@ -3172,7 +3201,7 @@ export function filterEmployees(items = [], filters = {}) {
   ).trim().toLowerCase();
   const department = String(filters.department || '').trim().toLowerCase();
   const designation = String(filters.designation || '').trim().toLowerCase();
-  const branch = String(filters.branch || '').trim().toLowerCase();
+  const state = String(filters.state || filters.branch || '').trim().toLowerCase();
   const employmentStatus = String(filters.employment_status || filters.status || '').trim().toLowerCase();
 
   return normalizeEmployeeList(items).filter((employee) => {
@@ -3203,9 +3232,12 @@ export function filterEmployees(items = [], filters = {}) {
       return false;
     }
 
-    if (branch && String(employee.branch || '').trim().toLowerCase() !== branch) {
-      return false;
-    }
+if (
+  state &&
+  String(employee.state || employee.branch || '').trim().toLowerCase() !== state
+) {
+  return false;
+}
 
     if (
       employmentStatus &&
@@ -4816,19 +4848,16 @@ export function exportAssetReportCsv(rows = []) {
 /* Reports APIs                                                               */
 /* -------------------------------------------------------------------------- */
 
-export async function downloadAttendanceRegisterExcel(params = {}) {
-  const token = getToken();
-
-  const allowedParams = {
-    period: params.period,
-    date: params.date,
-    on_date: params.on_date,
-    week_start: params.week_start,
-    week_end: params.week_end,
-    date_from: params.date_from,
-    date_to: params.date_to,
-    year: params.year,
-    month: params.month,
+function employeeReportFilterParams(params = {}) {
+  return {
+    employee_scope: params.employee_scope,
+    scope: params.scope,
+    q: params.q,
+    search: params.search,
+    department: params.department,
+    designation: params.designation,
+    employment_status: params.employment_status,
+    status: params.status,
 
     organisation_id: params.organisation_id,
     organization_id: params.organization_id,
@@ -4856,59 +4885,121 @@ export async function downloadAttendanceRegisterExcel(params = {}) {
     employee_name: params.employee_name,
     name: params.name,
   };
+}
 
-  const query = buildQuery(allowedParams);
+function attendanceReportPeriodParams(params = {}) {
+  return {
+    period: params.period,
+    date: params.date,
+    on_date: params.on_date,
+    week_start: params.week_start,
+    week_end: params.week_end,
+    date_from: params.date_from,
+    date_to: params.date_to,
+    year: params.year,
+    month: params.month,
+  };
+}
 
-  const headers = {};
+function attendanceExceptionReportParams(params = {}) {
+  return {
+    report_type: params.report_type,
+    type: params.type,
+    ...attendanceReportPeriodParams(params),
+    ...employeeReportFilterParams(params),
+  };
+}
+
+function responseDownloadFilename(response, fallbackFilename) {
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(
+    /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i,
+  );
+  const filename =
+    filenameMatch?.[1] ||
+    filenameMatch?.[2] ||
+    fallbackFilename;
+
+  try {
+    return decodeURIComponent(filename);
+  } catch {
+    return filename;
+  }
+}
+
+async function downloadAuthenticatedExcel(
+  path,
+  {
+    fallbackFilename,
+    permissionMessage,
+    errorMessage,
+  },
+  authRetry = false,
+) {
+  const token = getToken();
+  const headers = {
+    Accept:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json',
+  };
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(buildUrl(`/reports/attendance-register.xlsx${query}`), {
-    method: 'GET',
-    headers,
-  });
+  let response;
 
-if (response.status === 401) {
   try {
-    await refreshAccessToken();
-
-    return downloadAttendanceRegisterExcel(params);
-  } catch (refreshError) {
-    clearSession();
-    throw refreshError;
+    response = await fetch(buildUrl(path), {
+      method: 'GET',
+      headers,
+    });
+  } catch {
+    throw new Error(getConnectionErrorMessage());
   }
-}
+
+  if (response.status === 401) {
+    if (!authRetry && getRefreshToken()) {
+      try {
+        await refreshAccessToken();
+
+        return downloadAuthenticatedExcel(
+          path,
+          {
+            fallbackFilename,
+            permissionMessage,
+            errorMessage,
+          },
+          true,
+        );
+      } catch (refreshError) {
+        clearSession();
+        throw refreshError;
+      }
+    }
+
+    clearSession();
+    throw new Error('Session expired. Please login again.');
+  }
 
   if (response.status === 403) {
-    throw new Error('You do not have permission to download this attendance Excel report.');
+    throw new Error(permissionMessage);
   }
 
   if (!response.ok) {
-    let message = 'Unable to download attendance Excel report.';
+    const data = normalizeApiPayload(await parseResponse(response));
 
-    try {
-      const data = await response.json();
-      message = data.message || message;
-    } catch {
-      // Keep default message if response is not JSON.
-    }
-
-    throw new Error(message);
+    throw buildApiError(
+      data,
+      response.status,
+      errorMessage,
+    );
   }
 
   const blob = await response.blob();
-
-  let filename = 'attendance-register.xlsx';
-
-  const disposition = response.headers.get('content-disposition') || '';
-  const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i);
-
-  if (filenameMatch) {
-    filename = decodeURIComponent(filenameMatch[1] || filenameMatch[2] || filename);
-  }
-
+  const filename = responseDownloadFilename(
+    response,
+    fallbackFilename,
+  );
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement('a');
 
@@ -4921,6 +5012,68 @@ if (response.status === 401) {
   window.URL.revokeObjectURL(url);
 
   return true;
+}
+
+export function downloadEmployeeMasterExcel(params = {}) {
+  const query = buildQuery(
+    employeeReportFilterParams(params),
+  );
+
+  return downloadAuthenticatedExcel(
+    `/reports/employees.xlsx${query}`,
+    {
+      fallbackFilename: 'employee-master.xlsx',
+      permissionMessage:
+        'You do not have permission to export employee records.',
+      errorMessage:
+        'Unable to download the employee Excel report.',
+    },
+  );
+}
+
+export function downloadAttendanceRegisterExcel(params = {}) {
+  const query = buildQuery({
+    ...attendanceReportPeriodParams(params),
+    ...employeeReportFilterParams(params),
+  });
+
+  return downloadAuthenticatedExcel(
+    `/reports/attendance-register.xlsx${query}`,
+    {
+      fallbackFilename: 'attendance-register.xlsx',
+      permissionMessage:
+        'You do not have permission to download this attendance Excel report.',
+      errorMessage:
+        'Unable to download the attendance Excel report.',
+    },
+  );
+}
+
+export function getAttendanceExceptionReports(params = {}) {
+  const query = buildQuery(
+    attendanceExceptionReportParams(params),
+  );
+
+  return api(
+    `/reports/attendance-exceptions${query}`,
+  );
+}
+
+export function downloadAttendanceExceptionExcel(params = {}) {
+  const query = buildQuery(
+    attendanceExceptionReportParams(params),
+  );
+
+  return downloadAuthenticatedExcel(
+    `/reports/attendance-exceptions.xlsx${query}`,
+    {
+      fallbackFilename: 'attendance-exceptions.xlsx',
+      permissionMessage:
+        'You do not have permission to export attendance exceptions.',
+      errorMessage:
+        'Unable to download the attendance exception Excel report.',
+    },
+  );
 }
 
 export function getReportsSummary(params = {}) {

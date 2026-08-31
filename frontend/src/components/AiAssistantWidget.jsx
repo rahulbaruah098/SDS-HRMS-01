@@ -845,9 +845,7 @@ function isLateCheckInReasonError(error) {
 
   return (
     message.includes("late reason") ||
-    message.includes("late_reason") ||
-    message.includes("09:50") ||
-    message.includes("9:50")
+    message.includes("late_reason")
   );
 }
 
@@ -857,9 +855,7 @@ function isEarlyCheckoutReasonError(error) {
   return (
     message.includes("early checkout reason") ||
     message.includes("early check-out reason") ||
-    message.includes("early_checkout_reason") ||
-    message.includes("06:00") ||
-    message.includes("6:00")
+    message.includes("early_checkout_reason")
   );
 }
 

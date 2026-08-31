@@ -189,14 +189,70 @@ function formatTodayLabel() {
   });
 }
 
-function isLateNow() {
-  const now = new Date();
-  return now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() >= 50);
+function scheduleTimeParts(value, fallback = '') {
+  const raw = String(value || fallback || '').trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  return { hours, minutes };
 }
 
-function isEarlyCheckoutNow() {
+function isAtOrAfterScheduleTime(value, fallback) {
+  const target = scheduleTimeParts(value, fallback);
+
+  if (!target) {
+    return false;
+  }
+
   const now = new Date();
-  return now.getHours() < 18;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const targetMinutes = target.hours * 60 + target.minutes;
+
+  return currentMinutes >= targetMinutes;
+}
+
+function isBeforeScheduleTime(value, fallback) {
+  const target = scheduleTimeParts(value, fallback);
+
+  if (!target) {
+    return false;
+  }
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const targetMinutes = target.hours * 60 + target.minutes;
+
+  return currentMinutes < targetMinutes;
+}
+
+function formatScheduleTime(value, fallback = '--') {
+  const target = scheduleTimeParts(value);
+
+  if (!target) {
+    return fallback;
+  }
+
+  const meridiem = target.hours >= 12 ? 'PM' : 'AM';
+  const displayHour = target.hours % 12 || 12;
+
+  return `${String(displayHour).padStart(2, '0')}:${String(target.minutes).padStart(2, '0')} ${meridiem}`;
 }
 
 function modeLabel(mode) {
@@ -438,8 +494,30 @@ export default function AttendanceWidget({ onSuccess }) {
 
   const checkedIn = Boolean(attendance?.check_in);
   const checkedOut = Boolean(attendance?.check_out);
-  const lateNow = isLateNow();
-  const earlyCheckoutNow = isEarlyCheckoutNow();
+
+  const officeStart =
+    statusData?.office_start ||
+    statusData?.attendance_schedule?.check_in_time ||
+    '09:30';
+  const lateCutoff =
+    statusData?.late_cutoff ||
+    statusData?.attendance_schedule?.late_cutoff_time ||
+    '09:50';
+  const breakStart =
+    statusData?.break_start ||
+    statusData?.attendance_schedule?.break_start_time ||
+    '13:00';
+  const breakEnd =
+    statusData?.break_end ||
+    statusData?.attendance_schedule?.break_end_time ||
+    '14:00';
+  const officeEnd =
+    statusData?.office_end ||
+    statusData?.attendance_schedule?.check_out_time ||
+    '18:00';
+
+  const lateNow = isAtOrAfterScheduleTime(lateCutoff, '09:50');
+  const earlyCheckoutNow = isBeforeScheduleTime(officeEnd, '18:00');
 
   const todayLabel = useMemo(() => formatTodayLabel(), []);
   const availableCompOffCount = compOffs.filter((item) => item.status === 'available').length;
@@ -933,9 +1011,11 @@ async function submitHolidayWorkRequest(event) {
           <p className="attendance-kicker">Today&apos;s Attendance</p>
           <h3>{todayLabel}</h3>
           <p className="attendance-subtext">
-            Office timing: 09:30 AM to 06:00 PM. Late entry starts from 09:50 AM.
-            Office, WFH, and Field attendance can be marked directly. Field
-            attendance requires visit place and photo.
+            Office timing: {formatScheduleTime(officeStart)} to {formatScheduleTime(officeEnd)}.
+            Late entry starts from {formatScheduleTime(lateCutoff)}. Scheduled break is{' '}
+            {formatScheduleTime(breakStart)} to {formatScheduleTime(breakEnd)}. Office, WFH,
+            and Field attendance can be marked directly. Field attendance requires visit place
+            and photo.
           </p>
         </div>
 

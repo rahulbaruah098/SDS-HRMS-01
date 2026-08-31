@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { RefreshCcw, Search, X } from 'lucide-react';
 import {
   api,
+  downloadAttendanceExceptionExcel,
   downloadAttendanceRegisterExcel,
   getActiveEmployees,
   getActiveOrganisations,
+  getAttendanceExceptionReports,
 } from '../api/client';
 import Table from '../components/Table';
 import Stat from '../components/Stat';
@@ -87,6 +89,24 @@ const HOLIDAY_STATES = [
 
 
 const EMPTY_ATTENDANCE_EXCEL_FILTERS = {
+  period: 'month',
+  year: String(new Date().getFullYear()),
+  month: String(new Date().getMonth() + 1),
+  date: new Date().toISOString().slice(0, 10),
+  week_start: '',
+  week_end: '',
+  organisation_id: '',
+  organisation_code: '',
+  organisation: '',
+  state: '',
+  employee_id: '',
+  employee_code: '',
+  employee_email: '',
+  employee_name: '',
+};
+
+const EMPTY_ATTENDANCE_EXCEPTION_FILTERS = {
+  report_type: 'absent',
   period: 'month',
   year: String(new Date().getFullYear()),
   month: String(new Date().getMonth() + 1),
@@ -341,6 +361,91 @@ function employeeOptionLabel(employee = {}) {
   return meta ? `${name} (${meta})` : name;
 }
 
+function employeeStateValue(employee = {}) {
+  return (
+    employee.state ||
+    employee.office_state ||
+    employee.work_state ||
+    employee.current_state ||
+    employee.branch ||
+    ''
+  );
+}
+
+function normalisedComparable(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function employeeMatchesOrganisation(employee = {}, organisation = null) {
+  if (!organisation) {
+    return true;
+  }
+
+  const organisationValues = [
+    organisation.id,
+    organisation._id,
+    organisation.code,
+    organisation.organisation_code,
+    organisation.organization_code,
+    organisation.name,
+    organisation.organisation_name,
+    organisation.organization_name,
+  ]
+    .map(normalisedComparable)
+    .filter(Boolean);
+
+  if (!organisationValues.length) {
+    return true;
+  }
+
+  const employeeValues = [
+    employee.organisation_id,
+    employee.organization_id,
+    employee.entity_id,
+    employee.organisation_code,
+    employee.organization_code,
+    employee.entity_code,
+    employee.organisation,
+    employee.organization,
+    employee.entity,
+    employee.organisation_name,
+    employee.organization_name,
+  ]
+    .map(normalisedComparable)
+    .filter(Boolean);
+
+  return organisationValues.some((value) => employeeValues.includes(value));
+}
+
+function normaliseAttendanceExceptionRows(rows = []) {
+  return (rows || []).map((row, index) => ({
+    sl_no: row.sl_no || index + 1,
+    type:
+      row.report_type === 'missing_checkout'
+        ? 'Missing Checkout'
+        : row.report_type === 'absent'
+          ? 'Absent'
+          : row.status === 'Not Checked Out'
+            ? 'Missing Checkout'
+            : 'Absent',
+    employee_code: row.employee_code || row.emp_code || row.employee_id || '—',
+    employee_name: row.employee_name || row.name || '—',
+    organisation: row.organisation || row.organization || row.organisation_code || '—',
+    state: row.state || row.branch || '—',
+    department: row.department || '—',
+    designation: row.designation || '—',
+    date: formatDate(row.date),
+    status: row.status || '—',
+    attendance_code: row.attendance_code || '—',
+    mode: row.mode ? modeLabel(row.mode) : '—',
+    check_in: row.check_in || '—',
+    check_out: row.check_out || '—',
+    check_in_location: row.check_in_location || '—',
+    check_in_map: safeLink(row.check_in_map_url, 'Open map'),
+    remarks: row.remarks || '—',
+  }));
+}
+
 function normalizeRows(tab, rows = []) {
   if (tab === 'attendance' || tab === 'field-attendance') {
     return rows.map((row) => ({
@@ -545,10 +650,76 @@ export default function Reports() {
     ...EMPTY_ATTENDANCE_EXCEL_FILTERS,
   });
   const [downloadingExcel, setDownloadingExcel] = useState(false);
+  const [exceptionFilters, setExceptionFilters] = useState({
+    ...EMPTY_ATTENDANCE_EXCEPTION_FILTERS,
+  });
+  const [exceptionRows, setExceptionRows] = useState([]);
+  const [exceptionSummary, setExceptionSummary] = useState(null);
+  const [loadingExceptions, setLoadingExceptions] = useState(false);
+  const [downloadingExceptionExcel, setDownloadingExceptionExcel] = useState(false);
 
   const alerts = useCustomAlert();
 
   const currentTab = REPORT_TABS.find((tab) => tab.key === activeTab);
+
+  const reportStateOptions = useMemo(() => {
+    const values = [
+      ...HOLIDAY_STATES,
+      ...employees.map((employee) => employeeStateValue(employee)),
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    return Array.from(new Set(values)).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    );
+  }, [employees]);
+
+  const attendanceExcelEmployees = useMemo(() => {
+    const selectedOrganisation = organisations.find((organisation) => {
+      const id = organisation.id || organisation._id || '';
+      return id === excelFilters.organisation_id;
+    });
+    const selectedState = normalisedComparable(excelFilters.state);
+
+    return employees.filter((employee) => {
+      if (!employeeMatchesOrganisation(employee, selectedOrganisation)) {
+        return false;
+      }
+
+      if (
+        selectedState &&
+        normalisedComparable(employeeStateValue(employee)) !== selectedState
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [employees, organisations, excelFilters.organisation_id, excelFilters.state]);
+
+  const attendanceExceptionEmployees = useMemo(() => {
+    const selectedOrganisation = organisations.find((organisation) => {
+      const id = organisation.id || organisation._id || '';
+      return id === exceptionFilters.organisation_id;
+    });
+    const selectedState = normalisedComparable(exceptionFilters.state);
+
+    return employees.filter((employee) => {
+      if (!employeeMatchesOrganisation(employee, selectedOrganisation)) {
+        return false;
+      }
+
+      if (
+        selectedState &&
+        normalisedComparable(employeeStateValue(employee)) !== selectedState
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [employees, organisations, exceptionFilters.organisation_id, exceptionFilters.state]);
 
   const hasActiveFilters = useMemo(() => {
     return Object.values(filters).some((value) => String(value || '').trim());
@@ -737,6 +908,18 @@ export default function Reports() {
         next.organisation_code = selected
           ? selected.code || selected.organisation_code || selected.organization_code || ''
           : '';
+
+        next.employee_id = '';
+        next.employee_code = '';
+        next.employee_email = '';
+        next.employee_name = '';
+      }
+
+      if (key === 'state') {
+        next.employee_id = '';
+        next.employee_code = '';
+        next.employee_email = '';
+        next.employee_name = '';
       }
 
       if (key === 'employee_id') {
@@ -790,6 +973,199 @@ export default function Reports() {
 
       return next;
     });
+  }
+
+  function updateExceptionFilter(key, value) {
+    setExceptionFilters((current) => {
+      const next = {
+        ...current,
+        [key]: value,
+      };
+
+      if (key === 'organisation_id') {
+        const selected = organisations.find((organisation) => {
+          const id = organisation.id || organisation._id || '';
+          return id === value;
+        });
+
+        next.organisation = selected
+          ? selected.name || selected.organisation_name || selected.organization_name || ''
+          : '';
+
+        next.organisation_code = selected
+          ? selected.code || selected.organisation_code || selected.organization_code || ''
+          : '';
+
+        next.employee_id = '';
+        next.employee_code = '';
+        next.employee_email = '';
+        next.employee_name = '';
+      }
+
+      if (key === 'state') {
+        next.employee_id = '';
+        next.employee_code = '';
+        next.employee_email = '';
+        next.employee_name = '';
+      }
+
+      if (key === 'employee_id') {
+        const selected = employees.find((employee) => {
+          const id = employee.id || employee._id || '';
+          return id === value;
+        });
+
+        next.employee_code = selected
+          ? selected.employee_code || selected.emp_code || selected.employee_id || selected.code || ''
+          : '';
+
+        next.employee_email = selected
+          ? selected.official_email || selected.email || ''
+          : '';
+
+        next.employee_name = selected
+          ? selected.name || selected.employee_name || selected.full_name || ''
+          : '';
+      }
+
+      if (key === 'period') {
+        if (value === 'week' && (!next.week_start || !next.week_end)) {
+          const today = new Date();
+          const day = today.getDay();
+          const diffToMonday = day === 0 ? -6 : 1 - day;
+          const monday = new Date(today);
+
+          monday.setDate(today.getDate() + diffToMonday);
+
+          const sunday = new Date(monday);
+
+          sunday.setDate(monday.getDate() + 6);
+
+          next.week_start = monday.toISOString().slice(0, 10);
+          next.week_end = sunday.toISOString().slice(0, 10);
+        }
+
+        if (value === 'day' && !next.date) {
+          next.date = new Date().toISOString().slice(0, 10);
+        }
+
+        if (value === 'month' && !next.year) {
+          next.year = String(new Date().getFullYear());
+        }
+
+        if (value === 'month' && !next.month) {
+          next.month = String(new Date().getMonth() + 1);
+        }
+      }
+
+      return next;
+    });
+
+    setExceptionRows([]);
+    setExceptionSummary(null);
+  }
+
+  function attendanceExceptionPayload() {
+    const payload = {
+      report_type: exceptionFilters.report_type,
+      period: exceptionFilters.period,
+      organisation_id: exceptionFilters.organisation_id,
+      organisation_code: exceptionFilters.organisation_code,
+      organisation: exceptionFilters.organisation,
+      state: exceptionFilters.state,
+      employee_id: exceptionFilters.employee_id,
+      employee_code: exceptionFilters.employee_code,
+      employee_email: exceptionFilters.employee_email,
+      employee_name: exceptionFilters.employee_name,
+    };
+
+    if (exceptionFilters.period === 'day') {
+      payload.date = exceptionFilters.date;
+    } else if (exceptionFilters.period === 'week') {
+      payload.week_start = exceptionFilters.week_start;
+      payload.week_end = exceptionFilters.week_end;
+    } else {
+      payload.year = exceptionFilters.year;
+      payload.month = exceptionFilters.month;
+    }
+
+    return payload;
+  }
+
+  function validateAttendanceExceptionFilters() {
+    if (exceptionFilters.period === 'month' && (!exceptionFilters.year || !exceptionFilters.month)) {
+      alerts.warning('Please select year and month.', 'Month Required');
+      return false;
+    }
+
+    if (exceptionFilters.period === 'week' && (!exceptionFilters.week_start || !exceptionFilters.week_end)) {
+      alerts.warning('Please select week start and week end.', 'Week Range Required');
+      return false;
+    }
+
+    if (exceptionFilters.period === 'day' && !exceptionFilters.date) {
+      alerts.warning('Please select a date.', 'Date Required');
+      return false;
+    }
+
+    return true;
+  }
+
+  async function handleAttendanceExceptionPreview(event) {
+    event.preventDefault();
+
+    if (!validateAttendanceExceptionFilters()) {
+      return;
+    }
+
+    setLoadingExceptions(true);
+
+    try {
+      const data = await getAttendanceExceptionReports(attendanceExceptionPayload());
+      const nextRows = normaliseAttendanceExceptionRows(data.items || []);
+
+      setExceptionRows(nextRows);
+      setExceptionSummary(data.summary || null);
+
+      if (!nextRows.length) {
+        alerts.info(
+          'No matching attendance exceptions were found for the selected filters.',
+          'No Exceptions Found',
+        );
+      }
+    } catch (error) {
+      setExceptionRows([]);
+      setExceptionSummary(null);
+      alerts.error(
+        error.message || 'Unable to load attendance exception report.',
+        'Report Load Failed',
+      );
+    } finally {
+      setLoadingExceptions(false);
+    }
+  }
+
+  async function handleAttendanceExceptionDownload() {
+    if (!validateAttendanceExceptionFilters()) {
+      return;
+    }
+
+    setDownloadingExceptionExcel(true);
+
+    try {
+      await downloadAttendanceExceptionExcel(attendanceExceptionPayload());
+      alerts.success(
+        'Attendance exception Excel downloaded successfully.',
+        'Download Complete',
+      );
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to download attendance exception Excel report.',
+        'Download Failed',
+      );
+    } finally {
+      setDownloadingExceptionExcel(false);
+    }
   }
 
   async function handleAttendanceExcelDownload(event) {
@@ -1421,7 +1797,7 @@ export default function Reports() {
               onChange={(e) => updateExcelFilter('state', e.target.value)}
             >
               <option value="">All States</option>
-              {HOLIDAY_STATES.map((state) => (
+              {reportStateOptions.map((state) => (
                 <option key={state} value={state}>
                   {state}
                 </option>
@@ -1436,7 +1812,7 @@ export default function Reports() {
               onChange={(e) => updateExcelFilter('employee_id', e.target.value)}
             >
               <option value="">All Employees</option>
-              {employees.map((employee) => {
+              {attendanceExcelEmployees.map((employee) => {
                 const id = employee.id || employee._id || '';
 
                 return (
@@ -1562,6 +1938,211 @@ export default function Reports() {
         </form>
       </section>
 
+      <section className="panel">
+        <div className="toolbar">
+          <div>
+            <h3>Absence & Missing Checkout Export</h3>
+            <p>
+              Preview or export day-wise, week-wise, or month-wise absent employees
+              and employees who checked in but did not check out. Filters are applied
+              exactly by organisation, state, and employee.
+            </p>
+          </div>
+        </div>
+
+        <form className="dynamic-form" onSubmit={handleAttendanceExceptionPreview} noValidate>
+          <label>
+            Report Type
+            <select
+              value={exceptionFilters.report_type}
+              onChange={(e) => updateExceptionFilter('report_type', e.target.value)}
+            >
+              <option value="absent">Absent Employees</option>
+              <option value="missing_checkout">Missing Checkout</option>
+              <option value="exceptions">Absent + Missing Checkout</option>
+            </select>
+          </label>
+
+          <label>
+            Organisation / Entity
+            <select
+              value={exceptionFilters.organisation_id}
+              onChange={(e) => updateExceptionFilter('organisation_id', e.target.value)}
+            >
+              <option value="">All Organisations / Entities</option>
+              {organisations.map((organisation) => {
+                const id = organisation.id || organisation._id || '';
+                return (
+                  <option key={id || organisation.code || organisation.name} value={id}>
+                    {organisationOptionLabel(organisation)}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <label>
+            State
+            <select
+              value={exceptionFilters.state}
+              onChange={(e) => updateExceptionFilter('state', e.target.value)}
+            >
+              <option value="">All States</option>
+              {reportStateOptions.map((state) => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Employee
+            <select
+              value={exceptionFilters.employee_id}
+              onChange={(e) => updateExceptionFilter('employee_id', e.target.value)}
+            >
+              <option value="">All Employees</option>
+              {attendanceExceptionEmployees.map((employee) => {
+                const id = employee.id || employee._id || '';
+
+                return (
+                  <option
+                    key={id || employee.employee_code || employee.email}
+                    value={id}
+                  >
+                    {employeeOptionLabel(employee)}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <label>
+            Period
+            <select
+              value={exceptionFilters.period}
+              onChange={(e) => updateExceptionFilter('period', e.target.value)}
+            >
+              <option value="day">Day Wise</option>
+              <option value="week">Week Wise</option>
+              <option value="month">Month Wise</option>
+            </select>
+          </label>
+
+          {exceptionFilters.period === 'month' && (
+            <>
+              <label>
+                Year
+                <input
+                  type="number"
+                  value={exceptionFilters.year}
+                  onChange={(e) => updateExceptionFilter('year', e.target.value)}
+                  min="2020"
+                  max="2100"
+                  required
+                />
+              </label>
+
+              <label>
+                Month
+                <select
+                  value={exceptionFilters.month}
+                  onChange={(e) => updateExceptionFilter('month', e.target.value)}
+                  required
+                >
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </label>
+            </>
+          )}
+
+          {exceptionFilters.period === 'week' && (
+            <>
+              <label>
+                Week Start
+                <input
+                  type="date"
+                  value={exceptionFilters.week_start}
+                  onChange={(e) => updateExceptionFilter('week_start', e.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Week End
+                <input
+                  type="date"
+                  value={exceptionFilters.week_end}
+                  onChange={(e) => updateExceptionFilter('week_end', e.target.value)}
+                  required
+                />
+              </label>
+            </>
+          )}
+
+          {exceptionFilters.period === 'day' && (
+            <label>
+              Date
+              <input
+                type="date"
+                value={exceptionFilters.date}
+                onChange={(e) => updateExceptionFilter('date', e.target.value)}
+                required
+              />
+            </label>
+          )}
+
+          <button
+            type="submit"
+            className="primary"
+            disabled={loadingExceptions || downloadingExceptionExcel}
+          >
+            <Search size={16} />
+            {loadingExceptions ? 'Loading...' : 'Preview Report'}
+          </button>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleAttendanceExceptionDownload}
+            disabled={loadingExceptions || downloadingExceptionExcel}
+          >
+            {downloadingExceptionExcel ? 'Downloading...' : 'Download Excel'}
+          </button>
+        </form>
+
+        {exceptionSummary && (
+          <section className="stats-grid" style={{ marginTop: 18 }}>
+            <Stat label="Absent Records" value={exceptionSummary.absent_records || 0} />
+            <Stat label="Absent Employees" value={exceptionSummary.absent_employees || 0} />
+            <Stat label="Missing Checkout Records" value={exceptionSummary.missing_checkout_records || 0} />
+            <Stat label="Missing Checkout Employees" value={exceptionSummary.missing_checkout_employees || 0} />
+          </section>
+        )}
+
+        {loadingExceptions && (
+          <div className="inline-message">Loading attendance exception report...</div>
+        )}
+
+        {!loadingExceptions && exceptionSummary && (
+          <div style={{ marginTop: 18 }}>
+            <Table rows={exceptionRows} maxColumns={18} />
+          </div>
+        )}
+      </section>
+
 
       <section className="panel">
         <div className="toolbar">
@@ -1659,7 +2240,7 @@ export default function Reports() {
               onChange={(e) => updateFilter('state', e.target.value)}
             >
               <option value="">All States</option>
-              {HOLIDAY_STATES.map((state) => (
+              {reportStateOptions.map((state) => (
                 <option key={state} value={state}>
                   {state}
                 </option>

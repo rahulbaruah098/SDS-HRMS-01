@@ -18,6 +18,9 @@ from app.services.tenant_service import (
 crud_bp = Blueprint("crud", __name__)
 
 
+DEFAULT_EMPLOYEE_PASSWORD = "12345678"
+
+
 ADMIN_ROLES = {
     "super_admin",
     "admin",
@@ -699,6 +702,40 @@ def normalize_employee_organisation_fields(payload):
 
     return payload
 
+
+def normalize_employee_state_fields(payload, existing=None):
+    """Keep State authoritative while accepting old Branch-based records.
+
+    New employee payloads no longer persist a separate branch value.  Existing
+    employees that only have the legacy branch field are migrated to state the
+    next time they are updated, without deleting their historical branch data.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    existing = existing or {}
+    state = normalize_text(
+        payload.get("state")
+        or payload.get("office_state")
+        or payload.get("work_state")
+        or payload.get("current_state")
+        or payload.get("branch")
+        or existing.get("state")
+        or existing.get("office_state")
+        or existing.get("work_state")
+        or existing.get("current_state")
+        or existing.get("branch")
+    )
+
+    if state:
+        payload["state"] = state
+
+    # Branch remains readable on historical records for backwards
+    # compatibility, but it is not written by the employee create/edit API.
+    payload.pop("branch", None)
+
+    return payload
+
 def normalize_master_payload(collection, payload):
     if not isinstance(payload, dict):
         return payload
@@ -1220,11 +1257,6 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
         sync_payload = build_user_sync_payload(employee_doc, existing_user)
         update_doc = {"$set": sync_payload}
 
-        if raw_password:
-            if len(str(raw_password)) < 6:
-                return None, "Password must be at least 6 characters"
-            update_doc["$set"]["password_hash"] = generate_password_hash(str(raw_password))
-
         try:
             db.users.update_one({"_id": existing_user["_id"]}, update_doc)
         except DuplicateKeyError:
@@ -1240,7 +1272,7 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
     if duplicate:
         return None, "A user with this email already exists"
 
-    password = str(raw_password or "User@123")
+    password = str(raw_password or DEFAULT_EMPLOYEE_PASSWORD)
 
     if len(password) < 6:
         return None, "Password must be at least 6 characters"
@@ -1268,13 +1300,17 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
     return user_payload, ""
 
 
-def sync_employee_login_user(db, employee_doc, raw_password=None):
+def sync_employee_login_user(db, employee_doc):
     apply_avatar_aliases(employee_doc)
 
     user = find_employee_user(db, employee_doc)
 
     if not user:
-        return ensure_employee_login_user(db, employee_doc, raw_password)
+        return ensure_employee_login_user(
+            db,
+            employee_doc,
+            DEFAULT_EMPLOYEE_PASSWORD,
+        )
 
     email = employee_email_from_payload(employee_doc)
 
@@ -1293,12 +1329,6 @@ def sync_employee_login_user(db, employee_doc, raw_password=None):
         "updated_by": current_user_id(),
         "updated_by_name": current_user_name(),
     })
-
-    if raw_password:
-        if len(str(raw_password)) < 6:
-            return None, "Password must be at least 6 characters"
-
-        update_data["password_hash"] = generate_password_hash(str(raw_password))
 
     try:
         db.users.update_one(
@@ -2066,6 +2096,7 @@ def apply_common_filters(collection, q):
     ).lower()
     designation = normalize_text(request.args.get("designation"))
     branch = normalize_text(request.args.get("branch"))
+    state = normalize_text(request.args.get("state"))
     employment_status = normalize_text(request.args.get("employment_status"))
     employee_picker = normalize_text(
         request.args.get("employee_picker")
@@ -2135,6 +2166,19 @@ def apply_common_filters(collection, q):
 
         if branch:
             q["branch"] = re.compile(re.escape(branch), re.IGNORECASE)
+
+        if state:
+            state_regex = re.compile(f"^{re.escape(state)}$", re.IGNORECASE)
+            q = and_query(q, {
+                "$or": [
+                    {"state": state_regex},
+                    {"office_state": state_regex},
+                    {"work_state": state_regex},
+                    {"current_state": state_regex},
+                    # Legacy records may still have only branch populated.
+                    {"branch": state_regex},
+                ]
+            })
 
         if employment_status:
             q["employment_status"] = re.compile(
@@ -3004,7 +3048,7 @@ def build_project_team_tree(db, project):
                 "people": collaborators,
             },
         ],
-        "connection_label": "Reporting Officer → Team Leader → Team Members → Collaborators",
+        "connection_label": "Reporting Officer â†’ Team Leader â†’ Team Members â†’ Collaborators",
     }
 
 
@@ -3121,6 +3165,9 @@ def validate_required_fields(collection, payload):
     if collection == "employees":
         if not normalize_text(payload.get("name") or payload.get("employee_name")):
             return "Employee name is required"
+
+        if not normalize_text(payload.get("state")):
+            return "State is required"
 
     if collection in {"organisations", "departments", "designations", "states"}:
         if not normalize_text(
@@ -3417,7 +3464,7 @@ def enrich_leave_request(row):
     elif stage == "hr":
         live_status = "Pending with HR"
     else:
-        live_status = "Pending" if status == "pending" else status.title() if status else "—"
+        live_status = "Pending" if status == "pending" else status.title() if status else "â€”"
 
     row["live_status"] = live_status
     row["status_text"] = live_status
@@ -4118,10 +4165,15 @@ def create_collection_item(collection):
     payload.setdefault("tenant_id", current_tenant_id())
 
     if collection == "employees":
+        # Every newly created employee login starts with the same documented
+        # default.  Password changes are handled only by dedicated password
+        # endpoints and never by employee profile payloads.
+        raw_password = DEFAULT_EMPLOYEE_PASSWORD
         payload["name"] = employee_name_from_payload(payload)
         payload["employee_name"] = payload["name"]
         payload["email"] = employee_email_from_payload(payload)
         payload = normalize_employee_organisation_fields(payload)
+        payload = normalize_employee_state_fields(payload)
         payload.setdefault("status", "active")
         payload.setdefault("employment_status", payload.get("status") or "active")
         payload.setdefault("is_team_leader", "false")
@@ -4234,7 +4286,7 @@ def create_collection_item(collection):
 
     if collection == "employees":
         if not employee_is_alumni_payload(payload):
-            user, user_error = sync_employee_login_user(db, payload, raw_password)
+            user, user_error = sync_employee_login_user(db, payload)
 
             if user_error:
                 mongo_collection.delete_one({"_id": result.inserted_id})
@@ -4369,7 +4421,6 @@ def update_collection_item(collection, item_id):
         return jsonify({"message": "Record not found or not in your scope"}), 404
 
     payload = clean_payload(data)
-    raw_password = data.get("password") or data.get("new_password")
     employee_login_user_before = None
 
     if collection == "employees":
@@ -4599,6 +4650,7 @@ def update_collection_item(collection, item_id):
         payload = normalize_master_payload(collection, payload)
 
     if collection == "employees":
+        payload = normalize_employee_state_fields(payload, existing)
         merged_employee = dict(existing)
         merged_employee.update(payload)
         merged_employee["_id"] = existing["_id"]
@@ -4747,11 +4799,7 @@ def update_collection_item(collection, item_id):
         if employee_is_alumni_payload(updated):
             deactivate_employee_login_user(db, updated)
         else:
-            user, user_error = sync_employee_login_user(
-                db,
-                updated,
-                raw_password,
-            )
+            user, user_error = sync_employee_login_user(db, updated)
 
             if user_error:
                 mongo_collection.replace_one(
@@ -5120,4 +5168,4 @@ def update_project_collaborators(project_id):
     return jsonify({
         "message": "Project collaborators updated successfully",
         "item": clean_doc(enrich_project_item(updated)),
-    }) 
+    })

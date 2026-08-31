@@ -4,7 +4,7 @@ import {
   createEmployee,
   createPastEmployee,
   downloadAlumniCsv,
-  downloadEmployeeCsv,
+  downloadEmployeeMasterExcel,
   filterEmployees,
   getActiveEmployees,
   getActiveOrganisations,
@@ -35,7 +35,6 @@ const EMPTY_EMPLOYEE_FORM = {
   date_of_birth: '',
   blood_group: '',
   gross_salary: '',
-  branch: 'Assam/Guwahati (HO)',
   state: '',
   aadhar_no: '',
   employee_uan_no: '',
@@ -46,8 +45,6 @@ const EMPTY_EMPLOYEE_FORM = {
   payment_mode: 'Bank Transfer',
   previous_designation: '',
   previous_employment_tenure_end_date: '',
-  password: '12345678',
-  password_mode: 'default',
 
   role: 'employee',
 
@@ -102,8 +99,6 @@ const EMPTY_EMPLOYEE_FORM = {
 
 const EMPTY_ALUMNI_FORM = {
   ...EMPTY_EMPLOYEE_FORM,
-  password: '',
-  password_mode: '',
   is_alumni: true,
   skip_login: true,
   status: 'Resigned',
@@ -260,6 +255,16 @@ function uniqueOptions(rows = [], key) {
   ).sort((a, b) => a.localeCompare(b));
 }
 
+function uniqueStateOptions(rows = []) {
+  return Array.from(
+    new Set(
+      rows
+        .map((row) => String(row?.state || row?.branch || '').trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+}
+
 function optionText(option = {}) {
   return String(
     option.label ||
@@ -379,6 +384,21 @@ function normalizeEmployeeForForm(employee = {}) {
   merged.organization = merged.organization || merged.organisation || '';
   merged.organisation_code = merged.organisation_code || merged.organization_code || '';
   merged.organization_code = merged.organization_code || merged.organisation_code || '';
+
+  // State is authoritative. Keep legacy Branch readable for existing records only.
+  merged.state =
+    merged.state ||
+    merged.office_state ||
+    merged.work_state ||
+    merged.current_state ||
+    merged.branch ||
+    '';
+
+  // Never expose legacy Branch or password fields through this form.
+  delete merged.branch;
+  delete merged.password;
+  delete merged.password_mode;
+
   merged.joining_date = normalizeDateValue(merged.joining_date || merged.date_of_joining);
   merged.date_of_joining = normalizeDateValue(merged.date_of_joining || merged.joining_date);
   merged.date_of_birth = normalizeDateValue(merged.date_of_birth || merged.dob);
@@ -416,6 +436,23 @@ function employeePayloadFromForm(form = {}, extra = {}) {
   payload.organization = payload.organization || payload.organisation || '';
   payload.organisation_code = payload.organisation_code || payload.organization_code || '';
   payload.organization_code = payload.organization_code || payload.organisation_code || '';
+
+  payload.state =
+    payload.state ||
+    payload.office_state ||
+    payload.work_state ||
+    payload.current_state ||
+    payload.branch ||
+    '';
+
+  // State is authoritative. Branch is accepted only as legacy input.
+  delete payload.branch;
+
+  // Employee profile create/update requests must never control passwords.
+  // The backend assigns 12345678 only when a new employee is created.
+  delete payload.password;
+  delete payload.password_mode;
+
   payload.joining_date = payload.joining_date || payload.date_of_joining || '';
   payload.date_of_joining = payload.date_of_joining || payload.joining_date || '';
   payload.date_of_birth = payload.date_of_birth || payload.dob || '';
@@ -721,7 +758,6 @@ function EmployeeForm({
         <SelectInput label="Designation" name="designation" value={form.designation} onChange={handleChange} options={designationOptions} required />
         <SelectInput label="Department" name="department" value={form.department} onChange={handleChange} options={departmentOptions} required />
         <TextInput label="Shift" name="shift" value={form.shift} onChange={handleChange} placeholder="General" required />
-        <TextInput label="Branch" name="branch" value={form.branch} onChange={handleChange} placeholder="Assam/Guwahati (HO)" required />
         <SelectInput label="State" name="state" value={form.state} onChange={handleChange} options={stateOptions} required />
         <SelectInput label="Employee Type" name="employee_type" value={form.employee_type} onChange={handleChange} options={[{ value: '', label: 'Choose One' }, ...EMPLOYEE_TYPE_OPTIONS]} />
         <SelectInput label="Job Type" name="job_type" value={form.job_type} onChange={handleChange} options={JOB_TYPE_OPTIONS} />
@@ -782,7 +818,6 @@ function EmployeeForm({
       {!isAlumniForm ? (
         <>
           <FormSection title="Login & Reporting Mapping">
-            <TextInput label="Password" name="password" value={form.password} onChange={handleChange} type="password" required={!isEdit} placeholder="Default Password (12345678)" />
             <SelectInput label="Is Team Leader?" name="is_team_leader" value={String(Boolean(form.is_team_leader))} onChange={handleChange} options={TRUE_FALSE_OPTIONS} />
             <SelectInput label="Is Reporting Officer?" name="is_reporting_officer" value={String(Boolean(form.is_reporting_officer))} onChange={handleChange} options={TRUE_FALSE_OPTIONS} />
             <SearchableEmployeeSelect
@@ -805,8 +840,8 @@ function EmployeeForm({
               options={reportingOfficers}
               placeholder="Search any active Reporting Officer / Manager / Director / CEO..."
             />
-         <div className="hrms-form-note" style={{ gridColumn: '1 / -1' }}>
-              Team Leader and Reporting Officer mapping is employee-based. The selected person can belong to another department or organization.
+            <div className="hrms-form-note" style={{ gridColumn: '1 / -1' }}>
+              New employees receive the default login password <strong>12345678</strong> from the system only at first creation. Editing employee details never changes an existing password. Team Leader and Reporting Officer mapping remains employee-based.
             </div>
           </FormSection>
 
@@ -907,7 +942,7 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
                 <td>{displayValue(employee.designation)}</td>
                 <td>
                   <strong>{displayValue(employee.phone || employee.mobile)}</strong>
-                  <small>{displayValue(employee.branch, '')}</small>
+                  <small>{displayValue(employee.state || employee.branch, '')}</small>
                 </td>
                 <td>{displayDate(employee.joining_date || employee.date_of_joining)}</td>
                 <td>
@@ -1184,17 +1219,17 @@ export default function Employees({ user = {}, setPage } = {}) {
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [editForm, setEditForm] = useState(EMPTY_EMPLOYEE_FORM);
 
-  const [filters, setFilters] = useState({ q: '', department: '', designation: '', branch: '', employment_status: '' });
-  const [alumniFilters, setAlumniFilters] = useState({ q: '', department: '', designation: '', branch: '', employment_status: '' });
+  const [filters, setFilters] = useState({ q: '', department: '', designation: '', state: '', employment_status: '' });
+  const [alumniFilters, setAlumniFilters] = useState({ q: '', department: '', designation: '', state: '', employment_status: '' });
   const [resignEmployee, setResignEmployee] = useState(null);
   const [resignForm, setResignForm] = useState(EMPTY_RESIGN_FORM);
 
   const employeeDepartments = useMemo(() => uniqueOptions(employees, 'department'), [employees]);
   const employeeDesignations = useMemo(() => uniqueOptions(employees, 'designation'), [employees]);
-  const employeeBranches = useMemo(() => uniqueOptions(employees, 'branch'), [employees]);
+  const employeeStates = useMemo(() => uniqueStateOptions(employees), [employees]);
   const alumniDepartments = useMemo(() => uniqueOptions(alumni, 'department'), [alumni]);
   const alumniDesignations = useMemo(() => uniqueOptions(alumni, 'designation'), [alumni]);
-  const alumniBranches = useMemo(() => uniqueOptions(alumni, 'branch'), [alumni]);
+  const alumniStates = useMemo(() => uniqueStateOptions(alumni), [alumni]);
 
   const filteredEmployees = useMemo(() => filterEmployees(employees, filters), [employees, filters]);
   const filteredAlumni = useMemo(() => filterEmployees(alumni, alumniFilters), [alumni, alumniFilters]);
@@ -1312,8 +1347,19 @@ export default function Employees({ user = {}, setPage } = {}) {
 
   const handleFilterChange = (event) => setFilters((previous) => ({ ...previous, [event.target.name]: event.target.value }));
   const handleAlumniFilterChange = (event) => setAlumniFilters((previous) => ({ ...previous, [event.target.name]: event.target.value }));
-  const resetFilters = () => setFilters({ q: '', department: '', designation: '', branch: '', employment_status: '' });
-  const resetAlumniFilters = () => setAlumniFilters({ q: '', department: '', designation: '', branch: '', employment_status: '' });
+  const resetFilters = () => setFilters({ q: '', department: '', designation: '', state: '', employment_status: '' });
+  const resetAlumniFilters = () => setAlumniFilters({ q: '', department: '', designation: '', state: '', employment_status: '' });
+
+  const handleDownloadEmployeeExcel = async () => {
+    try {
+      await downloadEmployeeMasterExcel(filters);
+    } catch (error) {
+      showMessage(
+        'error',
+        error.message || 'Unable to download employee Excel report.',
+      );
+    }
+  };
 
   const handleCreateEmployee = async (event) => {
     event.preventDefault();
@@ -1885,7 +1931,7 @@ export default function Employees({ user = {}, setPage } = {}) {
               <p>Showing only active/current employees. Use Edit to update existing employee details.</p>
             </div>
             <div className="hrms-actions">
-              <button type="button" className="hrms-secondary-btn" onClick={() => downloadEmployeeCsv(filteredEmployees)}>Download Active CSV</button>
+              <button type="button" className="hrms-secondary-btn" onClick={handleDownloadEmployeeExcel}>Download Active Excel</button>
               <button type="button" className="hrms-primary-btn" onClick={() => setActiveTab('create')}>Create Employee</button>
             </div>
           </div>
@@ -1900,9 +1946,9 @@ export default function Employees({ user = {}, setPage } = {}) {
               <option value="">All Designations</option>
               {employeeDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
-            <select name="branch" value={filters.branch} onChange={handleFilterChange}>
-              <option value="">All Branches</option>
-              {employeeBranches.map((item) => <option key={item} value={item}>{item}</option>)}
+            <select name="state" value={filters.state} onChange={handleFilterChange}>
+              <option value="">All States</option>
+              {employeeStates.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
             <select name="employment_status" value={filters.employment_status} onChange={handleFilterChange}>
               <option value="">All Status</option>
@@ -1980,9 +2026,9 @@ export default function Employees({ user = {}, setPage } = {}) {
                   <option value="">All Designations</option>
                   {alumniDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
-                <select name="branch" value={alumniFilters.branch} onChange={handleAlumniFilterChange}>
-                  <option value="">All Branches</option>
-                  {alumniBranches.map((item) => <option key={item} value={item}>{item}</option>)}
+                <select name="state" value={alumniFilters.state} onChange={handleAlumniFilterChange}>
+                  <option value="">All States</option>
+                  {alumniStates.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
                 <select name="employment_status" value={alumniFilters.employment_status} onChange={handleAlumniFilterChange}>
                   <option value="">All Status</option>
