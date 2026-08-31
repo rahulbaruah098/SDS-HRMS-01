@@ -77,42 +77,67 @@ function getCelebrationMessage(item) {
   return '';
 }
 
-function getStorageKey(item) {
-  return [
-    'sds_hrms_celebration_seen',
-    item?.id || item?._id || '',
-    item?.date_key || '',
-    item?.event_type || '',
-    item?.employee_id || '',
-  ].join('_');
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
-function hasSeenCelebration(item) {
-  try {
-    return localStorage.getItem(getStorageKey(item)) === 'true';
-  } catch {
-    return false;
-  }
-}
+function millisecondsUntilNextLocalDay() {
+  const now = new Date();
+  const nextDay = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    1,
+    0,
+  );
 
-function markCelebrationSeen(item) {
-  try {
-    localStorage.setItem(getStorageKey(item), 'true');
-  } catch {
-    // ignore localStorage errors
-  }
+  return Math.max(1000, nextDay.getTime() - now.getTime());
 }
 
 export default function CelebrationPopup({ celebrations = [] }) {
+  const [currentDateKey, setCurrentDateKey] = useState(() =>
+    getLocalDateKey(),
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setCurrentDateKey(getLocalDateKey());
+    }, millisecondsUntilNextLocalDay());
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [currentDateKey]);
+
   const eligibleCelebrations = useMemo(() => {
     return (Array.isArray(celebrations) ? celebrations : [])
       .filter(Boolean)
       .filter((item) => item.is_active !== false)
-      .filter((item) => !hasSeenCelebration(item));
-  }, [celebrations]);
+      .filter((item) => String(item.date_key || '') === currentDateKey);
+  }, [celebrations, currentDateKey]);
 
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [visible, setVisible] = useState(false);
+  const celebrationSignature = useMemo(
+    () =>
+      eligibleCelebrations
+        .map((item) =>
+          [
+            item?.id || item?._id || '',
+            item?.date_key || '',
+            item?.event_type || '',
+            item?.employee_id || '',
+          ].join(':'),
+        )
+        .join('|'),
+    [eligibleCelebrations],
+  );
 
   const activeCelebration = eligibleCelebrations[activeIndex];
 
@@ -123,7 +148,7 @@ export default function CelebrationPopup({ celebrations = [] }) {
     } else {
       setVisible(false);
     }
-  }, [eligibleCelebrations.length]);
+  }, [celebrationSignature, eligibleCelebrations.length]);
 
   if (!visible || !activeCelebration) {
     return null;
@@ -139,8 +164,6 @@ export default function CelebrationPopup({ celebrations = [] }) {
   const message = getCelebrationMessage(activeCelebration);
 
   function closeCurrent() {
-    markCelebrationSeen(activeCelebration);
-
     const nextIndex = activeIndex + 1;
 
     if (nextIndex < eligibleCelebrations.length) {

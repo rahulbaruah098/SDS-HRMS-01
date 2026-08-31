@@ -16,7 +16,7 @@ try:
 except Exception:
     LOCAL_TZ = datetime.now().astimezone().tzinfo
     
-CELEBRATION_RELEASE_TIME = time(10, 0)
+CELEBRATION_RELEASE_TIME = time(0, 0)
 
 
 BIRTHDAY_MESSAGE = """Wishing you a very Happy Birthday!
@@ -151,26 +151,93 @@ def tenant_name_for(tenant_id):
     )
 
 
+INACTIVE_EMPLOYEE_STATUSES = {
+    "inactive",
+    "resigned",
+    "left",
+    "terminated",
+    "alumni",
+    "ex-employee",
+    "ex_employee",
+    "ex employee",
+    "retired",
+    "disabled",
+    "deleted",
+}
+
+FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def truthy(value):
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return False
+
+    return normalize_text(value).lower() in {"1", "true", "yes", "y", "on"}
+
+
+def employee_is_active(employee):
+    if not employee:
+        return False
+
+    if truthy(employee.get("is_deleted")):
+        return False
+
+    if truthy(employee.get("is_alumni")):
+        return False
+
+    is_active_value = employee.get("is_active")
+    if is_active_value is False or is_active_value == 0:
+        return False
+
+    if normalize_text(is_active_value).lower() in FALSE_VALUES:
+        return False
+
+    status = normalize_text(employee.get("status")).lower()
+    employment_status = normalize_text(employee.get("employment_status")).lower()
+
+    if status in INACTIVE_EMPLOYEE_STATUSES:
+        return False
+
+    if employment_status in INACTIVE_EMPLOYEE_STATUSES:
+        return False
+
+    if normalize_text(employee.get("last_working_date")):
+        return False
+
+    return True
+
+
 def active_employee_query(tenant_id):
+    inactive_pattern = (
+        r"^(inactive|resigned|left|terminated|alumni|retired|disabled|deleted|"
+        r"ex[-_ ]?employee)$"
+    )
+
     return {
         "tenant_id": tenant_id,
         "$and": [
+            {"is_deleted": {"$ne": True}},
+            {"is_alumni": {"$ne": True}},
+            {"is_active": {"$nin": [False, 0, "0", "false", "False", "FALSE"]}},
             {
                 "$or": [
-                    {"is_deleted": {"$exists": False}},
-                    {"is_deleted": False},
+                    {"status": {"$exists": False}},
+                    {"status": {"$not": {"$regex": inactive_pattern, "$options": "i"}}},
                 ],
             },
             {
                 "$or": [
-                    {"is_active": {"$exists": False}},
-                    {"is_active": True},
-                    {"is_active": "true"},
-                    {"is_active": "True"},
-                    {"status": "Active"},
-                    {"status": "active"},
-                    {"employment_status": "Active"},
-                    {"employment_status": "active"},
+                    {"employment_status": {"$exists": False}},
+                    {"employment_status": {"$not": {"$regex": inactive_pattern, "$options": "i"}}},
+                ],
+            },
+            {
+                "$or": [
+                    {"last_working_date": {"$exists": False}},
+                    {"last_working_date": {"$in": [None, ""]}},
                 ],
             },
         ],
@@ -178,23 +245,17 @@ def active_employee_query(tenant_id):
 
 
 def active_user_query(tenant_id):
+    inactive_pattern = r"^(inactive|disabled|deleted|resigned|left|terminated|alumni)$"
+
     return {
         "tenant_id": tenant_id,
         "$and": [
+            {"is_deleted": {"$ne": True}},
+            {"is_active": {"$nin": [False, 0, "0", "false", "False", "FALSE"]}},
             {
                 "$or": [
-                    {"is_deleted": {"$exists": False}},
-                    {"is_deleted": False},
-                ],
-            },
-            {
-                "$or": [
-                    {"is_active": {"$exists": False}},
-                    {"is_active": True},
-                    {"is_active": "true"},
-                    {"is_active": "True"},
-                    {"status": "Active"},
-                    {"status": "active"},
+                    {"status": {"$exists": False}},
+                    {"status": {"$not": {"$regex": inactive_pattern, "$options": "i"}}},
                 ],
             },
         ],
@@ -218,6 +279,124 @@ def employee_user_id(employee):
         or employee.get("employee_user_id")
         or ""
     )
+
+
+def deactivate_celebration(celebration, reason="inactive_employee"):
+    if not celebration or not celebration.get("_id"):
+        return
+
+    db = get_db()
+    now = now_utc()
+    celebration_id = celebration.get("_id")
+
+    db.celebrations.update_one(
+        {"_id": celebration_id},
+        {
+            "$set": {
+                "status": "expired" if reason == "date_expired" else "inactive",
+                "is_active": False,
+                "deactivated_reason": reason,
+                "deactivated_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+
+    # Celebration notifications are day-bound as well. Removing them keeps
+    # stale/resigned celebrations out of the normal notification history,
+    # whose generic listing endpoint does not filter by celebration status.
+    db.notifications.delete_many({
+        "target": "celebrations",
+        "meta.celebration_id": str(celebration_id),
+    })
+
+
+def expire_old_celebrations(tenant_id):
+    db = get_db()
+    current_date_key = today_key()
+    stale_items = list(
+        db.celebrations.find({
+            "tenant_id": tenant_id,
+            "date_key": {"$ne": current_date_key},
+            "$or": [
+                {"is_active": True},
+                {"status": "active"},
+            ],
+        })
+    )
+
+    for item in stale_items:
+        deactivate_celebration(item, reason="date_expired")
+
+
+def find_employee_for_celebration(celebration):
+    db = get_db()
+    tenant_id = celebration.get("tenant_id")
+    employee_id = safe_object_id(celebration.get("employee_id"))
+
+    if employee_id:
+        employee = db.employees.find_one({
+            "_id": employee_id,
+            "tenant_id": tenant_id,
+        })
+        if employee:
+            return employee
+
+    employee_user_id_value = normalize_text(celebration.get("employee_user_id"))
+    employee_code = normalize_text(celebration.get("employee_code"))
+
+    fallback_filters = []
+
+    if employee_user_id_value:
+        fallback_filters.extend([
+            {"user_id": employee_user_id_value},
+            {"linked_user_id": employee_user_id_value},
+            {"employee_user_id": employee_user_id_value},
+        ])
+
+    if employee_code:
+        fallback_filters.extend([
+            {"employee_id": employee_code},
+            {"employee_code": employee_code},
+            {"emp_code": employee_code},
+        ])
+
+    if not fallback_filters:
+        return None
+
+    return db.employees.find_one({
+        "tenant_id": tenant_id,
+        "$or": fallback_filters,
+    })
+
+
+def validate_today_celebrations_for_tenant(tenant_id):
+    db = get_db()
+    expire_old_celebrations(tenant_id)
+
+    today_items = list(
+        db.celebrations.find({
+            "tenant_id": tenant_id,
+            "date_key": today_key(),
+            "$or": [
+                {"is_active": True},
+                {"status": "active"},
+            ],
+        })
+    )
+
+    valid_items = []
+
+    for celebration in today_items:
+        employee = find_employee_for_celebration(celebration)
+
+        if not employee_is_active(employee):
+            deactivate_celebration(celebration, reason="employee_not_active")
+            continue
+
+        valid_items.append(celebration)
+
+    return valid_items
 
 
 def create_notification(user_id, title, body, tenant_id, celebration_id, meta=None):
@@ -244,8 +423,10 @@ def create_notification(user_id, title, body, tenant_id, celebration_id, meta=No
         "read": False,
         "status": "unread",
         "target": "celebrations",
+        "is_active": True,
         "meta": {
             "celebration_id": str(celebration_id),
+            "date_key": today_key(),
             **(meta or {}),
         },
         "created_at": now,
@@ -369,7 +550,7 @@ def build_birthday_payload(employee, tenant_id, tenant_name):
         "tenant_name": tenant_name,
         "event_type": "birthday",
         "date_key": today_key(),
-        "scheduled_time": "10:00",
+        "scheduled_time": "00:00",
         "employee_id": employee_id,
         "employee_user_id": str(employee_user_id(employee) or ""),
         "employee_name": name,
@@ -409,7 +590,7 @@ def build_anniversary_payload(employee, tenant_id, tenant_name, years):
         "tenant_name": tenant_name,
         "event_type": "work_anniversary",
         "date_key": today_key(),
-        "scheduled_time": "10:00",
+        "scheduled_time": "00:00",
         "employee_id": employee_id,
         "employee_user_id": str(employee_user_id(employee) or ""),
         "employee_name": name,
@@ -435,17 +616,18 @@ def build_anniversary_payload(employee, tenant_id, tenant_name, years):
 def generate_today_celebrations_for_tenant(tenant_id, force=False):
     db = get_db()
 
-    if not force and not release_time_reached():
-        return {
-            "status": "not_due",
-            "message": "Celebrations will be released at 10:00 AM.",
-            "items": [],
-            "created": 0,
-            "notified": 0,
-        }
+    # Celebrations are valid for the full local calendar day. The frontend
+    # already calls /celebrations/today immediately after login, so generation
+    # here makes the popup available as soon as an active user signs in.
+    expire_old_celebrations(tenant_id)
+    validate_today_celebrations_for_tenant(tenant_id)
 
     tenant_name = tenant_name_for(tenant_id)
-    employees = list(db.employees.find(active_employee_query(tenant_id)))
+    employees = [
+        employee
+        for employee in db.employees.find(active_employee_query(tenant_id))
+        if employee_is_active(employee)
+    ]
 
     items = []
     created_count = 0
@@ -527,6 +709,7 @@ def today_celebrations():
     tenant_id = current_tenant_id()
 
     generate_today_celebrations_for_tenant(tenant_id, force=False)
+    validate_today_celebrations_for_tenant(tenant_id)
 
     db = get_db()
 
@@ -546,8 +729,8 @@ def today_celebrations():
     return jsonify({
         "items": clean_doc(items),
         "date_key": today_key(),
-        "release_time": "10:00",
-        "released": release_time_reached(),
+        "release_time": "00:00",
+        "released": True,
     })
 
 
@@ -585,11 +768,27 @@ def my_celebrations():
         ],
     })
 
-    if not employee:
+    if not employee or not employee_is_active(employee):
+        if employee:
+            stale_items = list(db.celebrations.find({
+                "tenant_id": tenant_id,
+                "employee_id": str(employee.get("_id")),
+                "date_key": today_key(),
+                "$or": [
+                    {"is_active": True},
+                    {"status": "active"},
+                ],
+            }))
+
+            for item in stale_items:
+                deactivate_celebration(item, reason="employee_not_active")
+
         return jsonify({
             "items": [],
             "date_key": today_key(),
         })
+
+    validate_today_celebrations_for_tenant(tenant_id)
 
     items = list(
         db.celebrations.find({

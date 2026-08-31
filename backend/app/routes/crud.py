@@ -1363,6 +1363,90 @@ def deactivate_employee_login_user(db, employee_doc):
     )
 
 
+def deactivate_employee_celebrations(db, employee_doc):
+    """Immediately invalidate active celebration data for a resigned/alumni employee.
+
+    The celebrations API also revalidates lifecycle state on read, but doing the cleanup
+    here prevents a celebration/notification that was generated earlier today from
+    surviving after HR/Admin marks the employee as resigned.
+    """
+    if not employee_doc:
+        return
+
+    tenant_id = normalize_text(employee_doc.get("tenant_id") or current_tenant_id())
+    employee_object_id = employee_doc.get("_id")
+    employee_id = normalize_text(employee_object_id)
+    employee_user_id = normalize_text(
+        employee_doc.get("user_id")
+        or employee_doc.get("linked_user_id")
+        or employee_doc.get("employee_user_id")
+    )
+    employee_code = normalize_text(
+        employee_doc.get("emp_code")
+        or employee_doc.get("employee_code")
+        or employee_doc.get("employee_id")
+    )
+
+    identity_filters = []
+
+    if employee_id:
+        identity_filters.append({"employee_id": employee_id})
+
+    if employee_user_id:
+        identity_filters.append({"employee_user_id": employee_user_id})
+
+    if employee_code:
+        identity_filters.append({"employee_code": employee_code})
+
+    if not tenant_id or not identity_filters:
+        return
+
+    celebration_query = {
+        "tenant_id": tenant_id,
+        "$and": [
+            {"$or": identity_filters},
+            {
+                "$or": [
+                    {"is_active": True},
+                    {"status": "active"},
+                ]
+            },
+        ],
+    }
+
+    active_celebrations = list(
+        db.celebrations.find(celebration_query, {"_id": 1})
+    )
+
+    if not active_celebrations:
+        return
+
+    now = now_utc()
+    celebration_ids = [item["_id"] for item in active_celebrations if item.get("_id")]
+
+    if not celebration_ids:
+        return
+
+    db.celebrations.update_many(
+        {"_id": {"$in": celebration_ids}},
+        {
+            "$set": {
+                "status": "inactive",
+                "is_active": False,
+                "deactivated_reason": "employee_resigned",
+                "deactivated_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+
+    db.notifications.delete_many({
+        "tenant_id": tenant_id,
+        "target": "celebrations",
+        "meta.celebration_id": {"$in": [str(item_id) for item_id in celebration_ids]},
+    })
+
+
 def normalize_leave_type(value):
     key = normalize_text(value).upper()
     return LEAVE_TYPE_ALIASES.get(key, key)
@@ -4798,6 +4882,18 @@ def update_collection_item(collection, item_id):
     if collection == "employees":
         if employee_is_alumni_payload(updated):
             deactivate_employee_login_user(db, updated)
+
+            try:
+                deactivate_employee_celebrations(db, updated)
+            except Exception as exc:
+                # Do not roll back a completed resignation because celebration cleanup
+                # failed. File 16 also revalidates lifecycle state on every celebration
+                # read, so the resigned employee cannot become eligible again.
+                current_app.logger.exception(
+                    "Failed to deactivate celebrations for resigned employee %s: %s",
+                    str(updated.get("_id") or item_id),
+                    exc,
+                )
         else:
             user, user_error = sync_employee_login_user(db, updated)
 
