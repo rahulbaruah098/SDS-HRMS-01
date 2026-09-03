@@ -15,7 +15,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.ai_knowledge.hrms_workflows import HRMS_WORKFLOWS, KNOWLEDGE_VERSION
 from app.ai_knowledge.role_profiles import (
+    PROGRESSIVE_DISCLOSURE_RULES,
     build_role_subscription_guidance,
     derive_effective_ai_roles,
     resolve_designation_lens,
@@ -28,6 +30,7 @@ from app.services.ai_assistant_service import (
     search_static_knowledge,
 )
 from app.services.ai_capability_service import (
+    SAYA_CAPABILITY_SERVICE_VERSION,
     check_ai_role_permission,
     detect_ai_capabilities,
     detect_question_modules,
@@ -294,6 +297,103 @@ class CapabilityPermissionTests(SayaTestCase):
         self.assertIn("pricing_plans", capabilities)
         self.assertIn("subscription_summary", capabilities)
         self.assertIn("premium_quotation", capabilities)
+
+
+class ProgressiveDisclosureTests(SayaTestCase):
+    """Regression coverage for Saya's concise, ask-only-what-is-needed behavior."""
+
+    def test_capability_service_uses_progressive_disclosure_version(self):
+        self.assertEqual(
+            SAYA_CAPABILITY_SERVICE_VERSION,
+            "2026-09-03-PROGRESSIVE-DISCLOSURE-R1",
+        )
+
+    def test_leave_application_does_not_fetch_balance_automatically(self):
+        capabilities = detect_ai_capabilities(
+            "I want to apply for casual leave from 5 September to 7 September."
+        )
+
+        self.assertNotIn("leave_balance", capabilities)
+
+    def test_explicit_leave_balance_question_fetches_balance(self):
+        questions = [
+            "Show my leave balance.",
+            "How many casual leaves do I have?",
+            "How many CL do I have?",
+        ]
+
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertIn("leave_balance", detect_ai_capabilities(question))
+
+    def test_generic_handover_question_does_not_fetch_private_lists(self):
+        capabilities = detect_ai_capabilities(
+            "How does project handover work for leave?"
+        )
+
+        self.assertNotIn("projects", capabilities)
+        self.assertNotIn("team_scope", capabilities)
+        self.assertNotIn("leave_balance", capabilities)
+
+    def test_explicit_project_question_fetches_projects_only(self):
+        capabilities = detect_ai_capabilities("Show my projects.")
+
+        self.assertIn("projects", capabilities)
+        self.assertNotIn("team_scope", capabilities)
+        self.assertNotIn("leave_balance", capabilities)
+
+    def test_explicit_team_question_fetches_team_only(self):
+        questions = [
+            "Who are my team members?",
+            "State my team member names.",
+            "Who can I hand over to?",
+        ]
+
+        for question in questions:
+            with self.subTest(question=question):
+                capabilities = detect_ai_capabilities(question)
+                self.assertIn("team_scope", capabilities)
+                self.assertNotIn("projects", capabilities)
+                self.assertNotIn("leave_balance", capabilities)
+
+    def test_explicit_request_for_projects_and_team_fetches_both(self):
+        capabilities = detect_ai_capabilities(
+            "Show my projects and my team members."
+        )
+
+        self.assertIn("projects", capabilities)
+        self.assertIn("team_scope", capabilities)
+
+    def test_role_guidance_contains_global_progressive_disclosure_rules(self):
+        guidance = build_role_subscription_guidance(self.context("employee"))
+
+        self.assertTrue(PROGRESSIVE_DISCLOSURE_RULES)
+        self.assertIn("Progressive disclosure rules:", guidance)
+        self.assertIn(
+            "Do not enumerate leave types, expand leave abbreviations, show leave balances, list projects, or list team members",
+            guidance,
+        )
+        self.assertIn(
+            "do not automatically list accessible projects",
+            guidance.lower(),
+        )
+
+    def test_verified_leave_knowledge_uses_new_progressive_disclosure_version(self):
+        self.assertEqual(
+            KNOWLEDGE_VERSION,
+            "2026-09-03-v6-saya-progressive-disclosure",
+        )
+
+        leave_text = "\n".join(
+            str(item.get("content") or "")
+            for item in HRMS_WORKFLOWS
+            if str(item.get("module") or "").strip().lower() == "leave"
+        ).lower()
+
+        self.assertTrue(leave_text, "Expected verified Leave knowledge entries.")
+        self.assertIn("without automatically listing all projects", leave_text)
+        self.assertIn("leave balance", leave_text)
+        self.assertIn("explicitly", leave_text)
 
 
 class PricingAndPremiumTests(SayaTestCase):

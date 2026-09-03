@@ -72,12 +72,15 @@ def _is_quota_error(text: Any, status_code: int = 0) -> bool:
     lowered = _safe_str(text).lower()
 
     return (
-        status_code == 429
+        status_code in {402, 429}
+        or "402" in lowered
         or "429" in lowered
         or "quota" in lowered
+        or "credit" in lowered
         or "rate limit" in lowered
         or "resource_exhausted" in lowered
         or "too many requests" in lowered
+        or "insufficient_quota" in lowered
     )
 
 
@@ -859,6 +862,125 @@ def _sarvam_text_to_speech(
 
 
 
+def _clamp_float(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(float(value), maximum))
+
+
+def _elevenlabs_text_to_speech(
+    text: str,
+    voice: str = "",
+    language_code: str = "",
+    timeout: Optional[int] = None,
+) -> Tuple[bytes, str]:
+    """Generate Saya speech through ElevenLabs Text-to-Speech.
+
+    The voice is intentionally server-controlled through ELEVENLABS_VOICE_ID.
+    A voice value sent from the browser is not trusted as a Voice ID, preventing
+    clients from switching Saya to an arbitrary ElevenLabs voice.
+    """
+    api_key = _env("ELEVENLABS_API_KEY")
+    voice_id = _env("ELEVENLABS_VOICE_ID")
+
+    if not api_key:
+        raise AiProviderError(
+            "ELEVENLABS_API_KEY is missing in backend/.env.",
+            provider="elevenlabs",
+            status_code=500,
+        )
+
+    if not voice_id:
+        raise AiProviderError(
+            "ELEVENLABS_VOICE_ID is missing in backend/.env.",
+            provider="elevenlabs",
+            status_code=500,
+        )
+
+    clean_text = str(text or "").strip()
+
+    if not clean_text:
+        return b"", "audio/mpeg"
+
+    # Keep Saya concise and protect the free credit allowance from accidentally
+    # synthesizing very large responses. This is independently configurable.
+    max_chars = max(100, _env_int("ELEVENLABS_TTS_MAX_CHARS", 1800))
+
+    if len(clean_text) > max_chars:
+        clean_text = clean_text[:max_chars].rsplit(" ", 1)[0].strip() or clean_text[:max_chars]
+
+    api_base = _env("ELEVENLABS_API_BASE", "https://api.elevenlabs.io/v1").rstrip("/")
+    model = _env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
+    output_format = _env("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
+    request_timeout = timeout or _env_int("AI_TTS_TIMEOUT_SECONDS", 30)
+
+    # Defaults tuned for a natural, quick conversational HR assistant.
+    stability = _clamp_float(_env_float("ELEVENLABS_STABILITY", 0.45), 0.0, 1.0)
+    similarity_boost = _clamp_float(_env_float("ELEVENLABS_SIMILARITY_BOOST", 0.75), 0.0, 1.0)
+    style = _clamp_float(_env_float("ELEVENLABS_STYLE", 0.0), 0.0, 1.0)
+    speed = _clamp_float(_env_float("ELEVENLABS_SPEED", 1.10), 0.7, 1.2)
+    use_speaker_boost = _env_bool("ELEVENLABS_USE_SPEAKER_BOOST", True)
+
+    payload: Dict[str, Any] = {
+        "text": clean_text,
+        "model_id": model,
+        "voice_settings": {
+            "stability": stability,
+            "similarity_boost": similarity_boost,
+            "style": style,
+            "use_speaker_boost": use_speaker_boost,
+            "speed": speed,
+        },
+    }
+
+    # ElevenLabs expects ISO-639-1 language codes. Do not force en-IN; the
+    # Indian accent is carried by the custom Saya voice itself.
+    configured_language = _env("ELEVENLABS_LANGUAGE_CODE", "")
+    requested_language = str(language_code or "").strip()
+    final_language = configured_language
+
+    if not final_language and requested_language:
+        final_language = requested_language.split("-", 1)[0].lower()
+
+    if final_language and re.fullmatch(r"[A-Za-z]{2}", final_language):
+        payload["language_code"] = final_language.lower()
+
+    response = requests.post(
+        f"{api_base}/text-to-speech/{voice_id}",
+        params={"output_format": output_format},
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        },
+        json=payload,
+        timeout=request_timeout,
+    )
+
+    if not response.ok:
+        _raise_provider_error(
+            "elevenlabs",
+            response,
+            "ElevenLabs text-to-speech failed.",
+        )
+
+    audio_bytes = response.content or b""
+
+    if not audio_bytes:
+        raise AiProviderError(
+            "ElevenLabs returned no audio data.",
+            provider="elevenlabs",
+            status_code=502,
+        )
+
+    content_type = str(
+        response.headers.get("Content-Type") or "audio/mpeg"
+    ).split(";", 1)[0].strip()
+
+    if not content_type.startswith("audio/"):
+        content_type = "audio/mpeg"
+
+    return audio_bytes, content_type
+
+
 def _pcm_to_wav_bytes(pcm_bytes: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
     buffer = io.BytesIO()
 
@@ -1159,6 +1281,23 @@ def synthesize_ai_speech(
             "reason": "empty_text",
         }
 
+    if provider in {"elevenlabs", "eleven_labs", "11labs"}:
+        audio_bytes, mime_type = _elevenlabs_text_to_speech(
+            text=text,
+            voice=voice,
+            language_code=language_code,
+            timeout=timeout,
+        )
+
+        return {
+            "success": True,
+            "provider": "elevenlabs",
+            "audio_bytes": audio_bytes,
+            "mime_type": mime_type,
+            "latency_ms": int((time.time() - started_at) * 1000),
+            "model": _env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
+        }
+
     if provider == "sarvam":
         audio_bytes, mime_type = _sarvam_text_to_speech(
             text=text,
@@ -1207,10 +1346,13 @@ def ai_provider_status() -> Dict[str, Any]:
         "groq_configured": bool(_env("GROQ_API_KEY")),
         "deepgram_configured": bool(_env("DEEPGRAM_API_KEY")),
         "sarvam_configured": bool(_env("SARVAM_API_KEY")),
+        "elevenlabs_configured": bool(_env("ELEVENLABS_API_KEY") and _env("ELEVENLABS_VOICE_ID")),
         "gemini_configured": bool(_env("GEMINI_API_KEY")),
         "groq_model": _env("GROQ_CHAT_MODEL", "openai/gpt-oss-20b"),
         "deepgram_model": _env("DEEPGRAM_STT_MODEL", "nova-2"),
         "sarvam_tts_model": _env("SARVAM_TTS_MODEL", "bulbul:v3"),
+        "elevenlabs_tts_model": _env("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
+        "elevenlabs_output_format": _env("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128"),
         "gemini_tts_model": _env("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"),
         "gemini_tts_model_fallbacks": _env("GEMINI_TTS_MODEL_FALLBACKS", "gemini-2.5-flash-preview-tts,gemini-2.5-pro-preview-tts"),
         "gemini_tts_voice": _env("GEMINI_TTS_VOICE", "Kore"),

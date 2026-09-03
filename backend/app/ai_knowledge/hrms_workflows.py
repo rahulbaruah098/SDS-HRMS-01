@@ -9,7 +9,7 @@ Backend route guards remain authoritative for permissions.
 
 from __future__ import annotations
 
-KNOWLEDGE_VERSION = "2026-07-22-v5-recruitment-workflow-upgrade"
+KNOWLEDGE_VERSION = "2026-09-03-v6-saya-progressive-disclosure"
 
 HRMS_WORKFLOWS = [
     {
@@ -17,16 +17,16 @@ HRMS_WORKFLOWS = [
         "title": 'How to apply leave',
         "content": """
             Employee leave application workflow:
-            1. Log in and open Apply Leave.
-            2. Select Casual Leave, Earned Leave, Half Day, or Comp-Off according to the available balance and request type.
-            3. Select the applicable date or date range and enter a clear reason.
-            4. For Comp-Off leave, select an eligible unexpired comp-off credit generated from approved holiday work attendance.
-            5. Submit the request.
-            6. If a Team Leader is mapped, the request first goes to that Team Leader.
-            7. After Team Leader approval, it goes to the mapped Reporting Officer when one exists.
-            8. If only a Reporting Officer is mapped, it can go directly to the Reporting Officer.
-            9. If neither approval mapping exists, the configured HR fallback handles the request.
-            10. Check the live stage, decision, history, and rejection reason from Application Status.
+            1. Log in and open Apply Leave, or start a guided leave request with Saya.
+            2. Provide the leave type you want to apply for. During a guided Saya request, Saya should ask for the leave type without automatically listing every available leave type, full form, or balance unless the employee explicitly asks for those details.
+            3. Provide the applicable date or date range. Saya should reuse dates already supplied by the employee and should not ask for them again.
+            4. If project handover is required, provide the project and the employee who should receive the handover. Saya should ask for these details without automatically listing all projects or team members. Project or team-member lists should be shown only when the employee explicitly asks to see them.
+            5. Enter a clear leave reason when required. If the reason was already supplied, Saya should continue without asking for it again.
+            6. Saya may check the relevant leave balance internally. It should disclose the balance automatically only when insufficient or exhausted balance prevents or changes the requested leave, or when the employee explicitly asks for balance information.
+            7. For Comp-Off leave, an eligible unexpired comp-off credit generated from approved holiday work attendance is required.
+            8. Before submission, the guided action should summarize only the relevant entered details and require explicit employee confirmation.
+            9. If a Team Leader is mapped, the submitted request first goes to that Team Leader. After Team Leader approval, it goes to the mapped Reporting Officer when one exists. If only a Reporting Officer is mapped, it can go directly to the Reporting Officer. If neither approval mapping exists, the configured HR fallback handles the request.
+            10. The employee can check the live stage, decision, history, and rejection reason from Application Status.
         """,
         "keywords": ['apply leave', 'casual leave', 'earned leave', 'half day', 'comp off', 'approval', 'leave', 'how to apply leave'],
         "requires_live_data": False,
@@ -36,14 +36,13 @@ HRMS_WORKFLOWS = [
         "title": 'How half-day leave works',
         "content": """
             Half-day leave workflow in YourComate HRMS:
-            1. Employee opens Apply Leave.
-            2. Selects Half-Day leave option if available.
-            3. Selects the date and enters reason.
+            1. Employee opens Apply Leave or starts a guided leave request with Saya.
+            2. Selects or states Half-Day leave if that is the requested leave type.
+            3. Selects or states the date and enters a reason when required.
             4. Half-day leave is counted as 0.5 day.
-            5. The system may deduct Casual Leave first.
-            6. If Casual Leave is insufficient, Earned Leave may be used.
-            7. If both balances are insufficient, the remaining leave may be treated as LWP depending on configuration.
-            8. Approval follows Team Leader to Reporting Officer workflow.
+            5. The system applies the configured balance/deduction rules. Saya should not proactively announce unrelated balances or alternative leave types while collecting the request.
+            6. If the configured balance is insufficient and that affects the request, Saya should explain only the relevant shortage and the applicable next choice.
+            7. Approval follows the configured Team Leader and Reporting Officer workflow.
         """,
         "keywords": ['leave', 'how half-day leave works'],
         "requires_live_data": False,
@@ -71,11 +70,11 @@ HRMS_WORKFLOWS = [
         "title": 'How leave balances are managed',
         "content": """
             Leave balance workflow in YourComate HRMS:
-            1. HR/Admin/Super Admin can manage leave balances.
-            2. Employee can view leave balance if the module is available to their role.
-            3. Leave types include Casual Leave and Earned Leave.
-            4. Leave deductions happen after leave approval according to workflow rules.
-            5. Leave balance reports are available under Reports for authorized users.
+            1. HR/Admin/Super Admin can manage leave balances according to their authorized scope.
+            2. An employee can view their own leave balance if the module is available to their role.
+            3. When an employee explicitly asks for leave balance, Saya can show the relevant live balance information supplied by the backend.
+            4. During a normal leave application, Saya should not automatically enumerate balances. It should mention a balance only when the employee asks for it or when insufficient/exhausted balance affects the requested application.
+            5. Leave deductions happen after leave approval according to workflow rules, and authorized leave balance reports are available under Reports.
         """,
         "keywords": ['leave balances', 'how leave balances are managed'],
         "requires_live_data": False,

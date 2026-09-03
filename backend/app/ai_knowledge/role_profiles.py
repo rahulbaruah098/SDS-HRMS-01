@@ -491,6 +491,17 @@ PRODUCT_TRUTH_RULES = (
 )
 
 
+PROGRESSIVE_DISCLOSURE_RULES = (
+    "Answer only the information the user asked for and only the next information needed to continue an active workflow.",
+    "Do not enumerate leave types, expand leave abbreviations, show leave balances, list projects, or list team members unless the user explicitly asks for that information or the information is required to resolve a blocking validation.",
+    "During leave application, silently use authorised live records to validate leave balance and handover scope; do not narrate those records when validation succeeds.",
+    "If the selected leave balance is exhausted or insufficient for the requested dates, mention only the relevant blocking balance information and ask for the next corrective choice.",
+    "When a project is required for handover, ask which project; do not automatically list accessible projects. When a handover person is required, ask whom; do not automatically list mapped employees.",
+    "If the user explicitly asks to see projects, team members, leave types, or balances, return only the requested category and keep the answer concise.",
+    "Do not repeat a field the user has already supplied. Extract multiple supplied workflow fields from the same message and move directly to the next missing field.",
+)
+
+
 def _safe_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -693,9 +704,10 @@ def build_role_subscription_guidance(
     user_context: Mapping[str, Any] | None = None,
 ) -> str:
     """
-    Build compact prompt context for Eve.
+    Build compact role/subscription prompt context for Saya.
 
-    Later files will inject this text into ai_assistant_service.py.
+    The returned guidance is injected into ai_assistant_service.py and must
+    preserve both authorization scope and progressive disclosure.
     """
 
     context = dict(user_context or {})
@@ -734,6 +746,7 @@ def build_role_subscription_guidance(
     role_rules = _format_lines(role_profile.get("scope_rules") or [])
     plan_behavior = _format_lines(subscription_profile.get("response_behavior") or [])
     product_rules = _format_lines(PRODUCT_TRUTH_RULES)
+    disclosure_rules = _format_lines(PROGRESSIVE_DISCLOSURE_RULES)
 
     designation_block = ""
 
@@ -774,6 +787,9 @@ Subscription response behavior:
 Product truth rules:
 {product_rules}
 
+Progressive disclosure rules:
+{disclosure_rules}
+
 {designation_block}
 """.strip()
 
@@ -782,6 +798,7 @@ __all__ = [
     "DESIGNATION_LENSES",
     "EMPLOYEE_CAPABILITY_ROLES",
     "PRODUCT_TRUTH_RULES",
+    "PROGRESSIVE_DISCLOSURE_RULES",
     "PROTECTED_LOGIN_ROLES",
     "ROLE_ALIASES",
     "ROLE_PRIORITY",

@@ -272,9 +272,12 @@ def _normalize_tts_text(text):
     replacements = {
         "SDS": "S D S",
         "HRMS": "H R M S",
-        "CL": "casual leave",
-        "EL": "earned leave",
-        "WFH": "work from home",
+        # Preserve the assistant's wording in voice mode. These are spoken as
+        # abbreviations instead of silently expanding them into extra HR terms.
+        # If Saya says "CL", voice should say "C L" — not add "Casual Leave".
+        "CL": "C L",
+        "EL": "E L",
+        "WFH": "W F H",
         "IT": "I T",
         "API": "A P I",
     }

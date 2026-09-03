@@ -17,7 +17,7 @@ from app.ai_knowledge.role_profiles import (
 )
 
 
-SAYA_CAPABILITY_SERVICE_VERSION = "2026-07-21-FILE3-R3"
+SAYA_CAPABILITY_SERVICE_VERSION = "2026-09-03-PROGRESSIVE-DISCLOSURE-R1"
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -326,13 +326,35 @@ def detect_ai_capabilities(question):
     ]):
         capabilities.add("leave_status")
 
+    # Leave balance is private live data. Retrieve it only when the employee
+    # explicitly asks about balance/remaining entitlement. Merely mentioning a
+    # leave type or asking to apply for leave must not attach balances to the AI
+    # context; the guided action service validates balance internally instead.
     if _contains_any(text, [
         "cl left",
         "casual leave left",
+        "casual leaves left",
         "el left",
         "earned leave left",
+        "earned leaves left",
         "leave balance",
         "leave balances",
+        "casual leave balance",
+        "earned leave balance",
+        "cl balance",
+        "el balance",
+        "remaining casual leave",
+        "remaining casual leaves",
+        "remaining earned leave",
+        "remaining earned leaves",
+        "remaining cl",
+        "remaining el",
+        "how many casual leave",
+        "how many casual leaves",
+        "how many earned leave",
+        "how many earned leaves",
+        "how many cl",
+        "how many el",
     ]):
         capabilities.add("leave_balance")
 
@@ -364,25 +386,63 @@ def detect_ai_capabilities(question):
     ]):
         capabilities.add("performance_summary")
 
+    # Project records are fetched only for an explicit live-project request.
+    # Do not use bare "project"/"projects" as triggers: a general question such
+    # as "how does project handover work?" should receive workflow guidance, not
+    # an unsolicited dump of the employee's project names.
     if _contains_any(text, [
-        "project",
-        "projects",
         "project list",
+        "projects list",
         "department projects",
+        "list project",
         "list projects",
+        "list my projects",
+        "list all projects",
+        "show project",
+        "show projects",
+        "show my projects",
+        "show all projects",
+        "state my projects",
+        "state all projects",
+        "my project",
         "my projects",
+        "assigned project",
+        "assigned projects",
         "projects of department",
+        "what are my projects",
+        "what projects am i working on",
+        "which projects am i working on",
+        "which projects do i have",
+        "project status",
         "project progress",
         "task progress",
     ]):
         capabilities.add("projects")
 
+    # Team data follows the same progressive-disclosure rule. It is attached
+    # only when the user explicitly asks for team/Reporting Officer/Team Leader
+    # information or asks who is available for handover.
     if _contains_any(text, [
         "team member",
         "team members",
         "my team",
         "team list",
+        "show team members",
+        "show my team members",
+        "list team members",
+        "list my team members",
+        "state my team member",
+        "state my team members",
+        "team member name",
+        "team member names",
         "who is in my team",
+        "who are my team members",
+        "who can i handover to",
+        "who can i hand over to",
+        "whom can i handover to",
+        "whom can i hand over to",
+        "handover options",
+        "handover employees",
         "reporting officer",
         "my reporting officer",
         "ro",
@@ -2494,14 +2554,10 @@ Data:
             result = get_team_scope_context(user_context)
 
         elif capability == "projects":
-            team_result = get_team_scope_context(user_context)
-            blocks.append(
-                f"""
-Capability: {team_result.get("title")}
-Data:
-{team_result.get("content")}
-"""
-            )
+            # Keep project and team-member retrieval independent. If the user
+            # asks only for projects, do not silently attach Team Scope. When a
+            # question genuinely asks for both, detect_ai_capabilities() will
+            # return both capabilities and each block will be added explicitly.
             result = get_projects_context(user_context)
 
         else:

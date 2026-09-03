@@ -46,8 +46,8 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
-EXPECTED_CAPABILITY_VERSION = "2026-07-21-FILE3-R3"
-EXPECTED_KNOWLEDGE_VERSION = "2026-07-21-v2"
+EXPECTED_CAPABILITY_VERSION = "2026-09-03-PROGRESSIVE-DISCLOSURE-R1"
+EXPECTED_KNOWLEDGE_VERSION = "2026-09-03-v6-saya-progressive-disclosure"
 MIN_WORKFLOW_COUNT = 100
 MIN_MODULE_COUNT = 70
 
@@ -61,7 +61,7 @@ class CheckResult:
     warning: bool = False
 
 
-SAYA_SMOKE_CHECK_VERSION = "2026-07-21-FILE8-R2-PY310"
+SAYA_SMOKE_CHECK_VERSION = "2026-09-03-FILE7-PROGRESSIVE-DISCLOSURE-R1-PY310"
 
 def safe_text(value: Any) -> str:
     return str(value or "").strip()
@@ -225,6 +225,88 @@ def run_static_checks() -> List[CheckResult]:
             f"loaded={SAYA_CAPABILITY_SERVICE_VERSION}, "
             f"expected={EXPECTED_CAPABILITY_VERSION}"
         ),
+    ))
+
+    # Progressive-disclosure regression checks. These intentionally test only
+    # capability detection, so they remain safe static checks and never touch
+    # MongoDB or disclose any employee data.
+    progressive_disclosure_cases = [
+        (
+            "leave_apply_does_not_fetch_balance",
+            "I want to apply for casual leave",
+            set(),
+            {"leave_balance"},
+        ),
+        (
+            "explicit_leave_balance_fetches_balance",
+            "Show my leave balance",
+            {"leave_balance"},
+            set(),
+        ),
+        (
+            "project_handover_help_does_not_fetch_private_lists",
+            "How does project handover work for leave?",
+            set(),
+            {"projects", "team_scope", "leave_balance"},
+        ),
+        (
+            "explicit_projects_fetch_projects_only",
+            "Show my projects",
+            {"projects"},
+            {"team_scope", "leave_balance"},
+        ),
+        (
+            "explicit_team_fetches_team_only",
+            "Who are my team members?",
+            {"team_scope"},
+            {"projects", "leave_balance"},
+        ),
+        (
+            "explicit_projects_and_team_fetch_both",
+            "Show my projects and my team members",
+            {"projects", "team_scope"},
+            {"leave_balance"},
+        ),
+        (
+            "explicit_handover_people_fetch_team_only",
+            "Who can I hand over to?",
+            {"team_scope"},
+            {"projects", "leave_balance"},
+        ),
+    ]
+
+    for check_name, question, required, forbidden in progressive_disclosure_cases:
+        detected = set(detect_ai_capabilities(question))
+        ok = required.issubset(detected) and detected.isdisjoint(forbidden)
+        results.append(make_result(
+            check_name,
+            ok,
+            (
+                f"question={question!r}, detected={sorted(detected)}, "
+                f"required={sorted(required)}, forbidden={sorted(forbidden)}"
+            ),
+        ))
+
+    workflow_by_title = {
+        safe_text(item.get("title")): safe_text(item.get("content"))
+        for item in HRMS_WORKFLOWS
+    }
+    leave_apply_workflow = workflow_by_title.get("How to apply leave", "").lower()
+    leave_balance_workflow = workflow_by_title.get("How leave balances are managed", "").lower()
+    results.append(make_result(
+        "leave_workflow_progressive_disclosure_policy",
+        bool(leave_apply_workflow)
+        and "without automatically listing every available leave type" in leave_apply_workflow
+        and "without automatically listing all projects or team members" in leave_apply_workflow
+        and "insufficient or exhausted balance" in leave_apply_workflow,
+        "Verified leave workflow contains the progressive-disclosure rules.",
+    ))
+    results.append(make_result(
+        "leave_balance_workflow_progressive_disclosure_policy",
+        bool(leave_balance_workflow)
+        and "should not automatically enumerate balances" in leave_balance_workflow
+        and "employee asks for it" in leave_balance_workflow,
+        "Verified leave-balance workflow does not encourage unsolicited balance disclosure.",
     ))
 
     finance = check_ai_role_permission(
