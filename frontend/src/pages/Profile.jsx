@@ -307,6 +307,44 @@ function mergeNonEmpty(base = {}, incoming = {}) {
   return merged;
 }
 
+const PROFILE_MEDIA_FIELDS = [
+  'avatar',
+  'profile_photo',
+  'profile_picture',
+  'photo',
+  'image',
+  'picture',
+  'employee_avatar',
+  'employee_profile_photo',
+  'profile_photo_url',
+  'avatar_url',
+  'photo_url',
+
+  'cover_image',
+  'cover_photo',
+  'profile_cover',
+  'profile_cover_image',
+  'banner_image',
+  'banner_photo',
+  'employee_cover_image',
+  'employee_cover_photo',
+  'cover_url',
+  'profile_cover_url',
+  'banner_url',
+];
+
+function mergeProfileState(base = {}, incoming = {}) {
+  const merged = mergeNonEmpty(base, incoming);
+
+  PROFILE_MEDIA_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(incoming || {}, key)) {
+      merged[key] = incoming[key] ?? '';
+    }
+  });
+
+  return merged;
+}
+
 function extractEmployeePayload(response) {
   if (!response || typeof response !== 'object') {
     return null;
@@ -588,11 +626,11 @@ export default function Profile() {
         }
 
         const sessionUser = sessionData?.user
-          ? mergeNonEmpty(user, sessionData.user)
+          ? mergeProfileState(user, sessionData.user)
           : user;
 
         const sessionEmployee = sessionData?.employee
-          ? mergeNonEmpty(employee, sessionData.employee)
+          ? mergeProfileState(employee, sessionData.employee)
           : employee;
 
         setUser(sessionUser);
@@ -813,9 +851,9 @@ export default function Profile() {
   async function refreshProfileSession() {
     try {
       const sessionData = await refreshCurrentSession();
-      const sessionUser = sessionData?.user ? mergeNonEmpty(user, sessionData.user) : user;
+      const sessionUser = sessionData?.user ? mergeProfileState(user, sessionData.user) : user;
       const sessionEmployee = sessionData?.employee
-        ? mergeNonEmpty(employee, sessionData.employee)
+        ? mergeProfileState(employee, sessionData.employee)
         : employee;
 
       const empId = employeeId(sessionEmployee);
@@ -1040,6 +1078,8 @@ export default function Profile() {
         profile_cover_image: '',
         banner_image: '',
         banner_photo: '',
+        employee_cover_image: '',
+        employee_cover_photo: '',
         cover_url: '',
         profile_cover_url: '',
         banner_url: '',

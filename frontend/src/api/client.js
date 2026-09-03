@@ -1089,6 +1089,11 @@ export function buildProfileCoverPayload(coverValue, extra = {}) {
     profile_cover_image: cover,
     banner_image: cover,
     banner_photo: cover,
+    employee_cover_image: cover,
+    employee_cover_photo: cover,
+    cover_url: cover,
+    profile_cover_url: cover,
+    banner_url: cover,
   };
 }
 

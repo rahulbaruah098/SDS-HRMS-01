@@ -405,6 +405,14 @@ PROFILE_COVER_IMAGE_FIELDS = {
     "profile_cover_image",
     "banner_image",
     "banner_photo",
+    # Legacy/session aliases still read by the web/mobile clients.  Keep them in
+    # the same authoritative set so removing a cover cannot be undone by an old
+    # value surviving in another field after the session is refreshed.
+    "employee_cover_image",
+    "employee_cover_photo",
+    "cover_url",
+    "profile_cover_url",
+    "banner_url",
 }
 
 EMPLOYEE_SELF_PROFILE_FIELDS = {
@@ -877,22 +885,39 @@ def employee_cover_image_from_payload(payload):
         or safe_employee_avatar_value(payload.get("profile_cover_image"))
         or safe_employee_avatar_value(payload.get("banner_image"))
         or safe_employee_avatar_value(payload.get("banner_photo"))
+        or safe_employee_avatar_value(payload.get("employee_cover_image"))
+        or safe_employee_avatar_value(payload.get("employee_cover_photo"))
+        or safe_employee_avatar_value(payload.get("cover_url"))
+        or safe_employee_avatar_value(payload.get("profile_cover_url"))
+        or safe_employee_avatar_value(payload.get("banner_url"))
         or ""
     )
 
 
 def apply_cover_image_aliases(payload, cover_value=None):
-    payload = payload or {}
+    if payload is None:
+        payload = {}
+
+    explicit_cover_update = (
+        cover_value is not None
+        or bool(PROFILE_COVER_IMAGE_FIELDS.intersection(payload.keys()))
+    )
     cover = safe_employee_avatar_value(cover_value) or employee_cover_image_from_payload(payload)
 
     if cover:
-        payload["cover_image"] = cover
-        payload["cover_photo"] = cover
-        payload["profile_cover"] = cover
-        payload["profile_cover_image"] = cover
-        payload["banner_image"] = cover
-        payload["banner_photo"] = cover
+        # One valid cover value becomes authoritative across every alias that
+        # may be read by employee records, user/session records, web, or mobile.
+        for key in PROFILE_COVER_IMAGE_FIELDS:
+            payload[key] = cover
+    elif explicit_cover_update:
+        # An explicit empty cover means REMOVE, not "leave the other aliases
+        # untouched".  Clearing every alias prevents a stale URL from restoring
+        # the old cover during refreshCurrentSession()/login/session rebuilds.
+        for key in PROFILE_COVER_IMAGE_FIELDS:
+            payload[key] = ""
     else:
+        # No cover update was requested.  Only discard unsafe values if present;
+        # otherwise leave unrelated payloads untouched.
         for key in PROFILE_COVER_IMAGE_FIELDS:
             if payload.get(key) and not safe_employee_avatar_value(payload.get(key)):
                 payload.pop(key, None)
@@ -1228,6 +1253,11 @@ def build_user_sync_payload(employee_doc, existing_user=None):
 
     if cover:
         apply_cover_image_aliases(payload, cover)
+    elif PROFILE_COVER_IMAGE_FIELDS.intersection(employee_doc.keys()):
+        # Keep the linked login/session user in lock-step with the employee.
+        # Without this, an old cover_url/banner_url on users can resurrect a
+        # cover that was already removed from employees.
+        apply_cover_image_aliases(payload, "")
 
     if employee_doc.get("department_id"):
         payload["department_id"] = employee_doc.get("department_id")
@@ -2016,6 +2046,11 @@ def validate_employee_cover_image_payload(data):
         or data.get("profile_cover_image")
         or data.get("banner_image")
         or data.get("banner_photo")
+        or data.get("employee_cover_image")
+        or data.get("employee_cover_photo")
+        or data.get("cover_url")
+        or data.get("profile_cover_url")
+        or data.get("banner_url")
         or ""
     )
 
@@ -4735,6 +4770,14 @@ def update_collection_item(collection, item_id):
 
     if collection == "employees":
         payload = normalize_employee_state_fields(payload, existing)
+
+        # Normalize an explicit cover update BEFORE merging with the existing
+        # employee.  This is critical for removal: otherwise a legacy cover URL
+        # already stored on the employee can win during the merge and bring the
+        # supposedly removed image back.
+        if PROFILE_COVER_IMAGE_FIELDS.intersection(payload.keys()):
+            apply_cover_image_aliases(payload)
+
         merged_employee = dict(existing)
         merged_employee.update(payload)
         merged_employee["_id"] = existing["_id"]
