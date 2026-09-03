@@ -883,21 +883,35 @@ function detectActionMode(messages) {
     .reverse()
     .find((item) => item.role === "assistant");
 
-  const text = String(lastAssistant?.text || "").toLowerCase();
+  const text = String(lastAssistant?.text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 
   if (!text) return "";
 
-  if (
+  // Keep the guided leave UI/voice session active for Saya's concise,
+  // progressive-disclosure prompts. The backend intentionally no longer
+  // prints option lists, so detection must not depend on old menu wording.
+  const isLeaveConversation =
     text.includes("leave type") ||
+    text.includes("type of leave") ||
     text.includes("leave request") ||
+    text.includes("leave application") ||
     text.includes("leave date") ||
     text.includes("date/range") ||
+    text.includes("date range") ||
+    text.includes("during your leave") ||
+    text.includes("reason for your leave") ||
+    text.includes("reason for the leave") ||
+    text.includes("submit my leave") ||
+    text.includes("submit the leave") ||
+    text.includes("submit this leave") ||
     text.includes("handover") ||
     text.includes("hand over") ||
-    text.includes("during your leave") ||
-    text.includes("valid reason for your leave") ||
-    text.includes("submit my leave")
-  ) {
+    /\bhand\b.{0,80}\b(?:project|work)\b.{0,80}\bover\b/.test(text);
+
+  if (isLeaveConversation) {
     return "Leave Assistant";
   }
 
