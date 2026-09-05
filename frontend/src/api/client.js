@@ -1632,6 +1632,66 @@ function createAiProviderError(response, data = {}, fallbackMessage = 'AI reques
 }
 
 
+const SAYA_LEGACY_VOICE_COMPLETION_SUFFIX =
+  '\n\nBecause this is a voice conversation, respond naturally, professionally, and completely. ' +
+  'Be concise where appropriate, but do not omit required information or stop mid-sentence.';
+
+function normalizeSayaResponseMode(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase() === 'voice'
+    ? 'voice'
+    : 'text';
+}
+
+function normalizeSayaRequestMessage(message, responseMode = 'text') {
+  let cleanMessage = String(message || '').trim();
+
+  // File 6 temporarily appends this sentence so older backends can detect a
+  // voice conversation. File 7 now sends response_mode explicitly, so remove
+  // only that exact compatibility suffix before the user's request reaches Saya.
+  if (
+    responseMode === 'voice' &&
+    cleanMessage.endsWith(SAYA_LEGACY_VOICE_COMPLETION_SUFFIX)
+  ) {
+    cleanMessage = cleanMessage
+      .slice(0, -SAYA_LEGACY_VOICE_COMPLETION_SUFFIX.length)
+      .trim();
+  }
+
+  return cleanMessage;
+}
+
+function resolveSayaChatTimeoutMs(options = {}) {
+  const requested = Number(options?.timeoutMs);
+  const safeRequested = Number.isFinite(requested) && requested > 0
+    ? requested
+    : 75000;
+
+  // The backend may legitimately perform provider fallback plus automatic
+  // continuation. Do not let a short browser timeout cut off a healthy answer.
+  return Math.min(Math.max(safeRequested, 75000), 120000);
+}
+
+function resolveSayaSttTimeoutMs(options = {}) {
+  const requested = Number(options?.timeoutMs);
+  const safeRequested = Number.isFinite(requested) && requested > 0
+    ? requested
+    : 45000;
+
+  return Math.min(Math.max(safeRequested, 40000), 60000);
+}
+
+function resolveSayaTtsTimeoutMs(options = {}) {
+  const requested = Number(options?.timeoutMs);
+  const safeRequested = Number.isFinite(requested) && requested > 0
+    ? requested
+    : 60000;
+
+  return Math.min(Math.max(safeRequested, 55000), 90000);
+}
+
+
 function isAiAttendanceCommand(message = '') {
   const text = String(message || '')
     .trim()
@@ -6245,7 +6305,10 @@ export async function getAiAssistantVoiceContext() {
   }
 }
 export async function askAiAssistant(message, history = [], options = {}) {
-  const cleanMessage = String(message || '').trim();
+  const responseMode = normalizeSayaResponseMode(
+    options?.responseMode || options?.response_mode || 'text'
+  );
+  const cleanMessage = normalizeSayaRequestMessage(message, responseMode);
 
   if (!cleanMessage) {
     throw new Error('Message is required.');
@@ -6276,7 +6339,7 @@ export async function askAiAssistant(message, history = [], options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    Math.min(Number(options.timeoutMs || 30000), 35000)
+    resolveSayaChatTimeoutMs(options)
   );
 
   let response;
@@ -6292,10 +6355,12 @@ export async function askAiAssistant(message, history = [], options = {}) {
       body: JSON.stringify({
         message: cleanMessage,
         history: safeHistory,
+        response_mode: responseMode,
 
-        // Used by Saya AI attendance actions.
-        // Backend can pass this into attendance check-in/check-out payload.
+        // Used by Saya AI attendance actions. The browser only supplies
+        // location evidence; all attendance business rules remain backend-owned.
         client_context: {
+          response_mode: responseMode,
           attendance_location: attendanceLocation,
           location: attendanceLocation,
           latitude: attendanceLocation?.latitude,
@@ -6304,7 +6369,7 @@ export async function askAiAssistant(message, history = [], options = {}) {
           source: 'frontend_ai_assistant',
         },
 
-        // Backward-compatible direct keys.
+        // Backward-compatible direct location keys.
         attendance_location: attendanceLocation,
         location: attendanceLocation,
         latitude: attendanceLocation?.latitude,
@@ -6315,11 +6380,13 @@ export async function askAiAssistant(message, history = [], options = {}) {
     });
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('AI Assistant is taking too long to reply. Please try again.');
+      throw new Error(
+        'Saya is still taking too long to complete this response. Please try again.'
+      );
     }
 
     throw new Error(
-      'AI Assistant backend is not reachable. Please check if Flask backend is running.'
+      'Saya could not reach the HRMS backend. Please check your connection and try again.'
     );
   } finally {
     clearTimeout(timeout);
@@ -6333,34 +6400,65 @@ export async function askAiAssistant(message, history = [], options = {}) {
     data = {};
   }
 
-if (response.status === 401) {
-  try {
-    await refreshAccessToken();
+  if (response.status === 401) {
+    if (options?.__sayaAuthRetried) {
+      clearSession();
+      throw new Error('Your session has expired. Please sign in again to use Saya.');
+    }
 
-    return askAiAssistant(
-      message,
-      history,
-      options,
-    );
-  } catch (refreshError) {
-    clearSession();
-    throw refreshError;
+    try {
+      await refreshAccessToken();
+
+      return askAiAssistant(message, history, {
+        ...options,
+        __sayaAuthRetried: true,
+      });
+    } catch (refreshError) {
+      clearSession();
+      throw refreshError;
+    }
   }
-}
+
+  if (response.status === 402) {
+    redirectForSaasRestriction('/ai-assistant/chat', data, response.status);
+    throw createAiProviderError(
+      response,
+      data,
+      'Saya is unavailable because the current HRMS subscription does not permit this request.'
+    );
+  }
 
   if (response.status === 403) {
-    throw new Error('You do not have permission to use AI Assistant.');
+    throw createAiProviderError(
+      response,
+      data,
+      'Saya is not available for your current role or subscription access.'
+    );
   }
 
   if (!response.ok || !data?.success) {
     throw createAiProviderError(
       response,
       data,
-      'AI Assistant could not process this request.'
+      'Saya could not process this request. Please try again.'
     );
   }
 
-  return data;
+  const answer = String(data?.answer || data?.message || '').trim();
+  const responseMeta = data?.response && typeof data.response === 'object'
+    ? data.response
+    : {};
+
+  return {
+    ...data,
+    answer,
+    response: {
+      ...responseMeta,
+      mode: responseMeta?.mode || responseMode,
+      style: responseMeta?.style || 'professional',
+      complete_expected: responseMeta?.complete_expected !== false,
+    },
+  };
 }
 
 export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
@@ -6403,7 +6501,7 @@ export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    Math.min(Number(options.timeoutMs || 20000), 30000)
+    resolveSayaSttTimeoutMs(options)
   );
 
   let response;
@@ -6436,19 +6534,24 @@ export async function transcribeAiAssistantAudio(audioBlob, options = {}) {
     data = {};
   }
 
-if (response.status === 401) {
-  try {
-    await refreshAccessToken();
+  if (response.status === 401) {
+    if (options?.__sayaAuthRetried) {
+      clearSession();
+      throw new Error('Your session has expired. Please sign in again to use Saya voice.');
+    }
 
-    return transcribeAiAssistantAudio(
-      audioBlob,
-      options,
-    );
-  } catch (refreshError) {
-    clearSession();
-    throw refreshError;
+    try {
+      await refreshAccessToken();
+
+      return transcribeAiAssistantAudio(audioBlob, {
+        ...options,
+        __sayaAuthRetried: true,
+      });
+    } catch (refreshError) {
+      clearSession();
+      throw refreshError;
+    }
   }
-}
 
   if (response.status === 403) {
     throw new Error('You do not have permission to use Saya voice.');
@@ -6485,16 +6588,13 @@ export async function speakAiAssistantText(text, options = {}) {
   }
 
   const requestedVoice = String(options.voice || '').trim();
-  const sarvamVoice =
-    !requestedVoice || requestedVoice.toLowerCase() === 'kore'
-      ? 'anushka'
-      : requestedVoice;
+  const languageCode = String(options.languageCode || options.language_code || 'en-IN').trim();
 
   const token = getToken();
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    Math.min(Number(options.timeoutMs || 30000), 45000)
+    resolveSayaTtsTimeoutMs(options)
   );
 
   let response;
@@ -6509,13 +6609,14 @@ export async function speakAiAssistantText(text, options = {}) {
       },
       body: JSON.stringify({
         text: cleanText,
-        voice: sarvamVoice,
+        ...(requestedVoice ? { voice: requestedVoice } : {}),
+        language_code: languageCode || 'en-IN',
       }),
       signal: controller.signal,
     });
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('Voice generation timed out. Please try again.');
+      throw new Error('Saya voice generation timed out. Please try again.');
     }
 
     throw new Error(getConnectionErrorMessage());
@@ -6523,19 +6624,25 @@ export async function speakAiAssistantText(text, options = {}) {
     clearTimeout(timeout);
   }
 
-if (response.status === 401) {
-  try {
-    await refreshAccessToken();
+  if (response.status === 401) {
+    if (options?.__sayaAuthRetried) {
+      clearSession();
+      throw new Error('Your session has expired. Please sign in again to use Saya voice.');
+    }
 
-    return speakAiAssistantText(
-      text,
-      options,
-    );
-  } catch (refreshError) {
-    clearSession();
-    throw refreshError;
+    try {
+      await refreshAccessToken();
+
+      return speakAiAssistantText(text, {
+        ...options,
+        __sayaAuthRetried: true,
+      });
+    } catch (refreshError) {
+      clearSession();
+      throw refreshError;
+    }
   }
-}
+
   if (response.status === 403) {
     throw new Error('You do not have permission to use Saya voice.');
   }
@@ -6559,7 +6666,7 @@ if (response.status === 401) {
         errorMessage = textResponse || errorMessage;
       }
     } catch {
-      // keep default error
+      // Keep the safe default error message.
     }
 
     throw createAiProviderError(response, errorData, errorMessage);
@@ -6568,28 +6675,30 @@ if (response.status === 401) {
   const audioBlob = await response.blob();
 
   if (!audioBlob || audioBlob.size <= 0) {
-    throw new Error('Voice service returned empty audio.');
+    throw new Error('Saya voice service returned empty audio.');
   }
 
   const audioUrl = URL.createObjectURL(audioBlob);
   const provider =
-  response.headers.get('X-AI-Provider') ||
-  response.headers.get('X-Saya-Provider') ||
-  response.headers.get('X-Eve-Provider') ||
-  'sarvam';
+    response.headers.get('X-AI-Provider') ||
+    response.headers.get('X-Saya-Provider') ||
+    response.headers.get('X-Eve-Provider') ||
+    'server';
 
   return {
     success: true,
     provider,
+    model: response.headers.get('X-Saya-Model') || '',
+    cache: response.headers.get('X-Saya-Cache') || '',
     blob: audioBlob,
     audio_blob: audioBlob,
     audio_url: audioUrl,
     url: audioUrl,
     mime_type: audioBlob.type || response.headers.get('content-type') || 'audio/mpeg',
     voice:
-  response.headers.get('X-Saya-Voice') ||
-  response.headers.get('X-Eve-Voice') ||
-  sarvamVoice,
+      response.headers.get('X-Saya-Voice') ||
+      response.headers.get('X-Eve-Voice') ||
+      requestedVoice ||
+      '',
   };
 }
-

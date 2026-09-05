@@ -6,6 +6,7 @@ import hashlib
 import re
 import wave
 from datetime import datetime
+from time import perf_counter
 import requests
 
 from bson import ObjectId
@@ -26,6 +27,37 @@ from app.services.ai_provider_service import (
     AiProviderError,
     synthesize_ai_speech,
     transcribe_ai_audio,
+)
+from app.services.ai_action_service import (
+    get_action_definition,
+    get_pending_action,
+    get_saya_plugin_health,
+)
+from app.services.ai_voice_session_service import (
+    VoiceSessionError,
+    VoiceSessionNotFoundError,
+    VoiceSessionExpiredError,
+    VoiceSessionClosedError,
+    start_voice_session,
+    get_voice_session,
+    prepare_voice_turn,
+    record_voice_assistant_turn,
+    mark_voice_interruption,
+    restart_voice_session,
+    close_voice_session,
+    close_other_active_voice_sessions,
+    session_context_for_saya,
+)
+from app.services.ai_analytics_service import (
+    new_ai_request_id,
+    record_chat_event,
+    record_provider_event,
+    record_action_event,
+    record_voice_session_event,
+    record_error_event,
+    infer_action_outcome,
+    get_ai_analytics_snapshot,
+    get_saya_health_snapshot,
 )
 from app.utils.auth import current_user_required, roles_required, normalize_roles
 from app.middleware.tenant_guard import tenant_module_required
@@ -55,6 +87,54 @@ AI_TTS_TIMEOUT_SECONDS = int(os.getenv("AI_TTS_TIMEOUT_SECONDS", "45"))
 
 VOICE_EMPLOYEE_NAME_CACHE_SECONDS = int(os.getenv("VOICE_EMPLOYEE_NAME_CACHE_SECONDS", "600"))
 VOICE_EMPLOYEE_NAME_CACHE = {}
+
+AI_ASSISTANT_ENABLED = str(
+    os.getenv("AI_ASSISTANT_ENABLED", "true")
+).strip().lower() in {"1", "true", "yes", "on"}
+
+AI_TTS_CACHE_ENABLED = str(
+    os.getenv("AI_TTS_CACHE_ENABLED", "true")
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _professional_response_contract(response_mode="text"):
+    mode = str(response_mode or "text").strip().lower()
+    if mode not in {"text", "voice"}:
+        mode = "text"
+
+    return {
+        "style": "professional",
+        "mode": mode,
+        "must_be_complete": True,
+        "never_stop_mid_sentence": True,
+        "avoid_unnecessary_repetition": True,
+        "use_numbered_steps_for_procedures": True,
+        "do_not_claim_unconfirmed_actions": True,
+    }
+
+
+@ai_assistant_bp.before_request
+def _enforce_ai_assistant_enabled():
+    """
+    Central runtime switch for all Saya routes.
+
+    tenant_module_required() still remains authoritative for subscription/module
+    access. This flag is an operational kill switch that can disable Saya
+    without changing tenant configuration.
+    """
+
+    if AI_ASSISTANT_ENABLED:
+        return None
+
+    return jsonify({
+        "success": False,
+        "assistant_name": "Saya",
+        "error": "Saya is currently unavailable",
+        "message": (
+            "Saya has been temporarily disabled by the system administrator. "
+            "Please use the standard YourComate HRMS modules until the service is enabled again."
+        ),
+    }), 503
 
 
 def _require_gemini_api_key():
@@ -139,7 +219,15 @@ def _known_employee_names_for_prompt(user_context, limit=24):
     """
 
     user_context = user_context or {}
-    tenant_id = _safe_str(user_context.get("tenant_id") or "global")
+    tenant_id = _safe_str(user_context.get("tenant_id"))
+    tenant_values = _id_variants(tenant_id)
+
+    # Never build an organization-wide employee-name prompt without a verified
+    # tenant. Voice transcription hints are convenience data, not a reason to
+    # perform a cross-tenant lookup.
+    if not tenant_values:
+        return []
+
     cache_key = f"{tenant_id}:{limit}"
     now_ts = datetime.utcnow().timestamp()
 
@@ -150,7 +238,6 @@ def _known_employee_names_for_prompt(user_context, limit=24):
         if now_ts - cached_at <= VOICE_EMPLOYEE_NAME_CACHE_SECONDS:
             return cached.get("names", [])
 
-    tenant_values = _id_variants(tenant_id)
     query = {"is_deleted": {"$ne": True}}
 
     if tenant_values:
@@ -414,6 +501,34 @@ def _id_variants(value):
         variants.append(oid)
 
     return variants
+
+
+def _record_matches_tenant(record, tenant_id):
+    """
+    Return True only when a record is demonstrably associated with tenant_id.
+
+    Records without tenant/company markers are not trusted as tenant-scoped
+    embedded employee records when a tenant is known.
+    """
+
+    record = record or {}
+    tenant_values = _id_variants(tenant_id)
+
+    if not tenant_values:
+        return True
+
+    candidate_values = []
+    for key in ("tenant_id", "company_id", "tenant"):
+        candidate_values.extend(_id_variants(record.get(key)))
+
+    if not candidate_values:
+        return False
+
+    candidate_text = {_safe_str(value) for value in candidate_values if value}
+    tenant_text = {_safe_str(value) for value in tenant_values if value}
+
+    return bool(candidate_text.intersection(tenant_text))
+
 
 def _first_non_empty(*values):
     for value in values:
@@ -703,7 +818,15 @@ def _find_employee_for_user(current_user, tenant_id):
 
     if isinstance(nested_employee, dict):
         nested_name = _display_name_from_record(nested_employee)
-        if nested_name and nested_name.lower() != "employee":
+
+        # Embedded profile data may be used directly only when there is no
+        # tenant context or when the embedded record itself proves it belongs
+        # to the authenticated tenant.
+        if (
+            nested_name
+            and nested_name.lower() != "employee"
+            and _record_matches_tenant(nested_employee, tenant_id)
+        ):
             return _safe_doc(nested_employee)
 
     user_id = current_user.get("_id") or current_user.get("id")
@@ -828,6 +951,12 @@ def _find_employee_for_user(current_user, tenant_id):
         if employee:
             return _safe_doc(employee)
 
+        # Critical multi-tenant rule: when a tenant is known, never fall back
+        # to the same employee identifiers without tenant scoping.
+        return {}
+
+    # A truly tenant-less request may still use the identifier query. In normal
+    # tenant HRMS traffic tenant_module_required() supplies tenant context.
     employee = db.employees.find_one(base_query)
 
     return _safe_doc(employee)
@@ -1011,18 +1140,123 @@ def _build_ai_user_context(current_user):
     return context
 
 
+
+def _elapsed_ms(started_at):
+    try:
+        return max(0, int((perf_counter() - started_at) * 1000))
+    except Exception:
+        return 0
+
+
+def _safe_analytics_call(func, *args, **kwargs):
+    """Analytics must never break a normal Saya request."""
+    try:
+        return func(*args, **kwargs)
+    except Exception as exc:
+        print(f"Saya analytics warning: {exc}")
+        return None
+
+
+def _pending_action_public(action):
+    action = action or {}
+    action_type = _safe_str(action.get("action_type") or action.get("action"))
+    step = _safe_str(action.get("current_step") or action.get("step"))
+    status = _safe_str(action.get("status") or ("collecting" if action_type else ""))
+
+    if not action_type:
+        return {}
+
+    definition = get_action_definition(action_type) or {}
+    return {
+        "action": action_type,
+        "action_type": action_type,
+        "step": step,
+        "status": status,
+        "requires_confirmation": bool(
+            definition.get("requires_confirmation") and step == "confirm"
+        ),
+        "label": _safe_str(definition.get("label") or definition.get("name") or action_type),
+        "schema_version": "saya.action.v1",
+    }
+
+
+def _safe_plugin_health_snapshot():
+    try:
+        raw = get_saya_plugin_health() or {}
+    except Exception:
+        return {"loaded": False, "registered_actions": 0, "registered_plugin_actions": 0, "plugin_error_modules": []}
+
+    errors = raw.get("plugin_errors") or {}
+    error_modules = sorted(str(key) for key in errors.keys()) if isinstance(errors, dict) else []
+    return {
+        "loaded": bool(raw.get("loaded")),
+        "registered_actions": int(raw.get("registered_actions") or 0),
+        "registered_plugin_actions": int(raw.get("registered_plugin_actions") or 0),
+        "plugin_error_modules": error_modules[:30],
+    }
+
+
+def _history_without_current_voice_turn(history, question):
+    cleaned = _safe_chat_history(history)
+    if not cleaned:
+        return []
+    last = cleaned[-1]
+    if (
+        _safe_str(last.get("role")).lower() == "user"
+        and _safe_str(last.get("text")) == _safe_str(question)
+    ):
+        return cleaned[:-1]
+    return cleaned
+
+
+def _voice_error_response(exc, request_id=""):
+    if isinstance(exc, VoiceSessionNotFoundError):
+        status = 404
+        code = "voice_session_not_found"
+        message = "This Saya voice session could not be found. Please start a new voice conversation."
+    elif isinstance(exc, VoiceSessionExpiredError):
+        status = 409
+        code = "voice_session_expired"
+        message = "This Saya voice session has expired. Please start a new voice conversation."
+    elif isinstance(exc, VoiceSessionClosedError):
+        status = 409
+        code = "voice_session_closed"
+        message = "This Saya voice session has already ended. Please start a new voice conversation."
+    else:
+        status = 400
+        code = "voice_session_invalid"
+        message = "Saya could not continue this voice conversation. Please start a new voice session."
+
+    return jsonify({
+        "success": False,
+        "assistant_name": "Saya",
+        "request_id": request_id,
+        "error": code,
+        "message": message,
+    }), status
+
+
 @ai_assistant_bp.post("/chat")
 @tenant_module_required("ai_assistant")
 def chat():
+    started_at = perf_counter()
+    request_id = new_ai_request_id()
     data = request.get_json(silent=True) or {}
 
     question = _safe_str(data.get("message"))
     history = _safe_chat_history(data.get("history"))
+    response_mode = _safe_str(
+        data.get("response_mode") or data.get("mode") or "text"
+    ).lower()
+
+    if response_mode not in {"text", "voice"}:
+        response_mode = "text"
 
     if not question:
         return jsonify({
             "success": False,
             "assistant_name": "Saya",
+            "request_id": request_id,
             "error": "Message is required",
         }), 400
 
@@ -1030,6 +1264,7 @@ def chat():
         return jsonify({
             "success": False,
             "assistant_name": "Saya",
+            "request_id": request_id,
             "error": "Message is too long",
             "message": "Please keep a single Saya request within 6,000 characters.",
         }), 400
@@ -1037,29 +1272,236 @@ def chat():
     current_user = getattr(g, "current_user", {}) or {}
     user_context = _build_ai_user_context(current_user)
 
+    user_context["_saya_response_mode"] = response_mode
+    user_context["_saya_response_contract"] = _professional_response_contract(
+        response_mode
+    )
+    user_context["_saya_request_id"] = request_id
+
+    voice_session = {}
+    voice_turn = {}
+    voice_session_id = ""
+
+    if response_mode == "voice":
+        try:
+            voice_session_id = _safe_str(
+                data.get("voice_session_id") or data.get("session_id")
+            )
+            language = _safe_str(data.get("language") or data.get("language_code") or "en-IN")
+
+            if not voice_session_id:
+                voice_session = start_voice_session(
+                    user_context,
+                    language=language,
+                    client_session_id=_safe_str(data.get("client_session_id")),
+                    device_metadata=data.get("device_metadata") if isinstance(data.get("device_metadata"), dict) else {},
+                )
+                voice_session_id = _safe_str(voice_session.get("session_id"))
+                _safe_analytics_call(
+                    record_voice_session_event,
+                    "start",
+                    user_context=user_context,
+                    request_id=request_id,
+                    session_id=voice_session_id,
+                    success=True,
+                )
+
+            voice_turn = prepare_voice_turn(
+                user_context,
+                voice_session_id,
+                question,
+                client_turn_id=_safe_str(data.get("client_turn_id")),
+                language=language,
+                wake_word_detected=bool(data.get("wake_word_detected")),
+                interrupted_previous_speech=bool(data.get("interrupted_previous_speech")),
+            )
+
+            if not voice_turn.get("accepted"):
+                override = _safe_str(voice_turn.get("answer_override"))
+                control = _safe_str(voice_turn.get("control") or "none")
+                session_payload = voice_turn.get("session") or voice_session
+                if override:
+                    _safe_analytics_call(
+                        record_chat_event,
+                        user_context=user_context,
+                        request_id=request_id,
+                        response_mode="voice",
+                        success=True,
+                        latency_ms=_elapsed_ms(started_at),
+                        response_chars=len(override),
+                        metadata={"voice_control": control},
+                    )
+                _safe_analytics_call(
+                    record_voice_session_event,
+                    control or "control",
+                    user_context=user_context,
+                    request_id=request_id,
+                    session_id=voice_session_id,
+                    success=True,
+                    voice_control=control,
+                )
+                return jsonify({
+                    "success": True,
+                    "assistant_name": "Saya",
+                    "request_id": request_id,
+                    "question": question,
+                    "answer": override,
+                    "response": {
+                        "mode": "voice",
+                        "style": "professional",
+                        "complete_expected": True,
+                        "control": control,
+                        "should_end": bool(voice_turn.get("should_end")),
+                        "restart": bool(voice_turn.get("restart")),
+                        "repeat": bool(voice_turn.get("repeat")),
+                    },
+                    "voice_session": session_payload,
+                    "action": {},
+                }), 200
+
+            question = _safe_str(voice_turn.get("question") or question)
+            history = _history_without_current_voice_turn(
+                voice_turn.get("history") or history,
+                question,
+            )
+            user_context["_saya_voice_session"] = session_context_for_saya(
+                user_context,
+                voice_session_id,
+            )
+            user_context["_saya_voice_session_id"] = voice_session_id
+            user_context["_saya_voice_turn_sequence"] = int(voice_turn.get("sequence") or 0)
+        except VoiceSessionError as exc:
+            _safe_analytics_call(
+                record_error_event,
+                "voice_session_error",
+                user_context=user_context,
+                request_id=request_id,
+                response_mode="voice",
+                status_code=409,
+                latency_ms=_elapsed_ms(started_at),
+            )
+            return _voice_error_response(exc, request_id=request_id)
+
     detected_modules = detect_question_modules(question)
     permission_result = check_ai_role_permission(
         question,
         user_context=user_context,
     )
 
-    # Keep the preflight result in request context. File 5 will consume this
-    # cache directly, avoiding duplicate permission work inside the AI service.
     user_context["_saya_detected_modules"] = detected_modules
     user_context["_saya_permission_result"] = permission_result
+
+    pending_before = None
+    try:
+        pending_before = get_pending_action(user_context=user_context)
+    except Exception:
+        pending_before = None
 
     try:
         answer = generate_ai_answer(
             question,
             user_context=user_context,
             history=history,
+            response_mode=response_mode,
         )
+
+        pending_after = None
+        try:
+            pending_after = get_pending_action(user_context=user_context)
+        except Exception:
+            pending_after = None
+
+        action_outcome = infer_action_outcome(
+            pending_before=pending_before,
+            pending_after=pending_after,
+            answer=answer,
+            request_success=True,
+        )
+        action_payload = _pending_action_public(pending_after or pending_before)
+        if action_outcome.get("action_type") and not action_payload:
+            action_payload = {
+                "action": action_outcome.get("action_type"),
+                "action_type": action_outcome.get("action_type"),
+                "status": action_outcome.get("action_status") or "handled",
+                "step": "",
+                "requires_confirmation": False,
+                "schema_version": "saya.action.v1",
+            }
+        elif action_payload and action_outcome.get("action_status"):
+            action_payload["status"] = action_outcome.get("action_status")
+
+        awaiting_user_reply = bool(pending_after)
+        if response_mode == "voice" and voice_session_id:
+            try:
+                voice_session = record_voice_assistant_turn(
+                    user_context,
+                    voice_session_id,
+                    answer,
+                    sequence=int(voice_turn.get("sequence") or 0),
+                    action_metadata=action_payload,
+                    response_metadata={
+                        "request_id": request_id,
+                        "style": "professional",
+                        "complete": True,
+                    },
+                    awaiting_user_reply=awaiting_user_reply,
+                )
+                _safe_analytics_call(
+                    record_voice_session_event,
+                    "turn_complete",
+                    user_context=user_context,
+                    request_id=request_id,
+                    session_id=voice_session_id,
+                    success=True,
+                    turn_number=int(voice_turn.get("sequence") or 0),
+                    latency_ms=_elapsed_ms(started_at),
+                )
+            except VoiceSessionError:
+                voice_session = {}
+
+        latency_ms = _elapsed_ms(started_at)
+        _safe_analytics_call(
+            record_chat_event,
+            user_context=user_context,
+            request_id=request_id,
+            response_mode=response_mode,
+            success=True,
+            latency_ms=latency_ms,
+            action_type=action_outcome.get("action_type") or "",
+            action_status=action_outcome.get("action_status") or "",
+            response_chars=len(answer or ""),
+            metadata={
+                "detected_module_count": len(detected_modules or []),
+                "permission_allowed": bool(permission_result.get("allowed")),
+            },
+        )
+
+        if action_outcome.get("action_type"):
+            _safe_analytics_call(
+                record_action_event,
+                user_context=user_context,
+                request_id=request_id,
+                action_type=action_outcome.get("action_type"),
+                action_status=action_outcome.get("action_status") or "handled",
+                success=action_outcome.get("action_status") not in {"failed", "blocked"},
+                response_mode=response_mode,
+                latency_ms=latency_ms,
+            )
 
         return jsonify({
             "success": True,
             "assistant_name": "Saya",
+            "request_id": request_id,
             "question": question,
             "answer": answer,
+            "response": {
+                "mode": response_mode,
+                "style": "professional",
+                "complete_expected": True,
+                "latency_ms": latency_ms,
+            },
+            "action": action_payload,
+            "voice_session": voice_session if response_mode == "voice" else {},
             "context": {
                 "primary_role": permission_result.get("primary_role"),
                 "effective_roles": permission_result.get("effective_roles") or [],
@@ -1069,14 +1511,186 @@ def chat():
         }), 200
 
     except Exception as exc:
+        latency_ms = _elapsed_ms(started_at)
         print(f"Saya chat failed: {exc}")
+        _safe_analytics_call(
+            record_chat_event,
+            user_context=user_context,
+            request_id=request_id,
+            response_mode=response_mode,
+            success=False,
+            latency_ms=latency_ms,
+            status_code=500,
+            error_code="chat_processing_failed",
+        )
+        _safe_analytics_call(
+            record_error_event,
+            "chat_processing_failed",
+            user_context=user_context,
+            request_id=request_id,
+            response_mode=response_mode,
+            status_code=500,
+            latency_ms=latency_ms,
+        )
 
         return jsonify({
             "success": False,
             "assistant_name": "Saya",
+            "request_id": request_id,
             "error": "Saya could not process this request",
-            "message": "Please try again or contact the IT team if the issue continues.",
+            "message": (
+                "Saya is temporarily unable to complete this request. "
+                "Please try again. If the issue continues, contact the IT team."
+            ),
         }), 500
+
+
+@ai_assistant_bp.post("/voice-session/start")
+@tenant_module_required("ai_assistant")
+def voice_session_start_route():
+    request_id = new_ai_request_id()
+    data = request.get_json(silent=True) or {}
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+
+    try:
+        if bool(data.get("close_other_sessions", True)):
+            close_other_active_voice_sessions(user_context)
+        session = start_voice_session(
+            user_context,
+            language=_safe_str(data.get("language") or "en-IN"),
+            client_session_id=_safe_str(data.get("client_session_id")),
+            device_metadata=data.get("device_metadata") if isinstance(data.get("device_metadata"), dict) else {},
+        )
+        _safe_analytics_call(
+            record_voice_session_event,
+            "start",
+            user_context=user_context,
+            request_id=request_id,
+            session_id=_safe_str(session.get("session_id")),
+            success=True,
+        )
+        return jsonify({
+            "success": True,
+            "assistant_name": "Saya",
+            "request_id": request_id,
+            "voice_session": session,
+        }), 201
+    except VoiceSessionError as exc:
+        return _voice_error_response(exc, request_id=request_id)
+
+
+@ai_assistant_bp.get("/voice-session/<session_id>")
+@tenant_module_required("ai_assistant")
+def voice_session_get_route(session_id):
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    try:
+        session = get_voice_session(user_context, session_id, include_history=True)
+        return jsonify({"success": True, "assistant_name": "Saya", "voice_session": session}), 200
+    except VoiceSessionError as exc:
+        return _voice_error_response(exc)
+
+
+@ai_assistant_bp.post("/voice-session/<session_id>/interrupt")
+@tenant_module_required("ai_assistant")
+def voice_session_interrupt_route(session_id):
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    try:
+        session = mark_voice_interruption(user_context, session_id)
+        _safe_analytics_call(
+            record_voice_session_event,
+            "interrupt",
+            user_context=user_context,
+            session_id=session_id,
+            success=True,
+        )
+        return jsonify({"success": True, "assistant_name": "Saya", "voice_session": session}), 200
+    except VoiceSessionError as exc:
+        return _voice_error_response(exc)
+
+
+@ai_assistant_bp.post("/voice-session/<session_id>/restart")
+@tenant_module_required("ai_assistant")
+def voice_session_restart_route(session_id):
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    try:
+        session = restart_voice_session(user_context, session_id)
+        _safe_analytics_call(
+            record_voice_session_event,
+            "restart",
+            user_context=user_context,
+            session_id=session_id,
+            success=True,
+        )
+        return jsonify({"success": True, "assistant_name": "Saya", "voice_session": session}), 200
+    except VoiceSessionError as exc:
+        return _voice_error_response(exc)
+
+
+@ai_assistant_bp.post("/voice-session/<session_id>/close")
+@tenant_module_required("ai_assistant")
+def voice_session_close_route(session_id):
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    data = request.get_json(silent=True) or {}
+    try:
+        session = close_voice_session(
+            user_context,
+            session_id,
+            reason=_safe_str(data.get("reason") or "client_closed"),
+        )
+        _safe_analytics_call(
+            record_voice_session_event,
+            "close",
+            user_context=user_context,
+            session_id=session_id,
+            success=True,
+        )
+        return jsonify({"success": True, "assistant_name": "Saya", "voice_session": session}), 200
+    except VoiceSessionError as exc:
+        return _voice_error_response(exc)
+
+
+@ai_assistant_bp.get("/analytics")
+@tenant_module_required("ai_assistant")
+@roles_required("super_admin", "admin", "hr", "hr_admin", "hr_manager", "finance", "accounts_finance")
+def saya_analytics_route():
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    try:
+        days = int(request.args.get("days", 7) or 7)
+    except Exception:
+        days = 7
+    platform_scope = _safe_str(request.args.get("platform_scope")).lower() in {"1", "true", "yes", "on"}
+    tenant_id = _safe_str(request.args.get("tenant_id"))
+    try:
+        snapshot = get_ai_analytics_snapshot(
+            user_context=user_context,
+            days=days,
+            platform_scope=platform_scope,
+            tenant_id=tenant_id,
+        )
+        return jsonify({"success": True, "assistant_name": "Saya", "analytics": snapshot}), 200
+    except PermissionError:
+        return jsonify({
+            "success": False,
+            "assistant_name": "Saya",
+            "error": "Saya analytics access is not permitted for this scope.",
+        }), 403
+
+
+@ai_assistant_bp.get("/health")
+@tenant_module_required("ai_assistant")
+@roles_required("super_admin", "admin", "hr", "hr_admin", "hr_manager", "finance", "accounts_finance")
+def saya_health_route():
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
+    health = get_saya_health_snapshot(user_context=user_context)
+    health["action_plugins"] = _safe_plugin_health_snapshot()
+    return jsonify({"success": True, "assistant_name": "Saya", "health": health}), 200
 
 
 @ai_assistant_bp.get("/voice-context")
@@ -1138,6 +1752,8 @@ def transcribe_voice():
     - audio: webm/wav/mp3/m4a/ogg audio blob
     """
 
+    started_at = perf_counter()
+    request_id = new_ai_request_id()
     current_user = getattr(g, "current_user", {}) or {}
     user_context = _build_ai_user_context(current_user)
 
@@ -1194,6 +1810,16 @@ def transcribe_voice():
         )
 
         transcript_text = _safe_str(result.get("text") or result.get("transcript"))
+        _safe_analytics_call(
+            record_provider_event,
+            "stt",
+            result,
+            user_context=user_context,
+            request_id=request_id,
+            response_mode="voice",
+            success=True,
+            latency_ms=result.get("latency_ms") or _elapsed_ms(started_at),
+        )
 
         return jsonify({
             "success": True,
@@ -1217,6 +1843,19 @@ def transcribe_voice():
         if exc.quota_exceeded:
             status_code = 429
 
+        _safe_analytics_call(
+            record_provider_event,
+            "stt",
+            {},
+            user_context=user_context,
+            request_id=request_id,
+            response_mode="voice",
+            success=False,
+            provider=exc.provider,
+            latency_ms=_elapsed_ms(started_at),
+            error_code="stt_provider_failed",
+            status_code=status_code,
+        )
         return jsonify({
             "success": False,
             "error": "Voice transcription failed",
@@ -1348,6 +1987,10 @@ def speak_voice():
     - AI_TTS_PROVIDER=sarvam
     """
 
+    started_at = perf_counter()
+    request_id = new_ai_request_id()
+    current_user = getattr(g, "current_user", {}) or {}
+    user_context = _build_ai_user_context(current_user)
     data = request.get_json(silent=True) or {}
     text = _normalize_tts_text(data.get("text"))
 
@@ -1358,37 +2001,82 @@ def speak_voice():
         }), 400
 
     provider_name = os.getenv("AI_TTS_PROVIDER", "sarvam").strip().lower() or "sarvam"
+    requested_language = _safe_str(data.get("language_code")) or "en-IN"
 
-    if provider_name == "sarvam":
-        requested_voice = os.getenv("SARVAM_TTS_SPEAKER", "anushka").strip() or "anushka"
-        language_code = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN").strip() or "en-IN"
-    else:
+    if provider_name == "elevenlabs":
+        # ElevenLabs voice selection is intentionally server-controlled. Do not
+        # allow browser payloads to switch Saya to an arbitrary ElevenLabs voice.
+        requested_voice = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        language_code = requested_language
+        provider_model = (
+            os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5").strip()
+            or "eleven_flash_v2_5"
+        )
+    elif provider_name == "gemini":
         requested_voice = _safe_str(data.get("voice")) or GEMINI_TTS_VOICE
-        language_code = _safe_str(data.get("language_code")) or "en-IN"
+        language_code = requested_language
+        provider_model = (
+            os.getenv("GEMINI_TTS_MODEL", GEMINI_TTS_MODEL).strip()
+            or GEMINI_TTS_MODEL
+        )
+    elif provider_name == "sarvam":
+        requested_voice = (
+            os.getenv("SARVAM_TTS_SPEAKER", "anushka").strip()
+            or "anushka"
+        )
+        language_code = (
+            _safe_str(data.get("language_code"))
+            or os.getenv("SARVAM_LANGUAGE_CODE", "en-IN").strip()
+            or "en-IN"
+        )
+        provider_model = (
+            os.getenv("SARVAM_TTS_MODEL", "bulbul:v3").strip()
+            or "bulbul:v3"
+        )
+    else:
+        requested_voice = _safe_str(data.get("voice")) or "default"
+        language_code = requested_language
+        provider_model = (
+            os.getenv("AI_TTS_MODEL", "").strip()
+            or provider_name
+        )
 
-        if not re.match(r"^[A-Za-z0-9_-]{2,40}$", requested_voice):
-            requested_voice = GEMINI_TTS_VOICE
-
-    provider_model = (
-        os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
-        if provider_name == "gemini"
-        else os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
-    )
+    if requested_voice and not re.match(r"^[A-Za-z0-9_:-]{2,80}$", requested_voice):
+        requested_voice = (
+            GEMINI_TTS_VOICE
+            if provider_name == "gemini"
+            else "default"
+        )
 
     cache_key = _tts_cache_key(text, provider_name, requested_voice, provider_model)
-    cached_audio = _read_tts_cache(cache_key)
+    cached_audio = _read_tts_cache(cache_key) if AI_TTS_CACHE_ENABLED else None
 
     if cached_audio:
         cached_bytes, cached_mime_type, cached_extension = cached_audio
+        _safe_analytics_call(
+            record_provider_event,
+            "tts",
+            {},
+            user_context=user_context,
+            request_id=request_id,
+            response_mode="voice",
+            success=True,
+            provider=provider_name,
+            model=provider_model,
+            latency_ms=_elapsed_ms(started_at),
+            metadata={"cache_hit": True},
+        )
 
         return Response(
             cached_bytes,
             mimetype=cached_mime_type,
             headers={
                 "Content-Disposition": f"inline; filename=saya-response-cached.{cached_extension}",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": "private, no-store, max-age=0",
+                "Pragma": "no-cache",
                 "X-Saya-Provider": provider_name,
                 "X-Saya-Voice": str(requested_voice),
+                "X-Saya-Model": str(provider_model),
                 "X-Saya-Cache": "HIT",
             },
         )
@@ -1415,18 +2103,34 @@ def speak_voice():
         if response_mime_type == "audio/ogg":
             extension = "ogg"
 
-        _write_tts_cache(cache_key, audio_bytes, response_mime_type)
+        if AI_TTS_CACHE_ENABLED:
+            _write_tts_cache(cache_key, audio_bytes, response_mime_type)
+
+        _safe_analytics_call(
+            record_provider_event,
+            "tts",
+            speech_result,
+            user_context=user_context,
+            request_id=request_id,
+            response_mode="voice",
+            success=True,
+            provider=speech_result.get("provider") or provider_name,
+            model=speech_result.get("model") or provider_model,
+            latency_ms=speech_result.get("latency_ms") or _elapsed_ms(started_at),
+            metadata={"cache_hit": False},
+        )
 
         return Response(
             audio_bytes,
             mimetype=response_mime_type,
             headers={
-            "Content-Disposition": f"inline; filename=saya-response.{extension}",
-            "Cache-Control": "no-store",
-            "X-Saya-Voice": requested_voice,
-            "X-Saya-Provider": speech_result.get("provider") or provider_name,
-            "X-Saya-Model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
-            "X-Saya-Latency-Ms": str(speech_result.get("latency_ms") or ""),
+                "Content-Disposition": f"inline; filename=saya-response.{extension}",
+                "Cache-Control": "private, no-store, max-age=0",
+                "Pragma": "no-cache",
+                "X-Saya-Voice": str(requested_voice),
+                "X-Saya-Provider": speech_result.get("provider") or provider_name,
+                "X-Saya-Model": str(provider_model),
+                "X-Saya-Latency-Ms": str(speech_result.get("latency_ms") or ""),
                 "X-Saya-Cache": "MISS",
             },
         )
@@ -1442,6 +2146,19 @@ def speak_voice():
         if exc.quota_exceeded:
             status_code = 429
 
+        _safe_analytics_call(
+            record_provider_event,
+            "tts",
+            {},
+            user_context=user_context,
+            request_id=request_id,
+            response_mode="voice",
+            success=False,
+            provider=exc.provider,
+            latency_ms=_elapsed_ms(started_at),
+            error_code="tts_provider_failed",
+            status_code=status_code,
+        )
         return jsonify({
             "success": False,
             "error": "Voice generation failed",
@@ -1495,8 +2212,12 @@ def seed():
         }), 200
 
     except Exception as e:
+        print(f"Saya knowledge seed failed: {e}")
         return jsonify({
             "success": False,
             "error": "Knowledge seed failed",
-            "details": str(e)
+            "message": (
+                "Saya could not refresh the knowledge index. "
+                "Please review the backend logs and try again."
+            )
         }), 500

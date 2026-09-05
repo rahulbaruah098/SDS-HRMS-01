@@ -139,6 +139,48 @@ def _json_response(response: requests.Response, provider: str) -> Dict[str, Any]
         ) from exc
 
 
+def _provider_post(provider: str, url: str, **kwargs) -> requests.Response:
+    """POST to an AI provider and normalize transport failures.
+
+    Provider fallback previously handled HTTP provider errors but a timeout or
+    connection failure could bypass the configured fallback provider entirely.
+    Converting requests exceptions to AiProviderError keeps the fallback chain
+    reliable and gives the caller a consistent failure contract.
+    """
+
+    try:
+        return requests.post(url, **kwargs)
+    except requests.Timeout as exc:
+        raise AiProviderError(
+            f"{provider} request timed out.",
+            provider=provider,
+            status_code=504,
+            details=str(exc),
+        ) from exc
+    except requests.ConnectionError as exc:
+        raise AiProviderError(
+            f"{provider} could not be reached.",
+            provider=provider,
+            status_code=503,
+            details=str(exc),
+        ) from exc
+    except requests.RequestException as exc:
+        raise AiProviderError(
+            f"{provider} request failed.",
+            provider=provider,
+            status_code=502,
+            details=str(exc),
+        ) from exc
+
+
+def _max_continuations() -> int:
+    return max(0, min(_env_int("AI_MAX_CONTINUATIONS", 2), 3))
+
+
+def _auto_continue_enabled() -> bool:
+    return _env_bool("AI_AUTO_CONTINUE_TRUNCATED", True)
+
+
 def _normalise_chat_messages(
     messages: Optional[List[Dict[str, Any]]] = None,
     system_prompt: str = "",
@@ -231,46 +273,77 @@ def _groq_chat_completion(
 
     api_base = _env("GROQ_API_BASE", "https://api.groq.com/openai/v1").rstrip("/")
     model = _env("GROQ_CHAT_MODEL", "openai/gpt-oss-20b")
-    max_completion_tokens = max_tokens or _env_int("AI_MAX_OUTPUT_TOKENS", 450)
-    request_timeout = timeout or _env_int("AI_CHAT_TIMEOUT_SECONDS", 20)
+    max_completion_tokens = max_tokens or _env_int("AI_MAX_OUTPUT_TOKENS", 1600)
+    request_timeout = timeout or _env_int("AI_CHAT_TIMEOUT_SECONDS", 24)
+    request_messages = _normalise_chat_messages(messages, system_prompt, user_prompt)
 
-    payload = {
-        "model": model,
-        "messages": _normalise_chat_messages(messages, system_prompt, user_prompt),
-        "temperature": temperature,
-        "max_completion_tokens": max_completion_tokens,
-    }
+    all_parts: List[str] = []
+    continuation_count = 0
 
-    if _env_bool("AI_FAST_MODE", True):
-        payload["top_p"] = 0.9
+    while True:
+        payload = {
+            "model": model,
+            "messages": request_messages,
+            "temperature": temperature,
+            "max_completion_tokens": max_completion_tokens,
+        }
 
-    response = requests.post(
-        f"{api_base}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        json=payload,
-        timeout=request_timeout,
-    )
+        if _env_bool("AI_FAST_MODE", True):
+            payload["top_p"] = 0.9
 
-    if not response.ok:
-        _raise_provider_error("groq", response, "Groq chat request failed.")
-
-    data = _json_response(response, "groq")
-    text = _extract_groq_text(data)
-
-    if not text:
-        raise AiProviderError(
-            "Groq returned an empty answer.",
-            provider="groq",
-            status_code=502,
-            details=_safe_str(data)[:1000],
+        response = _provider_post(
+            "groq",
+            f"{api_base}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json=payload,
+            timeout=request_timeout,
         )
 
-    return text
+        if not response.ok:
+            _raise_provider_error("groq", response, "Groq chat request failed.")
 
+        data = _json_response(response, "groq")
+        text = _extract_groq_text(data)
+
+        if not text:
+            raise AiProviderError(
+                "Groq returned an empty answer.",
+                provider="groq",
+                status_code=502,
+                details=_safe_str(data)[:1000],
+            )
+
+        all_parts.append(text)
+        choices = data.get("choices") or []
+        finish_reason = str(
+            ((choices[0] if choices else {}).get("finish_reason") or "")
+        ).strip().lower()
+
+        if (
+            finish_reason not in {"length", "max_tokens"}
+            or not _auto_continue_enabled()
+            or continuation_count >= _max_continuations()
+        ):
+            break
+
+        continuation_count += 1
+        request_messages = request_messages + [
+            {"role": "assistant", "content": text},
+            {
+                "role": "user",
+                "content": (
+                    "Continue from exactly where the previous response stopped. "
+                    "Do not repeat earlier content. Complete the answer professionally, "
+                    "including any unfinished sentence, step, list, or conclusion."
+                ),
+            },
+        ]
+
+    return "\n".join(part.strip() for part in all_parts if part.strip()).strip()
 
 def _gemini_chat_completion(
     messages: Optional[List[Dict[str, Any]]] = None,
@@ -290,84 +363,119 @@ def _gemini_chat_completion(
         )
 
     model = _env("GEMINI_MODEL", "gemini-3.5-flash")
-    request_timeout = timeout or _env_int("AI_CHAT_TIMEOUT_SECONDS", 20)
-    max_output_tokens = max_tokens or _env_int("AI_MAX_OUTPUT_TOKENS", 450)
+    request_timeout = timeout or _env_int("AI_CHAT_TIMEOUT_SECONDS", 24)
+    max_output_tokens = max_tokens or _env_int("AI_MAX_OUTPUT_TOKENS", 1600)
 
     final_messages = _normalise_chat_messages(messages, system_prompt, user_prompt)
-    prompt_parts = []
+    system_parts = [
+        item.get("content", "")
+        for item in final_messages
+        if item.get("role") == "system" and item.get("content")
+    ]
+    conversation = [
+        item for item in final_messages
+        if item.get("role") != "system" and item.get("content")
+    ]
 
-    for item in final_messages:
-        role = item.get("role", "user")
-        content = item.get("content", "")
+    contents: List[Dict[str, Any]] = []
+    for item in conversation:
+        role = "model" if item.get("role") == "assistant" else "user"
+        contents.append({
+            "role": role,
+            "parts": [{"text": item.get("content", "")}],
+        })
 
-        if content:
-            prompt_parts.append(f"{role.upper()}:\n{content}")
+    if not contents:
+        contents.append({"role": "user", "parts": [{"text": "Hello"}]})
 
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": "\n\n".join(prompt_parts),
-                    }
-                ],
-            }
-        ],
+    base_payload: Dict[str, Any] = {
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
         },
     }
 
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        },
-        json=payload,
-        timeout=request_timeout,
-    )
+    if system_parts:
+        # Keep security, scope, and professional-response rules in Gemini's
+        # real system instruction rather than flattening them into user text.
+        base_payload["systemInstruction"] = {
+            "parts": [{"text": "\n\n".join(system_parts)}]
+        }
 
-    if not response.ok:
-        _raise_provider_error("gemini", response, "Gemini fallback chat request failed.")
+    all_parts: List[str] = []
+    continuation_count = 0
 
-    data = _json_response(response, "gemini")
-    candidates = data.get("candidates") or []
+    while True:
+        payload = dict(base_payload)
+        payload["contents"] = contents
 
-    if not candidates:
-        raise AiProviderError(
-            "Gemini returned no candidates.",
-            provider="gemini",
-            status_code=502,
-            details=_safe_str(data)[:1000],
+        response = _provider_post(
+            "gemini",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json=payload,
+            timeout=request_timeout,
         )
 
-    parts = (
-        candidates[0]
-        .get("content", {})
-        .get("parts", [])
-    )
+        if not response.ok:
+            _raise_provider_error("gemini", response, "Gemini fallback chat request failed.")
 
-    text_parts = [
-        str(part.get("text", "")).strip()
-        for part in parts
-        if isinstance(part, dict) and part.get("text")
-    ]
+        data = _json_response(response, "gemini")
+        candidates = data.get("candidates") or []
 
-    text = "\n".join(text_parts).strip()
+        if not candidates:
+            raise AiProviderError(
+                "Gemini returned no candidates.",
+                provider="gemini",
+                status_code=502,
+                details=_safe_str(data)[:1000],
+            )
 
-    if not text:
-        raise AiProviderError(
-            "Gemini returned an empty answer.",
-            provider="gemini",
-            status_code=502,
-            details=_safe_str(data)[:1000],
-        )
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text_parts = [
+            str(part.get("text", "")).strip()
+            for part in parts
+            if isinstance(part, dict) and part.get("text")
+        ]
+        text = "\n".join(text_parts).strip()
 
-    return text
+        if not text:
+            raise AiProviderError(
+                "Gemini returned an empty answer.",
+                provider="gemini",
+                status_code=502,
+                details=_safe_str(data)[:1000],
+            )
 
+        all_parts.append(text)
+        finish_reason = str(candidates[0].get("finishReason") or "").strip().upper()
+
+        if (
+            finish_reason not in {"MAX_TOKENS", "LENGTH"}
+            or not _auto_continue_enabled()
+            or continuation_count >= _max_continuations()
+        ):
+            break
+
+        continuation_count += 1
+        contents = contents + [
+            {"role": "model", "parts": [{"text": text}]},
+            {
+                "role": "user",
+                "parts": [{
+                    "text": (
+                        "Continue from exactly where the previous response stopped. "
+                        "Do not repeat earlier content. Complete the answer professionally, "
+                        "including any unfinished sentence, step, list, or conclusion."
+                    )
+                }],
+            },
+        ]
+
+    return "\n".join(part.strip() for part in all_parts if part.strip()).strip()
 
 def generate_ai_chat_response(
     messages: Optional[List[Dict[str, Any]]] = None,
@@ -529,7 +637,8 @@ def _deepgram_transcribe_audio(
         if keyterms:
             params["keyterm"] = keyterms[:20]
 
-    response = requests.post(
+    response = _provider_post(
+        "deepgram",
         "https://api.deepgram.com/v1/listen",
         headers={
             "Authorization": f"Token {api_key}",
@@ -611,7 +720,8 @@ def _groq_transcribe_audio(
         if prompt:
             data["prompt"] = prompt
 
-    response = requests.post(
+    response = _provider_post(
+        "groq",
         f"{api_base}/audio/transcriptions",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -817,7 +927,8 @@ def _sarvam_text_to_speech(
         "temperature": temperature,
     }
 
-    response = requests.post(
+    response = _provider_post(
+        "sarvam",
         f"{api_base}/text-to-speech",
         headers={
             "api-subscription-key": api_key,
@@ -943,7 +1054,8 @@ def _elevenlabs_text_to_speech(
     if final_language and re.fullmatch(r"[A-Za-z]{2}", final_language):
         payload["language_code"] = final_language.lower()
 
-    response = requests.post(
+    response = _provider_post(
+        "elevenlabs",
         f"{api_base}/text-to-speech/{voice_id}",
         params={"output_format": output_format},
         headers={
@@ -1212,7 +1324,8 @@ def _gemini_text_to_speech(
             "model": model,
         }
 
-        response = requests.post(
+        response = _provider_post(
+            "gemini",
             f"{api_base}/models/{model}:generateContent",
             headers={
                 "Content-Type": "application/json",

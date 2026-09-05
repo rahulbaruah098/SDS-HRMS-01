@@ -1,6 +1,9 @@
+import os
 import re
+import importlib
 from difflib import SequenceMatcher
 from datetime import date, datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from bson import ObjectId
 
@@ -38,6 +41,241 @@ ACTION_STALE_ACTION_TYPES = {
 # AI guided action dropdowns must never leak cross-department/cross-team data.
 # Project handover must never fall back to all tenant projects.
 STRICT_AI_ACTION_SCOPE = True
+
+
+# SAYA_ACTION_ENGINE_V1
+# Central metadata for every deterministic Saya write action.  The current
+# frontend/service contract still uses {handled, answer}; these fields let the
+# next UI/action-router files consume structured action state without breaking
+# the existing assistant.
+ACTION_SCHEMA_VERSION = 1
+ACTION_REGISTRY = {
+    "apply_leave": {
+        "label": "Apply Leave",
+        "module": "Leave",
+        "kind": "write",
+        "scope": "self",
+        "requires_tenant": True,
+        "requires_employee": True,
+        "requires_confirmation": True,
+    },
+    "attendance_check_in": {
+        "label": "Attendance Check-In",
+        "module": "Attendance",
+        "kind": "write",
+        "scope": "self",
+        "requires_tenant": True,
+        "requires_employee": True,
+        "requires_confirmation": False,
+    },
+    "attendance_check_out": {
+        "label": "Attendance Check-Out",
+        "module": "Attendance",
+        "kind": "write",
+        "scope": "self",
+        "requires_tenant": True,
+        "requires_employee": True,
+        "requires_confirmation": False,
+    },
+    "schedule_management_meeting": {
+        "label": "Schedule Management Group Meeting",
+        "module": "Management Group",
+        "kind": "write",
+        "scope": "management",
+        "requires_tenant": True,
+        "requires_employee": False,
+        "requires_confirmation": True,
+    },
+    "create_reminder": {
+        "label": "Create Reminder",
+        "module": "Notifications",
+        "kind": "write",
+        "scope": "self",
+        "requires_tenant": True,
+        "requires_employee": False,
+        "requires_confirmation": True,
+    },
+}
+
+
+# SAYA_PLUGIN_ACTION_ENGINE
+# Module-specific Saya action files register themselves here.  The core service
+# remains the authority for pending state, confirmation state and final dispatch.
+SAYA_ACTION_PLUGIN_MODULES = (
+    "app.services.ai_actions.team_manager_actions",
+    "app.services.ai_actions.hr_recruitment_actions",
+    "app.services.ai_actions.finance_payroll_actions",
+    "app.services.ai_actions.admin_superadmin_actions",
+)
+SAYA_ACTION_HANDLERS = {}
+SAYA_ACTION_PLUGIN_ERRORS = {}
+_SAYA_ACTION_PLUGINS_LOADED = False
+_SAYA_ACTION_PLUGINS_LOADING = False
+
+
+def register_saya_action(
+    action_type,
+    definition=None,
+    *,
+    start_handler=None,
+    continue_handler=None,
+    access_handler=None,
+    intent_phrases=None,
+    **extra,
+):
+    """Register one allow-listed Saya action/capability plugin.
+
+    Registration adds metadata only; it never grants access.  Every plugin can
+    provide its own access_handler and the authenticated action pipeline still
+    performs tenant/user validation before invoking the handler.
+    """
+    action_key = _safe_str(action_type)
+    if not action_key:
+        raise ValueError("Saya action_type is required")
+
+    metadata = dict(definition or {})
+    metadata.setdefault("label", action_key.replace("_", " ").title())
+    metadata.setdefault("kind", "write")
+    metadata.setdefault("requires_confirmation", False)
+    metadata["plugin"] = True
+    ACTION_REGISTRY[action_key] = metadata
+
+    SAYA_ACTION_HANDLERS[action_key] = {
+        "start_handler": start_handler,
+        "continue_handler": continue_handler,
+        "access_handler": access_handler,
+        "intent_phrases": list(intent_phrases or []),
+        "metadata": metadata,
+        **dict(extra or {}),
+    }
+    return action_key
+
+
+def _ensure_saya_action_plugins_loaded():
+    """Load module-specific Saya actions once, without breaking core actions."""
+    global _SAYA_ACTION_PLUGINS_LOADED, _SAYA_ACTION_PLUGINS_LOADING
+    if _SAYA_ACTION_PLUGINS_LOADED or _SAYA_ACTION_PLUGINS_LOADING:
+        return
+
+    _SAYA_ACTION_PLUGINS_LOADING = True
+    try:
+        for module_name in SAYA_ACTION_PLUGIN_MODULES:
+            try:
+                importlib.import_module(module_name)
+                SAYA_ACTION_PLUGIN_ERRORS.pop(module_name, None)
+            except Exception as exc:
+                # Keep legacy Employee actions available even if one optional
+                # role plugin has a deployment/import problem.  The error is
+                # intentionally kept server-side for health/debug use.
+                SAYA_ACTION_PLUGIN_ERRORS[module_name] = f"{type(exc).__name__}: {exc}"
+        _SAYA_ACTION_PLUGINS_LOADED = True
+    finally:
+        _SAYA_ACTION_PLUGINS_LOADING = False
+
+
+def get_saya_action_registry():
+    """Safe action metadata for tests/UI/health; no handler objects are exposed."""
+    _ensure_saya_action_plugins_loaded()
+    return {key: dict(value) for key, value in ACTION_REGISTRY.items()}
+
+
+def get_saya_plugin_health():
+    _ensure_saya_action_plugins_loaded()
+    return {
+        "loaded": not bool(SAYA_ACTION_PLUGIN_ERRORS),
+        "registered_actions": len(ACTION_REGISTRY),
+        "registered_plugin_actions": len(SAYA_ACTION_HANDLERS),
+        "plugin_errors": dict(SAYA_ACTION_PLUGIN_ERRORS),
+    }
+
+
+def get_action_definition(action_type):
+    """Return a safe copy of Saya action metadata for UI/orchestration use."""
+    _ensure_saya_action_plugins_loaded()
+    definition = ACTION_REGISTRY.get(_safe_str(action_type)) or {}
+    return dict(definition)
+
+
+def _action_access_error(action_type, user_context=None):
+    definition = ACTION_REGISTRY.get(_safe_str(action_type)) or {}
+
+    if definition.get("requires_tenant") and not _tenant_id(user_context):
+        return (
+            "I cannot perform this action because your organisation context "
+            "could not be verified. Please sign in again and retry."
+        )
+
+    if not _user_key(user_context):
+        return (
+            "I cannot perform this action because your signed-in user identity "
+            "could not be verified. Please sign in again and retry."
+        )
+
+    if definition.get("requires_employee") and not _employee_id(user_context):
+        return (
+            "I cannot perform this action because your employee profile is not "
+            "mapped to this login. Please contact HR or your system administrator."
+        )
+
+    if action_type == "schedule_management_meeting" and not _is_management_role(user_context):
+        return (
+            "Scheduling Management Group meetings is not available for your "
+            "current role. Please contact HR or an administrator if you require access."
+        )
+
+    return ""
+
+
+def _action_step_requires_confirmation(action_type, step):
+    definition = ACTION_REGISTRY.get(_safe_str(action_type)) or {}
+    return bool(definition.get("requires_confirmation") and _safe_str(step) == "confirm")
+
+
+def _decorate_action_result(result, action_type="", step="", status="collecting"):
+    """
+    Preserve the legacy action response while adding a stable structured contract.
+    Existing callers can keep reading handled/answer; future UI files can use the
+    action metadata directly instead of parsing Saya's prose.
+    """
+    if not isinstance(result, dict):
+        result = {"handled": bool(result), "answer": _safe_str(result)}
+
+    resolved_action = _safe_str(action_type or result.get("action"))
+    resolved_step = _safe_str(step or result.get("step"))
+    definition = get_action_definition(resolved_action)
+
+    output = dict(result)
+    output.setdefault("handled", bool(output.get("answer")))
+    output["action"] = resolved_action
+    output["action_type"] = resolved_action
+    output["action_schema_version"] = ACTION_SCHEMA_VERSION
+    output["action_definition"] = definition
+    output["step"] = resolved_step
+    output["status"] = _safe_str(status or output.get("status") or "collecting")
+    output["requires_confirmation"] = _action_step_requires_confirmation(
+        resolved_action,
+        resolved_step,
+    )
+    return output
+
+
+def _safe_action_error(error, fallback):
+    """Return business validation messages while hiding technical internals."""
+    message = _safe_str(error)
+    if not message:
+        return fallback
+
+    technical_markers = (
+        "traceback", "pymongo", "mongodb", "bson", "objectid(", "keyerror",
+        "attributeerror", "typeerror", "connection refused", "server selection",
+        "localhost:", "127.0.0.1:", "mongodb://", "http://", "https://",
+    )
+    lowered = message.lower()
+    if any(marker in lowered for marker in technical_markers):
+        return fallback
+
+    # Validation messages in this service are intentionally written for users.
+    return message[:600]
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -155,15 +393,16 @@ def _pending_action_query(user_context=None):
     user_key = _user_key(user_context)
     tenant_id = _tenant_id(user_context)
 
-    query = {
+    # Guided actions are private, tenant-bound state. Never allow an unscoped
+    # lookup if authentication/tenant mapping is incomplete.
+    if not user_key or not tenant_id:
+        return {"_id": {"$exists": False}}
+
+    return {
+        "tenant_id": tenant_id,
         "user_key": user_key,
         "status": "collecting",
     }
-
-    if tenant_id:
-        query["tenant_id"] = tenant_id
-
-    return query
 
 
 def _pending_action_updated_at(action):
@@ -269,10 +508,11 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
 
     user_key = _user_key(user_context)
 
-    if not user_key:
+    tenant_id = _tenant_id(user_context)
+
+    if not user_key or not tenant_id:
         return None
 
-    tenant_id = _tenant_id(user_context)
     now = _now_utc()
 
     payload = {
@@ -283,6 +523,7 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
         "data": data or {},
         "current_step": current_step,
         "status": "collecting",
+        "action_schema_version": ACTION_SCHEMA_VERSION,
         "updated_at": now,
     }
 
@@ -311,6 +552,103 @@ def save_pending_action(user_context=None, action_type="", data=None, current_st
     inserted = db[ACTION_COLLECTION].insert_one(payload)
 
     return db[ACTION_COLLECTION].find_one({"_id": inserted.inserted_id})
+
+
+def _plugin_action_access_error(action_type, user_context=None):
+    _ensure_saya_action_plugins_loaded()
+    action_key = _safe_str(action_type)
+    handlers = SAYA_ACTION_HANDLERS.get(action_key) or {}
+
+    generic_error = _action_access_error(action_key, user_context)
+    if generic_error:
+        return generic_error
+
+    access_handler = handlers.get("access_handler")
+    if callable(access_handler):
+        try:
+            return _safe_str(access_handler(user_context))
+        except Exception as exc:
+            print(f"Saya plugin access check failed for {action_key}: {exc}")
+            return "Saya could not verify access for this action. Please retry or use the standard HRMS screen."
+    return ""
+
+
+def _plugin_result(action_type, result, user_context=None, default_status="handled"):
+    pending = get_pending_action(user_context)
+    step = _safe_str((pending or {}).get("current_step"))
+    status = default_status
+    if pending and _safe_str(pending.get("action_type")) == _safe_str(action_type):
+        status = "awaiting_confirmation" if step == "confirm" else "collecting"
+    elif isinstance(result, dict):
+        status = _safe_str(result.get("status") or default_status)
+    return _decorate_action_result(
+        result if isinstance(result, dict) else {"handled": True, "answer": _safe_str(result)},
+        action_type=action_type,
+        step=step,
+        status=status,
+    )
+
+
+def _run_plugin_start(action_type, question, user_context=None):
+    _ensure_saya_action_plugins_loaded()
+    handlers = SAYA_ACTION_HANDLERS.get(_safe_str(action_type)) or {}
+    start_handler = handlers.get("start_handler")
+    if not callable(start_handler):
+        return _decorate_action_result(
+            {"handled": True, "answer": "This Saya action is registered but its handler is not available. Please use the standard HRMS screen."},
+            action_type=action_type,
+            status="blocked",
+        )
+    access_error = _plugin_action_access_error(action_type, user_context)
+    if access_error:
+        return _decorate_action_result(
+            {"handled": True, "answer": access_error},
+            action_type=action_type,
+            status="blocked",
+        )
+    try:
+        result = start_handler(question, user_context)
+        return _plugin_result(action_type, result, user_context=user_context)
+    except Exception as exc:
+        print(f"Saya plugin start failed for {action_type}: {exc}")
+        return _decorate_action_result(
+            {"handled": True, "answer": "Saya could not complete this action safely. Please retry or use the standard HRMS screen."},
+            action_type=action_type,
+            status="failed",
+        )
+
+
+def _run_plugin_continue(pending, question, user_context=None):
+    action_type = _safe_str((pending or {}).get("action_type"))
+    _ensure_saya_action_plugins_loaded()
+    handlers = SAYA_ACTION_HANDLERS.get(action_type) or {}
+    continue_handler = handlers.get("continue_handler")
+    if not callable(continue_handler):
+        clear_pending_action(user_context)
+        return _decorate_action_result(
+            {"handled": True, "answer": "This guided Saya action can no longer continue safely, so I cleared it. Please start the request again."},
+            action_type=action_type,
+            status="cancelled",
+        )
+    access_error = _plugin_action_access_error(action_type, user_context)
+    if access_error:
+        clear_pending_action(user_context)
+        return _decorate_action_result(
+            {"handled": True, "answer": access_error},
+            action_type=action_type,
+            status="blocked",
+        )
+    try:
+        result = continue_handler(pending, question, user_context)
+        return _plugin_result(action_type, result, user_context=user_context)
+    except Exception as exc:
+        print(f"Saya plugin continuation failed for {action_type}: {exc}")
+        clear_pending_action(user_context)
+        return _decorate_action_result(
+            {"handled": True, "answer": "Saya could not safely continue this action. The pending action was cleared; please retry from the beginning or use the standard HRMS screen."},
+            action_type=action_type,
+            status="failed",
+        )
 
 def detect_action_intent(question):
     text = _strip_assistant_wake_words(_normalize_option_text(_strip_voice_instruction_suffix(question)))
@@ -392,6 +730,12 @@ def detect_action_intent(question):
         "start leave request",
         "create leave request",
         "leave application",
+        "mark my leave",
+        "put my leave",
+        "put cl",
+        "put el",
+        "book leave",
+        "take leave tomorrow",
     ]
 
     if any(phrase in text for phrase in leave_start_phrases):
@@ -421,6 +765,19 @@ def detect_action_intent(question):
     ]):
         return "create_reminder"
 
+    # Final structured router pass (File 19).  It is side-effect-free and
+    # allow-listed; permission and execution still happen below.
+    try:
+        _ensure_saya_action_plugins_loaded()
+        from app.services.ai_intent_router import route_saya_intent
+
+        routed = route_saya_intent(question, use_llm_fallback=True) or {}
+        routed_intent = _safe_str(routed.get("intent"))
+        if routed_intent in ACTION_REGISTRY:
+            return routed_intent
+    except Exception as exc:
+        print(f"Saya structured intent routing fallback failed: {exc}")
+
     return ""
 
 
@@ -429,7 +786,9 @@ def _tenant_match_filter(user_context=None):
     values = _id_variants(tenant_id)
 
     if not values:
-        return {}
+        # Returning an impossible filter is safer than returning {} because many
+        # action-option helpers compose this filter dynamically.
+        return {"_id": {"$exists": False}}
 
     return {
         "$or": [
@@ -817,17 +1176,9 @@ def _current_employee_for_ai_action(user_context=None):
     if tenant_filter:
         query_parts.insert(0, tenant_filter)
 
-    employee = db.employees.find_one({"$and": query_parts})
-
-    if employee:
-        return employee
-
-    return db.employees.find_one({
-        "$and": [
-            {"is_deleted": {"$ne": True}},
-            {"$or": lookup_or},
-        ]
-    })
+    # Do not retry globally after a tenant-scoped lookup fails. Employee codes,
+    # emails and user ids can overlap across HRMS tenants.
+    return db.employees.find_one({"$and": query_parts})
 
 
 def _active_employee_query_for_handover(user_context=None):
@@ -1306,6 +1657,12 @@ def get_management_group_options(user_context=None, limit=10):
 
     person_values = _id_variants(employee_id) + _id_variants(user_key)
 
+    if not _tenant_id(user_context):
+        return []
+
+    if not _is_hr_admin_role(user_context) and not person_values:
+        return []
+
     query_parts = []
 
     if tenant_filter:
@@ -1352,7 +1709,7 @@ def get_management_group_member_options(group_id, user_context=None, limit=25):
     if not oid:
         return []
 
-    group = db.management_groups.find_one({"_id": oid})
+    group = _get_management_group(group_id, user_context=user_context)
 
     if not group:
         return []
@@ -2583,23 +2940,25 @@ def _submit_leave_request_from_ai(data, user_context=None):
 
     employee_obj_id = _as_object_id(employee_id)
 
+    if not tenant_id:
+        raise RuntimeError("Your organisation context could not be verified. Please sign in again.")
+
+    if not user_key:
+        raise RuntimeError("Your signed-in user identity could not be verified. Please sign in again.")
+
     if not employee_obj_id:
         raise RuntimeError("Employee profile is not mapped properly for this login.")
 
     employee = db.employees.find_one({
-        "_id": employee_obj_id,
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
+        "$and": [
+            _tenant_match_filter(user_context),
+            {"_id": employee_obj_id},
+            {"is_deleted": {"$ne": True}},
+        ]
     })
 
     if not employee:
-        employee = db.employees.find_one({
-            "_id": employee_obj_id,
-            "is_deleted": {"$ne": True},
-        })
-
-    if not employee:
-        raise RuntimeError("Employee profile was not found for this login.")
+        raise RuntimeError("Employee profile was not found for this login and organisation.")
 
     leave_type = normalize_leave_type(data.get("leave_type"))
 
@@ -2909,6 +3268,10 @@ def _advance_leave_after_dates(data, user_context=None):
 
 
 def _apply_leave_start(user_context=None, question=""):
+    access_error = _action_access_error("apply_leave", user_context)
+    if access_error:
+        return {"handled": True, "answer": access_error}
+
     question = _strip_voice_instruction_suffix(question)
     leave_options = get_leave_type_options(user_context)
     data = {
@@ -3410,9 +3773,9 @@ def _apply_leave_continue(pending, question, user_context=None):
                     "handled": True,
                     "answer": (
                         "I could not submit your leave request.\n\n"
-                        f"Reason: {str(error)}\n\n"
-                        "I have cleared this failed leave setup so Saya will not continue the old details.\n"
-                        "Please start again by saying: Hey Saya apply casual leave for tomorrow."
+                        f"Reason: {_safe_action_error(error, 'The leave request could not be submitted safely.')}\n\n"
+                        "I have cleared the incomplete leave setup so it will not reuse old details.\n"
+                        "Please start a new leave request when you are ready."
                     ),
                 }
 
@@ -3426,15 +3789,39 @@ def _apply_leave_continue(pending, question, user_context=None):
         "answer": "I am still collecting your leave request details. Please continue with the requested information.",
     }
 
-def _get_management_group(group_id):
+def _get_management_group(group_id, user_context=None):
     db = get_db()
 
     oid = _as_object_id(group_id)
 
-    if not oid:
+    if not oid or not _tenant_id(user_context):
         return None
 
-    return db.management_groups.find_one({"_id": oid})
+    query_parts = [
+        _tenant_match_filter(user_context),
+        {"_id": oid},
+    ]
+
+    # HR/Admin roles may schedule any management group in their tenant. Other
+    # management roles may operate only on groups they belong to or created.
+    if not _is_hr_admin_role(user_context):
+        person_values = (
+            _id_variants(_employee_id(user_context))
+            + _id_variants(_user_key(user_context))
+        )
+        if not person_values:
+            return None
+
+        query_parts.append({
+            "$or": [
+                {"members.employee_id": {"$in": person_values}},
+                {"members.user_id": {"$in": person_values}},
+                {"member_ids": {"$in": person_values}},
+                {"created_by": {"$in": person_values}},
+            ]
+        })
+
+    return db.management_groups.find_one({"$and": query_parts})
 
 
 def _create_notifications_for_management_group(
@@ -3471,13 +3858,17 @@ def _create_notifications_for_management_group(
 
 
 def _submit_management_meeting_from_ai(data, user_context=None):
+    access_error = _action_access_error("schedule_management_meeting", user_context)
+    if access_error:
+        raise RuntimeError(access_error)
+
     db = get_db()
 
     tenant_id = _tenant_id(user_context)
     user_key = _user_key(user_context)
 
     group_id = data.get("group_id")
-    group = _get_management_group(group_id)
+    group = _get_management_group(group_id, user_context=user_context)
 
     if not group:
         raise RuntimeError("Selected management group was not found.")
@@ -3574,6 +3965,10 @@ def _submit_management_meeting_from_ai(data, user_context=None):
     }
 
 def _meeting_start(user_context=None):
+    access_error = _action_access_error("schedule_management_meeting", user_context)
+    if access_error:
+        return {"handled": True, "answer": access_error}
+
     if not _is_management_role(user_context):
         return {
             "handled": True,
@@ -3739,8 +4134,7 @@ def _meeting_continue(pending, question, user_context=None):
                 f"Agenda: {data.get('agenda')}\n"
                 f"Date/Time: {data.get('date_time_text')}\n"
                 f"Minutes Writer: {data.get('minutes_writer_name')}\n\n"
-                "Reply 'confirm' to create this meeting, or 'cancel' to stop.\n\n"
-                "Note: Actual meeting creation API will be connected in the next backend file."
+                "Reply 'confirm' to create this meeting, or 'cancel' to stop."
             )
         }
 
@@ -3770,7 +4164,7 @@ def _meeting_continue(pending, question, user_context=None):
                     "handled": True,
                     "answer": (
                         "I could not create the meeting right now.\n\n"
-                        f"Reason: {str(error)}\n\n"
+                        f"Reason: {_safe_action_error(error, 'The meeting could not be created safely.')}\n\n"
                         "Please check the selected management group and try again."
                     )
                 }
@@ -3788,7 +4182,120 @@ def _meeting_continue(pending, question, user_context=None):
         "answer": "I am still collecting your meeting details. Please continue with the requested information."
     }
 
+def _reminder_timezone(user_context=None):
+    user_context = user_context or {}
+    tenant = user_context.get("tenant") or {}
+    tz_name = _safe_str(
+        user_context.get("timezone")
+        or tenant.get("timezone")
+        or os.getenv("AI_DEFAULT_TIMEZONE", "Asia/Kolkata")
+    ) or "Asia/Kolkata"
+
+    try:
+        return tz_name, ZoneInfo(tz_name)
+    except Exception:
+        # Windows/Python installations without the IANA tzdata package can still
+        # schedule correctly for the HRMS default timezone without crashing.
+        return "Asia/Kolkata", timezone(timedelta(hours=5, minutes=30))
+
+
+def _parse_reminder_schedule(value, user_context=None):
+    """Parse the common reminder date/time forms supported by Saya today."""
+    raw = _safe_str(value)
+    if not raw:
+        return {"valid": False, "message": "Please provide a reminder date and time."}
+
+    tz_name, tz = _reminder_timezone(user_context)
+    now = datetime.now(tz)
+    clean = re.sub(r"\s+", " ", raw.lower()).strip()
+
+    target_date = None
+    if "tomorrow" in clean:
+        target_date = (now + timedelta(days=1)).date()
+    elif "today" in clean:
+        target_date = now.date()
+
+    if target_date is None:
+        iso_match = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", clean)
+        slash_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b", clean)
+        month_match = re.search(
+            r"\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(20\d{2}))?\b",
+            clean,
+        )
+
+        try:
+            if iso_match:
+                target_date = date(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+            elif slash_match:
+                target_date = date(int(slash_match.group(3)), int(slash_match.group(2)), int(slash_match.group(1)))
+            elif month_match:
+                months = {
+                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+                }
+                month_no = months[month_match.group(2)[:3]]
+                year = int(month_match.group(3) or now.year)
+                target_date = date(year, month_no, int(month_match.group(1)))
+                if not month_match.group(3) and target_date < now.date():
+                    target_date = date(year + 1, month_no, int(month_match.group(1)))
+        except ValueError:
+            return {"valid": False, "message": "That reminder date is not valid. Please provide a valid date."}
+
+    time_match = re.search(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", clean)
+    time_24_match = re.search(r"\bat\s+(\d{1,2}):(\d{2})\b", clean) if not time_match else None
+
+    hour = minute = None
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or 0)
+        meridiem = time_match.group(3)
+        if hour < 1 or hour > 12 or minute > 59:
+            return {"valid": False, "message": "That reminder time is not valid."}
+        if meridiem == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = 12 if hour == 12 else hour + 12
+    elif time_24_match:
+        hour = int(time_24_match.group(1))
+        minute = int(time_24_match.group(2))
+        if hour > 23 or minute > 59:
+            return {"valid": False, "message": "That reminder time is not valid."}
+
+    if target_date is None or hour is None:
+        return {
+            "valid": False,
+            "message": (
+                "I need both a clear date and time for the reminder. "
+                "For example: tomorrow at 10 AM, or 15 September 2026 at 4 PM."
+            ),
+        }
+
+    scheduled_local = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        hour,
+        minute,
+        tzinfo=tz,
+    )
+
+    if scheduled_local <= now:
+        return {"valid": False, "message": "The reminder time must be in the future."}
+
+    return {
+        "valid": True,
+        "timezone": tz_name,
+        "scheduled_at": scheduled_local,
+        "scheduled_at_utc": scheduled_local.astimezone(timezone.utc),
+        "display": scheduled_local.strftime("%d %B %Y at %I:%M %p"),
+    }
+
+
 def _submit_reminder_from_ai(data, user_context=None):
+    access_error = _action_access_error("create_reminder", user_context)
+    if access_error:
+        raise RuntimeError(access_error)
+
     db = get_db()
 
     tenant_id = _tenant_id(user_context)
@@ -3798,19 +4305,32 @@ def _submit_reminder_from_ai(data, user_context=None):
     reminder_text = _safe_str(data.get("reminder_text"))
     reminder_time_text = _safe_str(data.get("reminder_time_text"))
 
+    if len(reminder_text) < 2:
+        raise RuntimeError("Please provide a valid reminder message.")
+
+    schedule = _parse_reminder_schedule(reminder_time_text, user_context=user_context)
+    if not schedule.get("valid"):
+        raise RuntimeError(schedule.get("message") or "Please provide a valid reminder date and time.")
+
     reminder_doc = {
         "tenant_id": tenant_id,
         "user_id": user_key,
         "employee_id": employee_id,
-        "title": "AI Assistant Reminder",
+        "title": "Saya Reminder",
         "message": reminder_text,
         "reminder_text": reminder_text,
         "reminder_time_text": reminder_time_text,
-        "status": "Pending",
+        "scheduled_at": schedule.get("scheduled_at"),
+        "scheduled_at_utc": schedule.get("scheduled_at_utc"),
+        "timezone": schedule.get("timezone"),
+        "status": "scheduled",
         "source": "ai_assistant",
         "is_completed": False,
         "is_read": False,
         "read": False,
+        # There is no reminder worker in the current codebase yet. This flag
+        # prevents the assistant from claiming timed delivery is already active.
+        "delivery_status": "awaiting_worker",
         "created_by": user_key,
         "created_at": _now_utc(),
         "updated_at": _now_utc(),
@@ -3821,20 +4341,26 @@ def _submit_reminder_from_ai(data, user_context=None):
     _create_notification_safe(
         tenant_id=tenant_id,
         user_id=user_key,
-        title="Reminder Created",
-        message=f"Reminder created: {reminder_text}. Time: {reminder_time_text}",
-        notification_type="ai_reminder",
+        title="Reminder Saved",
+        message=(
+            f"Reminder saved for {schedule.get('display')}: {reminder_text}. "
+            "Timed reminder delivery is not active yet."
+        ),
+        notification_type="ai_reminder_created",
     )
 
     _create_ai_audit_log(
         user_context=user_context,
         action_type="create_reminder",
         status="success",
-        message="Reminder created through AI Assistant.",
+        message="Reminder schedule saved through AI Assistant.",
         metadata={
             "reminder_id": str(result.inserted_id),
             "reminder_text": reminder_text,
             "reminder_time_text": reminder_time_text,
+            "scheduled_at_utc": schedule.get("scheduled_at_utc").isoformat(),
+            "timezone": schedule.get("timezone"),
+            "delivery_status": "awaiting_worker",
         },
     )
 
@@ -3844,9 +4370,18 @@ def _submit_reminder_from_ai(data, user_context=None):
         "reminder_id": str(result.inserted_id),
         "reminder_text": reminder_text,
         "reminder_time_text": reminder_time_text,
+        "scheduled_at": schedule.get("scheduled_at").isoformat(),
+        "scheduled_at_utc": schedule.get("scheduled_at_utc").isoformat(),
+        "timezone": schedule.get("timezone"),
+        "display_time": schedule.get("display"),
+        "delivery_status": "awaiting_worker",
     }
 
 def _reminder_start(user_context=None):
+    access_error = _action_access_error("create_reminder", user_context)
+    if access_error:
+        return {"handled": True, "answer": access_error}
+
     save_pending_action(
         user_context=user_context,
         action_type="create_reminder",
@@ -3888,6 +4423,18 @@ def _reminder_continue(pending, question, user_context=None):
 
     if step == "reminder_time":
         data["reminder_time_text"] = _safe_str(question)
+        schedule = _parse_reminder_schedule(data["reminder_time_text"], user_context=user_context)
+
+        if not schedule.get("valid"):
+            return {
+                "handled": True,
+                "answer": schedule.get("message") or "Please provide a valid reminder date and time.",
+            }
+
+        data["scheduled_at"] = schedule.get("scheduled_at").isoformat()
+        data["scheduled_at_utc"] = schedule.get("scheduled_at_utc").isoformat()
+        data["timezone"] = schedule.get("timezone")
+        data["display_time"] = schedule.get("display")
 
         save_pending_action(
             user_context=user_context,
@@ -3901,9 +4448,8 @@ def _reminder_continue(pending, question, user_context=None):
             "answer": (
                 "Please review your reminder:\n\n"
                 f"Reminder: {data.get('reminder_text')}\n"
-                f"Time: {data.get('reminder_time_text')}\n\n"
-                "Reply 'confirm' to create this reminder, or 'cancel' to stop.\n\n"
-                "Note: Actual reminder saving will be connected in the next backend file."
+                f"Scheduled for: {data.get('display_time')} ({data.get('timezone')})\n\n"
+                "Reply 'confirm' to save this reminder schedule, or 'cancel' to stop."
             )
         }
 
@@ -3918,11 +4464,12 @@ def _reminder_continue(pending, question, user_context=None):
                 return {
                     "handled": True,
                     "answer": (
-                        "Your reminder has been created successfully.\n\n"
+                        "Your reminder schedule has been saved successfully.\n\n"
                         f"Reminder ID: {reminder.get('reminder_id')}\n"
                         f"Reminder: {reminder.get('reminder_text')}\n"
-                        f"Time: {reminder.get('reminder_time_text')}\n\n"
-                        "It has also been added to your notifications."
+                        f"Scheduled for: {reminder.get('display_time')} ({reminder.get('timezone')})\n\n"
+                        "Important: this codebase does not yet have the background reminder worker that sends the notification at the scheduled time. "
+                        "The schedule is stored correctly and will become active when that worker is connected."
                     )
                 }
 
@@ -3930,9 +4477,9 @@ def _reminder_continue(pending, question, user_context=None):
                 return {
                     "handled": True,
                     "answer": (
-                        "I could not create the reminder right now.\n\n"
-                        f"Reason: {str(error)}\n\n"
-                        "Please try again."
+                        "I could not save the reminder right now.\n\n"
+                        f"Reason: {_safe_action_error(error, 'The reminder could not be saved safely.')}\n\n"
+                        "Please review the reminder details and try again."
                     )
                 }
 
@@ -4195,11 +4742,13 @@ def _attendance_employee(user_context=None):
 def _attendance_tenant_id(employee=None, user_context=None):
     employee = employee or {}
 
-    return (
-        employee.get("tenant_id")
-        or _tenant_id(user_context)
-        or "sds"
-    )
+    tenant_id = employee.get("tenant_id") or _tenant_id(user_context)
+    if not tenant_id:
+        raise RuntimeError(
+            "Your organisation context could not be verified for attendance. Please sign in again."
+        )
+
+    return tenant_id
 
 
 def _attendance_employee_org_name(employee):
@@ -4712,6 +5261,10 @@ def _submit_ai_check_out(data=None, user_context=None):
 
 
 def _attendance_start(action_type, question="", user_context=None):
+    access_error = _action_access_error(action_type, user_context)
+    if access_error:
+        return {"handled": True, "answer": access_error}
+
     clean_question = _strip_voice_instruction_suffix(question)
     now = _attendance_now_local()
     db = get_db()
@@ -4774,7 +5327,10 @@ def _attendance_start(action_type, question="", user_context=None):
         except Exception as error:
             return {
                 "handled": True,
-                "answer": str(error)
+                "answer": _safe_action_error(
+                    error,
+                    "I could not complete the attendance action safely. Please try again."
+                )
             }
 
     if action_type == "attendance_check_out":
@@ -4807,7 +5363,10 @@ def _attendance_start(action_type, question="", user_context=None):
         except Exception as error:
             return {
                 "handled": True,
-                "answer": str(error)
+                "answer": _safe_action_error(
+                    error,
+                    "I could not complete the attendance action safely. Please try again."
+                )
             }
 
     return {
@@ -4851,7 +5410,10 @@ def _attendance_continue(pending, question, user_context=None):
 
             return {
                 "handled": True,
-                "answer": str(error)
+                "answer": _safe_action_error(
+                    error,
+                    "I could not complete the attendance action safely. Please try again."
+                )
             }
 
     if action_type == "attendance_check_out":
@@ -4870,7 +5432,10 @@ def _attendance_continue(pending, question, user_context=None):
 
             return {
                 "handled": True,
-                "answer": str(error)
+                "answer": _safe_action_error(
+                    error,
+                    "I could not complete the attendance action safely. Please try again."
+                )
             }
 
     clear_pending_action(user_context)
@@ -4934,7 +5499,7 @@ def _looks_like_new_normal_question(question):
     return is_question_like and any(keyword in text for keyword in normal_question_keywords)
 
 
-def handle_guided_action(question, user_context=None):
+def _handle_guided_action_legacy(question, user_context=None):
     """
     Handles multi-turn guided actions.
     This function must not trap every normal chatbot question inside an old action.
@@ -5057,3 +5622,91 @@ def handle_guided_action(question, user_context=None):
         "handled": False,
         "answer": "",
     }
+
+def handle_guided_action(question, user_context=None):
+    """Public Saya action-engine entrypoint with lazy module-plugin dispatch."""
+    _ensure_saya_action_plugins_loaded()
+    clean_question = _strip_voice_instruction_suffix(question)
+    pending_before = get_pending_action(user_context)
+    pending_action = _safe_str((pending_before or {}).get("action_type"))
+
+    # Continue a registered plugin action deterministically.  Short replies such
+    # as "yes", dates, names and reasons must not be sent through a fresh LLM
+    # classification while a guided workflow is already active.
+    if pending_before and pending_action in SAYA_ACTION_HANDLERS:
+        normalized = _lower(clean_question)
+        cancel_phrases = {
+            "cancel", "stop", "cancel this", "stop this", "clear action",
+            "forget this", "exit", "exit action", "never mind", "nevermind",
+        }
+        if normalized in cancel_phrases:
+            clear_pending_action(user_context)
+            return _decorate_action_result(
+                {"handled": True, "answer": "The pending Saya action has been cancelled."},
+                action_type=pending_action,
+                status="cancelled",
+            )
+        return _run_plugin_continue(pending_before, clean_question, user_context=user_context)
+
+    intent = detect_action_intent(clean_question)
+
+    # New module-specific action/read capability.
+    if intent in SAYA_ACTION_HANDLERS:
+        return _run_plugin_start(intent, clean_question, user_context=user_context)
+
+    effective_action = intent or pending_action
+    if effective_action and effective_action != "cancel":
+        access_error = _action_access_error(effective_action, user_context)
+        if access_error:
+            if pending_before:
+                clear_pending_action(user_context)
+            return _decorate_action_result(
+                {"handled": True, "answer": access_error},
+                action_type=effective_action,
+                status="blocked",
+            )
+
+    # Preserve all proven Employee legacy flows (leave, attendance, meeting,
+    # reminder) exactly as before.
+    result = _handle_guided_action_legacy(question, user_context=user_context)
+
+    pending_after = get_pending_action(user_context)
+    action_after = _safe_str((pending_after or {}).get("action_type"))
+    step_after = _safe_str((pending_after or {}).get("current_step"))
+    resolved_action = action_after or ("" if intent == "cancel" else effective_action)
+
+    if not result.get("handled"):
+        return _decorate_action_result(
+            result,
+            action_type=resolved_action,
+            step=step_after,
+            status="not_handled",
+        )
+
+    answer_text = _lower(result.get("answer"))
+    if intent == "cancel" or "cancelled" in answer_text or "canceled" in answer_text:
+        status = "cancelled"
+    elif pending_after:
+        status = "awaiting_confirmation" if step_after == "confirm" else "collecting"
+    else:
+        completion_markers = (
+            "successfully", "has been scheduled", "has been submitted",
+            "request has been sent", "checked in", "checked out",
+            "already checked in", "already checked out", "schedule has been saved",
+        )
+        status = (
+            "completed"
+            if resolved_action and any(marker in answer_text for marker in completion_markers)
+            else "handled"
+        )
+
+    return _decorate_action_result(
+        result,
+        action_type=resolved_action,
+        step=step_after,
+        status=status,
+    )
+
+
+# Load plugins lazily on the first action request.  Do not import them eagerly
+# during Flask module discovery because each plugin imports this core service.

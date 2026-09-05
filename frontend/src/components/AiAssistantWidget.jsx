@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  api,
   askAiAssistant,
   checkInAttendance,
   currentEmployee,
@@ -373,9 +374,35 @@ function buildWelcomeMessage(context = {}) {
   return {
     role: "assistant",
     text:
-      `Hi, I am ${ASSISTANT_NAME}, your ${PRODUCT_NAME} Assistant. ` +
-      `I will guide you according to your ${roleLabel} access and ${subscriptionLabel}. ` +
-      "Ask me for exact steps, workflow explanations, live information available to your login, or help using any module you are permitted to access.",
+      `Hello, I am ${ASSISTANT_NAME}, your ${PRODUCT_NAME} Assistant. ` +
+      `I will assist you according to your verified ${roleLabel} access and ${subscriptionLabel}. ` +
+      "You can ask for HRMS guidance, complete workflows, authorised live information, or help with actions available to your login.",
+  };
+}
+
+function buildSayaRequestMessage(message, options = {}) {
+  const cleanMessage = String(message || "").trim();
+
+  if (!cleanMessage || !options?.voiceInput) {
+    return cleanMessage;
+  }
+
+  // Backward-compatible voice marker for the current backend service.
+  // Unlike the previous instruction, this never asks Saya to shorten or
+  // truncate the answer. File 7 will send response_mode=voice explicitly.
+  return (
+    `${cleanMessage}\n\n` +
+    "Because this is a voice conversation, respond naturally, professionally, and completely. " +
+    "Be concise where appropriate, but do not omit required information or stop mid-sentence."
+  );
+}
+
+function buildSayaRequestOptions(options = {}) {
+  return {
+    responseMode: options?.voiceInput ? "voice" : "text",
+    // Keep enough client-side time for File 2's provider continuation when a
+    // complete answer needs more than one model generation.
+    timeoutMs: options?.voiceInput ? 35000 : 35000,
   };
 }
 
@@ -878,10 +905,69 @@ function getFallbackVoiceContext() {
   };
 }
 
+function humanizeSayaActionValue(value = "") {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isTerminalSayaActionStatus(status = "") {
+  return [
+    "completed",
+    "handled",
+    "cancelled",
+    "canceled",
+    "failed",
+    "blocked",
+    "rejected",
+    "approved",
+    "submitted",
+    "created",
+    "delivered",
+  ].includes(String(status || "").trim().toLowerCase());
+}
+
+function getStructuredActionFromMessages(messages = []) {
+  const lastAssistant = [...messages]
+    .reverse()
+    .find((item) => item?.role === "assistant" && item?.meta?.action?.action);
+
+  return lastAssistant?.meta?.action || {};
+}
+
+function buildStructuredQuickReplies(messages, loading) {
+  if (loading) return [];
+
+  const action = getStructuredActionFromMessages(messages);
+  const replies = [];
+  const step = String(action?.step || "").trim().toLowerCase();
+  const status = String(action?.status || "").trim().toLowerCase();
+
+  if (action?.requires_confirmation || step === "confirm" || status === "awaiting_confirmation") {
+    replies.push("confirm", "cancel");
+  } else if (action?.action && !isTerminalSayaActionStatus(status)) {
+    replies.push("cancel");
+  }
+
+  return replies;
+}
+
 function detectActionMode(messages) {
   const lastAssistant = [...messages]
     .reverse()
     .find((item) => item.role === "assistant");
+
+  const structuredAction = lastAssistant?.meta?.action || {};
+  const structuredStatus = String(structuredAction?.status || "").trim().toLowerCase();
+
+  if (structuredAction?.action && !isTerminalSayaActionStatus(structuredStatus)) {
+    return (
+      String(structuredAction?.label || "").trim() ||
+      `${humanizeSayaActionValue(structuredAction.action)} Assistant`
+    );
+  }
 
   const text = String(lastAssistant?.text || "")
     .toLowerCase()
@@ -1025,6 +1111,8 @@ export default function AiAssistantWidget() {
   const [lastVoiceTranscript, setLastVoiceTranscript] = useState("");
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [mobileReplayText, setMobileReplayText] = useState("");
+  const [backendVoiceSession, setBackendVoiceSession] = useState(null);
+  const [voiceSessionBusy, setVoiceSessionBusy] = useState(false);
 
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -1073,6 +1161,9 @@ export default function AiAssistantWidget() {
   const lastMobileGeneratedTtsTextRef = useRef("");
   const lastMobileGeneratedTtsAtRef = useRef(0);
   const lastWakeGreetingTtsAtRef = useRef(0);
+  const backendVoiceSessionRef = useRef(null);
+  const voiceClientSessionIdRef = useRef("");
+  const voiceTurnSequenceRef = useRef(0);
 
   const hasStartedChat = useMemo(
     () => messages.some((item) => item.role === "user"),
@@ -1103,10 +1194,11 @@ export default function AiAssistantWidget() {
     [assistantContext]
   );
   const actionMode = useMemo(() => detectActionMode(messages), [messages]);
-  const quickReplies = useMemo(
-    () => buildQuickReplies(messages, loading),
-    [messages, loading]
-  );
+  const quickReplies = useMemo(() => {
+    const structured = buildStructuredQuickReplies(messages, loading);
+    const legacy = buildQuickReplies(messages, loading);
+    return uniqueValues([...structured, ...legacy]).slice(0, 6);
+  }, [messages, loading]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -1123,6 +1215,10 @@ export default function AiAssistantWidget() {
   useEffect(() => {
     voiceContextRef.current = voiceContext;
   }, [voiceContext]);
+
+  useEffect(() => {
+    backendVoiceSessionRef.current = backendVoiceSession;
+  }, [backendVoiceSession]);
 
   useEffect(() => {
     if (!open) return;
@@ -1819,6 +1915,12 @@ export default function AiAssistantWidget() {
       return;
     }
 
+    if (isSpeakingRef.current) {
+      await interruptBackendVoiceSession();
+    }
+
+    void ensureBackendVoiceSession().catch(() => {});
+
     stopGeminiRecording({ stopLoop: true });
     cleanupCurrentAudio();
 
@@ -1938,6 +2040,7 @@ export default function AiAssistantWidget() {
         speakAnswer: true,
         skipWakeWordCheck: true,
         voiceInput: true,
+        wakeWordDetected: true,
       });
       return;
     }
@@ -2368,6 +2471,228 @@ export default function AiAssistantWidget() {
     }
   }
 
+  function updateBackendVoiceSession(session) {
+    if (!session || typeof session !== "object") return;
+    backendVoiceSessionRef.current = session;
+    setBackendVoiceSession(session);
+  }
+
+  function getVoiceClientSessionId() {
+    if (voiceClientSessionIdRef.current) {
+      return voiceClientSessionIdRef.current;
+    }
+
+    let value = "";
+
+    try {
+      value = window?.crypto?.randomUUID?.() || "";
+    } catch {
+      value = "";
+    }
+
+    if (!value) {
+      value = `saya-web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    voiceClientSessionIdRef.current = value;
+    return value;
+  }
+
+  async function ensureBackendVoiceSession({ forceNew = false } = {}) {
+    const existing = backendVoiceSessionRef.current || {};
+    const existingStatus = String(existing?.status || "").toLowerCase();
+
+    if (
+      !forceNew &&
+      existing?.session_id &&
+      ["active", "interrupted"].includes(existingStatus)
+    ) {
+      return existing;
+    }
+
+    setVoiceSessionBusy(true);
+
+    try {
+      const result = await api("/ai-assistant/voice-session/start", {
+        method: "POST",
+        timeoutMs: 20000,
+        body: JSON.stringify({
+          language: "en-IN",
+          close_other_sessions: true,
+          client_session_id: getVoiceClientSessionId(),
+          device_metadata: {
+            client: "ai_assistant_widget",
+            mobile: isMobileBrowser(),
+          },
+        }),
+      });
+
+      const session = result?.voice_session || {};
+      updateBackendVoiceSession(session);
+      voiceTurnSequenceRef.current = 0;
+      return session;
+    } finally {
+      setVoiceSessionBusy(false);
+    }
+  }
+
+  async function restartBackendVoiceSession() {
+    const session = backendVoiceSessionRef.current || {};
+
+    if (!session?.session_id) {
+      const created = await ensureBackendVoiceSession({ forceNew: true });
+      setSiriStatus("Voice conversation restarted. Speak your next command.");
+      return created;
+    }
+
+    setVoiceSessionBusy(true);
+
+    try {
+      const result = await api(
+        `/ai-assistant/voice-session/${encodeURIComponent(session.session_id)}/restart`,
+        {
+          method: "POST",
+          timeoutMs: 15000,
+          body: JSON.stringify({}),
+        }
+      );
+      const updated = result?.voice_session || {};
+      updateBackendVoiceSession(updated);
+      voiceTurnSequenceRef.current = 0;
+      voiceConversationModeRef.current = true;
+      setSiriStatus("Voice conversation restarted. Speak your next command.");
+      setVoiceHint("Saya is ready for a new voice request.");
+      return updated;
+    } catch (error) {
+      setVoiceError(error?.message || "Saya could not restart the voice session.");
+      return {};
+    } finally {
+      setVoiceSessionBusy(false);
+    }
+  }
+
+  async function interruptBackendVoiceSession() {
+    const session = backendVoiceSessionRef.current || {};
+    if (!session?.session_id) return {};
+
+    try {
+      const result = await api(
+        `/ai-assistant/voice-session/${encodeURIComponent(session.session_id)}/interrupt`,
+        {
+          method: "POST",
+          timeoutMs: 10000,
+          body: JSON.stringify({}),
+        }
+      );
+      const updated = result?.voice_session || {};
+      updateBackendVoiceSession(updated);
+      return updated;
+    } catch {
+      return {};
+    }
+  }
+
+  async function closeBackendVoiceSession(reason = "client_closed") {
+    const session = backendVoiceSessionRef.current || {};
+    if (!session?.session_id) {
+      setBackendVoiceSession(null);
+      backendVoiceSessionRef.current = null;
+      return;
+    }
+
+    setVoiceSessionBusy(true);
+
+    try {
+      await api(
+        `/ai-assistant/voice-session/${encodeURIComponent(session.session_id)}/close`,
+        {
+          method: "POST",
+          timeoutMs: 10000,
+          body: JSON.stringify({ reason }),
+        }
+      );
+    } catch {
+      // Closing a voice session is best-effort and must never block the UI.
+    } finally {
+      setBackendVoiceSession(null);
+      backendVoiceSessionRef.current = null;
+      voiceTurnSequenceRef.current = 0;
+      setVoiceSessionBusy(false);
+    }
+  }
+
+  async function sendVoiceSayaRequest(cleanMessage, historyBeforeQuestion, options = {}) {
+    const session = await ensureBackendVoiceSession();
+    const attendanceAction = detectAttendanceVoiceAction(cleanMessage);
+    let attendanceLocation = {
+      available: false,
+      skipped: true,
+      reason: "not_attendance_command",
+    };
+
+    if (attendanceAction) {
+      const captured = await getBrowserAttendanceLocation();
+      attendanceLocation = {
+        ...captured,
+        available: true,
+      };
+    }
+
+    voiceTurnSequenceRef.current += 1;
+    const clientTurnId = `${getVoiceClientSessionId()}-${voiceTurnSequenceRef.current}`;
+    const safeHistory = Array.isArray(historyBeforeQuestion)
+      ? historyBeforeQuestion
+          .slice(-6)
+          .map((item) => ({ role: item?.role, text: item?.text || item?.content || "" }))
+          .filter((item) => item.role && item.text)
+      : [];
+
+    const response = await api("/ai-assistant/chat", {
+      method: "POST",
+      timeoutMs: 90000,
+      body: JSON.stringify({
+        message: cleanMessage,
+        history: safeHistory,
+        response_mode: "voice",
+        voice_session_id: session?.session_id || "",
+        client_session_id: getVoiceClientSessionId(),
+        client_turn_id: clientTurnId,
+        language: "en-IN",
+        wake_word_detected: Boolean(options?.wakeWordDetected),
+        interrupted_previous_speech: Boolean(options?.interruptedPreviousSpeech),
+        client_context: {
+          response_mode: "voice",
+          attendance_location: attendanceLocation,
+          location: attendanceLocation,
+          latitude: attendanceLocation?.latitude,
+          longitude: attendanceLocation?.longitude,
+          accuracy: attendanceLocation?.accuracy,
+          source: "frontend_ai_assistant",
+        },
+        attendance_location: attendanceLocation,
+        location: attendanceLocation,
+        latitude: attendanceLocation?.latitude,
+        longitude: attendanceLocation?.longitude,
+        accuracy: attendanceLocation?.accuracy,
+      }),
+    });
+
+    if (response?.voice_session) {
+      updateBackendVoiceSession(response.voice_session);
+    }
+
+    return {
+      ...response,
+      answer: String(response?.answer || response?.message || "").trim(),
+      response: {
+        ...(response?.response || {}),
+        mode: "voice",
+        style: response?.response?.style || "professional",
+        complete_expected: response?.response?.complete_expected !== false,
+      },
+    };
+  }
+
   async function sendMessage(manualMessage, options = {}) {
     const cleanMessage = String(manualMessage ?? message ?? "").trim();
 
@@ -2386,13 +2711,9 @@ export default function AiAssistantWidget() {
       return;
     }
 
-    if (
-      pendingAttendanceActionRef.current ||
-      detectAttendanceVoiceAction(cleanMessage)
-    ) {
-      await handleAttendanceActionMessage(cleanMessage, options);
-      return;
-    }
+    // Attendance commands now go through the same backend Saya action engine as
+    // every other HRMS action. The API client still collects GPS for recognised
+    // attendance commands, while backend validation remains the source of truth.
 
     const historyBeforeQuestion = [...messagesRef.current];
 
@@ -2411,11 +2732,16 @@ export default function AiAssistantWidget() {
     loadingRef.current = true;
 
     try {
-      const aiMessage = options?.voiceInput
-        ? `${cleanMessage}\n\nReply very briefly in 1-2 short sentences because this is a voice conversation.`
-        : cleanMessage;
+      const aiMessage = buildSayaRequestMessage(cleanMessage, options);
+      const aiRequestOptions = buildSayaRequestOptions(options);
 
-      const response = await askAiAssistant(aiMessage, historyBeforeQuestion);
+      const response = options?.voiceInput
+        ? await sendVoiceSayaRequest(cleanMessage, historyBeforeQuestion, options)
+        : await askAiAssistant(
+            aiMessage,
+            historyBeforeQuestion,
+            aiRequestOptions
+          );
 
       const responseContext = {
         ...(response?.context || {}),
@@ -2448,6 +2774,19 @@ export default function AiAssistantWidget() {
         {
           role: "assistant",
           text: answer,
+          meta: {
+            response_mode:
+              response?.response?.mode ||
+              aiRequestOptions.responseMode ||
+              "text",
+            response_style: response?.response?.style || "professional",
+            complete_expected:
+              response?.response?.complete_expected !== false,
+            request_id: response?.request_id || "",
+            action: response?.action || {},
+            voice_session: response?.voice_session || {},
+            context: responseContext,
+          },
         },
       ]);
 
@@ -2464,7 +2803,24 @@ export default function AiAssistantWidget() {
           },
         ];
 
-        voiceConversationModeRef.current = shouldKeepVoiceConversation(projectedMessages, answer);
+        const serverSession = response?.voice_session || {};
+        const serverAction = response?.action || {};
+        const serverShouldEnd = Boolean(response?.response?.should_end);
+        const serverAwaitingReply = Boolean(serverSession?.awaiting_user_reply);
+        const actionStillActive = Boolean(
+          serverAction?.action &&
+          !isTerminalSayaActionStatus(serverAction?.status)
+        );
+
+        voiceConversationModeRef.current = !serverShouldEnd && Boolean(
+          serverAwaitingReply ||
+          actionStillActive ||
+          shouldKeepVoiceConversation(projectedMessages, answer)
+        );
+
+        if (serverShouldEnd) {
+          void closeBackendVoiceSession("server_requested_end");
+        }
       }
 
       if (options?.speakAnswer) {
@@ -2486,7 +2842,7 @@ export default function AiAssistantWidget() {
     } catch (error) {
       const errorMessage =
         error?.message ||
-        `${ASSISTANT_NAME} could not respond. Please check the backend and try again.`;
+        `${ASSISTANT_NAME} could not complete this request right now. Please try again. If the issue continues, contact your HRMS administrator or IT support team.`;
 
       if (options?.voiceInput) {
         setSiriStatus(errorMessage);
@@ -3492,6 +3848,7 @@ export default function AiAssistantWidget() {
   }
 
   function clearChat() {
+    void closeBackendVoiceSession("chat_cleared");
     stopVoiceSession();
     stopVoiceMeter();
     voiceQuotaDisabledUntilRef.current = 0;
@@ -3504,6 +3861,31 @@ export default function AiAssistantWidget() {
     setVoiceError("");
     setLoading(false);
     loadingRef.current = false;
+  }
+
+  function handlePanelClose() {
+    void closeBackendVoiceSession("panel_closed");
+    stopVoiceSession();
+    setOpen(false);
+  }
+
+  async function handleVoiceSessionRestartClick() {
+    stopVoiceSession();
+    await restartBackendVoiceSession();
+    setSayaActive(true);
+    setAutoWakeMode(true);
+    voiceConversationModeRef.current = true;
+    oneShotVoiceModeRef.current = true;
+    lastVoiceActivationAtRef.current = Date.now();
+    geminiLoopActiveRef.current = true;
+    beginListening();
+  }
+
+  function handleVoiceSessionStopClick() {
+    void closeBackendVoiceSession("user_stopped_voice");
+    stopVoiceSession();
+    setSiriStatus("Voice conversation ended. Tap Saya whenever you need me again.");
+    setVoiceHint("");
   }
 
   return (
@@ -3530,7 +3912,7 @@ export default function AiAssistantWidget() {
             <button
               type="button"
               className="ai-circle-action"
-              onClick={() => setOpen(false)}
+              onClick={handlePanelClose}
               title="Close"
             >
               <X size={18} />
@@ -3624,6 +4006,31 @@ export default function AiAssistantWidget() {
                   </>
                 )}
               </div>
+
+              {backendVoiceSession?.session_id && (
+                <div className="ai-voice-session-controls" aria-label="Saya voice conversation controls">
+                  <span className={`ai-session-state ${backendVoiceSession?.status || "active"}`}>
+                    {backendVoiceSession?.awaiting_user_reply
+                      ? "Waiting for your reply"
+                      : `Voice session · ${humanizeSayaActionValue(backendVoiceSession?.status || "active")}`}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={voiceSessionBusy || loading}
+                    onClick={handleVoiceSessionRestartClick}
+                  >
+                    Restart
+                  </button>
+                  <button
+                    type="button"
+                    disabled={voiceSessionBusy}
+                    onClick={handleVoiceSessionStopClick}
+                    className="stop"
+                  >
+                    Stop voice
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -3667,6 +4074,42 @@ export default function AiAssistantWidget() {
                         <div className={`ai-message-bubble ${isUser ? "user" : "assistant"}`}>
                           {item.text}
                         </div>
+
+                        {!isUser && item?.meta?.action?.action && (
+                          <div className={`ai-structured-action-card ${
+                            isTerminalSayaActionStatus(item.meta.action.status) ? "terminal" : "active"
+                          }`}>
+                            <div className="ai-action-card-head">
+                              <strong>
+                                {item.meta.action.label || humanizeSayaActionValue(item.meta.action.action)}
+                              </strong>
+                              <span>{humanizeSayaActionValue(item.meta.action.status || "in progress")}</span>
+                            </div>
+                            {item.meta.action.step && (
+                              <small>Current step: {humanizeSayaActionValue(item.meta.action.step)}</small>
+                            )}
+                            {item.meta.action.requires_confirmation && (
+                              <div className="ai-action-card-controls">
+                                <button
+                                  type="button"
+                                  disabled={loading}
+                                  onClick={() => sendMessage("confirm")}
+                                  className="confirm"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={loading}
+                                  onClick={() => sendMessage("cancel")}
+                                  className="cancel"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {!isUser && index > 0 && (
                           <div className="ai-message-actions">
@@ -4240,6 +4683,125 @@ export default function AiAssistantWidget() {
           color: #64748b;
           font-size: 11px;
           font-weight: 700;
+        }
+
+        .ai-voice-session-controls {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+        }
+
+        .ai-voice-session-controls .ai-session-state {
+          font-size: 11px;
+          font-weight: 700;
+          color: #52645a;
+          background: rgba(255, 255, 255, 0.78);
+          border: 1px solid rgba(57, 126, 81, 0.14);
+          border-radius: 999px;
+          padding: 7px 10px;
+        }
+
+        .ai-voice-session-controls button {
+          border: 1px solid rgba(57, 126, 81, 0.22);
+          background: rgba(255, 255, 255, 0.9);
+          color: #2b7346;
+          border-radius: 10px;
+          padding: 7px 10px;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .ai-voice-session-controls button.stop {
+          color: #8d3a3a;
+          border-color: rgba(141, 58, 58, 0.2);
+        }
+
+        .ai-voice-session-controls button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .ai-structured-action-card {
+          margin-top: 8px;
+          width: min(100%, 520px);
+          border: 1px solid #dbe9df;
+          background: #f8fbf9;
+          border-radius: 14px;
+          padding: 11px 12px;
+          box-shadow: 0 7px 18px rgba(26, 72, 43, 0.045);
+        }
+
+        .ai-structured-action-card.terminal {
+          background: #fbfcfb;
+          border-color: #e5ebe7;
+        }
+
+        .ai-action-card-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .ai-action-card-head strong {
+          color: #17251d;
+          font-size: 12px;
+          font-weight: 850;
+        }
+
+        .ai-action-card-head span {
+          color: #397e51;
+          background: #edf6f0;
+          border-radius: 999px;
+          padding: 4px 7px;
+          font-size: 9px;
+          line-height: 1;
+          font-weight: 850;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          white-space: nowrap;
+        }
+
+        .ai-structured-action-card small {
+          display: block;
+          margin-top: 7px;
+          color: #6e7f74;
+          font-size: 10px;
+          font-weight: 650;
+        }
+
+        .ai-action-card-controls {
+          display: flex;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .ai-action-card-controls button {
+          border: 0;
+          border-radius: 10px;
+          padding: 8px 12px;
+          font-size: 11px;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .ai-action-card-controls button.confirm {
+          background: #397e51;
+          color: #fff;
+        }
+
+        .ai-action-card-controls button.cancel {
+          background: #eef2ef;
+          color: #4f6257;
+        }
+
+        .ai-action-card-controls button:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
         }
 
         .ai-action-mode-strip {

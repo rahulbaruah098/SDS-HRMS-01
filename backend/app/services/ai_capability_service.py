@@ -17,7 +17,7 @@ from app.ai_knowledge.role_profiles import (
 )
 
 
-SAYA_CAPABILITY_SERVICE_VERSION = "2026-09-03-PROGRESSIVE-DISCLOSURE-R1"
+SAYA_CAPABILITY_SERVICE_VERSION = "2026-09-04-TENANT-SAFE-LIVE-CONTEXT-R2"
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -135,42 +135,141 @@ def _tenant_query(user_context=None):
     }
 
 
+
+
+def _private_live_context_unavailable(title, reason="scope"):
+    """Return a non-sensitive capability block when live scope cannot be proven."""
+
+    if reason == "tenant":
+        message = (
+            "Saya could not establish the current tenant scope for this private HRMS data. "
+            "No live record was retrieved."
+        )
+    elif reason == "identity":
+        message = (
+            "Saya could not securely map this login to an employee identity for this private HRMS data. "
+            "No live record was retrieved."
+        )
+    else:
+        message = (
+            "Saya could not establish a sufficiently narrow access scope for this private HRMS data. "
+            "No live record was retrieved."
+        )
+
+    return {
+        "title": title,
+        "content": message,
+    }
+
+
+def _private_person_values(user_context=None):
+    employee_values = _employee_values(user_context)
+    user_values = _user_values(user_context)
+    return employee_values + [
+        item for item in user_values
+        if item not in employee_values
+    ]
+
+
+def _normalise_module_list(modules):
+    if isinstance(modules, str):
+        modules = [item.strip() for item in modules.split(",") if item.strip()]
+
+    if not isinstance(modules, list):
+        return []
+
+    return sorted({
+        _lower(item).replace("-", "_").replace(" ", "_")
+        for item in modules
+        if _safe_str(item)
+    })
+
+
 def _safe_doc(doc):
+    """Return a recursively sanitized copy of an HRMS document for Saya."""
+
     if not doc:
         return {}
 
-    cleaned = {}
-
-    blocked_keys = {
+    blocked_exact_keys = {
         "password",
         "password_hash",
+        "hashed_password",
         "secret",
-        "token",
+        "client_secret",
+        "private_key",
+        "private_key_id",
         "jwt",
+        "token",
+        "auth_token",
         "api_key",
         "refresh_token",
         "reset_token",
+        "access_token",
+        "id_token",
+        "otp",
+        "otp_code",
+        "otp_hash",
+        "razorpay_signature",
+        "payment_signature",
+        "firebase_private_key",
+        "service_account",
     }
 
-    for key, value in dict(doc).items():
-        if key in blocked_keys:
-            continue
+    blocked_key_fragments = (
+        "password",
+        "secret",
+        "private_key",
+        "api_key",
+        "refresh_token",
+        "reset_token",
+        "access_token",
+        "auth_token",
+        "otp_",
+        "_otp",
+        "signature",
+    )
 
-        if key == "_id":
-            cleaned["id"] = str(value)
-            continue
+    def sanitize(value, key=""):
+        key_lower = _safe_str(key).lower()
+
+        if key_lower in blocked_exact_keys:
+            return None, False
+
+        if any(fragment in key_lower for fragment in blocked_key_fragments):
+            return None, False
 
         if isinstance(value, ObjectId):
-            cleaned[key] = str(value)
-            continue
+            return str(value), True
 
         if isinstance(value, datetime):
-            cleaned[key] = value.isoformat()
-            continue
+            return value.isoformat(), True
 
-        cleaned[key] = value
+        if isinstance(value, dict):
+            cleaned_dict = {}
+            for nested_key, nested_value in value.items():
+                safe_value, include = sanitize(nested_value, nested_key)
+                if not include:
+                    continue
+                output_key = "id" if nested_key == "_id" else nested_key
+                cleaned_dict[output_key] = safe_value
+                if nested_key == "_id":
+                    cleaned_dict["_id"] = safe_value
+            return cleaned_dict, True
 
-    return cleaned
+        if isinstance(value, (list, tuple, set)):
+            cleaned_items = []
+            for item in value:
+                safe_value, include = sanitize(item, key)
+                if include:
+                    cleaned_items.append(safe_value)
+            return cleaned_items, True
+
+        return value, True
+
+    cleaned, included = sanitize(dict(doc))
+    return cleaned if included and isinstance(cleaned, dict) else {}
+
 
 
 def _normalise_match_text(value):
@@ -515,16 +614,12 @@ def get_tenant_profile_context(user_context=None):
         )
     }
 
+
 def get_tenant_weather_context(user_context=None):
     """
     Weather source:
     1. WEATHER_LAT and WEATHER_LON from backend .env
     2. Tenant/company document latitude/longitude if present
-
-    Add in backend .env if needed:
-    WEATHER_CITY=Guwahati
-    WEATHER_LAT=26.1445
-    WEATHER_LON=91.7362
     """
 
     db = get_db()
@@ -535,7 +630,6 @@ def get_tenant_weather_context(user_context=None):
 
     if not lat or not lon:
         tenant_values = _tenant_values(user_context)
-
         tenant_doc = None
 
         if tenant_values:
@@ -543,6 +637,7 @@ def get_tenant_weather_context(user_context=None):
                 db.companies.find_one({"_id": {"$in": tenant_values}})
                 or db.companies.find_one({"tenant_id": {"$in": tenant_values}})
                 or db.tenants.find_one({"_id": {"$in": tenant_values}})
+                or db.tenants.find_one({"tenant_id": {"$in": tenant_values}})
             )
 
         if tenant_doc:
@@ -595,37 +690,43 @@ def get_tenant_weather_context(user_context=None):
             )
         }
 
-    except Exception as error:
+    except Exception:
         return {
             "title": "Weather",
-            "content": f"Weather could not be fetched right now. Reason: {str(error)}"
+            "content": "Weather could not be fetched right now. Please try again shortly."
         }
+
+
 
 
 def get_notifications_context(user_context=None, limit=8):
     db = get_db()
 
     tenant_filter = _tenant_query(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Notifications", reason="tenant")
+
     user_values = _user_values(user_context)
 
-    query_parts = []
-
-    if tenant_filter:
-        query_parts.append(tenant_filter)
+    recipient_or = [
+        {"audience": "all"},
+        {"target": "all"},
+    ]
 
     if user_values:
-        query_parts.append({
-            "$or": [
-                {"user_id": {"$in": user_values}},
-                {"recipient_id": {"$in": user_values}},
-                {"target_user_id": {"$in": user_values}},
-                {"created_for": {"$in": user_values}},
-                {"audience": "all"},
-                {"target": "all"},
-            ]
-        })
+        recipient_or.extend([
+            {"user_id": {"$in": user_values}},
+            {"recipient_id": {"$in": user_values}},
+            {"target_user_id": {"$in": user_values}},
+            {"created_for": {"$in": user_values}},
+        ])
 
-    query = {"$and": query_parts} if query_parts else {}
+    query = {
+        "$and": [
+            tenant_filter,
+            {"$or": recipient_or},
+        ]
+    }
 
     docs = list(
         db.notifications
@@ -655,34 +756,32 @@ def get_notifications_context(user_context=None, limit=8):
     }
 
 
+
+
 def get_leave_status_context(user_context=None, limit=5):
     db = get_db()
 
     tenant_filter = _tenant_query(user_context)
-    employee_values = _employee_values(user_context)
-    user_values = _user_values(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Leave Status", reason="tenant")
 
-    person_values = employee_values + [
-        item for item in user_values
-        if item not in employee_values
-    ]
+    person_values = _private_person_values(user_context)
+    if not person_values:
+        return _private_live_context_unavailable("Leave Status", reason="identity")
 
-    query_parts = []
-
-    if tenant_filter:
-        query_parts.append(tenant_filter)
-
-    if person_values:
-        query_parts.append({
-            "$or": [
-                {"employee_id": {"$in": person_values}},
-                {"user_id": {"$in": person_values}},
-                {"created_by": {"$in": person_values}},
-                {"applicant_id": {"$in": person_values}},
-            ]
-        })
-
-    query = {"$and": query_parts} if query_parts else {}
+    query = {
+        "$and": [
+            tenant_filter,
+            {
+                "$or": [
+                    {"employee_id": {"$in": person_values}},
+                    {"user_id": {"$in": person_values}},
+                    {"created_by": {"$in": person_values}},
+                    {"applicant_id": {"$in": person_values}},
+                ]
+            },
+        ]
+    }
 
     docs = list(
         db.leave_requests
@@ -707,86 +806,39 @@ def get_leave_status_context(user_context=None, limit=5):
             or "Leave"
         )
 
-        status = (
-            doc.get("status")
-            or doc.get("approval_status")
-            or "Pending"
-        )
-
-        start_date = (
-            doc.get("start_date")
-            or doc.get("from_date")
-            or doc.get("date_from")
-            or ""
-        )
-
-        end_date = (
-            doc.get("end_date")
-            or doc.get("to_date")
-            or doc.get("date_to")
-            or ""
-        )
-
-        approval_stage = (
-            doc.get("approval_stage")
-            or doc.get("current_step")
-            or doc.get("pending_with_role")
-            or ""
-        )
-
-        pending_with_role = (
-            doc.get("pending_with_role")
-            or doc.get("current_step")
-            or ""
-        )
-
-        team_leader_status = (
-            doc.get("team_leader_status")
-            or doc.get("tl_status")
-            or doc.get("team_leader_approval_status")
-            or ""
-        )
-
-        reporting_officer_status = (
-            doc.get("reporting_officer_status")
-            or doc.get("ro_status")
-            or doc.get("reporting_officer_approval_status")
-            or ""
-        )
-
-        hr_status = (
-            doc.get("hr_status")
-            or doc.get("hr_approval_status")
-            or ""
-        )
-
+        status = doc.get("status") or doc.get("approval_status") or "Pending"
+        start_date = doc.get("start_date") or doc.get("from_date") or doc.get("date_from") or ""
+        end_date = doc.get("end_date") or doc.get("to_date") or doc.get("date_to") or ""
+        approval_stage = doc.get("approval_stage") or doc.get("current_step") or doc.get("pending_with_role") or ""
+        pending_with_role = doc.get("pending_with_role") or doc.get("current_step") or ""
+        team_leader_status = doc.get("team_leader_status") or doc.get("tl_status") or doc.get("team_leader_approval_status") or ""
+        reporting_officer_status = doc.get("reporting_officer_status") or doc.get("ro_status") or doc.get("reporting_officer_approval_status") or ""
+        hr_status = doc.get("hr_status") or doc.get("hr_approval_status") or ""
         approval_history = doc.get("approval_history") or []
 
         history_lines = []
-
         if isinstance(approval_history, list):
             for history in approval_history[-4:]:
                 if not isinstance(history, dict):
                     continue
-
                 action = history.get("action") or "updated"
                 history_status = history.get("status") or ""
                 by_name = history.get("by_name") or history.get("by_role") or ""
                 remark = history.get("remark") or ""
+                history_lines.append(f"{action} {history_status} by {by_name}. {remark}".strip())
 
-                history_lines.append(
-                    f"{action} {history_status} by {by_name}. {remark}".strip()
-                )
+        status_lower = _lower(status)
+        pending_lower = _lower(pending_with_role)
 
-        if status.lower() in ["approved", "final_approved", "completed"]:
+        if status_lower in ["approved", "final_approved", "completed"]:
             readable_position = "Your leave is approved."
-        elif status.lower() in ["rejected", "declined"]:
+        elif status_lower in ["rejected", "declined"]:
             readable_position = "Your leave is rejected."
-        elif pending_with_role in ["team_leader", "tl"]:
+        elif pending_lower in ["team_leader", "tl"]:
             readable_position = "Your leave is currently waiting for Team Leader approval."
-        elif pending_with_role in ["reporting_officer", "ro"]:
+        elif pending_lower in ["reporting_officer", "ro"]:
             readable_position = "Your leave is currently waiting for Reporting Officer approval."
-        elif pending_with_role in ["hr", "hr_admin", "hr_manager"]:
+        elif pending_lower in ["hr", "hr_admin", "hr_manager"]:
             readable_position = "Your leave is currently waiting for HR approval."
         elif approval_stage:
             readable_position = f"Current approval stage: {approval_stage}."
@@ -811,6 +863,7 @@ Recent Approval History: {" | ".join(history_lines) if history_lines else "No de
         "title": "Leave Status",
         "content": "\n\n".join(lines)
     }
+
 
 
 def _number_value(doc, keys, default=0):
@@ -930,21 +983,16 @@ def get_leave_balance_context(user_context=None):
     db = get_db()
 
     tenant_filter = _tenant_query(user_context)
-    employee_values = _employee_values(user_context)
-    user_values = _user_values(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Leave Balance", reason="tenant")
 
-    person_values = employee_values + [
-        item for item in user_values
-        if item not in employee_values
-    ]
+    person_values = _private_person_values(user_context)
+    if not person_values:
+        return _private_live_context_unavailable("Leave Balance", reason="identity")
 
-    query_parts = []
+    query_parts = [tenant_filter]
 
-    if tenant_filter:
-        query_parts.append(tenant_filter)
-
-    if person_values:
-        query_parts.append({
+    query_parts.append({
             "$or": [
                 {"employee_id": {"$in": person_values}},
                 {"user_id": {"$in": person_values}},
@@ -1063,18 +1111,16 @@ def get_assets_context(user_context=None, limit=20):
     db = get_db()
 
     tenant_filter = _tenant_query(user_context)
-    employee_values = _employee_values(user_context)
-    user_values = _user_values(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Assets", reason="tenant")
 
-    person_values = employee_values + [item for item in user_values if item not in employee_values]
+    person_values = _private_person_values(user_context)
+    if not person_values:
+        return _private_live_context_unavailable("Assets", reason="identity")
 
-    query_parts = []
+    query_parts = [tenant_filter]
 
-    if tenant_filter:
-        query_parts.append(tenant_filter)
-
-    if person_values:
-        query_parts.append({
+    query_parts.append({
             "$or": [
                 {"employee_id": {"$in": person_values}},
                 {"assigned_employee_id": {"$in": person_values}},
@@ -1117,10 +1163,12 @@ def get_attendance_summary_context(user_context=None, period="month"):
     start, end = _date_range(period)
 
     tenant_filter = _tenant_query(user_context)
-    employee_values = _employee_values(user_context)
-    user_values = _user_values(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable(f"Attendance Summary - {period}", reason="tenant")
 
-    person_values = employee_values + [item for item in user_values if item not in employee_values]
+    person_values = _private_person_values(user_context)
+    if not person_values:
+        return _private_live_context_unavailable(f"Attendance Summary - {period}", reason="identity")
 
     query_parts = [
         {
@@ -1132,16 +1180,13 @@ def get_attendance_summary_context(user_context=None, period="month"):
         }
     ]
 
-    if tenant_filter:
-        query_parts.append(tenant_filter)
-
-    if person_values:
-        query_parts.append({
-            "$or": [
-                {"employee_id": {"$in": person_values}},
-                {"user_id": {"$in": person_values}},
-            ]
-        })
+    query_parts.append(tenant_filter)
+    query_parts.append({
+        "$or": [
+            {"employee_id": {"$in": person_values}},
+            {"user_id": {"$in": person_values}},
+        ]
+    })
 
     query = {"$and": query_parts}
 
@@ -1195,10 +1240,12 @@ def get_performance_summary_context(user_context=None, period="month", limit=8):
     start, end = _date_range(period)
 
     tenant_filter = _tenant_query(user_context)
-    employee_values = _employee_values(user_context)
-    user_values = _user_values(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable(f"Performance Summary - {period}", reason="tenant")
 
-    person_values = employee_values + [item for item in user_values if item not in employee_values]
+    person_values = _private_person_values(user_context)
+    if not person_values:
+        return _private_live_context_unavailable(f"Performance Summary - {period}", reason="identity")
 
     query_parts = [
         {
@@ -1209,17 +1256,14 @@ def get_performance_summary_context(user_context=None, period="month", limit=8):
         }
     ]
 
-    if tenant_filter:
-        query_parts.append(tenant_filter)
-
-    if person_values:
-        query_parts.append({
-            "$or": [
-                {"employee_id": {"$in": person_values}},
-                {"user_id": {"$in": person_values}},
-                {"reviewee_id": {"$in": person_values}},
-            ]
-        })
+    query_parts.append(tenant_filter)
+    query_parts.append({
+        "$or": [
+            {"employee_id": {"$in": person_values}},
+            {"user_id": {"$in": person_values}},
+            {"reviewee_id": {"$in": person_values}},
+        ]
+    })
 
     docs = list(
         db.performance_reviews
@@ -1432,29 +1476,33 @@ def _person_lookup_or(values):
     return lookup_or
 
 
+
 def _lookup_current_employee(user_context=None):
+    """Resolve the current employee only inside the authenticated tenant."""
+
     db = get_db()
     values = _identity_values_from_doc(user_context=user_context)
 
     if not values:
         return None
 
+    tenant_filter = _tenant_query(user_context)
+    if not tenant_filter:
+        return None
+
+    lookup_or = _person_lookup_or(values)
+    if not lookup_or:
+        return None
+
     query_parts = [
+        tenant_filter,
         {"is_deleted": {"$ne": True}},
         {"deleted": {"$ne": True}},
-        {"$or": _person_lookup_or(values)},
+        {"$or": lookup_or},
     ]
 
-    tenant_filter = _tenant_query(user_context)
-
-    if tenant_filter:
-        scoped_parts = [tenant_filter] + query_parts
-        employee = db.employees.find_one({"$and": scoped_parts})
-
-        if employee:
-            return employee
-
     return db.employees.find_one({"$and": query_parts})
+
 
 
 def _department_match_query(department):
@@ -1576,30 +1624,29 @@ def _employee_brief(employee):
     return f"{name}{f' ({extra})' if extra else ''}"
 
 
+
 def _find_person_by_values(values, user_context=None):
+    """Resolve a related employee only inside the authenticated tenant."""
+
     values = _unique_values(values)
 
     if not values:
         return None
 
+    tenant_filter = _tenant_query(user_context)
+    if not tenant_filter:
+        return None
+
     db = get_db()
-    query_parts = _active_employee_query_parts()
+    query_parts = [tenant_filter] + _active_employee_query_parts()
     lookup_or = _person_lookup_or(values)
 
     if not lookup_or:
         return None
 
     query_parts.append({"$or": lookup_or})
-
-    tenant_filter = _tenant_query(user_context)
-
-    if tenant_filter:
-        employee = db.employees.find_one({"$and": [tenant_filter] + query_parts})
-
-        if employee:
-            return employee
-
     return db.employees.find_one({"$and": query_parts})
+
 
 
 def get_team_scope_context(user_context=None, limit=30):
@@ -1616,7 +1663,14 @@ def get_team_scope_context(user_context=None, limit=30):
 
     db = get_db()
 
+    tenant_filter = _tenant_query(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Team Scope", reason="tenant")
+
     current_employee = _lookup_current_employee(user_context)
+    if not current_employee:
+        return _private_live_context_unavailable("Team Scope", reason="identity")
+
     department = _safe_str(
         (current_employee or {}).get("department")
         or (current_employee or {}).get("department_name")
@@ -1689,12 +1743,7 @@ def get_team_scope_context(user_context=None, limit=30):
         if ro_or:
             relationship_or.append({"$or": ro_or})
 
-    query_parts = []
-
-    tenant_filter = _tenant_query(user_context)
-
-    if tenant_filter:
-        query_parts.append(tenant_filter)
+    query_parts = [tenant_filter]
 
     query_parts.extend(_active_employee_query_parts())
 
@@ -1709,9 +1758,14 @@ def get_team_scope_context(user_context=None, limit=30):
     if relationship_or:
         query_parts.append({"$or": relationship_or})
     elif current_values:
-        query_parts.append({"$or": _person_lookup_or(current_values)})
+        self_lookup = _person_lookup_or(current_values)
+        if not self_lookup:
+            return _private_live_context_unavailable("Team Scope")
+        query_parts.append({"$or": self_lookup})
+    else:
+        return _private_live_context_unavailable("Team Scope", reason="identity")
 
-    query = {"$and": query_parts} if query_parts else {}
+    query = {"$and": query_parts}
 
     docs = list(
         db.employees
@@ -1797,7 +1851,12 @@ def get_projects_context(user_context=None, limit=12):
     db = get_db()
 
     tenant_filter = _tenant_query(user_context)
+    if not tenant_filter:
+        return _private_live_context_unavailable("Projects", reason="tenant")
+
     current_employee = _lookup_current_employee(user_context)
+    if not current_employee and not _is_admin_like_role(user_context):
+        return _private_live_context_unavailable("Projects", reason="identity")
 
     department = _safe_str(
         (current_employee or {}).get("department")
@@ -1813,10 +1872,7 @@ def get_projects_context(user_context=None, limit=12):
     team_scope_values = _unique_values(current_values + team_leader_values + reporting_officer_values)
     team_scope_text_values = list(_text_value_set(team_scope_values))
 
-    query_parts = []
-
-    if tenant_filter:
-        query_parts.append(tenant_filter)
+    query_parts = [tenant_filter]
 
     query_parts.extend(_active_project_query_parts())
 
@@ -1863,10 +1919,12 @@ def get_projects_context(user_context=None, limit=12):
     # For department project questions, allow department projects even when old
     # project records do not store member IDs consistently. Still never leave the
     # user's department/tenant scope.
-    if project_or_parts and not _is_admin_like_role(user_context):
+    if not _is_admin_like_role(user_context):
+        if not project_or_parts:
+            return _private_live_context_unavailable("Projects", reason="identity")
         query_parts.append({"$or": project_or_parts})
 
-    query = {"$and": query_parts} if query_parts else {}
+    query = {"$and": query_parts}
 
     docs = list(
         db.projects
@@ -2489,25 +2547,36 @@ def get_role_subscription_guidance_context(user_context=None):
         "content": build_role_subscription_guidance(context),
     }
 
+
 def build_capability_context(question, user_context=None):
     """
     Return tenant-safe, read-only context based on the question.
 
     Saya's verified role/subscription guidance is always attached. Live records
-    are added only when a matching capability is detected.
+    are added only when a matching capability is detected. A failure in one
+    live capability never broadens scope and never aborts the entire answer.
     """
 
     capabilities = detect_ai_capabilities(question)
     blocks = []
 
-    role_result = get_role_subscription_guidance_context(user_context)
-    blocks.append(
-        f"""
-Capability: {role_result.get("title")}
+    try:
+        role_result = get_role_subscription_guidance_context(user_context)
+        blocks.append(
+            f"""
+Capability: {role_result.get('title')}
+Source: Verified role and subscription policy
 Data:
-{role_result.get("content")}
+{role_result.get('content')}
 """
-    )
+        )
+    except Exception:
+        blocks.append(
+            "Capability: Saya Role and Subscription Guidance\n"
+            "Source: Verified role and subscription policy\n"
+            "Data:\nRole/subscription guidance is temporarily unavailable. "
+            "Do not infer or broaden access because this block is unavailable."
+        )
 
     text = _lower(question)
     period = "month"
@@ -2517,61 +2586,70 @@ Data:
         period = "year"
 
     for capability in capabilities:
-        if capability == "tenant_profile":
-            result = get_tenant_profile_context(user_context)
+        try:
+            if capability == "tenant_profile":
+                result = get_tenant_profile_context(user_context)
 
-        elif capability == "pricing_plans":
-            result = get_pricing_plans_context(question, user_context)
+            elif capability == "pricing_plans":
+                result = get_pricing_plans_context(question, user_context)
 
-        elif capability == "subscription_summary":
-            result = get_subscription_context(user_context)
+            elif capability == "subscription_summary":
+                result = get_subscription_context(user_context)
 
-        elif capability == "premium_quotation":
-            result = get_premium_quotation_context(user_context)
+            elif capability == "premium_quotation":
+                result = get_premium_quotation_context(user_context)
 
-        elif capability == "weather":
-            result = get_tenant_weather_context(user_context)
+            elif capability == "weather":
+                result = get_tenant_weather_context(user_context)
 
-        elif capability == "notifications":
-            result = get_notifications_context(user_context)
+            elif capability == "notifications":
+                result = get_notifications_context(user_context)
 
-        elif capability == "leave_status":
-            result = get_leave_status_context(user_context)
+            elif capability == "leave_status":
+                result = get_leave_status_context(user_context)
 
-        elif capability == "leave_balance":
-            result = get_leave_balance_context(user_context)
+            elif capability == "leave_balance":
+                result = get_leave_balance_context(user_context)
 
-        elif capability == "assets":
-            result = get_assets_context(user_context)
+            elif capability == "assets":
+                result = get_assets_context(user_context)
 
-        elif capability == "attendance_summary":
-            result = get_attendance_summary_context(user_context, period=period)
+            elif capability == "attendance_summary":
+                result = get_attendance_summary_context(user_context, period=period)
 
-        elif capability == "performance_summary":
-            result = get_performance_summary_context(user_context, period=period)
+            elif capability == "performance_summary":
+                result = get_performance_summary_context(user_context, period=period)
 
-        elif capability == "team_scope":
-            result = get_team_scope_context(user_context)
+            elif capability == "team_scope":
+                result = get_team_scope_context(user_context)
 
-        elif capability == "projects":
-            # Keep project and team-member retrieval independent. If the user
-            # asks only for projects, do not silently attach Team Scope. When a
-            # question genuinely asks for both, detect_ai_capabilities() will
-            # return both capabilities and each block will be added explicitly.
-            result = get_projects_context(user_context)
+            elif capability == "projects":
+                result = get_projects_context(user_context)
 
-        else:
-            continue
+            else:
+                continue
+
+        except Exception:
+            result = {
+                "title": capability.replace("_", " ").title(),
+                "content": (
+                    "This live HRMS context is temporarily unavailable. "
+                    "Do not infer values, records, identities, balances, approvals, or status from other users or tenants."
+                ),
+            }
 
         blocks.append(
             f"""
-Capability: {result.get("title")}
+Capability: {result.get('title')}
+Source: Live tenant-scoped YourComate HRMS data
 Data:
-{result.get("content")}
+{result.get('content')}
+Scope rule: Treat 'not found' as 'no accessible record found for this login', not as proof that no record exists anywhere.
 """
         )
 
     return "\n\n".join(blocks).strip()
+
 
 ROLE_MODULES = {
     "super_admin": [
@@ -2592,7 +2670,7 @@ ROLE_MODULES = {
         "grievance", "it_support", "leave_balances", "holiday_calendar",
         "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
         "performance", "assets", "notifications", "policies", "departments",
-        "designations", "states", "payroll", "settings", "profile", "weather",
+        "designations", "states", "payroll", "recruitment", "settings", "profile", "weather",
         "general_writing",
     ],
     "hr": [
@@ -2602,7 +2680,7 @@ ROLE_MODULES = {
         "grievance", "it_support", "leave_balances", "holiday_calendar",
         "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
         "performance", "assets", "notifications", "policies", "departments",
-        "designations", "states", "payroll", "profile", "weather", "general_writing",
+        "designations", "states", "payroll", "recruitment", "profile", "weather", "general_writing",
     ],
     "hr_admin": [
         "product_overview", "pricing", "subscription", "trial",
@@ -2611,7 +2689,7 @@ ROLE_MODULES = {
         "grievance", "it_support", "leave_balances", "holiday_calendar",
         "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
         "performance", "assets", "notifications", "policies", "departments",
-        "designations", "states", "payroll", "profile", "weather", "general_writing",
+        "designations", "states", "payroll", "recruitment", "profile", "weather", "general_writing",
     ],
     "hr_manager": [
         "product_overview", "pricing", "subscription", "trial",
@@ -2620,31 +2698,31 @@ ROLE_MODULES = {
         "grievance", "it_support", "leave_balances", "holiday_calendar",
         "attendance_mode_requests", "attendance_logs", "compoff_credits", "reports",
         "performance", "assets", "notifications", "policies", "departments",
-        "designations", "states", "payroll", "profile", "weather", "general_writing",
+        "designations", "states", "payroll", "recruitment", "profile", "weather", "general_writing",
     ],
     "finance": [
         "product_overview", "pricing", "subscription", "trial",
         "attendance", "leave", "application_status", "grievance", "it_support",
-        "assets", "notifications", "policies", "payroll", "reports", "profile",
+        "assets", "notifications", "policies", "payroll", "reports", "recruitment", "profile",
         "weather", "general_writing",
     ],
     "accounts_finance": [
         "product_overview", "pricing", "subscription", "trial",
         "attendance", "leave", "application_status", "grievance", "it_support",
-        "assets", "notifications", "policies", "payroll", "reports", "profile",
+        "assets", "notifications", "policies", "payroll", "reports", "recruitment", "profile",
         "weather", "general_writing",
     ],
     "team_leader": [
         "product_overview", "pricing", "subscription", "trial",
         "attendance", "leave", "projects", "team_approvals", "application_status",
         "grievance", "it_support", "performance", "assets", "notifications",
-        "policies", "payroll", "profile", "weather", "general_writing",
+        "policies", "payroll", "recruitment", "profile", "weather", "general_writing",
     ],
     "reporting_officer": [
         "product_overview", "pricing", "subscription", "trial",
         "attendance", "leave", "projects", "team_approvals", "application_status",
         "grievance", "it_support", "performance", "assets", "notifications",
-        "policies", "payroll", "profile", "weather", "general_writing",
+        "policies", "payroll", "recruitment", "profile", "weather", "general_writing",
     ],
     "employee": [
         "product_overview", "pricing", "subscription", "trial",
@@ -2689,6 +2767,7 @@ AI_TO_TENANT_MODULE_ALIASES = {
     "assets": {"assets", "asset"},
     "policies": {"policies", "policy"},
     "performance": {"performance"},
+    "recruitment": {"recruitment", "hiring", "candidate_management"},
     "organisations": {"organisations", "organizations", "organisation", "organization"},
     "departments": {"departments", "department"},
     "designations": {"designations", "designation"},
@@ -2746,12 +2825,18 @@ QUESTION_MODULE_KEYWORDS = {
         "payroll", "salary", "salary structure", "gross salary", "net salary",
         "payslip", "pay slip", "salary slip", "payroll run", "hr review",
         "finance approval", "salary disbursement", "bank verification", "bank details",
-        "bank file", "loan advance", "loan recovery", "reimbursement", "tax declaration",
-        "tds", "provident fund", "professional tax", "esi", "pf deduction", "lwp deduction",
+        "bank file", "loan advance", "loan recovery", "reimbursement", "reimbursements",
+        "expense", "expenses", "expense claim", "expense claims", "travel expense",
+        "tax declaration", "tds", "provident fund", "professional tax", "esi", "pf deduction", "lwp deduction",
     ],
     "performance": [
         "performance", "performance review", "rating", "weekly performance",
         "monthly performance",
+    ],
+    "recruitment": [
+        "recruitment", "hiring request", "job opening", "job openings",
+        "candidate", "candidates", "application pipeline", "interview schedule",
+        "interview feedback", "offer letter", "background check", "onboarding candidate",
     ],
     "management_groups": [
         "management group", "management meeting", "meeting minutes", "minutes writer", "agenda",
@@ -2817,25 +2902,35 @@ def allowed_modules_for_roles(roles):
     return sorted(allowed)
 
 
+
 def _tenant_enabled_modules(user_context=None):
-    tenant = _tenant_document(user_context)
-    modules = tenant.get("allowed_modules") or []
+    """Resolve enabled modules from the trusted request/subscription context first."""
 
-    if isinstance(modules, str):
-        modules = [
-            item.strip()
-            for item in modules.split(",")
-            if item.strip()
-        ]
+    context = user_context or {}
+    module_sources = []
 
-    if not isinstance(modules, list):
-        return []
+    if isinstance(context, dict):
+        module_sources.extend([
+            context.get("allowed_modules"),
+            (context.get("_saya_subscription_snapshot") or {}).get("allowed_modules")
+            if isinstance(context.get("_saya_subscription_snapshot"), dict)
+            else None,
+            (context.get("subscription") or {}).get("allowed_modules")
+            if isinstance(context.get("subscription"), dict)
+            else None,
+        ])
 
-    return sorted({
-        _lower(item).replace("-", "_").replace(" ", "_")
-        for item in modules
-        if _safe_str(item)
-    })
+    tenant = _tenant_document(context)
+    if isinstance(tenant, dict):
+        module_sources.append(tenant.get("allowed_modules"))
+
+    for modules in module_sources:
+        normalized = _normalise_module_list(modules)
+        if normalized:
+            return normalized
+
+    return []
+
 
 
 def _module_enabled_for_tenant(module, enabled_modules):
