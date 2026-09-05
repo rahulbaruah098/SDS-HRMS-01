@@ -4200,7 +4200,7 @@ def _reminder_timezone(user_context=None):
 
 
 def _parse_reminder_schedule(value, user_context=None):
-    """Parse the common reminder date/time forms supported by Saya today."""
+    """Parse natural reminder schedules, including relative durations."""
     raw = _safe_str(value)
     if not raw:
         return {"valid": False, "message": "Please provide a reminder date and time."}
@@ -4209,11 +4209,63 @@ def _parse_reminder_schedule(value, user_context=None):
     now = datetime.now(tz)
     clean = re.sub(r"\s+", " ", raw.lower()).strip()
 
+    # Relative reminders: "in 5 minutes", "after 2 hours", "in an hour".
+    relative_match = re.search(
+        r"\b(?:in|after)\s+(?:(\d+)|(a|an|one))\s*"
+        r"(minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    if relative_match:
+        amount = int(relative_match.group(1) or 1)
+        unit = relative_match.group(3).lower()
+        if amount <= 0:
+            return {"valid": False, "message": "The reminder delay must be greater than zero."}
+        if unit.startswith(("minute", "min")):
+            delta = timedelta(minutes=amount)
+        elif unit.startswith(("hour", "hr")):
+            delta = timedelta(hours=amount)
+        elif unit.startswith("day"):
+            delta = timedelta(days=amount)
+        else:
+            delta = timedelta(weeks=amount)
+        scheduled_local = now + delta
+        return {
+            "valid": True,
+            "timezone": tz_name,
+            "scheduled_at": scheduled_local,
+            "scheduled_at_utc": scheduled_local.astimezone(timezone.utc),
+            "display": scheduled_local.strftime("%d %B %Y at %I:%M %p"),
+        }
+
     target_date = None
-    if "tomorrow" in clean:
+    explicit_date = False
+    if "day after tomorrow" in clean:
+        target_date = (now + timedelta(days=2)).date()
+        explicit_date = True
+    elif "tomorrow" in clean:
         target_date = (now + timedelta(days=1)).date()
+        explicit_date = True
     elif "today" in clean:
         target_date = now.date()
+        explicit_date = True
+
+    if target_date is None:
+        weekday_match = re.search(
+            r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            clean,
+        )
+        if weekday_match:
+            weekday_map = {
+                "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                "friday": 4, "saturday": 5, "sunday": 6,
+            }
+            wanted = weekday_map[weekday_match.group(1)]
+            days_ahead = (wanted - now.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            target_date = (now + timedelta(days=days_ahead)).date()
+            explicit_date = True
 
     if target_date is None:
         iso_match = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", clean)
@@ -4226,8 +4278,10 @@ def _parse_reminder_schedule(value, user_context=None):
         try:
             if iso_match:
                 target_date = date(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+                explicit_date = True
             elif slash_match:
                 target_date = date(int(slash_match.group(3)), int(slash_match.group(2)), int(slash_match.group(1)))
+                explicit_date = True
             elif month_match:
                 months = {
                     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -4238,6 +4292,7 @@ def _parse_reminder_schedule(value, user_context=None):
                 target_date = date(year, month_no, int(month_match.group(1)))
                 if not month_match.group(3) and target_date < now.date():
                     target_date = date(year + 1, month_no, int(month_match.group(1)))
+                explicit_date = True
         except ValueError:
             return {"valid": False, "message": "That reminder date is not valid. Please provide a valid date."}
 
@@ -4261,12 +4316,19 @@ def _parse_reminder_schedule(value, user_context=None):
         if hour > 23 or minute > 59:
             return {"valid": False, "message": "That reminder time is not valid."}
 
+    # A clock time without a date means the next occurrence of that time.
+    if target_date is None and hour is not None:
+        target_date = now.date()
+        candidate = datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=tz)
+        if candidate <= now:
+            target_date = (now + timedelta(days=1)).date()
+
     if target_date is None or hour is None:
         return {
             "valid": False,
             "message": (
-                "I need both a clear date and time for the reminder. "
-                "For example: tomorrow at 10 AM, or 15 September 2026 at 4 PM."
+                "I need a clear reminder time. You can say: in 5 minutes, tomorrow at 10 AM, "
+                "next Monday at 9:30 AM, or 15 September 2026 at 4 PM."
             ),
         }
 
@@ -4290,6 +4352,53 @@ def _parse_reminder_schedule(value, user_context=None):
         "display": scheduled_local.strftime("%d %B %Y at %I:%M %p"),
     }
 
+
+def _extract_reminder_request_parts(question):
+    """Extract reminder message and schedule from one natural-language command."""
+    raw = _safe_str(question)
+    if not raw:
+        return {"reminder_text": "", "reminder_time_text": ""}
+
+    body = re.sub(r"^\s*(?:saya\s*[,,:-]?\s*)?(?:please\s+)?", "", raw, flags=re.IGNORECASE)
+    body = re.sub(
+        r"^\s*(?:remind\s+me|set\s+(?:a\s+)?reminder|create\s+(?:a\s+)?reminder|add\s+(?:a\s+)?reminder)\b",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).strip(" ,.-")
+
+    schedule_patterns = [
+        r"\b(?:in|after)\s+(?:(?:\d+)|(?:a|an|one))\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+        r"\bday\s+after\s+tomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
+        r"\b(?:today|tomorrow|next\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
+        r"\b20\d{2}-\d{1,2}-\d{1,2}(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
+        r"\b\d{1,2}[/-]\d{1,2}[/-]20\d{2}(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
+        r"\b\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+20\d{2})?(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
+        r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+        r"\bat\s+\d{1,2}:\d{2}\b",
+    ]
+
+    match = None
+    for pattern in schedule_patterns:
+        candidate = re.search(pattern, body, flags=re.IGNORECASE)
+        if candidate and (match is None or candidate.start() < match.start()):
+            match = candidate
+
+    schedule_text = match.group(0).strip() if match else ""
+    if match:
+        message = (body[:match.start()] + " " + body[match.end():]).strip(" ,.-")
+    else:
+        message = body
+
+    # Natural connectors: "in 5 minutes to test X" / "to call John in 5 minutes".
+    message = re.sub(r"^\s*(?:to|about)\s+", "", message, flags=re.IGNORECASE)
+    message = re.sub(r"\s+(?:at|on)\s*$", "", message, flags=re.IGNORECASE)
+    message = re.sub(r"\s+", " ", message).strip(" ,.-")
+
+    return {
+        "reminder_text": message,
+        "reminder_time_text": schedule_text,
+    }
 
 def _submit_reminder_from_ai(data, user_context=None):
     access_error = _action_access_error("create_reminder", user_context)
@@ -4328,9 +4437,8 @@ def _submit_reminder_from_ai(data, user_context=None):
         "is_completed": False,
         "is_read": False,
         "read": False,
-        # There is no reminder worker in the current codebase yet. This flag
-        # prevents the assistant from claiming timed delivery is already active.
-        "delivery_status": "awaiting_worker",
+        # The production reminder worker claims scheduled reminders atomically.
+        "delivery_status": "scheduled",
         "created_by": user_key,
         "created_at": _now_utc(),
         "updated_at": _now_utc(),
@@ -4343,8 +4451,7 @@ def _submit_reminder_from_ai(data, user_context=None):
         user_id=user_key,
         title="Reminder Saved",
         message=(
-            f"Reminder saved for {schedule.get('display')}: {reminder_text}. "
-            "Timed reminder delivery is not active yet."
+            f"Reminder scheduled for {schedule.get('display')}: {reminder_text}."
         ),
         notification_type="ai_reminder_created",
     )
@@ -4360,7 +4467,7 @@ def _submit_reminder_from_ai(data, user_context=None):
             "reminder_time_text": reminder_time_text,
             "scheduled_at_utc": schedule.get("scheduled_at_utc").isoformat(),
             "timezone": schedule.get("timezone"),
-            "delivery_status": "awaiting_worker",
+            "delivery_status": "scheduled",
         },
     )
 
@@ -4374,27 +4481,91 @@ def _submit_reminder_from_ai(data, user_context=None):
         "scheduled_at_utc": schedule.get("scheduled_at_utc").isoformat(),
         "timezone": schedule.get("timezone"),
         "display_time": schedule.get("display"),
-        "delivery_status": "awaiting_worker",
+        "delivery_status": "scheduled",
     }
 
-def _reminder_start(user_context=None):
+def _reminder_start(user_context=None, question=None):
     access_error = _action_access_error("create_reminder", user_context)
     if access_error:
         return {"handled": True, "answer": access_error}
+
+    parts = _extract_reminder_request_parts(question)
+    reminder_text = _safe_str(parts.get("reminder_text"))
+    reminder_time_text = _safe_str(parts.get("reminder_time_text"))
+    data = {}
+
+    if reminder_text:
+        data["reminder_text"] = reminder_text
+    if reminder_time_text:
+        data["reminder_time_text"] = reminder_time_text
+        schedule = _parse_reminder_schedule(reminder_time_text, user_context=user_context)
+        if schedule.get("valid"):
+            data["scheduled_at"] = schedule.get("scheduled_at").isoformat()
+            data["scheduled_at_utc"] = schedule.get("scheduled_at_utc").isoformat()
+            data["timezone"] = schedule.get("timezone")
+            data["display_time"] = schedule.get("display")
+        else:
+            # Preserve the message but ask only for a corrected time.
+            reminder_time_text = ""
+            data.pop("reminder_time_text", None)
+
+    if reminder_text and reminder_time_text and data.get("display_time"):
+        save_pending_action(
+            user_context=user_context,
+            action_type="create_reminder",
+            data=data,
+            current_step="confirm",
+        )
+        return {
+            "handled": True,
+            "answer": (
+                "Please confirm your reminder:\n\n"
+                f"Reminder: {reminder_text}\n"
+                f"Scheduled for: {data.get('display_time')} ({data.get('timezone')})\n\n"
+                "Reply 'confirm' to schedule it, or 'cancel' to stop."
+            ),
+        }
+
+    if reminder_text:
+        save_pending_action(
+            user_context=user_context,
+            action_type="create_reminder",
+            data=data,
+            current_step="reminder_time",
+        )
+        return {
+            "handled": True,
+            "answer": (
+                f"Got it — I will remind you about: {reminder_text}.\n\n"
+                "When should I remind you? You can say 'in 5 minutes', 'tomorrow at 10 AM', "
+                "or '15 September 2026 at 4 PM'."
+            ),
+        }
+
+    if reminder_time_text and data.get("display_time"):
+        save_pending_action(
+            user_context=user_context,
+            action_type="create_reminder",
+            data=data,
+            current_step="reminder_text",
+        )
+        return {
+            "handled": True,
+            "answer": "What should I remind you about?",
+        }
 
     save_pending_action(
         user_context=user_context,
         action_type="create_reminder",
         data={},
-        current_step="reminder_text"
+        current_step="reminder_text",
     )
-
     return {
         "handled": True,
         "answer": (
             "Sure, I can help you create a reminder.\n\n"
             "What should I remind you about?"
-        )
+        ),
     }
 
 
@@ -4404,6 +4575,29 @@ def _reminder_continue(pending, question, user_context=None):
 
     if step == "reminder_text":
         data["reminder_text"] = _safe_str(question)
+
+        if data.get("reminder_time_text"):
+            schedule = _parse_reminder_schedule(data.get("reminder_time_text"), user_context=user_context)
+            if schedule.get("valid"):
+                data["scheduled_at"] = schedule.get("scheduled_at").isoformat()
+                data["scheduled_at_utc"] = schedule.get("scheduled_at_utc").isoformat()
+                data["timezone"] = schedule.get("timezone")
+                data["display_time"] = schedule.get("display")
+                save_pending_action(
+                    user_context=user_context,
+                    action_type="create_reminder",
+                    data=data,
+                    current_step="confirm"
+                )
+                return {
+                    "handled": True,
+                    "answer": (
+                        "Please confirm your reminder:\n\n"
+                        f"Reminder: {data.get('reminder_text')}\n"
+                        f"Scheduled for: {data.get('display_time')} ({data.get('timezone')})\n\n"
+                        "Reply 'confirm' to schedule it, or 'cancel' to stop."
+                    )
+                }
 
         save_pending_action(
             user_context=user_context,
@@ -4417,7 +4611,7 @@ def _reminder_continue(pending, question, user_context=None):
             "answer": (
                 "Reminder note saved.\n\n"
                 "When should I remind you?\n"
-                "Example: tomorrow at 10 AM, or 15 June 2026 at 4 PM."
+                "Example: in 5 minutes, tomorrow at 10 AM, or 15 September 2026 at 4 PM."
             )
         }
 
@@ -4468,8 +4662,7 @@ def _reminder_continue(pending, question, user_context=None):
                         f"Reminder ID: {reminder.get('reminder_id')}\n"
                         f"Reminder: {reminder.get('reminder_text')}\n"
                         f"Scheduled for: {reminder.get('display_time')} ({reminder.get('timezone')})\n\n"
-                        "Important: this codebase does not yet have the background reminder worker that sends the notification at the scheduled time. "
-                        "The schedule is stored correctly and will become active when that worker is connected."
+                        "Saya will notify you when the reminder becomes due."
                     )
                 }
 
@@ -5556,7 +5749,7 @@ def _handle_guided_action_legacy(question, user_context=None):
             return _meeting_start(user_context=user_context)
 
         if intent == "create_reminder":
-            return _reminder_start(user_context=user_context)
+            return _reminder_start(user_context=user_context, question=clean_question)
 
         if intent in ["attendance_check_in", "attendance_check_out"]:
             return _attendance_start(intent, question=clean_question, user_context=user_context)
@@ -5613,7 +5806,7 @@ def _handle_guided_action_legacy(question, user_context=None):
         return _meeting_start(user_context=user_context)
 
     if intent == "create_reminder":
-        return _reminder_start(user_context=user_context)
+        return _reminder_start(user_context=user_context, question=clean_question)
 
     if intent in ["attendance_check_in", "attendance_check_out"]:
         return _attendance_start(intent, question=clean_question, user_context=user_context)
