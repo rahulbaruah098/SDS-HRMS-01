@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import calendar
+import os
 import re
 from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 from bson import ObjectId
 from pymongo import ReturnDocument
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 from jinja2 import Environment
+from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
@@ -805,6 +808,15 @@ PAYROLL_REIMBURSEMENT_ACCESS_ROLES = (
     "manager",
     "ro",
 )
+
+REIMBURSEMENT_RECEIPT_ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png"}
+REIMBURSEMENT_RECEIPT_MAX_BYTES = 8 * 1024 * 1024
+REIMBURSEMENT_RECEIPT_MIME_TYPES = {
+    "pdf": "application/pdf",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+}
 
 PAYROLL_REIMBURSEMENT_MANAGEMENT_ROLES = {
     "super_admin",
@@ -2881,6 +2893,187 @@ def _release_run_reimbursements_after_failed_transition(
         # Preserve the primary workflow error. The scheduled records remain
         # traceable by run_id and can be corrected through the dedicated API.
         pass
+
+
+def _reimbursement_receipt_upload_root() -> str:
+    configured = current_app.config.get("REIMBURSEMENT_RECEIPT_UPLOAD_FOLDER")
+
+    if configured:
+        upload_root = configured
+    else:
+        upload_root = os.path.join(
+            current_app.root_path,
+            "..",
+            "uploads",
+            "reimbursements",
+        )
+
+    upload_root = os.path.abspath(upload_root)
+    os.makedirs(upload_root, exist_ok=True)
+    return upload_root
+
+
+def _detect_reimbursement_receipt_extension(file_path: str) -> str:
+    try:
+        with open(file_path, "rb") as uploaded_file:
+            header = uploaded_file.read(16)
+    except OSError:
+        return ""
+
+    if header.startswith(b"%PDF-"):
+        return "pdf"
+
+    if header.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+
+    return ""
+
+
+def _remove_reimbursement_receipt_file(file_path: str) -> None:
+    try:
+        if file_path and os.path.isfile(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
+
+@payroll_bp.post("/reimbursements/receipts/upload")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
+def upload_payroll_reimbursement_receipt():
+    tenant_id = _requested_tenant_id()
+
+    receipt_file = (
+        request.files.get("receipt")
+        or request.files.get("file")
+        or request.files.get("attachment")
+        or request.files.get("document")
+    )
+
+    if not receipt_file or not safe_str(receipt_file.filename):
+        raise PayrollReimbursementError(
+            "Receipt file is required.",
+            code="reimbursement_receipt_file_required",
+        )
+
+    original_filename = secure_filename(receipt_file.filename or "")
+
+    if not original_filename or "." not in original_filename:
+        raise PayrollReimbursementError(
+            "Receipt filename must include a supported file extension.",
+            code="invalid_reimbursement_receipt_filename",
+        )
+
+    requested_extension = original_filename.rsplit(".", 1)[-1].lower()
+
+    if requested_extension not in REIMBURSEMENT_RECEIPT_ALLOWED_EXTENSIONS:
+        raise PayrollReimbursementError(
+            "Only PDF, JPG, JPEG, and PNG receipt files are allowed.",
+            code="unsupported_reimbursement_receipt_type",
+            details={
+                "allowed_extensions": sorted(
+                    REIMBURSEMENT_RECEIPT_ALLOWED_EXTENSIONS
+                )
+            },
+        )
+
+    try:
+        receipt_file.seek(0, os.SEEK_END)
+        file_size = int(receipt_file.tell() or 0)
+        receipt_file.seek(0)
+    except (OSError, ValueError) as exc:
+        raise PayrollReimbursementError(
+            "Unable to read the uploaded receipt file.",
+            code="reimbursement_receipt_read_failed",
+        ) from exc
+
+    if file_size <= 0:
+        raise PayrollReimbursementError(
+            "The uploaded receipt file is empty.",
+            code="empty_reimbursement_receipt",
+        )
+
+    if file_size > REIMBURSEMENT_RECEIPT_MAX_BYTES:
+        raise PayrollReimbursementError(
+            "Receipt file must be 8 MB or smaller.",
+            status_code=413,
+            code="reimbursement_receipt_too_large",
+            details={
+                "max_bytes": REIMBURSEMENT_RECEIPT_MAX_BYTES,
+                "size_bytes": file_size,
+            },
+        )
+
+    tenant_folder = secure_filename(tenant_id.lower()) or "sds"
+    upload_directory = os.path.join(
+        _reimbursement_receipt_upload_root(),
+        tenant_folder,
+        "receipts",
+    )
+    os.makedirs(upload_directory, exist_ok=True)
+
+    temporary_name = secure_filename(
+        f"tmp_{uuid4().hex}.{requested_extension}"
+    )
+    temporary_path = os.path.join(upload_directory, temporary_name)
+
+    try:
+        receipt_file.save(temporary_path)
+    except OSError as exc:
+        _remove_reimbursement_receipt_file(temporary_path)
+        raise PayrollReimbursementError(
+            "Unable to save the uploaded receipt file.",
+            status_code=500,
+            code="reimbursement_receipt_save_failed",
+        ) from exc
+
+    detected_extension = _detect_reimbursement_receipt_extension(
+        temporary_path
+    )
+
+    if detected_extension not in {"pdf", "jpg", "png"}:
+        _remove_reimbursement_receipt_file(temporary_path)
+        raise PayrollReimbursementError(
+            "The uploaded file content is not a valid PDF, JPG, JPEG, or PNG receipt.",
+            code="invalid_reimbursement_receipt_content",
+        )
+
+    final_name = secure_filename(
+        f"reimbursement_receipt_{uuid4().hex}.{detected_extension}"
+    )
+    final_path = os.path.join(upload_directory, final_name)
+
+    try:
+        os.replace(temporary_path, final_path)
+    except OSError as exc:
+        _remove_reimbursement_receipt_file(temporary_path)
+        raise PayrollReimbursementError(
+            "Unable to finalize the uploaded receipt file.",
+            status_code=500,
+            code="reimbursement_receipt_finalize_failed",
+        ) from exc
+
+    uploaded_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    reference = (
+        f"reimbursements/{tenant_folder}/receipts/{final_name}"
+    )
+    receipt = {
+        "reference": reference,
+        "filename": original_filename,
+        "mime_type": REIMBURSEMENT_RECEIPT_MIME_TYPES[
+            detected_extension
+        ],
+        "size_bytes": file_size,
+        "uploaded_at": uploaded_at,
+    }
+
+    return _success(
+        "Receipt uploaded successfully.",
+        receipt=receipt,
+    )
 
 
 @payroll_bp.get("/reimbursements")
