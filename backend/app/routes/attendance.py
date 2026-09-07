@@ -40,12 +40,20 @@ ATTENDANCE_GEOFENCE_ENABLED = False
 
 DEFAULT_STATE = "Assam(HO)"
 
+# Fallback only. The Holiday Calendar now loads active operating states from
+# the tenant's State master so it cannot silently fall behind when a new state
+# is added. Keep these values for legacy tenants that do not yet have State
+# master records.
 SUPPORTED_HOLIDAY_STATES = [
     "Assam(HO)",
     "Manipur",
     "Mizoram",
     "Arunachal Pradesh",
+    "Tripura",
 ]
+
+HOLIDAY_DATE_TYPE_SINGLE = "single_day"
+HOLIDAY_DATE_TYPE_RANGE = "date_range"
 
 ATTENDANCE_MODES = ["office", "wfh", "field"]
 
@@ -1500,6 +1508,263 @@ def manager_scope_query(db):
     return q
 
 
+def holiday_states_for_tenant(db, tenant_id):
+    """Return active Holiday Calendar states from the tenant State master.
+
+    The previous Holiday Calendar used a four-item hard-coded list. That meant
+    a newly configured operating state could exist in the States module but
+    never appear in Holiday Calendar filters/forms. State master is now the
+    authoritative source, with SUPPORTED_HOLIDAY_STATES retained only as a
+    backwards-compatible fallback for tenants without State master records.
+    """
+    tenant_id = normalize_text(tenant_id)
+    query = {
+        "is_deleted": {"$ne": True},
+        "status": {"$nin": ["inactive", "Inactive", "INACTIVE"]},
+    }
+
+    if tenant_id:
+        query["tenant_id"] = tenant_id
+
+    rows = list(
+        db.states
+        .find(query, {"name": 1, "state_name": 1, "code": 1, "status": 1})
+        .sort([("name", 1), ("state_name", 1)])
+    )
+
+    states = []
+
+    for row in rows:
+        state_name = normalize_state(row.get("name") or row.get("state_name"))
+
+        if state_name and state_name not in states:
+            states.append(state_name)
+
+    if states:
+        return states
+
+    return list(SUPPORTED_HOLIDAY_STATES)
+
+
+def holiday_date_type(value):
+    normalized = normalize_text(value).lower().replace("-", "_").replace(" ", "_")
+
+    if normalized in {
+        "range",
+        "date_range",
+        "multi_day",
+        "multiple_days",
+        "multiple_day",
+    }:
+        return HOLIDAY_DATE_TYPE_RANGE
+
+    if normalized in {
+        "single",
+        "single_day",
+        "one_day",
+        "one_date",
+    }:
+        return HOLIDAY_DATE_TYPE_SINGLE
+
+    return ""
+
+
+def holiday_existing_start_date(existing):
+    existing = existing or {}
+    return (
+        existing.get("start_date")
+        or existing.get("from_date")
+        or existing.get("date")
+        or ""
+    )
+
+
+def holiday_existing_end_date(existing):
+    existing = existing or {}
+    return (
+        existing.get("end_date")
+        or existing.get("to_date")
+        or holiday_existing_start_date(existing)
+        or ""
+    )
+
+
+def holiday_date_range_from_payload(data, existing=None):
+    """Resolve old single-date and new date-range holiday payloads safely."""
+    data = data or {}
+    existing = existing or {}
+
+    start_keys = ("start_date", "from_date", "date")
+    end_keys = ("end_date", "to_date")
+
+    explicit_start = next((key for key in start_keys if key in data), "")
+    explicit_end = next((key for key in end_keys if key in data), "")
+
+    start_raw = (
+        data.get(explicit_start)
+        if explicit_start
+        else holiday_existing_start_date(existing)
+    )
+    end_raw = (
+        data.get(explicit_end)
+        if explicit_end
+        else holiday_existing_end_date(existing)
+    )
+
+    requested_type = holiday_date_type(
+        data.get("date_type")
+        or data.get("holiday_date_type")
+        or data.get("duration_type")
+        or existing.get("date_type")
+        or existing.get("holiday_date_type")
+    )
+
+    start_date = parse_date(start_raw)
+
+    if not start_date:
+        return None, "Holiday start date is required"
+
+    # A legacy payload that only sends `date` still means a single-day holiday.
+    # This keeps the current frontend/API contract working while the new range UI
+    # is introduced in the next files.
+    if explicit_start == "date" and not explicit_end and not requested_type:
+        end_raw = start_date.isoformat()
+
+    if requested_type == HOLIDAY_DATE_TYPE_SINGLE:
+        end_raw = start_date.isoformat()
+
+    if requested_type == HOLIDAY_DATE_TYPE_RANGE and not normalize_text(end_raw):
+        return None, "Holiday end date is required for a date range"
+
+    end_date = parse_date(end_raw) if normalize_text(end_raw) else start_date
+
+    if not end_date:
+        return None, "Invalid holiday end date"
+
+    if end_date < start_date:
+        return None, "Holiday end date cannot be earlier than start date"
+
+    resolved_type = (
+        HOLIDAY_DATE_TYPE_SINGLE
+        if start_date == end_date
+        else HOLIDAY_DATE_TYPE_RANGE
+    )
+
+    return {
+        "date": start_date.isoformat(),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "from_date": start_date.isoformat(),
+        "to_date": end_date.isoformat(),
+        "date_type": resolved_type,
+    }, ""
+
+
+def normalize_holiday_date_fields(holiday):
+    """Expose range fields for legacy holiday rows without requiring migration."""
+    holiday = dict(holiday or {})
+    start_date = holiday_existing_start_date(holiday)
+    end_date = holiday_existing_end_date(holiday) or start_date
+
+    if start_date:
+        holiday["date"] = start_date
+        holiday["start_date"] = start_date
+        holiday["from_date"] = start_date
+
+    if end_date:
+        holiday["end_date"] = end_date
+        holiday["to_date"] = end_date
+
+    holiday["date_type"] = (
+        HOLIDAY_DATE_TYPE_RANGE
+        if start_date and end_date and start_date != end_date
+        else HOLIDAY_DATE_TYPE_SINGLE
+    )
+
+    return holiday
+
+
+def holiday_overlap_query(tenant_id, state, start_date, end_date, exclude_id=None):
+    """Build a query that detects overlapping holidays for one state."""
+    query = {
+        "tenant_id": tenant_id,
+        "state": normalize_state(state),
+        "status": {"$ne": "inactive"},
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {
+                "$and": [
+                    {"start_date": {"$lte": end_date}},
+                    {"end_date": {"$gte": start_date}},
+                ]
+            },
+            {
+                "$and": [
+                    {"start_date": {"$exists": False}},
+                    {"date": {"$gte": start_date, "$lte": end_date}},
+                ]
+            },
+        ],
+    }
+
+    if exclude_id:
+        query["_id"] = {"$ne": exclude_id}
+
+    return query
+
+
+def holiday_list_date_filter(date_from="", date_to=""):
+    """Return an overlap filter for list queries across single/range holidays."""
+    date_from = normalize_text(date_from)
+    date_to = normalize_text(date_to)
+
+    if not date_from and not date_to:
+        return None
+
+    if date_from and date_to:
+        return {
+            "$or": [
+                {
+                    "$and": [
+                        {"start_date": {"$lte": date_to}},
+                        {"end_date": {"$gte": date_from}},
+                    ]
+                },
+                {
+                    "$and": [
+                        {"start_date": {"$exists": False}},
+                        {"date": {"$gte": date_from, "$lte": date_to}},
+                    ]
+                },
+            ]
+        }
+
+    if date_from:
+        return {
+            "$or": [
+                {"end_date": {"$gte": date_from}},
+                {
+                    "$and": [
+                        {"start_date": {"$exists": False}},
+                        {"date": {"$gte": date_from}},
+                    ]
+                },
+            ]
+        }
+
+    return {
+        "$or": [
+            {"start_date": {"$lte": date_to}},
+            {
+                "$and": [
+                    {"start_date": {"$exists": False}},
+                    {"date": {"$lte": date_to}},
+                ]
+            },
+        ]
+    }
+
+
 def is_second_or_fourth_saturday(check_date):
     if check_date.weekday() != 5:
         return False
@@ -1541,9 +1806,18 @@ def manual_holiday_for_date(db, tenant_id, state, check_date):
     return db.holiday_calendar.find_one({
         "tenant_id": tenant_id,
         "state": normalize_state(state),
-        "date": date_str,
         "status": {"$ne": "inactive"},
         "is_deleted": {"$ne": True},
+        "$or": [
+            {
+                "$and": [
+                    {"start_date": {"$lte": date_str}},
+                    {"end_date": {"$gte": date_str}},
+                ]
+            },
+            # Backwards compatibility for existing one-day holiday records.
+            {"date": date_str},
+        ],
     })
 
 
@@ -3359,18 +3633,21 @@ def list_holidays():
     can_manage_holidays = bool(roles.intersection(manager_roles))
     requested_state = normalize_state(state_arg) if state_arg else ""
 
-    q = {
-        "status": {"$ne": "inactive"},
-        "is_deleted": {"$ne": True},
-    }
-
     # Tenant isolation:
     # Super Admin can filter tenant by tenant_id.
     # All tenant users, including employees, can only see their own tenant.
     if "super_admin" in roles and tenant_arg:
-        q["tenant_id"] = tenant_arg
+        tenant_id = tenant_arg
     else:
-        q["tenant_id"] = current_tenant_id()
+        tenant_id = current_tenant_id()
+
+    available_states = holiday_states_for_tenant(db, tenant_id)
+
+    q = {
+        "tenant_id": tenant_id,
+        "status": {"$ne": "inactive"},
+        "is_deleted": {"$ne": True},
+    }
 
     # Employee default view:
     # If employee opens holiday page without selecting state,
@@ -3382,14 +3659,10 @@ def list_holidays():
     elif not can_manage_holidays:
         q["state"] = current_employee_state(db)
 
-    if date_from or date_to:
-        q["date"] = {}
+    date_filter = holiday_list_date_filter(date_from, date_to)
 
-        if date_from:
-            q["date"]["$gte"] = date_from
-
-        if date_to:
-            q["date"]["$lte"] = date_to
+    if date_filter:
+        q["$and"] = [date_filter]
 
     items = list(
         db.holiday_calendar
@@ -3397,14 +3670,14 @@ def list_holidays():
         .sort([("date", 1), ("state", 1)])
         .limit(500)
     )
+    items = [normalize_holiday_date_fields(item) for item in items]
 
     return jsonify({
-        "states": SUPPORTED_HOLIDAY_STATES,
+        "states": available_states,
         "default_state": current_employee_state(db),
         "can_manage": can_manage_holidays,
         "items": clean_doc(items),
     })
-
 
 @attendance_bp.post("/holidays")
 @roles_required(*HOLIDAY_MANAGER_ROLES)
@@ -3419,18 +3692,25 @@ def create_holiday():
     if "super_admin" not in roles:
         tenant_id = current_tenant_id()
 
-    state = normalize_state(data.get("state"))
-    holiday_date = parse_date(data.get("date"))
+    raw_state = normalize_text(data.get("state"))
+
+    if not raw_state:
+        return jsonify({"message": "State is required for holiday calendar"}), 400
+
+    state = normalize_state(raw_state)
+    available_states = holiday_states_for_tenant(db, tenant_id)
     title = normalize_text(data.get("title"))
     message = normalize_text(data.get("message"))
 
-    if state not in SUPPORTED_HOLIDAY_STATES:
+    if state not in available_states:
         return jsonify({
-            "message": "Invalid state for holiday calendar"
+            "message": "Invalid or inactive state for holiday calendar"
         }), 400
 
-    if not holiday_date:
-        return jsonify({"message": "Holiday date is required"}), 400
+    date_fields, date_error = holiday_date_range_from_payload(data)
+
+    if date_error:
+        return jsonify({"message": date_error}), 400
 
     if not title:
         return jsonify({"message": "Holiday title is required"}), 400
@@ -3440,27 +3720,28 @@ def create_holiday():
     doc = {
         "tenant_id": tenant_id,
         "state": state,
-        "date": holiday_date.isoformat(),
+        **date_fields,
         "title": title,
         "message": message,
-        "status": "active",
+        "status": normalize_text(data.get("status")) or "active",
         "created_at": now,
         "updated_at": now,
         "created_by": str(g.current_user["_id"]),
         "created_by_name": g.current_user.get("name") or g.current_user.get("email"),
     }
 
-    existing = db.holiday_calendar.find_one({
-        "tenant_id": tenant_id,
-        "state": state,
-        "date": holiday_date.isoformat(),
-        "status": {"$ne": "inactive"},
-        "is_deleted": {"$ne": True},
-    })
+    existing = db.holiday_calendar.find_one(
+        holiday_overlap_query(
+            tenant_id,
+            state,
+            date_fields["start_date"],
+            date_fields["end_date"],
+        )
+    )
 
     if existing:
         return jsonify({
-            "message": "Holiday already exists for this state and date"
+            "message": "A holiday already exists for this state within the selected date range"
         }), 409
 
     res = db.holiday_calendar.insert_one(doc)
@@ -3470,9 +3751,8 @@ def create_holiday():
 
     return jsonify({
         "message": "Holiday added",
-        "item": clean_doc(doc),
+        "item": clean_doc(normalize_holiday_date_fields(doc)),
     }), 201
-
 
 @attendance_bp.patch("/holidays/<holiday_id>")
 @roles_required(*HOLIDAY_MANAGER_ROLES)
@@ -3500,36 +3780,60 @@ def update_holiday(holiday_id):
     if not existing:
         return jsonify({"message": "Holiday not found"}), 404
 
+    tenant_id = normalize_text(existing.get("tenant_id")) or current_tenant_id()
+    state = normalize_state(existing.get("state"))
+
+    if "state" in data:
+        raw_state = normalize_text(data.get("state"))
+
+        if not raw_state:
+            return jsonify({"message": "State is required for holiday calendar"}), 400
+
+        state = normalize_state(raw_state)
+
+    available_states = holiday_states_for_tenant(db, tenant_id)
+
+    if state not in available_states:
+        return jsonify({
+            "message": "Invalid or inactive state for holiday calendar"
+        }), 400
+
+    date_fields, date_error = holiday_date_range_from_payload(data, existing)
+
+    if date_error:
+        return jsonify({"message": date_error}), 400
+
+    title = (
+        normalize_text(data.get("title"))
+        if "title" in data
+        else normalize_text(existing.get("title"))
+    )
+
+    if not title:
+        return jsonify({"message": "Holiday title is required"}), 400
+
+    overlap = db.holiday_calendar.find_one(
+        holiday_overlap_query(
+            tenant_id,
+            state,
+            date_fields["start_date"],
+            date_fields["end_date"],
+            exclude_id=holiday_obj_id,
+        )
+    )
+
+    if overlap:
+        return jsonify({
+            "message": "A holiday already exists for this state within the selected date range"
+        }), 409
+
     update_data = {
+        "state": state,
+        **date_fields,
+        "title": title,
         "updated_at": datetime.utcnow(),
         "updated_by": str(g.current_user["_id"]),
     }
-
-    if "state" in data:
-        state = normalize_state(data.get("state"))
-
-        if state not in SUPPORTED_HOLIDAY_STATES:
-            return jsonify({
-                "message": "Invalid state for holiday calendar"
-            }), 400
-
-        update_data["state"] = state
-
-    if "date" in data:
-        holiday_date = parse_date(data.get("date"))
-
-        if not holiday_date:
-            return jsonify({"message": "Invalid holiday date"}), 400
-
-        update_data["date"] = holiday_date.isoformat()
-
-    if "title" in data:
-        title = normalize_text(data.get("title"))
-
-        if not title:
-            return jsonify({"message": "Holiday title is required"}), 400
-
-        update_data["title"] = title
 
     if "message" in data:
         update_data["message"] = normalize_text(data.get("message"))
@@ -3544,11 +3848,12 @@ def update_holiday(holiday_id):
 
     audit("update", "holiday_calendar", holiday_id, update_data)
 
+    updated = db.holiday_calendar.find_one({"_id": holiday_obj_id})
+
     return jsonify({
         "message": "Holiday updated",
-        "item": clean_doc(db.holiday_calendar.find_one({"_id": holiday_obj_id})),
+        "item": clean_doc(normalize_holiday_date_fields(updated)),
     })
-
 
 @attendance_bp.delete("/holidays/<holiday_id>")
 @roles_required(*HOLIDAY_MANAGER_ROLES)

@@ -22,11 +22,15 @@ const FALLBACK_STATES = [
   'Manipur',
   'Mizoram',
   'Arunachal Pradesh',
+  'Tripura',
 ];
 
 const EMPTY_FORM = {
-  state: 'Assam(HO)',
+  state: '',
+  date_type: 'single_day',
   date: '',
+  start_date: '',
+  end_date: '',
   title: '',
   message: '',
   status: 'active',
@@ -125,10 +129,20 @@ function statusLabel(value = '') {
 }
 
 function normalizeHoliday(row = {}) {
+  const startDate = row.start_date || row.from_date || row.date || '';
+  const endDate = row.end_date || row.to_date || startDate;
+  const dateType =
+    row.date_type ||
+    row.holiday_date_type ||
+    (startDate && endDate && startDate !== endDate ? 'date_range' : 'single_day');
+
   return {
     _id: row._id || row.id || '',
     state: row.state || '—',
-    date: row.date || '',
+    date: startDate,
+    start_date: startDate,
+    end_date: endDate,
+    date_type: dateType,
     title: row.title || '—',
     message: row.message || '',
     status: row.status || 'active',
@@ -141,16 +155,55 @@ function normalizeHoliday(row = {}) {
   };
 }
 
-function isUpcoming(dateValue = '') {
+function parseDateKey(value = '') {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+  if (!match) return null;
+
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function dateKeysInRange(startValue = '', endValue = '') {
+  const start = parseDateKey(startValue);
+  const end = parseDateKey(endValue || startValue);
+
+  if (!start || !end || end < start) return [];
+
+  const keys = [];
+  const cursor = new Date(start);
+  let guard = 0;
+
+  while (cursor <= end && guard < 370) {
+    keys.push(toDateKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+
+  return keys;
+}
+
+function formatHolidayDate(item = {}) {
+  const startDate = item.start_date || item.date || '';
+  const endDate = item.end_date || startDate;
+
+  if (!startDate) return '—';
+  if (!endDate || endDate === startDate) return formatDate(startDate);
+
+  return `${formatDate(startDate)} – ${formatDate(endDate)}`;
+}
+
+function isUpcomingHoliday(item = {}) {
+  const dateValue = item.end_date || item.start_date || item.date || '';
   if (!dateValue) return false;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const date = new Date(dateValue);
-  date.setHours(0, 0, 0, 0);
+  const holidayEnd = parseDateKey(dateValue) || new Date(dateValue);
+  holidayEnd.setHours(0, 0, 0, 0);
 
-  return date >= today;
+  return holidayEnd >= today;
 }
 
 
@@ -280,6 +333,9 @@ export default function HolidayCalendar({ user = {} }) {
       return [
         item.state,
         item.date,
+        item.start_date,
+        item.end_date,
+        item.date_type,
         item.title,
         item.created_by_name,
         statusLabel(item.status),
@@ -291,14 +347,18 @@ export default function HolidayCalendar({ user = {} }) {
   }, [items, filters.search]);
 
   const upcomingCount = useMemo(() => {
-    return items.filter((item) => isUpcoming(item.date)).length;
+    return items.filter((item) => isUpcomingHoliday(item)).length;
   }, [items]);
 
   const holidayMap = useMemo(() => {
     return items.reduce((acc, item) => {
-      if (item.date) {
-        acc[item.date] = item;
-      }
+      const startDate = item.start_date || item.date || '';
+      const endDate = item.end_date || startDate;
+      const keys = dateKeysInRange(startDate, endDate);
+
+      keys.forEach((dateKey) => {
+        acc[dateKey] = item;
+      });
 
       return acc;
     }, {});
@@ -318,18 +378,38 @@ export default function HolidayCalendar({ user = {} }) {
   }
 
   function updateForm(key, value) {
-    setForm((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
+    setForm((prev) => {
+      if (key === 'date_type') {
+        if (value === 'date_range') {
+          const startDate = prev.start_date || prev.date || '';
+          return {
+            ...prev,
+            date_type: 'date_range',
+            date: '',
+            start_date: startDate,
+            end_date: prev.end_date || startDate,
+          };
+        }
+
+        return {
+          ...prev,
+          date_type: 'single_day',
+          date: prev.date || prev.start_date || '',
+          start_date: '',
+          end_date: '',
+        };
+      }
+
+      return {
+        ...prev,
+        [key]: value,
+      };
+    });
   }
 
   function resetForm() {
     setEditingId('');
-    setForm({
-      ...EMPTY_FORM,
-      state: defaultState || states[0] || 'Assam(HO)',
-    });
+    setForm({ ...EMPTY_FORM });
   }
 
 
@@ -372,10 +452,8 @@ export default function HolidayCalendar({ user = {} }) {
       setDefaultState(nextDefaultState);
       setItems((data.items || []).map(normalizeHoliday));
 
-      setForm((prev) => ({
-        ...prev,
-        state: prev.state || nextDefaultState,
-      }));
+      // Do not silently select a state for new holidays. HR/Admin must
+      // deliberately choose the state that the declared holiday applies to.
     } catch (err) {
       setError(err?.message || 'Unable to load holiday calendar.');
       setItems([]);
@@ -393,11 +471,52 @@ export default function HolidayCalendar({ user = {} }) {
     setError('');
     setMessage('');
 
+    const state = String(form.state || '').trim();
+    const title = String(form.title || '').trim();
+    const isRange = form.date_type === 'date_range';
+    const startDate = isRange ? form.start_date : form.date;
+    const endDate = isRange ? form.end_date : form.date;
+
+    if (!state) {
+      setError('Please select the state this holiday applies to.');
+      setSaving(false);
+      return;
+    }
+
+    if (!title) {
+      setError('Holiday title is required.');
+      setSaving(false);
+      return;
+    }
+
+    if (!startDate) {
+      setError(isRange ? 'Holiday from date is required.' : 'Holiday date is required.');
+      setSaving(false);
+      return;
+    }
+
+    if (isRange && !endDate) {
+      setError('Holiday to date is required for a date range.');
+      setSaving(false);
+      return;
+    }
+
+    if (isRange && endDate < startDate) {
+      setError('Holiday to date cannot be earlier than the from date.');
+      setSaving(false);
+      return;
+    }
+
     try {
       const payload = {
-        state: form.state,
-        date: form.date,
-        title: form.title,
+        state,
+        date_type: isRange ? 'date_range' : 'single_day',
+        date: startDate,
+        start_date: startDate,
+        end_date: endDate,
+        from_date: startDate,
+        to_date: endDate,
+        title,
         message: form.message,
         status: form.status || 'active',
       };
@@ -431,9 +550,19 @@ export default function HolidayCalendar({ user = {} }) {
     if (!canManage) return;
 
     setEditingId(item._id);
+    const startDate = item.start_date || item.date || '';
+    const endDate = item.end_date || startDate;
+    const dateType =
+      item.date_type === 'date_range' || (startDate && endDate && startDate !== endDate)
+        ? 'date_range'
+        : 'single_day';
+
     setForm({
-      state: item.state || defaultState || states[0] || 'Assam(HO)',
-      date: item.date || '',
+      state: item.state || '',
+      date_type: dateType,
+      date: dateType === 'single_day' ? startDate : '',
+      start_date: dateType === 'date_range' ? startDate : '',
+      end_date: dateType === 'date_range' ? endDate : '',
       title: item.title || '',
       message: item.message || '',
       status: item.status || 'active',
@@ -1622,6 +1751,7 @@ export default function HolidayCalendar({ user = {} }) {
                 onChange={(event) => updateForm('state', event.target.value)}
                 required
               >
+                <option value="">Select state</option>
                 {states.map((state) => (
                   <option key={state} value={state}>
                     {state}
@@ -1631,14 +1761,50 @@ export default function HolidayCalendar({ user = {} }) {
             </label>
 
             <label>
-              Date *
-              <input
-                type="date"
-                value={form.date}
-                onChange={(event) => updateForm('date', event.target.value)}
-                required
-              />
+              Holiday Duration *
+              <select
+                value={form.date_type}
+                onChange={(event) => updateForm('date_type', event.target.value)}
+              >
+                <option value="single_day">Single Day</option>
+                <option value="date_range">Date Range</option>
+              </select>
             </label>
+
+            {form.date_type === 'date_range' ? (
+              <>
+                <label>
+                  From Date *
+                  <input
+                    type="date"
+                    value={form.start_date}
+                    onChange={(event) => updateForm('start_date', event.target.value)}
+                    required
+                  />
+                </label>
+
+                <label>
+                  To Date *
+                  <input
+                    type="date"
+                    min={form.start_date || undefined}
+                    value={form.end_date}
+                    onChange={(event) => updateForm('end_date', event.target.value)}
+                    required
+                  />
+                </label>
+              </>
+            ) : (
+              <label>
+                Date *
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(event) => updateForm('date', event.target.value)}
+                  required
+                />
+              </label>
+            )}
 
             <label>
               Title *
@@ -1715,7 +1881,7 @@ export default function HolidayCalendar({ user = {} }) {
               <table className="holiday-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
+                    <th>Date / Range</th>
                     <th>Holiday</th>
                     <th>State</th>
                     <th>Status</th>
@@ -1728,7 +1894,7 @@ export default function HolidayCalendar({ user = {} }) {
                   {filteredItems.map((item) => (
                     <tr key={item._id || `${item.state}-${item.date}-${item.title}`}>
                       <td>
-                        <strong>{formatDate(item.date)}</strong>
+                        <strong>{formatHolidayDate(item)}</strong>
                       </td>
 
                       <td>
@@ -1784,7 +1950,7 @@ export default function HolidayCalendar({ user = {} }) {
                   key={`mobile-${item._id || `${item.state}-${item.date}-${item.title}`}`}
                 >
                   <div>
-                    <span>{formatDate(item.date)}</span>
+                    <span>{formatHolidayDate(item)}</span>
                     <strong>{item.title}</strong>
                   </div>
 
