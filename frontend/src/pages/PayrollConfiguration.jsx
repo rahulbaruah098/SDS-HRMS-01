@@ -1162,6 +1162,47 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     }
   }
 
+  async function deleteActiveSalaryRevision(document = {}) {
+    const id = documentId(document);
+
+    if (!id || normalizeKey(document.status) !== 'active') {
+      alerts.warning('Only the currently active salary revision can be deleted with this action.', 'Active Revision Required');
+      return;
+    }
+
+    const confirmed = await alerts.confirm(
+      `Delete ACTIVE salary revision Version ${document.version || '—'} effective from ${formatDate(document.effective_from)}? This should only be used to correct an accidentally activated salary structure, such as an incorrect state code. The action cannot be undone from this screen.`,
+      {
+        title: 'Delete Active Salary Revision',
+        confirmText: 'Delete Active Revision',
+      },
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingSalaryId(id);
+      const data = await api(`/payroll/salary-structure/${encodeURIComponent(id)}/active`, {
+        method: 'DELETE',
+        body: JSON.stringify(tenantParams()),
+      });
+      await loadSalaryHistory(selectedEmployeeId);
+      alerts.success(
+        data.message || 'Active salary revision deleted. You can now create or activate the corrected salary revision.',
+        'Active Revision Deleted',
+      );
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to delete the active salary revision.',
+        'Delete Active Revision Failed',
+      );
+    } finally {
+      setDeletingSalaryId('');
+    }
+  }
+
   async function deleteSalaryDraft(document = {}) {
     const id = documentId(document);
 
@@ -2182,6 +2223,20 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                 onClick={() => deleteSalaryDraft(item)}
                               >
                                 {deletingSalaryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Draft
+                              </button>
+                            </>
+                          ) : normalizeKey(item.status) === 'active' ? (
+                            <>
+                              <button type="button" className="secondary" onClick={() => startSalaryRevision(salaryFormFromDocument(item))}>
+                                Use for New Revision
+                              </button>
+                              <button
+                                type="button"
+                                className="danger-light"
+                                disabled={deletingSalaryId === documentId(item)}
+                                onClick={() => deleteActiveSalaryRevision(item)}
+                              >
+                                {deletingSalaryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Active
                               </button>
                             </>
                           ) : (

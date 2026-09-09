@@ -29,6 +29,7 @@ from app.services.payroll_config_service import (
     activate_salary_structure_revision,
     activate_statutory_config_revision,
     delete_salary_structure_draft,
+    delete_active_salary_structure_revision,
     delete_statutory_config_draft,
     delete_active_statutory_config_revision,
     get_effective_salary_structure,
@@ -616,6 +617,52 @@ def delete_salary_structure_draft_route(salary_structure_id: str):
     return _success(
         "Salary structure draft deleted successfully.",
         deleted_salary_structure_id=safe_str(structure.get("_id")),
+    )
+
+
+@payroll_bp.delete("/salary-structure/<salary_structure_id>/active")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_CONFIG_ROLES)
+def delete_active_salary_structure_route(salary_structure_id: str):
+    """Delete an accidentally activated salary-structure revision safely.
+
+    Active salary revisions are soft-deleted by the payroll configuration
+    service. Deletion is blocked when an existing payslip already references
+    the revision so historical payroll remains auditable.
+    """
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+
+    structure = delete_active_salary_structure_revision(
+        db,
+        tenant_id=tenant_id,
+        salary_structure_id=salary_structure_id,
+        actor_id=_current_user_id(),
+    )
+
+    audit(
+        "payroll_salary_structure_active_revision_deleted",
+        "salary_structures",
+        structure.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": structure.get("employee_id"),
+            "employee_code": structure.get("employee_code"),
+            "version": structure.get("version"),
+            "effective_from": structure.get("effective_from"),
+            "deletion_type": structure.get("deletion_type")
+            or "active_revision_correction",
+        },
+    )
+
+    return _success(
+        (
+            "Active salary structure revision deleted successfully. "
+            "You can now activate the corrected salary revision."
+        ),
+        deleted_salary_structure_id=safe_str(structure.get("_id")),
+        salary_structure=structure,
     )
 
 

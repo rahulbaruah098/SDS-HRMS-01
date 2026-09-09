@@ -636,6 +636,113 @@ def delete_salary_structure_draft(
     return draft
 
 
+def delete_active_salary_structure_revision(
+    db: Any,
+    *,
+    tenant_id: str,
+    salary_structure_id: Any,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Safely remove the current active employee salary revision.
+
+    This correction flow is intended for cases where an administrator
+    accidentally activates a salary structure with incorrect metadata such as
+    the wrong state code. Active revisions are soft-deleted so the correction
+    remains auditable. Deletion is blocked once a persisted payslip references
+    the revision, because historical payroll must retain the exact salary
+    structure that was used for calculation.
+
+    The previously superseded revision is deliberately not reactivated. That
+    leaves the employee with no active salary revision temporarily, allowing a
+    corrected draft (including one with an earlier effective date) to be
+    activated without the normal active-revision date conflict.
+    """
+    structure_id = object_id_or_none(salary_structure_id)
+
+    if not structure_id:
+        raise PayrollConfigError(
+            "Invalid salary structure id.",
+            code="invalid_salary_structure_id",
+        )
+
+    tenant_id = safe_str(tenant_id)
+    active = db.salary_structures.find_one({
+        "_id": structure_id,
+        "tenant_id": tenant_id,
+        "status": "active",
+        "is_deleted": {"$ne": True},
+    })
+
+    if not active:
+        raise PayrollConfigError(
+            "Active salary structure revision not found.",
+            status_code=404,
+            code="active_salary_structure_not_found",
+        )
+
+    referenced_payslip = db.payslips.find_one({
+        "tenant_id": tenant_id,
+        "salary_structure_id": safe_str(active.get("_id")),
+        "is_deleted": {"$ne": True},
+    })
+    if referenced_payslip:
+        raise PayrollConfigError(
+            (
+                "This active salary revision cannot be deleted because one or "
+                "more payroll records already use it. Create a corrected new "
+                "revision instead to preserve payroll history."
+            ),
+            status_code=409,
+            code="salary_structure_active_revision_in_use",
+        )
+
+    current_time = now_utc()
+    result = db.salary_structures.update_one(
+        {
+            "_id": structure_id,
+            "tenant_id": tenant_id,
+            "status": "active",
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "is_deleted": True,
+                "deleted_by": safe_str(actor_id),
+                "deleted_at": current_time,
+                "deletion_type": "active_revision_correction",
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            }
+        },
+    )
+
+    if result.modified_count != 1:
+        raise PayrollConfigError(
+            "Active salary revision could not be deleted because it changed.",
+            status_code=409,
+            code="salary_structure_active_delete_conflict",
+        )
+
+    db.salary_structures.update_one(
+        {
+            "tenant_id": tenant_id,
+            "employee_id": active.get("employee_id"),
+            "status": "superseded",
+            "superseded_by": safe_str(active.get("_id")),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$unset": {"superseded_by": ""},
+            "$set": {
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            },
+        },
+    )
+
+    return active
+
+
 def activate_salary_structure_revision(
     db: Any,
     *,
