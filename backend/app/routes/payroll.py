@@ -1207,41 +1207,134 @@ def _sum_numbers(items: Iterable[Mapping[str, Any]], key: str) -> int | float:
     return int(rounded) if rounded.is_integer() else rounded
 
 
-def _employee_state_code(employee: Mapping[str, Any], structure: Mapping[str, Any]) -> str:
-    structure_state = safe_str(structure.get("state_code")).upper()
+_INDIAN_STATE_CODE_ALIASES = {
+    "ANDHRA PRADESH": "AP",
+    "ARUNACHAL PRADESH": "AR",
+    "ASSAM": "AS",
+    "BIHAR": "BR",
+    "CHHATTISGARH": "CG",
+    "GOA": "GA",
+    "GUJARAT": "GJ",
+    "HARYANA": "HR",
+    "HIMACHAL PRADESH": "HP",
+    "JHARKHAND": "JH",
+    "KARNATAKA": "KA",
+    "KERALA": "KL",
+    "MADHYA PRADESH": "MP",
+    "MAHARASHTRA": "MH",
+    "MANIPUR": "MN",
+    "MEGHALAYA": "ML",
+    "MIZORAM": "MZ",
+    "NAGALAND": "NL",
+    "ODISHA": "OD",
+    "ORISSA": "OD",
+    "PUNJAB": "PB",
+    "RAJASTHAN": "RJ",
+    "SIKKIM": "SK",
+    "TAMIL NADU": "TN",
+    "TELANGANA": "TS",
+    "TRIPURA": "TR",
+    "UTTAR PRADESH": "UP",
+    "UTTARAKHAND": "UK",
+    "UTTARANCHAL": "UK",
+    "WEST BENGAL": "WB",
+    "ANDAMAN AND NICOBAR ISLANDS": "AN",
+    "CHANDIGARH": "CH",
+    "DADRA AND NAGAR HAVELI AND DAMAN AND DIU": "DN",
+    "DELHI": "DL",
+    "NCT OF DELHI": "DL",
+    "JAMMU AND KASHMIR": "JK",
+    "LADAKH": "LA",
+    "LAKSHADWEEP": "LD",
+    "PUDUCHERRY": "PY",
+    "PONDICHERRY": "PY",
+}
 
-    # A salary structure may be deliberately pinned to a specific state. Keep
-    # that explicit override, but do not let the generic ALL value hide a
-    # specific employee payroll/work state. Salary-structure drafts historically
-    # defaulted to ALL, which could make an Assam employee resolve the generic
-    # statutory configuration and therefore skip Assam Professional Tax.
+
+def _state_code_from_employee_value(value: Any) -> str:
+    """Resolve a two-letter payroll state from an employee field.
+
+    Employee records in older HRMS data do not consistently carry
+    ``payroll_state_code``.  Some contain a state name (for example ``Assam``)
+    or a location string such as ``Assam/Guwahati (HO)``.  Statutory rules are
+    state-specific, so silently falling back to the generic ``ALL`` config can
+    disable Professional Tax even though an Assam PT revision is active.
+    """
+    raw = safe_str(value).strip()
+    if not raw:
+        return ""
+
+    upper = raw.upper().replace("_", " ").strip()
+    if upper == "ALL":
+        return "ALL"
+    if len(upper) == 2 and upper.isalpha():
+        return upper
+
+    # First prefer an exact state-name match.
+    exact = _INDIAN_STATE_CODE_ALIASES.get(upper)
+    if exact:
+        return exact
+
+    # Older employee records commonly store values such as
+    # ``Assam/Guwahati (HO)`` or ``Assam - Guwahati`` in the location field.
+    # Match only at a clear token boundary so a city/office name cannot
+    # accidentally resolve to another state's code.
+    normalized = upper.replace("/", " ").replace("-", " ").replace(",", " ")
+    normalized = " ".join(normalized.split())
+    for state_name, state_code in sorted(
+        _INDIAN_STATE_CODE_ALIASES.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        if normalized == state_name or normalized.startswith(f"{state_name} "):
+            return state_code
+
+    return ""
+
+
+def _employee_state_code(employee: Mapping[str, Any], structure: Mapping[str, Any]) -> str:
+    structure_state = _state_code_from_employee_value(structure.get("state_code"))
+
+    # A salary structure deliberately pinned to a specific state remains the
+    # strongest explicit override.  A generic ALL structure, however, must not
+    # hide a specific employee state because that would make state-specific
+    # deductions (notably Assam Professional Tax) disappear.
     if structure_state and structure_state != "ALL":
-        if len(structure_state) == 2:
-            return structure_state
-        raise PayrollConfigError(
-            "Payroll state must be stored as a two-letter state code for this employee.",
-            code="invalid_employee_payroll_state",
-        )
+        return structure_state
 
     employee_candidates = (
         employee.get("payroll_state_code"),
         employee.get("work_state_code"),
         employee.get("state_code"),
+        employee.get("payroll_state"),
+        employee.get("work_state"),
+        employee.get("state"),
+        employee.get("location"),
+        employee.get("work_location"),
+        employee.get("office_location"),
     )
 
-    for value in employee_candidates:
-        candidate = safe_str(value).upper()
-        if not candidate:
+    saw_invalid_explicit_state = False
+    for index, value in enumerate(employee_candidates):
+        if not safe_str(value):
             continue
-        if candidate == "ALL" or len(candidate) == 2:
+        candidate = _state_code_from_employee_value(value)
+        if candidate and candidate != "ALL":
             return candidate
+        # The first six values are explicit state fields. If one is populated
+        # but cannot be interpreted, remember that instead of silently masking
+        # the bad value with a generic statutory configuration.
+        if index < 6 and not candidate:
+            saw_invalid_explicit_state = True
+
+    if saw_invalid_explicit_state:
         raise PayrollConfigError(
-            "Payroll state must be stored as a two-letter state code for this employee.",
+            "Payroll state is invalid for this employee. Use a two-letter state code or a recognised Indian state name.",
             code="invalid_employee_payroll_state",
         )
 
-    # Preserve an explicitly configured generic structure only when no employee
-    # state is available. This keeps existing global statutory setups working.
+    # ``ALL`` remains a backward-compatible last resort only when the employee
+    # record truly contains no resolvable state/location. This preserves global
+    # statutory configurations while allowing legacy location values such as
+    # Assam/Guwahati (HO) to select the Assam statutory revision.
     if structure_state == "ALL":
         return "ALL"
 

@@ -1386,9 +1386,16 @@ def get_effective_statutory_config(
     tenant_id = safe_str(tenant_id)
     requested_state = normalize_state_code(state_code)
 
+    # Historical payroll must resolve the statutory revision that was valid
+    # on the payroll date, not merely the revision that is active today.
+    # Once a newer revision is activated, the previous revision is marked
+    # superseded but remains authoritative for its closed effective period.
+    # Restricting this lookup to status=active caused historical payroll (for
+    # example August payroll recalculated after a September revision) to miss
+    # the Assam PT revision and fall back to ALL, where PT may be disabled.
     common_query = {
         "tenant_id": tenant_id,
-        "status": "active",
+        "status": {"$in": ["active", "superseded"]},
         "effective_from": {"$lte": reference_date},
         "$or": [
             {"effective_to": None},
