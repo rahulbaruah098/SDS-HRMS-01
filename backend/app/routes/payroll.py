@@ -30,6 +30,7 @@ from app.services.payroll_config_service import (
     activate_statutory_config_revision,
     delete_salary_structure_draft,
     delete_statutory_config_draft,
+    delete_active_statutory_config_revision,
     get_effective_salary_structure,
     get_effective_statutory_config,
     list_salary_structure_history,
@@ -773,6 +774,51 @@ def delete_statutory_config_draft_route(statutory_config_id: str):
     return _success(
         "Statutory configuration draft deleted successfully.",
         deleted_statutory_config_id=safe_str(config.get("_id")),
+    )
+
+
+@payroll_bp.delete("/statutory-config/<statutory_config_id>/active")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_CONFIG_ROLES)
+def delete_active_statutory_config_route(statutory_config_id: str):
+    """Delete an accidentally activated statutory revision safely.
+
+    Active revisions are soft-deleted by the payroll configuration service.
+    The service also blocks deletion when a persisted payroll/payslip already
+    references the revision so historical payroll remains auditable.
+    """
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+
+    config = delete_active_statutory_config_revision(
+        db,
+        tenant_id=tenant_id,
+        statutory_config_id=statutory_config_id,
+        actor_id=_current_user_id(),
+    )
+
+    audit(
+        "payroll_statutory_config_active_revision_deleted",
+        "statutory_configs",
+        config.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "state_code": config.get("state_code"),
+            "version": config.get("version"),
+            "effective_from": config.get("effective_from"),
+            "deletion_type": config.get("deletion_type")
+            or "active_revision_correction",
+        },
+    )
+
+    return _success(
+        (
+            "Active statutory configuration revision deleted successfully. "
+            "You can now activate the corrected draft revision."
+        ),
+        deleted_statutory_config_id=safe_str(config.get("_id")),
+        statutory_config=config,
     )
 
 # ---------------------------------------------------------------------------

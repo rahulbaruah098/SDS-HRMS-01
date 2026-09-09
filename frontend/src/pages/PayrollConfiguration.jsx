@@ -1418,6 +1418,48 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     }
   }
 
+  async function deleteActiveStatutoryRevision(document = {}) {
+    const id = documentId(document);
+
+    if (!id || normalizeKey(document.status) !== 'active') {
+      alerts.warning('Only the currently active statutory revision can be deleted with this action.', 'Active Revision Required');
+      return;
+    }
+
+    const confirmed = await alerts.confirm(
+      `Delete ACTIVE statutory revision ${safeText(document.state_code, 'ALL')} Version ${document.version || '—'} effective from ${formatDate(document.effective_from)}? This should only be used to correct an accidentally activated revision. The action cannot be undone from this screen.`,
+      {
+        title: 'Delete Active Statutory Revision',
+        confirmText: 'Delete Active Revision',
+      },
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingStatutoryId(id);
+      const data = await api(`/payroll/statutory-config/${encodeURIComponent(id)}/active`, {
+        method: 'DELETE',
+        body: JSON.stringify(tenantParams()),
+      });
+      await loadStatutoryHistory(safeText(document.state_code, stateCode));
+      await loadEmployeeStatutoryReadiness(selectedEmployee);
+      alerts.success(
+        data.message || 'Active statutory revision deleted. You can now activate the corrected draft.',
+        'Active Revision Deleted',
+      );
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to delete the active statutory revision.',
+        'Delete Active Revision Failed',
+      );
+    } finally {
+      setDeletingStatutoryId('');
+    }
+  }
+
   async function deleteStatutoryDraft(document = {}) {
     const id = documentId(document);
 
@@ -2571,6 +2613,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                           onClick={() => deleteStatutoryDraft(item)}
                         >
                           {deletingStatutoryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Draft
+                        </button>
+                      </>
+                    ) : normalizeKey(item.status) === 'active' ? (
+                      <>
+                        <button type="button" className="secondary" onClick={() => startStatutoryRevision(statutoryFormFromDocument(item))}>Use for New Revision</button>
+                        <button
+                          type="button"
+                          className="danger-light"
+                          disabled={deletingStatutoryId === documentId(item)}
+                          onClick={() => deleteActiveStatutoryRevision(item)}
+                          title="Delete an accidentally activated statutory revision"
+                        >
+                          {deletingStatutoryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Active
                         </button>
                       </>
                     ) : (

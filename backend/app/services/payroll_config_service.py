@@ -1182,6 +1182,119 @@ def delete_statutory_config_draft(
     return draft
 
 
+def delete_active_statutory_config_revision(
+    db: Any,
+    *,
+    tenant_id: str,
+    statutory_config_id: Any,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Safely remove the current active statutory configuration revision.
+
+    This operation exists for correcting an accidentally activated effective
+    date. Unlike draft deletion, an active revision is soft-deleted so the
+    deletion remains auditable. The operation is blocked when a persisted
+    payslip already references the revision because historical payroll must
+    continue to point to the exact statutory configuration that was used.
+
+    The previously superseded revision is intentionally *not* reactivated.
+    Leaving no active revision after deletion allows an administrator to
+    activate a corrected draft whose effective date may be earlier than the
+    deleted revision (for example, correcting 08-Sep to 01-Aug).
+    """
+    config_id = object_id_or_none(statutory_config_id)
+
+    if not config_id:
+        raise PayrollConfigError(
+            "Invalid statutory configuration id.",
+            code="invalid_statutory_config_id",
+        )
+
+    tenant_id = safe_str(tenant_id)
+    active = db.statutory_configs.find_one({
+        "_id": config_id,
+        "tenant_id": tenant_id,
+        "status": "active",
+        "is_deleted": {"$ne": True},
+    })
+
+    if not active:
+        raise PayrollConfigError(
+            "Active statutory configuration revision not found.",
+            status_code=404,
+            code="active_statutory_config_not_found",
+        )
+
+    # Once payroll has been calculated using a statutory revision, removing
+    # that revision would make the audit trail misleading. Payslips keep an
+    # immutable snapshot, but we still protect the source revision itself.
+    referenced_payslip = db.payslips.find_one({
+        "tenant_id": tenant_id,
+        "statutory_config_id": safe_str(active.get("_id")),
+        "is_deleted": {"$ne": True},
+    })
+    if referenced_payslip:
+        raise PayrollConfigError(
+            (
+                "This active statutory revision cannot be deleted because "
+                "one or more payroll records already use it. Create a new "
+                "revision instead to preserve payroll history."
+            ),
+            status_code=409,
+            code="statutory_config_active_revision_in_use",
+        )
+
+    current_time = now_utc()
+    result = db.statutory_configs.update_one(
+        {
+            "_id": config_id,
+            "tenant_id": tenant_id,
+            "status": "active",
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "is_deleted": True,
+                "deleted_by": safe_str(actor_id),
+                "deleted_at": current_time,
+                "deletion_type": "active_revision_correction",
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            }
+        },
+    )
+
+    if result.modified_count != 1:
+        raise PayrollConfigError(
+            "Active statutory revision could not be deleted because it changed.",
+            status_code=409,
+            code="statutory_config_active_delete_conflict",
+        )
+
+    # Remove the forward pointer from the immediately preceding superseded
+    # revision when it points at the revision we just deleted. We deliberately
+    # keep that predecessor superseded and keep its original effective_to: the
+    # corrected draft will become the next active source of truth.
+    db.statutory_configs.update_one(
+        {
+            "tenant_id": tenant_id,
+            "state_code": active.get("state_code"),
+            "status": "superseded",
+            "superseded_by": safe_str(active.get("_id")),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$unset": {"superseded_by": ""},
+            "$set": {
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            },
+        },
+    )
+
+    return active
+
+
 def activate_statutory_config_revision(
     db: Any,
     *,
