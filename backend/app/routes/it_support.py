@@ -5,7 +5,7 @@ from datetime import datetime
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
-from app.middleware.tenant_guard import tenant_module_required
+from app.utils.notification_service import notify_users as centralized_notify_users
 
 
 it_support_bp = Blueprint("it_support", __name__)
@@ -241,24 +241,26 @@ def build_employee_snapshot(employee=None, user=None):
 
 
 def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
-    docs = []
-    now = now_utc()
+    """Persist IT Support notifications and deliver them through central FCM."""
+    notification_meta = dict(meta or {})
 
-    for user_id in set([str(uid) for uid in user_ids if uid]):
-        docs.append({
-            "tenant_id": tenant_id or current_tenant_id(),
-            "user_id": user_id,
-            "title": title,
-            "body": body,
-            "meta": meta or {},
-            "read": False,
-            "status": "unread",
-            "created_at": now,
-            "updated_at": now,
-        })
+    # Preserve the module's existing metadata while adding canonical fields used
+    # by the shared Notification Center and Flutter push-routing layer.
+    notification_meta.setdefault("module", "it_support")
+    notification_meta.setdefault(
+        "notification_type",
+        notification_meta.get("type") or "it_support",
+    )
+    notification_meta.setdefault("page", "it_support")
 
-    if docs:
-        db.notifications.insert_many(docs)
+    return centralized_notify_users(
+        db,
+        user_ids,
+        title,
+        body,
+        meta=notification_meta,
+        tenant_id=tenant_id or current_tenant_id(),
+    )
 
 
 def employee_user_id(employee):
@@ -291,7 +293,13 @@ def department_is_it(employee=None):
 def is_it_head(employee=None):
     employee = employee or {}
 
-    return truthy(employee.get("is_it_support_head"))
+    return (
+        truthy(employee.get("is_it_support_head"))
+        or (
+            department_is_it(employee)
+            and truthy(employee.get("is_team_leader"))
+        )
+    )
 
 
 def is_it_member(employee=None):
@@ -300,6 +308,7 @@ def is_it_member(employee=None):
     return (
         is_it_head(employee)
         or truthy(employee.get("is_it_support_member"))
+        or department_is_it(employee)
     )
 
 
@@ -332,18 +341,18 @@ def it_department_query(tenant_id, include_heads=True):
         "is_active": {"$ne": False},
     }
 
-    support_conditions = [
+    department_conditions = [
+        {"department": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
+        {"department_id": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
         {"is_it_support_member": {"$in": [True, "true", "True", "1", 1]}},
     ]
 
     if include_heads:
-        support_conditions.append({
-            "is_it_support_head": {"$in": [True, "true", "True", "1", 1]}
-        })
+        department_conditions.append({"is_it_support_head": {"$in": [True, "true", "True", "1", 1]}})
 
     return {
         **active_filter,
-        "$or": support_conditions,
+        "$or": department_conditions,
     }
 
 
@@ -352,7 +361,20 @@ def get_it_heads(db, tenant_id):
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
         "is_active": {"$ne": False},
-        "is_it_support_head": {"$in": [True, "true", "True", "1", 1]},
+        "$or": [
+            {"is_it_support_head": {"$in": [True, "true", "True", "1", 1]}},
+            {
+                "$and": [
+                    {
+                        "$or": [
+                            {"department": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
+                            {"department_id": {"$regex": r"(^|\b)(IT|Information Technology|Technology|Tech|Software|MIS)(\b|$)", "$options": "i"}},
+                        ]
+                    },
+                    {"is_team_leader": {"$in": [True, "true", "True", "1", 1]}},
+                ]
+            },
+        ],
     }).sort("employee_name", 1))
 
 
@@ -440,28 +462,26 @@ def build_ticket_query_for_current_user(db, include_all_for_it=False):
 
     query = {"tenant_id": tenant_id}
 
-    # Used only when a backend route intentionally wants all tenant tickets for IT Head.
     if include_all_for_it and can_manage_normal_it_support(employee):
         return query
 
-    # My Tickets must show only tickets raised/created by the current user.
-    # It must NOT include assigned tickets or all tenant tickets.
-    clauses = []
+    clauses = [
+        {"created_by_user_id": user_id},
+        {"raised_by_user_id": user_id},
+    ]
 
-    if user_id:
-        clauses.extend([
-            {"created_by_user_id": user_id},
-            {"raised_by_user_id": user_id},
-        ])
+    if is_it_member(employee):
+        clauses.append({"tenant_id": tenant_id})
 
     if emp_id:
         clauses.extend([
             {"created_by_employee_id": emp_id},
             {"raised_by_employee_id": emp_id},
+            {"assigned_to_employee_id": emp_id},
         ])
 
-    if not clauses:
-        clauses = [{"created_by_user_id": "__none__"}]
+    if user_id:
+        clauses.append({"assigned_to_user_id": user_id})
 
     query["$or"] = clauses
 
@@ -469,7 +489,6 @@ def build_ticket_query_for_current_user(db, include_all_for_it=False):
 
 
 @it_support_bp.get("/options")
-@tenant_module_required("it_support")
 @current_user_required
 def it_support_options():
     db = get_db()
@@ -503,7 +522,6 @@ def it_support_options():
 
 
 @it_support_bp.get("/profile")
-@tenant_module_required("it_support")
 @current_user_required
 def it_support_profile():
     db = get_db()
@@ -524,7 +542,6 @@ def it_support_profile():
 
 
 @it_support_bp.post("")
-@tenant_module_required("it_support")
 @current_user_required
 def create_it_support_ticket():
     db = get_db()
@@ -664,7 +681,6 @@ def create_it_support_ticket():
 
 
 @it_support_bp.get("/my")
-@tenant_module_required("it_support")
 @current_user_required
 def my_it_support_tickets():
     db = get_db()
@@ -691,7 +707,6 @@ def my_it_support_tickets():
 
 
 @it_support_bp.get("")
-@tenant_module_required("it_support")
 @current_user_required
 def list_it_support_tickets():
     db = get_db()
@@ -794,7 +809,6 @@ def list_it_support_tickets():
 
 
 @it_support_bp.get("/<ticket_id>")
-@tenant_module_required("it_support")
 @current_user_required
 def it_support_ticket_detail(ticket_id):
     db = get_db()
@@ -846,7 +860,6 @@ def it_support_ticket_detail(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/assign")
-@tenant_module_required("it_support")
 @current_user_required
 def assign_it_support_ticket(ticket_id):
     db = get_db()
@@ -971,7 +984,6 @@ def assign_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/status")
-@tenant_module_required("it_support")
 @current_user_required
 def update_it_support_status(ticket_id):
     db = get_db()
@@ -1114,7 +1126,6 @@ def update_it_support_status(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/escalate")
-@tenant_module_required("it_support")
 @current_user_required
 def escalate_it_support_ticket(ticket_id):
     db = get_db()
@@ -1221,7 +1232,6 @@ def escalate_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/review")
-@tenant_module_required("it_support")
 @current_user_required
 def review_it_support_ticket(ticket_id):
     db = get_db()
@@ -1353,7 +1363,6 @@ def review_it_support_ticket(ticket_id):
 
 
 @it_support_bp.patch("/<ticket_id>/reopen")
-@tenant_module_required("it_support")
 @current_user_required
 def reopen_it_support_ticket(ticket_id):
     db = get_db()

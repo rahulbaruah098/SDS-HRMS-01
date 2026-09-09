@@ -11,6 +11,19 @@ from app.routes.attendance import (
     attendance_schedule_for_tenant,
     format_attendance_schedule_time,
 )
+from app.utils.notification_service import (
+    TENANT_DEVICE_SCOPE as NOTIFICATION_TENANT_DEVICE_SCOPE,
+    active_fcm_device_rows_for_users as centralized_active_fcm_device_rows_for_users,
+    active_fcm_tokens_for_users as centralized_active_fcm_tokens_for_users,
+    device_scope_for_roles as notification_device_scope_for_roles,
+    normalize_platform_notification_item as centralized_normalize_platform_notification_item,
+    normalize_platform_notification_meta as centralized_normalize_platform_notification_meta,
+    notification_identity_values_for_user_ids as centralized_notification_identity_values_for_user_ids,
+    notify_users as centralized_notify_users,
+    register_device as centralized_register_notification_device,
+    send_fcm_to_users as centralized_send_fcm_to_users,
+    unregister_device as centralized_unregister_notification_device,
+)
 
 try:
     import firebase_admin
@@ -265,85 +278,13 @@ def canonical_platform_notification_navigation(value):
 
 
 def normalize_platform_notification_meta(meta):
-    meta = dict(meta or {})
-
-    if not is_platform_notification_payload(meta):
-        return meta
-
-    navigation = canonical_platform_notification_navigation(
-        meta
-    )
-    page = navigation["page"]
-    route = navigation["mobile_route"]
-    label = navigation["label"]
-
-    meta["platform_notification"] = True
-    meta["target"] = page
-    meta["page"] = page
-    meta["action_page"] = page
-    meta["action_target"] = page
-    meta["action_label"] = label
-    meta["action_route"] = route
-    meta["mobile_route"] = route
-    meta["web_page"] = page
-
-    if not normalize_text(meta.get("link_id")):
-        meta["link_id"] = normalize_text(
-            meta.get("source_id")
-            or meta.get("request_id")
-            or meta.get("premium_request_id")
-            or meta.get("order_id")
-            or meta.get("payment_id")
-            or meta.get("tenant_id")
-        )
-
-    if not normalize_text(meta.get("link_type")):
-        meta["link_type"] = normalize_text(
-            meta.get("notification_type")
-            or meta.get("type")
-            or "platform_notification"
-        )
-
-    return meta
+    """Keep legacy workflow callers on the centralized platform normalizer."""
+    return centralized_normalize_platform_notification_meta(meta)
 
 
 def normalize_platform_notification_item(item):
-    item = dict(item or {})
-
-    if not is_platform_notification_payload(item):
-        return item
-
-    meta = normalize_platform_notification_meta(
-        item.get("meta") or {}
-    )
-    navigation = canonical_platform_notification_navigation(
-        {
-            **item,
-            "meta": meta,
-        }
-    )
-    page = navigation["page"]
-    label = navigation["label"]
-    route = navigation["mobile_route"]
-
-    item["platform_notification"] = True
-    item["target"] = page
-    item["page"] = page
-    item["action_page"] = page
-    item["action_target"] = page
-    item["action_label"] = label
-    item["action_route"] = route
-    item["mobile_route"] = route
-    item["web_page"] = page
-    item["meta"] = meta
-    item["action"] = {
-        "page": page,
-        "target": page,
-        "label": label,
-        "route": route,
-    }
-
-    return item
+    """Keep notification-list output aligned with the centralized service."""
+    return centralized_normalize_platform_notification_item(item)
 
 
 def append_identity_value(values, value):
@@ -383,198 +324,27 @@ def identity_values_from_record(record):
     return values
 
 def notification_identity_values_for_user_ids(db, user_ids, tenant_id=None):
-    values = []
-
-    clean_user_ids = [
-        normalize_text(user_id)
-        for user_id in user_ids
-        if normalize_text(user_id)
-    ]
-
-    clean_user_ids = list(dict.fromkeys(clean_user_ids))
-
-    for user_id in clean_user_ids:
-        append_identity_value(values, user_id)
-
-    object_ids = [
-        safe_object_id(user_id)
-        for user_id in clean_user_ids
-        if safe_object_id(user_id)
-    ]
-
-    user_or = [
-        {"id": {"$in": clean_user_ids}},
-        {"user_id": {"$in": clean_user_ids}},
-        {"employee_id": {"$in": clean_user_ids}},
-        {"employee_code": {"$in": clean_user_ids}},
-        {"emp_code": {"$in": clean_user_ids}},
-        {"email": {"$in": clean_user_ids}},
-        {"official_email": {"$in": clean_user_ids}},
-        {"username": {"$in": clean_user_ids}},
-    ]
-
-    if object_ids:
-        user_or.insert(0, {"_id": {"$in": object_ids}})
-
-    user_query = {
-        "$or": user_or,
-        "is_deleted": {"$ne": True},
-    }
-
-    if tenant_id:
-        user_query["tenant_id"] = tenant_id
-
-    users = list(
-        db.users.find(
-            user_query,
-            {
-                "_id": 1,
-                "id": 1,
-                "user_id": 1,
-                "employee_id": 1,
-                "employee_code": 1,
-                "emp_code": 1,
-                "email": 1,
-                "official_email": 1,
-                "username": 1,
-                "tenant_id": 1,
-            },
-        ).limit(5000)
-    )
-
-    for user in users:
-        for item in identity_values_from_record(user):
-            append_identity_value(values, item)
-
-    employee_lookup_values = list(dict.fromkeys(values))
-
-    employee_object_ids = [
-        safe_object_id(value)
-        for value in employee_lookup_values
-        if safe_object_id(value)
-    ]
-
-    employee_or = [
-        {"user_id": {"$in": employee_lookup_values}},
-        {"employee_user_id": {"$in": employee_lookup_values}},
-        {"employee_id": {"$in": employee_lookup_values}},
-        {"employee_ref_id": {"$in": employee_lookup_values}},
-        {"employee_code": {"$in": employee_lookup_values}},
-        {"emp_code": {"$in": employee_lookup_values}},
-        {"code": {"$in": employee_lookup_values}},
-        {"email": {"$in": employee_lookup_values}},
-        {"official_email": {"$in": employee_lookup_values}},
-    ]
-
-    if employee_object_ids:
-        employee_or.insert(0, {"_id": {"$in": employee_object_ids}})
-
-    employee_query = {
-        "$or": employee_or,
-        "is_deleted": {"$ne": True},
-    }
-
-    if tenant_id:
-        employee_query["tenant_id"] = tenant_id
-
-    employees = list(
-        db.employees.find(
-            employee_query,
-            {
-                "_id": 1,
-                "user_id": 1,
-                "employee_user_id": 1,
-                "employee_id": 1,
-                "employee_ref_id": 1,
-                "employee_code": 1,
-                "emp_code": 1,
-                "code": 1,
-                "email": 1,
-                "official_email": 1,
-                "tenant_id": 1,
-            },
-        ).limit(5000)
-    )
-
-    for employee in employees:
-        for item in identity_values_from_record(employee):
-            append_identity_value(values, item)
-
-    return list(dict.fromkeys(values))
-
-def active_fcm_device_rows_for_users(db, user_ids, tenant_id=None):
-    identity_values = notification_identity_values_for_user_ids(
+    return centralized_notification_identity_values_for_user_ids(
         db,
         user_ids,
         tenant_id=tenant_id,
     )
 
-    identity_values = [
-        normalize_text(value)
-        for value in identity_values
-        if normalize_text(value)
-    ]
-
-    identity_values = list(dict.fromkeys(identity_values))
-
-    if not identity_values:
-        return [], [], 0
-
-    base_query = {
-        "is_active": {"$ne": False},
-        "is_deleted": {"$ne": True},
-        "token": {"$nin": ["", None]},
-    }
-
-    if tenant_id:
-        base_query["tenant_id"] = tenant_id
-
-    scanned_device_count = db.notification_devices.count_documents(base_query)
-
-    query = {
-        **base_query,
-        "$or": [
-            {"user_id": {"$in": identity_values}},
-            {"employee_id": {"$in": identity_values}},
-            {"employee_user_id": {"$in": identity_values}},
-            {"user_ids": {"$in": identity_values}},
-            {"identity_values": {"$in": identity_values}},
-        ],
-    }
-
-    rows = list(
-        db.notification_devices.find(
-            query,
-            {
-                "token": 1,
-                "user_id": 1,
-                "employee_id": 1,
-                "employee_user_id": 1,
-                "user_ids": 1,
-                "identity_values": 1,
-                "tenant_id": 1,
-                "platform": 1,
-                "last_seen_at": 1,
-            },
-        ).limit(10000)
-    )
-
-    return rows, identity_values, scanned_device_count
-
-def active_fcm_tokens_for_users(db, user_ids, tenant_id=None):
-    rows, _, _ = active_fcm_device_rows_for_users(
+def active_fcm_device_rows_for_users(db, user_ids, tenant_id=None, scope=None):
+    return centralized_active_fcm_device_rows_for_users(
         db,
         user_ids,
         tenant_id=tenant_id,
+        scope=scope or NOTIFICATION_TENANT_DEVICE_SCOPE,
     )
 
-    tokens = [
-        normalize_text(row.get("token"))
-        for row in rows
-        if normalize_text(row.get("token"))
-    ]
-
-    return list(dict.fromkeys(tokens))
+def active_fcm_tokens_for_users(db, user_ids, tenant_id=None, scope=None):
+    return centralized_active_fcm_tokens_for_users(
+        db,
+        user_ids,
+        tenant_id=tenant_id,
+        scope=scope or NOTIFICATION_TENANT_DEVICE_SCOPE,
+    )
 
 def mark_invalid_fcm_tokens(db, tokens):
     tokens = [
@@ -713,95 +483,24 @@ def send_fcm_to_tokens(db, tokens, title, body, data=None):
         "invalid_token_count": len(invalid_tokens),
     }
 
-def send_fcm_to_users(db, user_ids, title, body, meta=None, tenant_id=None):
-    meta = meta or {}
-
-    if is_platform_notification_payload(meta):
-        meta = normalize_platform_notification_meta(meta)
-
-    clean_user_ids = [
-        str(user_id)
-        for user_id in user_ids
-        if normalize_text(user_id)
-    ]
-
-    clean_user_ids = list(dict.fromkeys(clean_user_ids))
-
-    device_rows, identity_values, scanned_device_count = active_fcm_device_rows_for_users(
+def send_fcm_to_users(
+    db,
+    user_ids,
+    title,
+    body,
+    meta=None,
+    tenant_id=None,
+    device_scope=None,
+):
+    return centralized_send_fcm_to_users(
         db,
-        clean_user_ids,
-        tenant_id=tenant_id,
-    )
-
-    tokens = [
-        normalize_text(row.get("token"))
-        for row in device_rows
-        if normalize_text(row.get("token"))
-    ]
-
-    tokens = list(dict.fromkeys(tokens))
-
-    result = send_fcm_to_tokens(
-        db,
-        tokens,
+        user_ids,
         title,
         body,
-        data={
-            "title": normalize_text(title),
-            "body": normalize_text(body),
-            "message": normalize_text(body),
-            "target": meta.get("target") or meta.get("page") or "notifications",
-            "page": meta.get("page") or meta.get("target") or "notifications",
-            "action_target": meta.get("action_target") or meta.get("target") or meta.get("page") or "notifications",
-            "action_page": meta.get("action_page") or meta.get("page") or meta.get("target") or "notifications",
-            "action_label": meta.get("action_label") or "",
-            "action_route": meta.get("action_route") or meta.get("mobile_route") or "",
-            "mobile_route": meta.get("mobile_route") or meta.get("action_route") or "",
-            "web_page": meta.get("web_page") or meta.get("page") or meta.get("target") or "notifications",
-            "platform_notification": meta.get("platform_notification", False),
-            "source_id": meta.get("source_id") or "",
-            "tenant_id": meta.get("source_tenant_id") or meta.get("tenant_id") or "",
-            "company_name": meta.get("company_name") or "",
-            "notification_type": meta.get("notification_type") or meta.get("type") or "system",
-            "priority": meta.get("priority") or "normal",
-            "link_id": meta.get("link_id") or "",
-            "link_type": meta.get("link_type") or "",
-        },
+        meta=meta,
+        tenant_id=tenant_id,
+        device_scope=device_scope,
     )
-
-    result["token_count"] = len(tokens)
-    result["user_count"] = len(clean_user_ids)
-    result["tenant_id"] = tenant_id or ""
-    result["lookup_user_ids"] = clean_user_ids
-    result["lookup_identity_values"] = identity_values[:80]
-    result["scanned_device_count"] = scanned_device_count
-    result["device_matches"] = [
-        {
-            "user_id": str(row.get("user_id") or ""),
-            "employee_id": str(row.get("employee_id") or ""),
-            "employee_user_id": str(row.get("employee_user_id") or ""),
-            "tenant_id": str(row.get("tenant_id") or ""),
-            "platform": str(row.get("platform") or ""),
-            "token_prefix": normalize_text(row.get("token"))[:18],
-            "last_seen_at": row.get("last_seen_at"),
-        }
-        for row in device_rows
-    ]
-
-    current_app.logger.info(
-        "FCM result tenant=%s users=%s identities=%s scanned_devices=%s tokens=%s sent=%s failed=%s skipped=%s reason=%s",
-        tenant_id or "",
-        len(clean_user_ids),
-        len(identity_values),
-        scanned_device_count,
-        len(tokens),
-        result.get("sent"),
-        result.get("failed"),
-        result.get("skipped"),
-        result.get("reason", ""),
-    )
-
-    return result
 
 ADMIN_HR_ROLES = {
     "super_admin",
@@ -1269,79 +968,83 @@ def users_for_roles(db, role_names, tenant_id=None):
     return [str(row["_id"]) for row in rows]
 
 
-def notify_users(db, user_ids, title, body, meta=None, tenant_id=None):
-    now = datetime.utcnow()
-    tenant_id = tenant_id or current_tenant_id()
-    meta = meta or {}
 
-    recipient_user_ids = [
-        str(user_id)
-        for user_id in user_ids
-        if normalize_text(user_id)
-    ]
+def notification_user_id_for_record(db, record, tenant_id=None, fields=None):
+    """Resolve a workflow record's user recipient from user/employee aliases."""
+    record = record or {}
+    tenant_id = normalize_text(tenant_id) or current_tenant_id()
+    fields = fields or (
+        "user_id",
+        "employee_user_id",
+        "raised_by_user_id",
+        "employee_id",
+        "employee_ref_id",
+        "raised_by",
+        "created_by_employee_id",
+        "created_by",
+    )
 
-    recipient_user_ids = list(dict.fromkeys(recipient_user_ids))
+    for field in fields:
+        candidate = normalize_text(record.get(field))
+        if not candidate:
+            continue
 
-    docs = []
+        # Employee records are the most reliable bridge from HRMS workflow
+        # identifiers to the authenticated user id used by notifications.
+        resolved = employee_user_id(db, candidate, tenant_id)
+        if resolved:
+            return resolved
 
-    for user_id in recipient_user_ids:
-        docs.append({
+        user_or = [
+            {"id": candidate},
+            {"user_id": candidate},
+            {"employee_id": candidate},
+            {"employee_code": candidate},
+            {"emp_code": candidate},
+            {"email": normalize_email(candidate)},
+            {"official_email": normalize_email(candidate)},
+            {"username": candidate},
+        ]
+        candidate_obj_id = safe_object_id(candidate)
+        if candidate_obj_id:
+            user_or.insert(0, {"_id": candidate_obj_id})
+
+        user_query = {
             "tenant_id": tenant_id,
-            "target_tenant_id": meta.get("target_tenant_id") or tenant_id,
-            "user_id": str(user_id),
-            "user_ids": [str(user_id)],
-            "title": title,
-            "body": body,
-            "message": body,
-            "notification_type": meta.get("notification_type") or meta.get("type") or "system",
-            "priority": meta.get("priority") or "normal",
-            "target": meta.get("target") or meta.get("page") or "notifications",
-            "target_scope": meta.get("target_scope") or "selected_users",
-            "audience": meta.get("audience") or "selected_users",
-            "show_popup": meta.get("show_popup", True),
-            "popup_seen": False,
-            "popup_seen_at": "",
-            "read": False,
-            "status": "unread",
-            "meta": meta,
-            "created_at": now,
-            "updated_at": now,
-            "created_by": meta.get("created_by") or str(g.current_user.get("_id", "")),
-            "created_by_name": meta.get("created_by_name") or g.current_user.get("name") or g.current_user.get("email") or "System",
-            "is_deleted": False,
-        })
+            "is_deleted": {"$ne": True},
+            "$or": user_or,
+        }
+        user = db.users.find_one(user_query, {"_id": 1})
+        if user:
+            return str(user["_id"])
 
-    if not docs:
-        return []
+    return ""
 
-    insert_result = db.notifications.insert_many(docs)
-    inserted_ids = list(insert_result.inserted_ids)
 
-    fcm_result = send_fcm_to_users(
+def notify_users(
+    db,
+    user_ids,
+    title,
+    body,
+    meta=None,
+    tenant_id=None,
+    *,
+    event="",
+    event_key="",
+    push=True,
+):
+    """Compatibility wrapper around the centralized notification engine."""
+    return centralized_notify_users(
         db,
-        recipient_user_ids,
+        user_ids,
         title,
         body,
         meta=meta,
         tenant_id=tenant_id,
+        event=event,
+        event_key=event_key,
+        push=push,
     )
-
-    db.notifications.update_many(
-        {"_id": {"$in": inserted_ids}},
-        {
-            "$set": {
-                "fcm_result": fcm_result,
-                "fcm_sent_at": datetime.utcnow(),
-            }
-        },
-    )
-
-    for index, inserted_id in enumerate(inserted_ids):
-        docs[index]["_id"] = inserted_id
-        docs[index]["fcm_result"] = fcm_result
-        docs[index]["fcm_sent_at"] = datetime.utcnow()
-
-    return docs
 
 def current_user_id():
     return str(g.current_user.get("_id") or "")
@@ -2991,18 +2694,23 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         else:
             user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id))
 
+    user_ids = [user_id for user_id in user_ids if normalize_text(user_id)]
     if not user_ids:
         return
 
+    leave_id = str(leave_doc.get("_id") or "")
     notify_users(
         db,
         user_ids,
         "Leave Approval Pending",
         f"{employee_display_name(employee)} has a leave request pending at {leave_stage_label(stage)} stage.",
         {
+            "notification_type": "leave_approval_pending",
+            "priority": "high",
             "target": "team_approvals",
             "page": "team_approvals",
-            "leave_request_id": str(leave_doc.get("_id")),
+            "source_id": leave_id,
+            "leave_request_id": leave_id,
             "employee_id": str(employee.get("_id")),
             "stage": stage,
             "approval_stage": stage,
@@ -3010,22 +2718,35 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
             "status": "pending",
         },
         tenant_id=tenant_id,
+        event="leave.approval_pending",
+        event_key=f"leave:{leave_id}:approval_pending:{stage}",
     )
 
 def notify_employee_leave_decision(db, employee, leave_doc, status):
     status_text = "approved" if status == "approved" else "rejected/cancelled"
+    leave_id = str(leave_doc.get("_id") or "")
+    user_id = normalize_text(employee.get("user_id"))
+
+    if not user_id:
+        return
 
     notify_users(
         db,
-        [employee.get("user_id")],
+        [user_id],
         "Leave Request Updated",
         f"Your leave request has been {status_text}.",
         {
+            "notification_type": f"leave_{normalize_status(status) or 'updated'}",
+            "priority": "high",
             "target": "application_status",
-            "leave_request_id": str(leave_doc.get("_id")),
+            "page": "application_status",
+            "source_id": leave_id,
+            "leave_request_id": leave_id,
             "status": status,
         },
         tenant_id=employee.get("tenant_id") or current_tenant_id(),
+        event=f"leave.{normalize_status(status) or 'updated'}",
+        event_key=f"leave:{leave_id}:employee:{normalize_status(status) or 'updated'}",
     )
 
 
@@ -3041,6 +2762,7 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
     to_date = leave_doc.get("to_date") or leave_doc.get("upto_date") or ""
     team_leader_name = leave_doc.get("team_leader_decision_by_name") or leave_doc.get("approved_by_team_leader_name") or leave_doc.get("team_leader_name") or "Not applicable"
     reporting_officer_name = leave_doc.get("reporting_officer_decision_by_name") or leave_doc.get("approved_by_reporting_officer_name") or leave_doc.get("reporting_officer_name") or "Not applicable"
+    leave_id = str(leave_doc.get("_id") or "")
 
     notify_users(
         db,
@@ -3051,9 +2773,12 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
             f"Team Leader: {team_leader_name}. Reporting Officer: {reporting_officer_name}."
         ),
         {
+            "notification_type": "leave_record_update",
+            "priority": "normal",
             "target": "team_approvals",
             "page": "team_approvals",
-            "leave_request_id": str(leave_doc.get("_id")),
+            "source_id": leave_id,
+            "leave_request_id": leave_id,
             "employee_id": str(employee.get("_id")),
             "from_date": from_date,
             "to_date": to_date,
@@ -3064,6 +2789,8 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
             "record_only": True,
         },
         tenant_id=tenant_id,
+        event="leave.hr_record_update",
+        event_key=f"leave:{leave_id}:hr_record:{normalize_status(status) or 'updated'}",
     )
 
     db.leave_requests.update_one(
@@ -3644,43 +3371,30 @@ def register_notification_device():
     tenant_id = current_tenant_id()
     user_id = current_user_id()
     employee_id = current_employee_id(db)
-    now = datetime.utcnow()
-
-    identity_values = notification_identity_values_for_user_ids(
-        db,
-        [user_id, employee_id],
-        tenant_id=tenant_id,
+    device_scope = notification_device_scope_for_roles(
+        g.current_user.get("role"),
+        g.current_user.get("roles"),
     )
 
-    db.notification_devices.update_one(
-        {"token": token},
-        {
-            "$set": {
-                "tenant_id": tenant_id,
-                "user_id": user_id,
-                "employee_id": employee_id,
-                "employee_user_id": user_id,
-                "user_ids": identity_values,
-                "identity_values": identity_values,
-                "token": token,
-                "platform": platform,
-                "device_id": device_id,
-                "app_version": app_version,
-                "is_active": True,
-                "is_deleted": False,
-                "last_seen_at": now,
-                "updated_at": now,
-            },
-            "$setOnInsert": {
-                "created_at": now,
-            },
-        },
-        upsert=True,
-    )
+    try:
+        result = centralized_register_notification_device(
+            db,
+            token=token,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            platform=platform,
+            device_id=device_id,
+            app_version=app_version,
+            scope=device_scope,
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     return jsonify({
         "message": "Notification device registered",
         "registered": True,
+        "scope": result.get("scope", device_scope),
     })
 
 #changes by atlanta
@@ -3699,20 +3413,14 @@ def unregister_notification_device():
     if not token:
         return jsonify({"message": "FCM token is required"}), 400
 
-    db.notification_devices.update_many(
-        {
-            "token": token,
-            "user_id": current_user_id(),
-        },
-        {
-            "$set": {
-                "is_active": False,
-                "is_deleted": True,
-                "updated_at": datetime.utcnow(),
-                "deleted_at": datetime.utcnow(),
-            }
-        },
-    )
+    try:
+        centralized_unregister_notification_device(
+            db,
+            token=token,
+            user_id=current_user_id(),
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     return jsonify({
         "message": "Notification device unregistered",
@@ -3924,7 +3632,20 @@ def attendance_reminder_insert_notification(
         "created_by_name": "Attendance Reminder",
         "created_by_role": ["system"],
         "is_deleted": False,
+        "event": "attendance.reminder",
+        "event_key": reminder_key,
+        "source_id": reminder_key,
+        "delivery_status": "persisted",
+        "push_status": "pending",
+        "push_attempt_count": 0,
+        "last_push_attempt_at": "",
+        "push_sent_at": "",
+        "failure_reason": "",
+        "device_count": 0,
         "meta": {
+            "event": "attendance.reminder",
+            "event_key": reminder_key,
+            "source_id": reminder_key,
             "attendance_reminder_key": reminder_key,
             "attendance_reminder_kind": kind,
             "attendance_date": today,
@@ -3938,7 +3659,6 @@ def attendance_reminder_insert_notification(
 
     result = db.notifications.insert_one(doc)
     doc["_id"] = result.inserted_id
-
     return doc
 
 
@@ -4094,18 +3814,47 @@ def run_attendance_reminder_job(kind, tenant_id="", dry_run=False):
                 "type": "attendance_reminder",
                 "notification_type": "attendance_reminder",
                 "priority": "high",
+                "source_id": reminder_key,
+                "event": "attendance.reminder",
+                "event_key": reminder_key,
+                "notification_id": str(doc["_id"]),
                 "link_id": str(doc["_id"]),
                 "link_type": "attendance_reminder",
             },
             tenant_id=employee_tenant_id,
         )
 
+        push_attempt_at = datetime.utcnow()
+        push_sent = int(fcm_result.get("sent") or 0) > 0
+        push_failed = int(fcm_result.get("failed") or 0) > 0
+        failure_reason = normalize_text(fcm_result.get("reason"))
+        if not failure_reason and push_failed:
+            errors = fcm_result.get("errors") or []
+            if isinstance(errors, list) and errors:
+                failure_reason = normalize_text(errors[0].get("error"))
+
         db.notifications.update_one(
             {"_id": doc["_id"]},
             {
                 "$set": {
                     "fcm_result": fcm_result,
-                    "fcm_sent_at": datetime.utcnow(),
+                    "fcm_sent_at": push_attempt_at,
+                    "delivery_status": "delivered_to_fcm" if push_sent else "persisted",
+                    "push_status": (
+                        "sent"
+                        if push_sent
+                        else "failed"
+                        if push_failed
+                        else f"skipped_{failure_reason}"
+                        if failure_reason
+                        else "not_sent"
+                    ),
+                    "push_attempt_count": 1,
+                    "last_push_attempt_at": push_attempt_at,
+                    "push_sent_at": push_attempt_at if push_sent else "",
+                    "failure_reason": failure_reason,
+                    "device_count": int(fcm_result.get("token_count") or 0),
+                    "updated_at": datetime.utcnow(),
                 }
             },
         )
@@ -5676,7 +5425,7 @@ def expense_decision(expense_id):
 
     db = get_db()
     data = request.get_json(silent=True) or {}
-    status = data.get("status")
+    status = normalize_status(data.get("status"))
 
     if status not in ["approved", "rejected", "paid"]:
         return jsonify({"message": "Invalid expense status"}), 400
@@ -5705,6 +5454,9 @@ def expense_decision(expense_id):
         if status == "paid":
             return jsonify({"message": "Only finance/admin can mark expense as paid"}), 403
 
+    previous_status = normalize_status(existing.get("status"))
+    now = datetime.utcnow()
+
     db.expenses.update_one(
         {"_id": expense_obj_id},
         {
@@ -5713,13 +5465,58 @@ def expense_decision(expense_id):
                 "decision_note": data.get("note", ""),
                 "approved_by": str(g.current_user["_id"]),
                 "approved_by_name": g.current_user.get("name") or g.current_user.get("email"),
-                "updated_at": datetime.utcnow(),
+                "updated_at": now,
             }
         },
     )
 
-    audit(status, "expenses", expense_id, data)
+    tenant_id = normalize_text(existing.get("tenant_id")) or current_tenant_id()
+    recipient_user_id = notification_user_id_for_record(
+        db,
+        existing,
+        tenant_id=tenant_id,
+        fields=(
+            "user_id",
+            "employee_user_id",
+            "employee_id",
+            "employee_ref_id",
+            "created_by_employee_id",
+            "created_by",
+        ),
+    )
 
+    if recipient_user_id and recipient_user_id != current_user_id() and status != previous_status:
+        titles = {
+            "approved": "Expense Approved",
+            "rejected": "Expense Rejected",
+            "paid": "Expense Payment Updated",
+        }
+        bodies = {
+            "approved": "Your expense request has been approved.",
+            "rejected": "Your expense request has been rejected.",
+            "paid": "Your approved expense has been marked as paid.",
+        }
+
+        notify_users(
+            db,
+            [recipient_user_id],
+            titles[status],
+            bodies[status],
+            {
+                "notification_type": f"expense_{status}",
+                "priority": "high" if status in {"rejected", "paid"} else "normal",
+                "target": "expenses",
+                "page": "expenses",
+                "source_id": expense_id,
+                "expense_id": expense_id,
+                "status": status,
+            },
+            tenant_id=tenant_id,
+            event=f"expense.{status}",
+            event_key=f"expense:{expense_id}:{status}",
+        )
+
+    audit(status, "expenses", expense_id, data)
     return jsonify({"message": f"Expense {status}"})
 
 
@@ -5734,8 +5531,8 @@ def ticket_status(ticket_id):
 
     db = get_db()
     data = request.get_json(silent=True) or {}
-    status = data.get("status", "in_progress")
-    comment = data.get("comment", "")
+    status = normalize_status(data.get("status", "in_progress"))
+    comment = normalize_text(data.get("comment", ""))
 
     if status not in ["open", "in_progress", "resolved", "closed"]:
         return jsonify({"message": "Invalid ticket status"}), 400
@@ -5756,7 +5553,7 @@ def ticket_status(ticket_id):
     roles = current_user_roles()
     emp_id = current_employee_id(db)
 
-    is_owner = existing.get("raised_by") == emp_id
+    is_owner = normalize_text(existing.get("raised_by")) == normalize_text(emp_id)
     is_manager = bool(roles.intersection(TICKET_MANAGER_ROLES))
 
     if not is_owner and not is_manager:
@@ -5765,10 +5562,12 @@ def ticket_status(ticket_id):
     if is_owner and not is_manager and status in ["resolved", "closed"]:
         return jsonify({"message": "Only HR/Admin/Manager can resolve or close ticket"}), 403
 
+    previous_status = normalize_status(existing.get("status"))
+    now = datetime.utcnow()
     update = {
         "$set": {
             "status": status,
-            "updated_at": datetime.utcnow(),
+            "updated_at": now,
         }
     }
 
@@ -5778,14 +5577,71 @@ def ticket_status(ticket_id):
                 "by": str(g.current_user["_id"]),
                 "by_name": g.current_user.get("name") or g.current_user.get("email"),
                 "comment": comment,
-                "created_at": datetime.utcnow(),
+                "created_at": now,
             }
         }
 
     db.tickets.update_one({"_id": ticket_obj_id}, update)
 
-    audit("ticket_status", "tickets", ticket_id, data)
+    tenant_id = normalize_text(existing.get("tenant_id")) or current_tenant_id()
+    owner_user_id = notification_user_id_for_record(
+        db,
+        existing,
+        tenant_id=tenant_id,
+        fields=(
+            "raised_by_user_id",
+            "user_id",
+            "employee_user_id",
+            "raised_by",
+            "employee_id",
+            "employee_ref_id",
+            "created_by",
+        ),
+    )
 
+    status_changed = status != previous_status
+    should_notify_owner = bool(
+        owner_user_id
+        and owner_user_id != current_user_id()
+        and (status_changed or comment)
+    )
+
+    if should_notify_owner:
+        if status_changed:
+            status_label = status.replace("_", " ").title()
+            title = "IT Ticket Status Updated"
+            body = f"Your IT support ticket status is now {status_label}."
+            notification_type = "it_ticket_status"
+            event_name = f"it_ticket.{status}"
+            event_key = f"ticket:{ticket_id}:status:{status}"
+        else:
+            title = "IT Ticket Updated"
+            body = "A new update was added to your IT support ticket."
+            notification_type = "it_ticket_comment"
+            event_name = ""
+            event_key = ""
+
+        notify_users(
+            db,
+            [owner_user_id],
+            title,
+            body,
+            {
+                "notification_type": notification_type,
+                "priority": "high" if status in {"resolved", "closed"} else "normal",
+                "target": "it_support",
+                "page": "it_support",
+                "source_id": ticket_id,
+                "ticket_id": ticket_id,
+                "status": status,
+                "previous_status": previous_status,
+            },
+            tenant_id=tenant_id,
+            event=event_name,
+            event_key=event_key,
+        )
+
+    audit("ticket_status", "tickets", ticket_id, data)
     return jsonify({"message": "Ticket updated"})
 
 
@@ -5795,7 +5651,7 @@ def ticket_status(ticket_id):
 def payroll_run():
     db = get_db()
     data = request.get_json(silent=True) or {}
-    month = data.get("month")
+    month = normalize_text(data.get("month"))
     tenant_arg = normalize_text(data.get("tenant_id"))
     roles = current_user_roles()
 
@@ -5857,12 +5713,46 @@ def payroll_run():
     }
 
     res = db.payroll_runs.insert_one(run)
+    run_id = str(res.inserted_id)
+
+    # Payroll generation is an internal finance/admin workflow event. Keep it
+    # inside the Notification Centre without exposing salary values on a lock
+    # screen. Employee push notifications should happen only when a later
+    # publish/disbursement workflow actually exists.
+    finance_user_ids = [
+        user_id
+        for user_id in users_for_roles(db, FINANCE_ROLES, tenant_id)
+        if user_id != current_user_id()
+    ]
+
+    if finance_user_ids:
+        notify_users(
+            db,
+            finance_user_ids,
+            "Payroll Processing Completed",
+            f"Payroll processing for {month} has completed for {len(employees)} employee(s).",
+            {
+                "notification_type": "payroll_processed",
+                "priority": "normal",
+                "target": "payroll_runs",
+                "page": "payroll_runs",
+                "source_id": run_id,
+                "payroll_run_id": run_id,
+                "month": month,
+                "status": "processed",
+                "show_popup": False,
+            },
+            tenant_id=tenant_id,
+            event="payroll.processed",
+            event_key=f"payroll:{run_id}:processed",
+            push=False,
+        )
 
     audit("payroll_run", "payroll_runs", res.inserted_id, run)
 
     return jsonify({
         "message": "Payroll processed",
-        "run": str(res.inserted_id),
+        "run": run_id,
     })
 
 
@@ -6042,7 +5932,13 @@ def performance_score_bucket(rating):
     return "Critical"
 
 
-def notify_performance_review_submitted(db, employee, reviewer_emp, review):
+def notify_performance_review_submitted(
+    db,
+    employee,
+    reviewer_emp,
+    review,
+    event_name="performance.review_submitted",
+):
     tenant_id = employee.get("tenant_id") or current_tenant_id()
     notify_ids = []
 
@@ -6065,15 +5961,28 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
         else g.current_user.get("name") or g.current_user.get("email")
     )
 
+    review_id = str(review.get("_id", ""))
+    is_update = event_name == "performance.review_updated"
+    title = (
+        "Weekly Performance Review Updated"
+        if is_update
+        else "Weekly Performance Review Submitted"
+    )
+    action_word = "updated" if is_update else "submitted"
+    event_stamp = normalize_text(review.get("updated_at") or review.get("submitted_at"))
+
     notify_users(
         db,
         notify_ids,
-        "Weekly Performance Review Submitted",
-        f"{reviewer_name} submitted a weekly performance review for {employee_display_name(employee)}.",
+        title,
+        f"{reviewer_name} {action_word} a weekly performance review for {employee_display_name(employee)}.",
         {
+            "notification_type": "performance_review_updated" if is_update else "performance_review_submitted",
+            "priority": "normal",
             "target": "performance_reviews",
             "page": "performance_reviews",
-            "performance_review_id": str(review.get("_id", "")),
+            "source_id": review_id,
+            "performance_review_id": review_id,
             "employee_id": str(employee.get("_id")),
             "reviewer_employee_id": review.get("reviewer_employee_id", ""),
             "reviewer_role": review.get("reviewer_role", ""),
@@ -6086,8 +5995,11 @@ def notify_performance_review_submitted(db, employee, reviewer_emp, review):
             "month": review.get("month", ""),
             "year": review.get("year", ""),
             "cycle": review.get("cycle"),
+            "status": review.get("status", "submitted"),
         },
         tenant_id=tenant_id,
+        event=event_name,
+        event_key=f"performance:{review_id}:{event_name}:{event_stamp}",
     )
 
 
@@ -6340,7 +6252,17 @@ def create_performance_review():
         audit_action = "create_performance_review"
         status_code = 201
 
-    notify_performance_review_submitted(db, employee, reviewer_emp, review)
+    notify_performance_review_submitted(
+        db,
+        employee,
+        reviewer_emp,
+        review,
+        event_name=(
+            "performance.review_updated"
+            if existing
+            else "performance.review_submitted"
+        ),
+    )
 
     audit(audit_action, "performance_reviews", review["_id"], review)
 

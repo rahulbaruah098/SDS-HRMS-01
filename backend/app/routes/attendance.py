@@ -1821,16 +1821,14 @@ def manual_holiday_for_date(db, tenant_id, state, check_date):
     })
 
 
-def holiday_info_for_employee(db, employee, check_date):
-    state = employee_state(employee)
-    tenant_id = employee.get("tenant_id") or current_tenant_id()
+def holiday_info_from_sources(employee, check_date, manual=None):
+    """Resolve one date using the same manual + weekly holiday policy.
 
-    manual = manual_holiday_for_date(
-        db,
-        tenant_id,
-        state,
-        check_date,
-    )
+    Range-based callers can preload manual holidays once and pass the matching
+    row here, avoiding one database query per date while keeping a single
+    source of truth for holiday precedence.
+    """
+    state = employee_state(employee)
 
     if manual:
         return {
@@ -1855,6 +1853,24 @@ def holiday_info_for_employee(db, employee, check_date):
         "title": "",
         "message": "",
     }
+
+
+def holiday_info_for_employee(db, employee, check_date):
+    state = employee_state(employee)
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+
+    manual = manual_holiday_for_date(
+        db,
+        tenant_id,
+        state,
+        check_date,
+    )
+
+    return holiday_info_from_sources(
+        employee,
+        check_date,
+        manual=manual,
+    )
 
 
 def approved_mode_for_date(db, employee, attendance_date, mode):
@@ -2461,6 +2477,106 @@ def update_attendance_reason_settings():
     return jsonify({
         "message": "Attendance reasons updated successfully",
         **clean_doc(settings),
+    })
+
+
+@attendance_bp.get("/working-calendar")
+@tenant_module_required("attendance")
+def attendance_working_calendar():
+    db = get_db()
+    e = emp(db)
+
+    if not e:
+        return jsonify({"message": "Employee profile not found"}), 404
+
+    raw_date_from = normalize_text(request.args.get("date_from"))
+    raw_date_to = normalize_text(request.args.get("date_to"))
+
+    date_from = parse_date(raw_date_from) if raw_date_from else today_local()
+
+    if raw_date_from and not date_from:
+        return jsonify({
+            "message": "date_from must be in YYYY-MM-DD format",
+        }), 400
+
+    date_to = (
+        parse_date(raw_date_to)
+        if raw_date_to
+        else date_from + timedelta(days=13)
+    )
+
+    if raw_date_to and not date_to:
+        return jsonify({
+            "message": "date_to must be in YYYY-MM-DD format",
+        }), 400
+
+    if date_to < date_from:
+        return jsonify({
+            "message": "date_to must be on or after date_from",
+        }), 400
+
+    # The mobile reminder window is currently 14 days. Keep a modest server
+    # ceiling so this lightweight endpoint cannot be used as an unbounded
+    # holiday-calendar export.
+    if (date_to - date_from).days > 30:
+        return jsonify({
+            "message": "Working calendar range cannot exceed 31 days",
+        }), 400
+
+    tenant_id = e.get("tenant_id") or current_tenant_id()
+    state = employee_state(e)
+
+    manual_rows = list(
+        db.holiday_calendar.find({
+            "tenant_id": tenant_id,
+            "state": state,
+            "date": {
+                "$gte": date_from.isoformat(),
+                "$lte": date_to.isoformat(),
+            },
+            "status": {"$ne": "inactive"},
+            "is_deleted": {"$ne": True},
+        })
+    )
+
+    manual_by_date = {
+        date_to_str(row.get("date")): row
+        for row in manual_rows
+        if date_to_str(row.get("date"))
+    }
+
+    working_dates = []
+    non_working_dates = []
+
+    cursor = date_from
+
+    while cursor <= date_to:
+        date_key = cursor.isoformat()
+        holiday_info = holiday_info_from_sources(
+            e,
+            cursor,
+            manual=manual_by_date.get(date_key),
+        )
+
+        if holiday_info.get("is_holiday"):
+            non_working_dates.append({
+                "date": date_key,
+                "holiday_type": holiday_info.get("holiday_type", ""),
+                "title": holiday_info.get("title", "Holiday"),
+                "state": holiday_info.get("state", state),
+            })
+        else:
+            working_dates.append(date_key)
+
+        cursor += timedelta(days=1)
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "state": state,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "working_dates": working_dates,
+        "non_working_dates": non_working_dates,
     })
 
 
