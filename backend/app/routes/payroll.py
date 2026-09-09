@@ -124,7 +124,6 @@ from app.services.payroll_branding_service import (
     resolve_snapshot_for_employee,
 )
 from app.utils.auth import audit, roles_required
-from app.utils.notification_service import notify_users as centralized_notify_users
 from app.utils.serializers import clean_doc
 
 
@@ -1943,18 +1942,35 @@ def _employee_snapshot(
             or employee.get("joining_date")
             or employee.get("doj")
         ),
+        # Employee master stores these statutory identifiers under the field
+        # names used by Employees.jsx (pan_no, employee_uan_no and
+        # employee_esic_ip). Keep the older aliases as fallbacks so existing
+        # tenants/data imports continue to render correctly in payslips.
         "pan": safe_str(
-            employee.get("pan")
+            employee.get("pan_no")
+            or employee.get("pan")
             or employee.get("pan_number")
             or employee.get("permanent_account_number")
         ),
         "uan": safe_str(
-            employee.get("uan")
+            employee.get("employee_uan_no")
+            or employee.get("uan_no")
+            or employee.get("uan")
             or employee.get("uan_number")
             or employee.get("universal_account_number")
         ),
-        "esi_number": safe_str(employee.get("esi_number") or employee.get("esic_number")),
-        "pran": safe_str(employee.get("pran") or employee.get("pran_number")),
+        "esi_number": safe_str(
+            employee.get("employee_esic_ip")
+            or employee.get("esic_ip")
+            or employee.get("esi_number")
+            or employee.get("esic_number")
+        ),
+        "pran": safe_str(
+            employee.get("pran_no")
+            or employee.get("pran")
+            or employee.get("pran_number")
+            or employee.get("pr_account_number")
+        ),
         **bank,
     }
 
@@ -2078,42 +2094,42 @@ def _insert_notifications(
     body: str,
     meta: Mapping[str, Any],
 ) -> None:
-    recipients = list(
-        dict.fromkeys(
-            safe_str(user_id)
-            for user_id in user_ids
-            if safe_str(user_id)
-        )
-    )
-
+    recipients = list(dict.fromkeys(safe_str(user_id) for user_id in user_ids if safe_str(user_id)))
     if not recipients:
         return
 
-    notification_meta = _snapshot(dict(meta or {}))
-    target_page = safe_str(notification_meta.get("page")) or "payroll_runs"
+    now = _now()
+    target_page = safe_str(meta.get("page")) or "payroll_runs"
+    docs = []
 
-    # Preserve the payroll module's existing Notification Centre contract while
-    # routing delivery through the centralized notification engine. That engine
-    # persists the notification, resolves registered devices, sends FCM, and
-    # records delivery telemetry on each notification document.
-    notification_meta.setdefault("notification_type", "payroll")
-    notification_meta.setdefault("priority", "high")
-    notification_meta.setdefault("target", target_page)
-    notification_meta.setdefault("page", target_page)
-    notification_meta.setdefault("target_scope", "selected_users")
-    notification_meta.setdefault("audience", "selected_users")
-    notification_meta.setdefault("show_popup", True)
-    notification_meta.setdefault("created_by", _current_user_id())
-    notification_meta.setdefault("created_by_name", _current_user_name())
+    for user_id in recipients:
+        docs.append({
+            "tenant_id": tenant_id,
+            "target_tenant_id": tenant_id,
+            "user_id": user_id,
+            "user_ids": [user_id],
+            "title": title,
+            "body": body,
+            "message": body,
+            "notification_type": "payroll",
+            "priority": "high",
+            "target": target_page,
+            "target_scope": "selected_users",
+            "audience": "selected_users",
+            "show_popup": True,
+            "popup_seen": False,
+            "popup_seen_at": "",
+            "read": False,
+            "status": "unread",
+            "meta": _snapshot(dict(meta)),
+            "created_at": now,
+            "updated_at": now,
+            "created_by": _current_user_id(),
+            "created_by_name": _current_user_name(),
+            "is_deleted": False,
+        })
 
-    centralized_notify_users(
-        db,
-        recipients,
-        title,
-        body,
-        notification_meta,
-        tenant_id=tenant_id,
-    )
+    db.notifications.insert_many(docs)
 
 
 # ----------------------------- Loans & advances ----------------------------

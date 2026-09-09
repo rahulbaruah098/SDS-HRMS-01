@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowUpRight,
-  Bell,
   BriefcaseBusiness,
   CalendarDays,
   Clock3,
@@ -63,41 +62,6 @@ function formatDateTime(value) {
   }
 }
 
-
-function notificationBody(row = {}) {
-  return row.body || row.message || 'No notification details available.';
-}
-
-function notificationIsUnread(row = {}) {
-  return row.read !== true && row.status !== 'read';
-}
-
-function notificationTargetLabel(row = {}) {
-  const scope = String(
-    row.target_scope ||
-      row.target ||
-      row.audience ||
-      '',
-  ).toLowerCase();
-
-  if (scope === 'all_tenants' || scope === 'global') {
-    return 'All Tenants';
-  }
-
-  if (scope === 'selected_tenant') {
-    return row.target_tenant_name || row.target_tenant_id || 'Selected Tenant';
-  }
-
-  if (scope === 'selected_users') {
-    return 'Selected Users';
-  }
-
-  return row.tenant_name || row.tenant_id || 'Tenant';
-}
-
-function notificationPriorityLabel(value = '') {
-  return statusLabel(value || 'normal');
-}
 
 function modeLabel(mode) {
   if (mode === 'wfh') return 'Work From Home';
@@ -592,10 +556,6 @@ export default function AdminDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [decisionSavingId, setDecisionSavingId] = useState('');
-  const [recentNotifications, setRecentNotifications] = useState([]);
-  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
-  const [notificationLoading, setNotificationLoading] = useState(false);
-
 
   async function loadDashboard() {
     try {
@@ -611,26 +571,9 @@ export default function AdminDashboard({ setPage }) {
     }
   }
 
-  async function loadDashboardNotifications() {
-    try {
-      setNotificationLoading(true);
-
-      const notificationData = await api('/notifications?limit=6');
-      setRecentNotifications(notificationData.items || []);
-      setNotificationUnreadCount(Number(notificationData.unread_count || 0));
-    } catch (error) {
-      console.error(error);
-      setRecentNotifications([]);
-      setNotificationUnreadCount(0);
-      alerts.error(error.message || 'Unable to load dashboard notifications', 'Notifications Load Failed');
-    } finally {
-      setNotificationLoading(false);
-    }
-  }
 
   useEffect(() => {
     loadDashboard();
-    loadDashboardNotifications();
   }, []);
 
   function goTo(page) {
@@ -852,7 +795,6 @@ export default function AdminDashboard({ setPage }) {
     ['Pending RO Leaves', leaveSummary.pendingWithReportingOfficer],
     ['Pending HR Leaves', leaveSummary.pendingWithHr],
     ['Pending WFH/Field', stats['Pending WFH/Field'] || 0],
-    ['Unread Notifications', notificationUnreadCount],
     ['Available Comp-Off', stats['Available Comp-Off'] || 0],
     ['Open Tickets', stats['Open Tickets'] || 0],
     ['Pending Expenses', stats['Pending Expenses'] || 0],
@@ -1074,17 +1016,7 @@ export default function AdminDashboard({ setPage }) {
     completion_rate: `${row.completion_rate || 0}%`,
   }));
 
-  const recentNotificationRows = recentNotifications.map((row) => ({
-    title: row.title || 'Notification',
-    message: notificationBody(row),
-    target: notificationTargetLabel(row),
-    type: statusLabel(row.notification_type || 'general'),
-    priority: notificationPriorityLabel(row.priority),
-    status: notificationIsUnread(row) ? 'Unread' : 'Read',
-    popup: row.show_popup === false ? 'No' : 'Yes',
-    created_by: row.created_by_name || row.sender_name || 'System',
-    created_at: formatDateTime(row.created_at),
-  }));
+
 
   return (
     <div className="page-grid admin-dashboard-page">
@@ -3414,30 +3346,8 @@ export default function AdminDashboard({ setPage }) {
 
               <button
                 type="button"
-                className="employee-quick-action notifications"
-                onClick={() => goTo('notifications')}
-              >
-                <span className="employee-quick-action-icon" aria-hidden="true">
-                  <Bell size={20} strokeWidth={1.9} />
-                </span>
-
-                <span className="employee-quick-action-copy">
-                  <strong>Notifications</strong>
-                  <small>Open the notification centre</small>
-                </span>
-
-                <span className="employee-quick-action-arrow" aria-hidden="true">
-                  <ArrowUpRight size={17} strokeWidth={2.1} />
-                </span>
-              </button>
-
-              <button
-                type="button"
                 className="employee-quick-action refresh"
-                onClick={() => {
-                  loadDashboard();
-                  loadDashboardNotifications();
-                }}
+                onClick={loadDashboard}
                 disabled={loading}
               >
                 <span className="employee-quick-action-icon" aria-hidden="true">
@@ -3486,76 +3396,6 @@ export default function AdminDashboard({ setPage }) {
           ))}
         </section>
       )}
-
-      <section className="admin-notification-summary">
-        <div className="toolbar">
-          <div>
-            <h3>Recent Tenant Notifications</h3>
-            <p>
-              Latest tenant-scoped notifications visible to this login. HR/Admin
-              notifications remain tenant-wise, while Super Admin broadcasts are
-              also shown here.
-            </p>
-          </div>
-
-          <div className="row-actions">
-            <button type="button" className="secondary" onClick={loadDashboardNotifications} disabled={notificationLoading}>
-              {notificationLoading ? 'Refreshing...' : 'Refresh Notifications'}
-            </button>
-
-            <button type="button" className="secondary" onClick={() => goTo('notifications')}>
-              Open Notification Center
-            </button>
-          </div>
-        </div>
-
-        {recentNotifications.length ? (
-          <div className="admin-notification-grid">
-            {recentNotifications.slice(0, 6).map((row) => (
-              <div
-                key={row._id || `${row.title}-${row.created_at}`}
-                className={`admin-notification-card ${notificationIsUnread(row) ? 'unread' : 'read'}`}
-              >
-                <strong>{row.title || 'Notification'}</strong>
-                <p>{notificationBody(row)}</p>
-
-                <div className="admin-notification-meta">
-                  <span className={`admin-notification-pill ${notificationIsUnread(row) ? 'unread' : 'read'}`}>
-                    {notificationIsUnread(row) ? 'Unread' : 'Read'}
-                  </span>
-                  <span className="admin-notification-pill">
-                    {notificationPriorityLabel(row.priority)}
-                  </span>
-                  <span className="admin-notification-pill">
-                    {notificationTargetLabel(row)}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="empty">
-            {notificationLoading ? 'Loading notifications...' : 'No recent notifications found.'}
-          </div>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="toolbar">
-          <div>
-            <h3>Notification Records</h3>
-            <p>
-              Quick table view of recent notifications with popup and read status.
-            </p>
-          </div>
-
-          <button type="button" className="secondary" onClick={() => goTo('notifications')}>
-            Manage Notifications
-          </button>
-        </div>
-
-        <Table rows={recentNotificationRows} maxColumns={9} />
-      </section>
 
       <section className="admin-project-hero">
         <div>

@@ -1043,11 +1043,50 @@ def _field_value(context: Mapping[str, Any], key: str) -> Any:
     item = EMPLOYEE_FIELD_BY_KEY.get(key) or {}
     source = safe_str(item.get("source"))
     record = context.get(source) if isinstance(context.get(source), Mapping) else {}
-    value = record.get(key) if isinstance(record, Mapping) else ""
+
+    # Payroll snapshots created by older HRMS versions used several different
+    # field names for statutory and bank information.  The payslip renderer is
+    # deliberately tolerant of those aliases so a valid PAN/UAN/PRAN/bank
+    # value is not displayed as blank merely because the snapshot key changed.
+    aliases: dict[str, tuple[str, ...]] = {
+        "name": ("name", "employee_name", "full_name"),
+        "employee_code": ("employee_code", "employee_id", "code", "emp_code"),
+        "designation": ("designation", "job_title", "role_title"),
+        "department": ("department", "department_name"),
+        "function": ("function", "department", "department_name"),
+        "location": ("location", "work_location", "office_location", "base_location"),
+        "date_of_joining": ("date_of_joining", "joining_date", "date_joined", "doj"),
+        "pan": ("pan", "pan_number", "pan_no", "permanent_account_number"),
+        "uan": ("uan", "uan_number", "uan_no", "universal_account_number"),
+        "esi_number": ("esi_number", "esi", "esic_number", "esi_no", "esic_no"),
+        "pran": ("pran", "pran_number", "pr_account_number", "pran_no"),
+        "account_number": (
+            "account_number",
+            "bank_account_number",
+            "account_no",
+            "bank_account_no",
+        ),
+        "ifsc_code": ("ifsc_code", "ifsc", "ifs_code", "bank_ifsc"),
+        "paid_leave_days": ("paid_leave_days", "sanctioned_leave_days", "total_sanctioned_leave"),
+        "lwp_days": ("lwp_days", "leave_without_pay_days", "lop_days"),
+        "leave_availed": ("leave_availed", "leave_availed_days", "leave_taken_days"),
+        "payable_days": ("payable_days", "salary_paid_days", "paid_days"),
+        "leave_balance": ("leave_balance", "remaining_leave", "leave_balance_days"),
+    }
+
+    value: Any = ""
+    if isinstance(record, Mapping):
+        for candidate in aliases.get(key, (key,)):
+            candidate_value = record.get(candidate)
+            if candidate_value not in {None, "", "—"}:
+                value = candidate_value
+                break
+
     if key in {"paid_leave_days", "lwp_days", "leave_availed", "payable_days", "leave_balance"}:
         if value in {None, ""}:
             value = 0
-        return f"{value} Days"
+        number_text = safe_str(value)
+        return number_text if "day" in number_text.lower() else f"{number_text} Days"
     return value
 
 
@@ -1182,114 +1221,185 @@ def build_preview_context(
 
 PAYSLIP_DESIGNER_HTML_TEMPLATE = r"""
 <!doctype html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8">
 <style>
-  @page { size: {{ design.paper.size }} {{ design.paper.orientation }}; margin: {{ design.paper.margin_mm }}mm; }
+  @page { size: A4 landscape; margin: 8mm; }
   * { box-sizing: border-box; }
-  body { margin: 0; color: #222; font-family: {{ design.theme.font_family }}, Arial, sans-serif; font-size: {{ design.theme.base_font_size }}px; }
+  body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10.2px;
+    color: #111;
+    background: #fff;
+  }
   .sheet { width: 100%; }
-  .header { display: grid; grid-template-columns: 110px 1fr 110px; align-items: center; margin-bottom: 8px; min-height: {{ design.header.logo_height_px }}px; }
-  .header.logo-center { grid-template-columns: 1fr; gap: 5px; }
-  .header.logo-right .logo-box { grid-column: 3; }
-  .header.logo-right .company { grid-column: 2; grid-row: 1; }
-  .logo-box { width: 100%; min-height: {{ design.header.logo_height_px }}px; display: flex; align-items: center; justify-content: center; color: {{ design.theme.primary_color }}; font-weight: 800; font-size: 20px; }
-  .logo-box img { max-width: {{ design.header.logo_width_px }}px; max-height: {{ design.header.logo_height_px }}px; object-fit: contain; }
-  .company { text-align: {{ design.header.alignment }}; }
-  .company h1 { margin: 0; font-size: calc({{ design.theme.base_font_size }}px + 10px); color: {{ design.theme.primary_color }}; }
-  .company p { margin: 2px 0 0; color: {{ design.theme.muted_color }}; }
-  .title { text-align: center; font-size: calc({{ design.theme.base_font_size }}px + 3px); font-weight: 700; margin: 6px 0 9px; }
+  .header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    min-height: 68px;
+    padding: 0 10px 3px;
+  }
+  .company { text-align: center; padding-left: 90px; }
+  .company h1 {
+    margin: 0;
+    font-size: 21px;
+    line-height: 1.1;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .15px;
+  }
+  .company p { margin: 4px 0 0; font-size: 9.4px; }
+  .logo-box {
+    width: 105px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 21px;
+    font-weight: 700;
+  }
+  .logo-box img { max-width: 105px; max-height: 52px; object-fit: contain; }
+  .title {
+    border-top: 1.3px solid #111;
+    border-bottom: 1.3px solid #111;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 0;
+    margin-bottom: 1px;
+  }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  td, th { border: 1px solid {{ design.theme.border_color }}; padding: 4px 5px; vertical-align: middle; }
-  .info td { min-height: 24px; }
-  .info .label { font-weight: 700; width: 19%; }
-  .info .value { width: 31%; }
-  .section-head { background: {{ design.theme.accent_color }}; font-weight: 700; text-align: left; }
-  .earnings th, .advance th { background: {{ design.theme.table_header_background }}; text-align: left; }
-  .amount, .right { text-align: right; }
-  .center { text-align: center; }
-  .summary td { font-weight: 700; }
-  .net { font-size: calc({{ design.theme.base_font_size }}px + 3px); font-weight: 800; text-align: center; background: {{ design.theme.net_background }}; }
-  .footer-note { background: {{ design.theme.accent_color }}; border: 1px solid {{ design.theme.border_color }}; padding: 6px; margin-top: 7px; }
-  .signatory { margin-top: 22px; text-align: right; font-weight: 700; }
-  .spacer { height: 6px; }
+  .info { margin-bottom: 2px; }
+  .info td { border: 0; padding: 2px 4px; vertical-align: top; line-height: 1.15; }
+  .info .label { width: 27%; font-weight: 700; }
+  .info .value { width: 23%; }
+  .earnings { margin-top: 1px; }
+  .earnings th, .earnings td { border: 1px solid #111; padding: 2px 3px; vertical-align: middle; }
+  .earnings th { font-weight: 700; text-align: center; }
+  .earnings .text { width: 28%; }
+  .earnings .amount { width: 14%; text-align: right; white-space: nowrap; }
+  .earnings .summary-label, .earnings .summary-amount { font-weight: 700; }
+  .earnings .net-label, .earnings .net-amount { font-weight: 700; }
+  .advance { margin-top: 2px; }
+  .advance th, .advance td { border: 1px solid #111; padding: 2px 3px; vertical-align: middle; }
+  .advance .section-head { background: #ffff00; text-align: left; font-weight: 700; }
+  .advance .right { text-align: right; }
+  .advance .center { text-align: center; }
+  .transfer { margin-top: 1px; }
+  .transfer td { border: 1px solid #111; padding: 2px 3px; }
+  .transfer .transfer-label { width: 28%; font-weight: 700; }
+  .footer-note {
+    margin-top: 8px;
+    border: 0;
+    background: #ffff00;
+    font-weight: 700;
+    padding: 4px 3px;
+  }
+  .signatory { margin-top: 17px; text-align: right; font-weight: 700; }
 </style>
 </head>
 <body>
 <div class="sheet">
-  <div class="header logo-{{ design.header.logo_position }}{% if design.header.logo_position == 'center' %} logo-center{% endif %}">
+  <div class="header">
+    <div class="company">
+      {% if design.header.show_organisation_name %}<h1>{{ company.name }}</h1>{% endif %}
+      {% if design.header.show_address and company.address %}<p>{{ company.address }}</p>{% endif %}
+    </div>
     {% if design.header.show_logo %}
     <div class="logo-box">
       {% if company.logo_data_uri %}<img src="{{ company.logo_data_uri }}" alt="Logo">{% else %}{{ company.initials }}{% endif %}
     </div>
     {% endif %}
-    <div class="company">
-      {% if design.header.show_organisation_name %}<h1>{{ company.name }}</h1>{% endif %}
-      {% if design.header.show_address and company.address %}<p>{{ company.address }}</p>{% endif %}
-      {% if design.header.show_contact %}
-        <p>{% if company.email %}{{ company.email }}{% endif %}{% if company.phone %}{% if company.email %} · {% endif %}{{ company.phone }}{% endif %}{% if company.website %}{% if company.email or company.phone %} · {% endif %}{{ company.website }}{% endif %}</p>
-      {% endif %}
-    </div>
-    {% if design.header.logo_position != 'center' %}<div></div>{% endif %}
   </div>
 
-  <div class="title">{{ design.header.title_text }} for {{ month_name }} - {{ year }}</div>
+  <div class="title">{{ design.header.title_text }} for {{ month_name }} -{{ year }}</div>
 
-  {% for section_key in design.section_order %}
-    {% if section_key == 'employee_info' and design.employee_info.visible %}
-      <table class="info">
-      {% for row in employee_rows %}
-        <tr>
-          {% for cell in row %}
-            <td class="label">{{ cell.label }}</td><td class="value">{{ cell.value }}</td>
-          {% endfor %}
-          {% if row|length == 1 %}<td class="label"></td><td class="value"></td>{% endif %}
-        </tr>
+  {% if design.employee_info.visible %}
+  <table class="info">
+    {% for row in employee_rows %}
+    <tr>
+      {% for cell in row %}
+        <td class="label">{{ cell.label }}</td><td class="value">{{ cell.value }}</td>
       {% endfor %}
-      </table>
-      <div class="spacer"></div>
-    {% elif section_key == 'earnings_deductions' and design.earnings_deductions.visible %}
-      <table class="earnings">
-        <thead><tr><th>{{ design.earnings_deductions.earnings_title }}</th><th class="amount">{{ design.earnings_deductions.gross_title }}</th><th>{{ design.earnings_deductions.deductions_title }}</th><th class="amount">{{ design.earnings_deductions.amount_title }}</th></tr></thead>
-        <tbody>
-        {% for index in range(max_component_rows) %}
-          <tr>
-            <td>{{ earning_rows[index].label if index < earning_rows|length else '' }}</td>
-            <td class="amount">{{ money(earning_rows[index].amount) if index < earning_rows|length else '' }}</td>
-            <td>{{ deduction_rows[index].label if index < deduction_rows|length else '' }}</td>
-            <td class="amount">{{ money(deduction_rows[index].amount) if index < deduction_rows|length else '' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-        <tfoot>
-          <tr class="summary"><td>{{ design.earnings_deductions.cost_to_company_label }}</td><td class="amount">{{ plain(totals.cost_to_company) }}</td><td>{{ design.earnings_deductions.total_deductions_label }}</td><td class="amount">{{ plain(totals.total_deductions) }}</td></tr>
-          <tr><td colspan="2"></td><td class="net">{{ design.earnings_deductions.net_amount_label }}</td><td class="net">{{ plain(net_amount) }}</td></tr>
-        </tfoot>
-      </table>
-      <div class="spacer"></div>
-    {% elif section_key == 'advances' and design.advances.visible %}
-      <table class="advance">
-        <tr><th class="section-head" colspan="7">{{ design.advances.title }}</th></tr>
-        <tr><th>Advance Type</th><th>Date</th><th>Balance Advance Amount</th><th>Deduction Amount</th><th>Bills Received</th><th>Pending / Balance</th><th>Remarks</th></tr>
-        {% for row in advance_rows %}
-        <tr><td>{{ row.label }}</td><td>{{ row.date }}</td><td class="right">{{ plain(row.balance) if row.balance != '' else '' }}</td><td class="right">{{ plain(row.deduction) }}</td><td class="center">{{ row.bills_received }}</td><td class="right">{{ plain(row.pending) if row.pending != '' else '' }}</td><td></td></tr>
-        {% endfor %}
-        <tr><td colspan="3"><strong>Total Advance Amount</strong></td><td class="right"><strong>{{ plain(totals.advances) }}</strong></td><td colspan="3"></td></tr>
-      </table>
-      <div class="spacer"></div>
-    {% elif section_key == 'transfer' and design.transfer.visible %}
-      <table class="transfer">
-        <tr><td><strong>Total Amount Transferred</strong></td><td><strong>{{ money(net_amount) }}</strong></td></tr>
-        {% if design.transfer.show_amount_words %}<tr><td><strong>Amount (in words)</strong></td><td>{{ amount_words }}</td></tr>{% endif %}
-        {% if design.transfer.show_transfer_date %}<tr><td><strong>Transfer Date</strong></td><td>{{ transfer.transfer_date or '—' }}{% if design.transfer.show_transfer_mode and transfer.transfer_mode %}&nbsp;&nbsp;&nbsp;{{ transfer.transfer_mode }}{% endif %}</td></tr>{% endif %}
-      </table>
-      <div class="spacer"></div>
-    {% elif section_key == 'footer' and design.footer.visible %}
-      <div class="footer-note">{{ design.footer.text }}</div>
-      {% if design.footer.show_authorized_signatory %}<div class="signatory">{{ design.footer.authorized_signatory_label }}</div>{% endif %}
+      {% if row|length == 1 %}<td class="label"></td><td class="value"></td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if design.earnings_deductions.visible %}
+  <table class="earnings">
+    <thead>
+      <tr>
+        <th class="text">{{ design.earnings_deductions.earnings_title }}</th>
+        <th class="amount">{{ design.earnings_deductions.gross_title }}</th>
+        <th class="text">{{ design.earnings_deductions.deductions_title }}</th>
+        <th class="amount">{{ design.earnings_deductions.amount_title }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for index in range(max_component_rows) %}
+      <tr>
+        <td>{{ earning_rows[index].label if index < earning_rows|length else '' }}</td>
+        <td class="amount">{{ money(earning_rows[index].amount) if index < earning_rows|length else '' }}</td>
+        <td>{{ deduction_rows[index].label if index < deduction_rows|length else '' }}</td>
+        <td class="amount">{{ money(deduction_rows[index].amount) if index < deduction_rows|length else '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td class="summary-label">{{ design.earnings_deductions.cost_to_company_label }}</td>
+        <td class="amount summary-amount">{{ plain(totals.cost_to_company) }}</td>
+        <td class="summary-label">{{ design.earnings_deductions.total_deductions_label }}</td>
+        <td class="amount summary-amount">{{ plain(totals.total_deductions) }}</td>
+      </tr>
+      <tr>
+        <td colspan="2"></td>
+        <td class="net-label">{{ design.earnings_deductions.net_amount_label }}</td>
+        <td class="amount net-amount">{{ plain(net_amount) }}</td>
+      </tr>
+    </tfoot>
+  </table>
+  {% endif %}
+
+  {% if design.advances.visible %}
+  <table class="advance">
+    <tr><th class="section-head" colspan="7">{{ design.advances.title }}</th></tr>
+    <tr>
+      <th>Advance Type</th><th>Date</th><th>Balance<br>Advance<br>Amount</th><th>Deduction Amount</th>
+      <th>Bills Received<br>(Yes/ No)</th><th>Pending/balance<br>Amount</th><th>Remarks</th>
+    </tr>
+    {% for row in advance_rows %}
+    <tr>
+      <td>{{ row.label }}</td><td>{{ row.date }}</td>
+      <td class="right">{{ plain(row.balance) if row.balance != '' else '' }}</td>
+      <td class="right">{{ plain(row.deduction) }}</td>
+      <td class="center">{{ row.bills_received }}</td>
+      <td class="right">{{ plain(row.pending) if row.pending != '' else '' }}</td><td></td>
+    </tr>
+    {% endfor %}
+    <tr><td colspan="3" style="text-align:center;font-weight:700;">Total Advance Amount</td><td class="right"><strong>{{ plain(totals.advances) }}</strong></td><td colspan="3"></td></tr>
+  </table>
+  {% endif %}
+
+  {% if design.transfer.visible %}
+  <table class="transfer">
+    <tr><td class="transfer-label">Total Amount Transferred</td><td><strong>{{ money(net_amount) }}</strong></td></tr>
+    {% if design.transfer.show_amount_words %}<tr><td class="transfer-label">Amount (in words)</td><td>{{ amount_words }}</td></tr>{% endif %}
+    {% if design.transfer.show_transfer_date %}
+      <tr><td class="transfer-label">Transfer Date</td><td>{{ transfer.transfer_date or '—' }}{% if design.transfer.show_transfer_mode and transfer.transfer_mode %}&nbsp;&nbsp;&nbsp;{{ transfer.transfer_mode }}{% endif %}</td></tr>
     {% endif %}
-  {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if design.footer.visible %}
+    <div class="footer-note">{{ design.footer.text }}</div>
+    {% if design.footer.show_authorized_signatory %}<div class="signatory">{{ design.footer.authorized_signatory_label }}</div>{% endif %}
+  {% endif %}
 </div>
 </body>
 </html>

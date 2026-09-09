@@ -22,6 +22,13 @@ import { api } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_LIMIT = 500;
+
+let componentEditorSequence = 0;
+
+function nextComponentEditorId() {
+  componentEditorSequence += 1;
+  return `salary-component-editor-${componentEditorSequence}`;
+}
 const REQUIRED_EARNING_CODES = new Set([
   'basic',
   'hra',
@@ -194,6 +201,7 @@ function documentId(document = {}) {
 function defaultSalaryComponents() {
   return [
     {
+      editor_id: nextComponentEditorId(),
       code: 'basic',
       label: 'Basic',
       category: 'earning',
@@ -213,6 +221,7 @@ function defaultSalaryComponents() {
       is_active: true,
     },
     {
+      editor_id: nextComponentEditorId(),
       code: 'hra',
       label: 'HRA',
       category: 'earning',
@@ -232,6 +241,7 @@ function defaultSalaryComponents() {
       is_active: true,
     },
     {
+      editor_id: nextComponentEditorId(),
       code: 'medical_allowance',
       label: 'Medical Allowance',
       category: 'earning',
@@ -251,6 +261,7 @@ function defaultSalaryComponents() {
       is_active: true,
     },
     {
+      editor_id: nextComponentEditorId(),
       code: 'other_allowances',
       label: 'Other Allowances',
       category: 'earning',
@@ -293,6 +304,7 @@ function emptySalaryForm() {
 
 function componentFromDocument(component = {}) {
   return {
+    editor_id: safeText(component.editor_id) || nextComponentEditorId(),
     code: safeText(component.code),
     label: safeText(component.label),
     category: safeText(component.category, 'earning'),
@@ -998,32 +1010,38 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
   }
 
   function addComponent() {
-    setSalaryForm((current) => ({
-      ...current,
-      components: [
-        ...current.components,
-        {
-          code: '',
-          label: '',
-          category: 'earning',
-          calculation_type: 'fixed',
-          amount: '',
-          percentage: '',
-          base_component: 'monthly_ctc',
-          balance_of: 'monthly_ctc',
-          minimum_amount: '0',
-          statutory_rule: '',
-          prorate_on_lwp: true,
-          include_in_gross: true,
-          include_in_ctc: true,
-          show_in_earnings: true,
-          show_in_deductions: false,
-          taxable: true,
-          is_active: true,
-        },
-      ],
-    }));
-    setExpandedComponent(salaryForm.components.length);
+    setSalaryForm((current) => {
+      const newIndex = current.components.length;
+
+      setExpandedComponent(newIndex);
+
+      return {
+        ...current,
+        components: [
+          ...current.components,
+          {
+            editor_id: nextComponentEditorId(),
+            code: '',
+            label: '',
+            category: 'earning',
+            calculation_type: 'fixed',
+            amount: '',
+            percentage: '',
+            base_component: 'monthly_ctc',
+            balance_of: 'monthly_ctc',
+            minimum_amount: '0',
+            statutory_rule: '',
+            prorate_on_lwp: true,
+            include_in_gross: true,
+            include_in_ctc: true,
+            show_in_earnings: true,
+            show_in_deductions: false,
+            taxable: true,
+            is_active: true,
+          },
+        ],
+      };
+    });
   }
 
   function removeComponent(index) {
@@ -1859,7 +1877,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                     {salaryForm.components.map((component, index) => {
                       const expanded = expandedComponent === index;
                       return (
-                        <article className="payroll-component-row" key={`salary-component-${index}`}>
+                        <article className="payroll-component-row" key={component.editor_id || `salary-component-${index}`}>
                           <button
                             type="button"
                             className="payroll-component-summary"
@@ -1889,15 +1907,18 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                   Component code
                                   <input
                                     value={component.code}
-                                    onChange={(event) => updateComponent(index, 'code', event.target.value)}
+                                    onChange={(event) => updateComponent(index, 'code', event.currentTarget.value)}
                                     placeholder="component_code"
+                                    autoComplete="off"
+                                    spellCheck={false}
                                   />
                                 </label>
                                 <label>
                                   Display label
                                   <input
                                     value={component.label}
-                                    onChange={(event) => updateComponent(index, 'label', event.target.value)}
+                                    onChange={(event) => updateComponent(index, 'label', event.currentTarget.value)}
+                                    autoComplete="off"
                                   />
                                 </label>
                                 <label>

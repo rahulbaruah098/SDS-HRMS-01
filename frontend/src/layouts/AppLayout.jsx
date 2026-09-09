@@ -966,14 +966,6 @@ function notificationIsUnread(notification = {}) {
   return notification.read !== true && notification.status !== 'read';
 }
 
-function notificationIsPopupPending(notification = {}) {
-  return (
-    notification.show_popup !== false &&
-    notification.popup_seen !== true &&
-    notificationIsUnread(notification)
-  );
-}
-
 export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -981,7 +973,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [notificationCount, setNotificationCount] = useState(0);
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
-  const [popupNotification, setPopupNotification] = useState(null);
   const [tenantBranding, setTenantBranding] = useState({
     companyName: '',
     logo: '',
@@ -1129,7 +1120,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     };
   }, [saasSummary]);
 
-  async function loadNotifications({ silent = false, showPopup = true } = {}) {
+  async function loadNotifications({ silent = false } = {}) {
     if (!safeUser?._id && !safeUser?.email) {
       return;
     }
@@ -1146,13 +1137,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       setNotificationCount(Number(data.unread_count || 0));
       setNotificationMessage('');
 
-      if (showPopup) {
-        const nextPopup = nextItems.find(notificationIsPopupPending);
-
-        if (nextPopup) {
-          setPopupNotification(nextPopup);
-        }
-      }
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to load notifications');
     } finally {
@@ -1426,7 +1410,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
       await loadNotifications({
         silent: true,
-        showPopup: true,
       });
     }
 
@@ -1564,7 +1547,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     setNotificationOpen(nextOpen);
 
     if (nextOpen) {
-      await loadNotifications({ showPopup: false });
+      await loadNotifications();
     }
   }
 
@@ -1586,27 +1569,9 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         }
       }
 
-      await loadNotifications({ silent: true, showPopup: false });
+      await loadNotifications({ silent: true });
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to update notification');
-    }
-  }
-
-  async function markNotificationPopupSeen(notification) {
-    if (!notification?._id) {
-      setPopupNotification(null);
-      return;
-    }
-
-    try {
-      await api(`/notifications/${notification._id}/popup_seen`, {
-        method: 'PATCH',
-      });
-
-      setPopupNotification(null);
-      await loadNotifications({ silent: true, showPopup: false });
-    } catch {
-      setPopupNotification(null);
     }
   }
 
@@ -1616,22 +1581,13 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         method: 'PATCH',
       });
 
-      await loadNotifications({ silent: true, showPopup: false });
+      await loadNotifications({ silent: true });
     } catch (error) {
       setNotificationMessage(error.message || 'Unable to mark all as read');
     }
   }
 
-  async function openPopupNotification(notification) {
-    const target = notificationTarget(normalizeNotificationMeta(notification));
 
-    await markNotificationRead(notification, false);
-    await markNotificationPopupSeen(notification);
-
-    if (target) {
-      goToNotificationTarget(target);
-    }
-  }
 
   return (
     <div className="app-shell layout-photo-aware">
@@ -2978,63 +2934,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
         {children}
       </main>
 
-      {popupNotification ? (
-        <div className="layout-popup-backdrop">
-          <div className="layout-popup-card">
-            <div className="layout-popup-top">
-              <span>
-                <Bell size={15} />
-                New Notification
-              </span>
-
-              <button
-                type="button"
-                className="layout-popup-close"
-                onClick={() => markNotificationPopupSeen(popupNotification)}
-                aria-label="Close notification popup"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="layout-popup-body">
-              <h3>{popupNotification.title || 'Notification'}</h3>
-              <p>{notificationBody(popupNotification)}</p>
-
-              <div className="layout-popup-meta">
-                <span className="layout-popup-pill">
-                  {popupNotification.priority || 'normal'}
-                </span>
-                <span className="layout-popup-pill">
-                  {popupNotification.notification_type || 'general'}
-                </span>
-                {popupNotification.created_by_name ? (
-                  <span className="layout-popup-pill">
-                    From: {popupNotification.created_by_name}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="layout-popup-actions">
-              <button
-                type="button"
-                className="layout-popup-soft"
-                onClick={() => markNotificationPopupSeen(popupNotification)}
-              >
-                Dismiss
-              </button>
-              <button
-                type="button"
-                className="layout-popup-primary"
-                onClick={() => openPopupNotification(popupNotification)}
-              >
-                Open Notification
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
