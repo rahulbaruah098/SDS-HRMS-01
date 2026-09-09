@@ -19,6 +19,7 @@ import {
   ContactRound,
   Network,
   Calculator,
+  Palette,
 } from 'lucide-react';
 
 /*
@@ -204,6 +205,8 @@ export const RECRUITMENT_ROLES = [
 ];
 
 export const PAYROLL_CONFIG_ROLES = ADMIN_HR_FINANCE_ROLES;
+
+export const PAYSLIP_DESIGNER_ROLES = HR_ROLES;
 
 export const PAYROLL_RUN_ROLES = ADMIN_HR_FINANCE_ROLES;
 
@@ -690,6 +693,13 @@ export const coreModules = [
   'Configure salary structures, statutory rules, PF, PT, ESI, TDS, LWP calculation and revision history.',
   PAYROLL_CONFIG_ROLES,
 ],
+[
+  'payslip_designer',
+  'Payslip Designer',
+  Palette,
+  'Design organisation-specific payslip layouts, labels, sections and branding while payroll values remain controlled by the payroll engine.',
+  PAYSLIP_DESIGNER_ROLES,
+],
 
   [
     'loans_advances',
@@ -840,6 +850,7 @@ export const SUPERADMIN_PLATFORM_MODULE_KEYS = [
   'it_support',
   'audit_logs',
   'system_settings',
+  'payslip_designer',
   'employees',
   'profile',
 ];

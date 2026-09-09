@@ -310,9 +310,21 @@ function moduleGroup(key) {
     return 'Reports';
   }
 
-if (['payroll_runs', 'payslips'].includes(key)) {
-  return 'Payroll & Finance';
-}
+  if (
+    [
+      'payroll_configuration',
+      'payslip_designer',
+      'loans_advances',
+      'reimbursements',
+      'payroll_banking',
+      'payroll_reports',
+      'tax_declarations',
+      'payroll_runs',
+      'payslips',
+    ].includes(key)
+  ) {
+    return 'Payroll & Finance';
+  }
 
 if (
   [

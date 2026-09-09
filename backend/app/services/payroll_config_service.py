@@ -584,6 +584,58 @@ def save_salary_structure_draft(
     return db.salary_structures.find_one({"_id": result.inserted_id})
 
 
+def delete_salary_structure_draft(
+    db: Any,
+    *,
+    tenant_id: str,
+    salary_structure_id: Any,
+) -> dict[str, Any]:
+    """Permanently delete an unactivated salary-structure draft.
+
+    Activated/superseded revisions are immutable payroll history and must never
+    be removed through the draft-management flow. Drafts are hard-deleted so
+    their revision number can be reused safely with the existing unique index.
+    """
+    structure_id = object_id_or_none(salary_structure_id)
+
+    if not structure_id:
+        raise PayrollConfigError(
+            "Invalid salary structure id.",
+            code="invalid_salary_structure_id",
+        )
+
+    tenant_id = safe_str(tenant_id)
+    draft = db.salary_structures.find_one({
+        "_id": structure_id,
+        "tenant_id": tenant_id,
+        "status": "draft",
+        "is_deleted": {"$ne": True},
+    })
+
+    if not draft:
+        raise PayrollConfigError(
+            "Salary structure draft not found or is no longer editable.",
+            status_code=404,
+            code="salary_structure_draft_not_found",
+        )
+
+    result = db.salary_structures.delete_one({
+        "_id": structure_id,
+        "tenant_id": tenant_id,
+        "status": "draft",
+        "is_deleted": {"$ne": True},
+    })
+
+    if result.deleted_count != 1:
+        raise PayrollConfigError(
+            "Salary structure draft could not be deleted because it changed.",
+            status_code=409,
+            code="salary_structure_draft_delete_conflict",
+        )
+
+    return draft
+
+
 def activate_salary_structure_revision(
     db: Any,
     *,
@@ -1077,6 +1129,57 @@ def save_statutory_config_draft(
     document["version"] = next_revision_number(db.statutory_configs, revision_query)
     result = db.statutory_configs.insert_one(document)
     return db.statutory_configs.find_one({"_id": result.inserted_id})
+
+
+def delete_statutory_config_draft(
+    db: Any,
+    *,
+    tenant_id: str,
+    statutory_config_id: Any,
+) -> dict[str, Any]:
+    """Permanently delete an unactivated statutory-configuration draft.
+
+    Active and superseded statutory revisions are protected because payroll
+    runs may depend on their historical configuration.
+    """
+    config_id = object_id_or_none(statutory_config_id)
+
+    if not config_id:
+        raise PayrollConfigError(
+            "Invalid statutory configuration id.",
+            code="invalid_statutory_config_id",
+        )
+
+    tenant_id = safe_str(tenant_id)
+    draft = db.statutory_configs.find_one({
+        "_id": config_id,
+        "tenant_id": tenant_id,
+        "status": "draft",
+        "is_deleted": {"$ne": True},
+    })
+
+    if not draft:
+        raise PayrollConfigError(
+            "Statutory configuration draft not found or is no longer editable.",
+            status_code=404,
+            code="statutory_config_draft_not_found",
+        )
+
+    result = db.statutory_configs.delete_one({
+        "_id": config_id,
+        "tenant_id": tenant_id,
+        "status": "draft",
+        "is_deleted": {"$ne": True},
+    })
+
+    if result.deleted_count != 1:
+        raise PayrollConfigError(
+            "Statutory configuration draft could not be deleted because it changed.",
+            status_code=409,
+            code="statutory_config_draft_delete_conflict",
+        )
+
+    return draft
 
 
 def activate_statutory_config_revision(

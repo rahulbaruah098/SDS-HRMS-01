@@ -12,7 +12,6 @@ from uuid import uuid4
 from bson import ObjectId
 from pymongo import ReturnDocument
 from flask import Blueprint, Response, current_app, g, jsonify, request
-from jinja2 import Environment
 from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
@@ -29,6 +28,8 @@ from app.services.payroll_config_service import (
     PayrollConfigError,
     activate_salary_structure_revision,
     activate_statutory_config_revision,
+    delete_salary_structure_draft,
+    delete_statutory_config_draft,
     get_effective_salary_structure,
     get_effective_statutory_config,
     list_salary_structure_history,
@@ -115,6 +116,12 @@ from app.services.payroll_tax_service import (
     resolve_payroll_tax_context,
     submit_tax_declaration,
     upsert_tax_declaration,
+)
+from app.services.payroll_branding_service import (
+    PayrollBrandingError,
+    normalize_payslip_design,
+    render_payslip_html as render_designed_payslip_html,
+    resolve_snapshot_for_employee,
 )
 from app.utils.auth import audit, roles_required
 from app.utils.serializers import clean_doc
@@ -423,6 +430,16 @@ def handle_payroll_tax_error(error: PayrollTaxError):
     }), error.status_code
 
 
+@payroll_bp.errorhandler(PayrollBrandingError)
+def handle_payroll_branding_error(error: PayrollBrandingError):
+    return jsonify({
+        "ok": False,
+        "message": error.message,
+        "code": error.code,
+        "field": error.field,
+    }), error.status_code
+
+
 @payroll_bp.post("/salary-structure")
 @tenant_module_required("payroll")
 @roles_required(*PAYROLL_CONFIG_ROLES)
@@ -568,6 +585,39 @@ def activate_salary_structure(salary_structure_id: str):
     )
 
 
+@payroll_bp.delete("/salary-structure/<salary_structure_id>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_CONFIG_ROLES)
+def delete_salary_structure_draft_route(salary_structure_id: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+
+    structure = delete_salary_structure_draft(
+        db,
+        tenant_id=tenant_id,
+        salary_structure_id=salary_structure_id,
+    )
+
+    audit(
+        "payroll_salary_structure_draft_deleted",
+        "salary_structures",
+        structure.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "employee_id": structure.get("employee_id"),
+            "employee_code": structure.get("employee_code"),
+            "version": structure.get("version"),
+            "effective_from": structure.get("effective_from"),
+        },
+    )
+
+    return _success(
+        "Salary structure draft deleted successfully.",
+        deleted_salary_structure_id=safe_str(structure.get("_id")),
+    )
+
+
 @payroll_bp.post("/statutory-config")
 @tenant_module_required("payroll")
 @roles_required(*PAYROLL_CONFIG_ROLES)
@@ -691,6 +741,38 @@ def activate_statutory_config(statutory_config_id: str):
     return _success(
         "Statutory configuration activated successfully.",
         statutory_config=config,
+    )
+
+
+@payroll_bp.delete("/statutory-config/<statutory_config_id>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_CONFIG_ROLES)
+def delete_statutory_config_draft_route(statutory_config_id: str):
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+
+    config = delete_statutory_config_draft(
+        db,
+        tenant_id=tenant_id,
+        statutory_config_id=statutory_config_id,
+    )
+
+    audit(
+        "payroll_statutory_config_draft_deleted",
+        "statutory_configs",
+        config.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "state_code": config.get("state_code"),
+            "version": config.get("version"),
+            "effective_from": config.get("effective_from"),
+        },
+    )
+
+    return _success(
+        "Statutory configuration draft deleted successfully.",
+        deleted_statutory_config_id=safe_str(config.get("_id")),
     )
 
 # ---------------------------------------------------------------------------
@@ -1080,14 +1162,28 @@ def _sum_numbers(items: Iterable[Mapping[str, Any]], key: str) -> int | float:
 
 
 def _employee_state_code(employee: Mapping[str, Any], structure: Mapping[str, Any]) -> str:
-    candidates = (
-        structure.get("state_code"),
+    structure_state = safe_str(structure.get("state_code")).upper()
+
+    # A salary structure may be deliberately pinned to a specific state. Keep
+    # that explicit override, but do not let the generic ALL value hide a
+    # specific employee payroll/work state. Salary-structure drafts historically
+    # defaulted to ALL, which could make an Assam employee resolve the generic
+    # statutory configuration and therefore skip Assam Professional Tax.
+    if structure_state and structure_state != "ALL":
+        if len(structure_state) == 2:
+            return structure_state
+        raise PayrollConfigError(
+            "Payroll state must be stored as a two-letter state code for this employee.",
+            code="invalid_employee_payroll_state",
+        )
+
+    employee_candidates = (
         employee.get("payroll_state_code"),
         employee.get("work_state_code"),
         employee.get("state_code"),
     )
 
-    for value in candidates:
+    for value in employee_candidates:
         candidate = safe_str(value).upper()
         if not candidate:
             continue
@@ -1097,6 +1193,11 @@ def _employee_state_code(employee: Mapping[str, Any], structure: Mapping[str, An
             "Payroll state must be stored as a two-letter state code for this employee.",
             code="invalid_employee_payroll_state",
         )
+
+    # Preserve an explicitly configured generic structure only when no employee
+    # state is available. This keeps existing global statutory setups working.
+    if structure_state == "ALL":
+        return "ALL"
 
     raise PayrollConfigError(
         "Payroll state is missing for this employee.",
@@ -1855,6 +1956,32 @@ def _employee_snapshot(
         "pran": safe_str(employee.get("pran") or employee.get("pran_number")),
         **bank,
     }
+
+
+def _branding_employee_for_snapshot(
+    employee_info: Mapping[str, Any],
+    organisation_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Prepare an employee reference safe for payroll-branding resolution."""
+
+    branding_employee = dict(employee_info or {})
+    organisation_snapshot = dict(organisation_snapshot or {})
+    if organisation_snapshot and not organisation_snapshot.get("record_found"):
+        # A free-text/stale organisation label must never be mistaken for a
+        # valid organisation branding profile. Use the tenant fallback until
+        # HR links the employee to an organisation master record.
+        for key in (
+            "organisation_id",
+            "organization_id",
+            "organisation_code",
+            "organization_code",
+            "organisation",
+            "organization",
+            "organisation_name",
+            "organization_name",
+        ):
+            branding_employee[key] = ""
+    return branding_employee
 
 
 def _run_totals(calculations: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -6045,16 +6172,42 @@ def calculate_monthly_payroll():
                 employee,
                 organisation_snapshot,
             )
+
+            # Freeze the organisation identity and the ACTIVE payslip design that
+            # were effective when this Draft payroll was calculated. Recalculating
+            # an editable Draft intentionally refreshes this snapshot; locked or
+            # disbursed payroll therefore keeps the design version it was built with.
+            branding_employee = _branding_employee_for_snapshot(
+                employee_info,
+                organisation_snapshot,
+            )
+
+            payroll_branding_snapshot = resolve_snapshot_for_employee(
+                db,
+                tenant_id,
+                branding_employee,
+            )
+
             calculation_warnings = list(calculation.get("warnings") or [])
             if not safe_str(organisation_snapshot.get("name")):
                 calculation_warnings.append(
                     "Organisation is not assigned to this employee. Payslip branding "
                     "will use the tenant fallback."
                 )
-            elif not safe_str(organisation_snapshot.get("logo_src")):
+            elif not organisation_snapshot.get("record_found"):
                 calculation_warnings.append(
-                    "The employee organisation does not have a logo configured. "
-                    "Payslip branding will use the tenant fallback logo or initials."
+                    "The employee organisation is not linked to an organisation master "
+                    "record. Payslip branding will use the tenant fallback until the "
+                    "employee organisation mapping is corrected."
+                )
+
+            logo_source = _normalize_key(
+                payroll_branding_snapshot.get("logo_source")
+            )
+            if logo_source == "initials":
+                calculation_warnings.append(
+                    "No payroll, organisation, or tenant logo is configured. Payslip "
+                    "branding will use organisation initials."
                 )
 
             attendance_snapshot = {
@@ -6089,6 +6242,19 @@ def calculate_monthly_payroll():
                 ),
                 "organisation_snapshot": _snapshot(organisation_snapshot),
                 "organization_snapshot": _snapshot(organisation_snapshot),
+                "payroll_branding_snapshot": _snapshot(payroll_branding_snapshot),
+                "payslip_design_snapshot": _snapshot(
+                    payroll_branding_snapshot.get("design") or {}
+                ),
+                "payslip_design_version": int(
+                    payroll_branding_snapshot.get("design_version") or 0
+                ),
+                "payslip_design_source": safe_str(
+                    payroll_branding_snapshot.get("design_source")
+                ),
+                "payroll_branding_profile_key": safe_str(
+                    payroll_branding_snapshot.get("profile_key")
+                ),
                 "state_code": state_code,
                 "status": "draft",
                 "workflow_stage": "draft",
@@ -6162,6 +6328,15 @@ def calculate_monthly_payroll():
                 "employee_name": employee_name,
                 "message": exc.message,
                 "code": exc.code,
+            })
+        except PayrollBrandingError as exc:
+            validation_errors.append({
+                "employee_id": employee_id,
+                "employee_code": employee_code,
+                "employee_name": employee_name,
+                "message": exc.message,
+                "code": exc.code,
+                "field": exc.field,
             })
         except PayrollReimbursementError as exc:
             validation_errors.append({
@@ -7183,13 +7358,10 @@ def _tenant_company(db: Any, tenant_id: str) -> dict[str, Any]:
     }
 
 
-def _payslip_company(
-    db: Any,
+def _payslip_branding_lookup_employee(
     payslip: Mapping[str, Any],
     current_employee: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    tenant_id = safe_str(payslip.get("tenant_id"))
-    tenant_company = _tenant_company(db, tenant_id)
     employee = {
         **dict(payslip.get("employee_info") or {}),
         **dict(current_employee or {}),
@@ -7199,25 +7371,50 @@ def _payslip_company(
         or payslip.get("organization_snapshot")
         or {}
     )
+    branding_snapshot = dict(payslip.get("payroll_branding_snapshot") or {})
 
-    lookup_employee = {
+    return {
         **employee,
         "organisation_id": (
-            payslip.get("organisation_id")
+            branding_snapshot.get("organisation_id")
+            or branding_snapshot.get("organization_id")
+            or payslip.get("organisation_id")
             or payslip.get("organization_id")
             or organisation_snapshot.get("organisation_id")
             or organisation_snapshot.get("organization_id")
             or employee.get("organisation_id")
             or employee.get("organization_id")
         ),
+        "organization_id": (
+            branding_snapshot.get("organization_id")
+            or branding_snapshot.get("organisation_id")
+            or payslip.get("organization_id")
+            or payslip.get("organisation_id")
+            or organisation_snapshot.get("organization_id")
+            or organisation_snapshot.get("organisation_id")
+            or employee.get("organization_id")
+            or employee.get("organisation_id")
+        ),
         "organisation_code": (
-            organisation_snapshot.get("organisation_code")
+            branding_snapshot.get("organisation_code")
+            or branding_snapshot.get("organization_code")
+            or organisation_snapshot.get("organisation_code")
             or organisation_snapshot.get("organization_code")
             or employee.get("organisation_code")
             or employee.get("organization_code")
         ),
+        "organization_code": (
+            branding_snapshot.get("organization_code")
+            or branding_snapshot.get("organisation_code")
+            or organisation_snapshot.get("organization_code")
+            or organisation_snapshot.get("organisation_code")
+            or employee.get("organization_code")
+            or employee.get("organisation_code")
+        ),
         "organisation_name": (
-            payslip.get("organisation_name")
+            branding_snapshot.get("organisation_name")
+            or branding_snapshot.get("organization_name")
+            or payslip.get("organisation_name")
             or payslip.get("organization_name")
             or organisation_snapshot.get("name")
             or organisation_snapshot.get("organisation_name")
@@ -7227,49 +7424,259 @@ def _payslip_company(
             or employee.get("organisation")
             or employee.get("organization")
         ),
+        "organization_name": (
+            branding_snapshot.get("organization_name")
+            or branding_snapshot.get("organisation_name")
+            or payslip.get("organization_name")
+            or payslip.get("organisation_name")
+            or organisation_snapshot.get("name")
+            or organisation_snapshot.get("organization_name")
+            or organisation_snapshot.get("organisation_name")
+            or employee.get("organization_name")
+            or employee.get("organisation_name")
+            or employee.get("organization")
+            or employee.get("organisation")
+        ),
     }
+
+
+def _resolve_payslip_branding_snapshot(
+    db: Any,
+    payslip: Mapping[str, Any],
+    current_employee: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Return the frozen branding/design snapshot, with a legacy fallback flag.
+
+    New payroll calculations store an immutable branding snapshot. Older
+    payslips created before the designer feature do not have one, so they use
+    the currently effective organisation branding/design on their first render.
+    The PDF route persists that fallback onto the legacy payslip afterwards.
+    """
+
+    saved = dict(payslip.get("payroll_branding_snapshot") or {})
+    if saved:
+        design = (
+            payslip.get("payslip_design_snapshot")
+            or saved.get("design")
+            or {}
+        )
+        saved["design"] = normalize_payslip_design(design)
+        saved["design_version"] = int(
+            payslip.get("payslip_design_version")
+            or saved.get("design_version")
+            or 0
+        )
+        saved["design_source"] = safe_str(
+            payslip.get("payslip_design_source")
+            or saved.get("design_source")
+            or "system_default"
+        )
+        return saved, False
+
+    tenant_id = safe_str(payslip.get("tenant_id"))
+    lookup_employee = _payslip_branding_lookup_employee(
+        payslip,
+        current_employee,
+    )
+    try:
+        resolved = resolve_snapshot_for_employee(
+            db,
+            tenant_id,
+            lookup_employee,
+        )
+    except (PayrollBrandingError, TypeError, AttributeError, KeyError):
+        # Type/attribute/key fallbacks keep route-level legacy test doubles and
+        # very old records working while real Mongo deployments use the full
+        # payroll-branding service.
+        resolved = {}
+
+    if resolved:
+        resolved = dict(resolved)
+        resolved["design"] = normalize_payslip_design(
+            resolved.get("design") or {}
+        )
+        return resolved, True
+
+    return {}, True
+
+
+def _payslip_company(
+    db: Any,
+    payslip: Mapping[str, Any],
+    current_employee: Mapping[str, Any] | None = None,
+    branding_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    tenant_id = safe_str(payslip.get("tenant_id"))
+    tenant_company = _tenant_company(db, tenant_id)
+    frozen_branding = dict(
+        branding_snapshot
+        or payslip.get("payroll_branding_snapshot")
+        or {}
+    )
+    lookup_employee = _payslip_branding_lookup_employee(
+        payslip,
+        current_employee,
+    )
+
+    # The organisation identity/design are frozen with the payroll snapshot,
+    # but the logo is intentionally resolved from the CURRENT organisation
+    # payroll-branding profile when possible. This means HR can replace a logo
+    # without stale/deleted upload URLs breaking previously generated payslips.
+    # The frozen logo URL remains the fallback if the live profile is unavailable.
+    try:
+        current_branding = resolve_snapshot_for_employee(
+            db,
+            tenant_id,
+            lookup_employee,
+        )
+    except (PayrollBrandingError, TypeError, AttributeError, KeyError):
+        current_branding = {}
+
+    organisation_snapshot = dict(
+        payslip.get("organisation_snapshot")
+        or payslip.get("organization_snapshot")
+        or {}
+    )
     current_organisation = _employee_organisation_snapshot(
         db,
         tenant_id,
         lookup_employee,
     )
     organisation = current_organisation or organisation_snapshot
+
     organisation_name = safe_str(
-        organisation.get("name")
+        frozen_branding.get("organisation_name")
+        or frozen_branding.get("organization_name")
+        or current_branding.get("organisation_name")
+        or current_branding.get("organization_name")
+        or organisation.get("name")
         or organisation.get("organisation_name")
         or organisation.get("organization_name")
     )
-
     if not organisation_name:
         return tenant_company
 
     organisation_code = safe_str(
-        organisation.get("organisation_code")
+        frozen_branding.get("organisation_code")
+        or frozen_branding.get("organization_code")
+        or current_branding.get("organisation_code")
+        or current_branding.get("organization_code")
+        or organisation.get("organisation_code")
         or organisation.get("organization_code")
+    )
+
+    current_logo = safe_str(current_branding.get("logo_url"))
+    current_logo_source = _normalize_key(current_branding.get("logo_source"))
+    snapshot_logo = safe_str(
+        frozen_branding.get("logo_url")
+        or frozen_branding.get("logo_data_uri")
     )
     organisation_logo = safe_str(
         organisation.get("logo_src")
         or _branding_logo_source(organisation)
     )
-    logo_src = organisation_logo or safe_str(tenant_company.get("logo_src"))
-    address = _format_address(organisation.get("address"))
+    tenant_logo = safe_str(tenant_company.get("logo_src"))
+    logo_src = current_logo or snapshot_logo or organisation_logo or tenant_logo
+
+    if current_logo:
+        if current_logo_source == "payroll_branding":
+            branding_source = "payroll_branding"
+        elif current_logo_source == "organisation":
+            branding_source = "employee_organisation"
+        elif current_logo_source == "tenant":
+            branding_source = "tenant_logo_fallback"
+        else:
+            branding_source = current_logo_source or "payroll_branding"
+    elif snapshot_logo:
+        branding_source = safe_str(frozen_branding.get("logo_source")) or "payroll_branding_snapshot"
+    elif organisation_logo:
+        branding_source = "employee_organisation"
+    elif tenant_logo:
+        branding_source = "tenant_logo_fallback"
+    else:
+        branding_source = "initials"
+
+    address = safe_str(
+        frozen_branding.get("address")
+        or current_branding.get("address")
+    ) or _format_address(organisation.get("address"))
+    email = safe_str(
+        frozen_branding.get("email")
+        or current_branding.get("email")
+        or organisation.get("email")
+    )
+    phone = safe_str(
+        frozen_branding.get("phone")
+        or current_branding.get("phone")
+        or organisation.get("phone")
+    )
+    website = safe_str(
+        frozen_branding.get("website")
+        or current_branding.get("website")
+        or organisation.get("website")
+    )
 
     return {
         "name": organisation_name,
         "address": address or safe_str(tenant_company.get("address")),
+        "email": email,
+        "phone": phone,
+        "website": website,
         "initials": organisation_code or _company_initials(organisation_name),
         "logo_src": logo_src,
         "logo_data_uri": logo_src,
-        "branding_source": (
-            "employee_organisation"
-            if organisation_logo
-            else "tenant_logo_fallback"
-        ),
+        "branding_source": branding_source,
         "organisation_id": safe_str(
-            organisation.get("organisation_id")
+            frozen_branding.get("organisation_id")
+            or frozen_branding.get("organization_id")
+            or current_branding.get("organisation_id")
+            or current_branding.get("organization_id")
+            or organisation.get("organisation_id")
             or organisation.get("organization_id")
         ),
+        "organization_id": safe_str(
+            frozen_branding.get("organization_id")
+            or frozen_branding.get("organisation_id")
+            or current_branding.get("organization_id")
+            or current_branding.get("organisation_id")
+            or organisation.get("organization_id")
+            or organisation.get("organisation_id")
+        ),
+        "payroll_design_version": int(
+            frozen_branding.get("design_version") or 0
+        ),
     }
+
+
+def _payslip_component_rows(lines: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(lines or []):
+        if not isinstance(item, Mapping):
+            continue
+        code = safe_str(item.get("code"))
+        label = safe_str(
+            item.get("label")
+            or item.get("name")
+            or code.replace("_", " ").title()
+        )
+        if not label:
+            continue
+        try:
+            display_order = int(item.get("display_order") or (index + 1) * 10)
+        except (TypeError, ValueError):
+            display_order = (index + 1) * 10
+        rows.append({
+            "code": code,
+            "label": label,
+            "amount": _number(
+                item.get("amount", item.get("payable_amount", 0)),
+                0,
+            ),
+            "display_order": display_order,
+            "category": safe_str(item.get("category")),
+        })
+    rows.sort(key=lambda row: (row["display_order"], row["code"], row["label"]))
+    return rows
 
 
 def _payslip_pdf_context(
@@ -7279,10 +7686,9 @@ def _payslip_pdf_context(
 ) -> dict[str, Any]:
     employee = dict(payslip.get("employee_info") or {})
 
-    # Bank details are verified and frozen only when the payroll is prepared
-    # for locking. The original employee_info snapshot is created during Draft
-    # calculation and may therefore contain blank or outdated bank fields.
-    # Prefer the immutable payroll bank snapshot for the generated payslip.
+    # Bank details are verified and frozen only when payroll is prepared for
+    # locking. Prefer that immutable bank snapshot over the earlier Draft-time
+    # employee snapshot when rendering the final payslip.
     bank_snapshot = dict(
         payslip.get("bank_details_snapshot")
         or payslip.get("bank_snapshot")
@@ -7333,43 +7739,124 @@ def _payslip_pdf_context(
     attendance = dict(payslip.get("attendance") or {})
     totals = dict(payslip.get("totals") or {})
     earnings = list(payslip.get("earnings") or [])
+    employer_contributions = list(
+        payslip.get("employer_contributions") or []
+    )
     deductions = list(payslip.get("deductions") or [])
     advances = list(payslip.get("advance_details") or [])
     transfer = dict(payslip.get("transfer_details") or {})
-    tenant_id = safe_str(payslip.get("tenant_id"))
-    company = _payslip_company(db, payslip, current_employee)
+
+    branding_snapshot, used_legacy_branding_fallback = (
+        _resolve_payslip_branding_snapshot(
+            db,
+            payslip,
+            current_employee,
+        )
+    )
+    company = _payslip_company(
+        db,
+        payslip,
+        current_employee,
+        branding_snapshot,
+    )
+    payslip_design = normalize_payslip_design(
+        payslip.get("payslip_design_snapshot")
+        or branding_snapshot.get("design")
+        or {}
+    )
 
     month_number = int(payslip.get("month") or 0)
     year_number = int(payslip.get("year") or 0)
-    month_name = calendar.month_name[month_number] if 1 <= month_number <= 12 else ""
+    month_name = (
+        calendar.month_name[month_number]
+        if 1 <= month_number <= 12
+        else ""
+    )
 
     net_amount = totals.get("net_amount", 0)
-    pf_employer = totals.get("pf_employer", _line_amount(earnings, "pf_employer"))
+    pf_employer = totals.get(
+        "pf_employer",
+        _line_amount(earnings, "pf_employer"),
+    )
 
+    # Keep the original fixed rows for compatibility with legacy tests and any
+    # downstream integrations that still inspect this context. The new designer
+    # consumes all_earning_rows/all_deduction_rows so custom salary components
+    # and every statutory deduction are rendered dynamically.
     earning_rows = [
         ("Basic", _line_amount(earnings, "basic")),
         ("HRA", _line_amount(earnings, "hra")),
-        ("Medical Allowance", _line_amount(earnings, "medical_allowance", "medical")),
-        ("Other Allowances", _line_amount(earnings, "other_allowances", "other_allowance")),
+        (
+            "Medical Allowance",
+            _line_amount(earnings, "medical_allowance", "medical"),
+        ),
+        (
+            "Other Allowances",
+            _line_amount(earnings, "other_allowances", "other_allowance"),
+        ),
         ("Employer's Contribution towards PF", pf_employer),
     ]
 
     deduction_rows = [
-        ("Tax Deducted at Source (TDS)", totals.get("tds", _line_amount(deductions, "tds"))),
-        ("PF Contribution- Employee", totals.get("pf_employee", _line_amount(deductions, "pf_employee"))),
+        (
+            "Tax Deducted at Source (TDS)",
+            totals.get("tds", _line_amount(deductions, "tds")),
+        ),
+        (
+            "PF Contribution- Employee",
+            totals.get(
+                "pf_employee",
+                _line_amount(deductions, "pf_employee"),
+            ),
+        ),
         ("PF Contribution- Employer", pf_employer),
-        ("Deduction against Leave without pay", totals.get("lwp_deduction", _line_amount(deductions, "lwp_deduction"))),
-        ("Professional Tax", totals.get("professional_tax", _line_amount(deductions, "professional_tax"))),
+        (
+            "Deduction against Leave without pay",
+            totals.get(
+                "lwp_deduction",
+                _line_amount(deductions, "lwp_deduction"),
+            ),
+        ),
+        (
+            "Professional Tax",
+            totals.get(
+                "professional_tax",
+                _line_amount(deductions, "professional_tax"),
+            ),
+        ),
         ("Advances", totals.get("advances", 0)),
     ]
+
+    all_earning_rows = _payslip_component_rows(earnings)
+    existing_earning_codes = {
+        _normalize_key(row.get("code"))
+        for row in all_earning_rows
+        if safe_str(row.get("code"))
+    }
+    for row in _payslip_component_rows(employer_contributions):
+        code = _normalize_key(row.get("code"))
+        if code and code in existing_earning_codes:
+            continue
+        all_earning_rows.append(row)
+        if code:
+            existing_earning_codes.add(code)
+    all_earning_rows.sort(
+        key=lambda row: (
+            int(row.get("display_order") or 0),
+            safe_str(row.get("code")),
+            safe_str(row.get("label")),
+        )
+    )
+    all_deduction_rows = _payslip_component_rows(deductions)
 
     advance_map = {
         _normalize_key(item.get("code") or item.get("label")): item
         for item in advances
+        if isinstance(item, Mapping)
     }
 
     def advance_row(label: str, *codes: str) -> dict[str, Any]:
-        match = None
+        match: Mapping[str, Any] | None = None
         for code in codes:
             match = advance_map.get(_normalize_key(code))
             if match:
@@ -7396,133 +7883,43 @@ def _payslip_pdf_context(
         "attendance": attendance,
         "earning_rows": earning_rows,
         "deduction_rows": deduction_rows,
+        "all_earning_rows": all_earning_rows,
+        "all_deduction_rows": all_deduction_rows,
         "totals": totals,
         "advance_rows": [
             advance_row("Work Advance", "work_advance", "work"),
             advance_row("Tour Advance", "tour_advance", "tour"),
-            advance_row("Personal Advance", "personal_advance", "personal", "advance"),
+            advance_row(
+                "Personal Advance",
+                "personal_advance",
+                "personal",
+                "advance",
+            ),
         ],
         "transfer": transfer,
         "amount_words": f"Rupees {_indian_number_words(net_amount)} only",
         "net_amount": net_amount,
+        "payslip_design": payslip_design,
+        "payroll_branding_snapshot": branding_snapshot,
+        "payroll_branding_legacy_fallback": used_legacy_branding_fallback,
+        "payslip_design_version": int(
+            payslip.get("payslip_design_version")
+            or branding_snapshot.get("design_version")
+            or 0
+        ),
+        "payslip_design_source": safe_str(
+            payslip.get("payslip_design_source")
+            or branding_snapshot.get("design_source")
+            or "system_default"
+        ),
     }
 
 
-PAYSLIP_HTML_TEMPLATE = r"""
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<style>
-  @page { size: Letter portrait; margin: 15mm 14mm 12mm; }
-  * { box-sizing: border-box; }
-  body { margin: 0; color: #222; font-family: Arial, Helvetica, sans-serif; font-size: 10px; }
-  .sheet { width: 100%; }
-  .header { display: grid; grid-template-columns: 90px 1fr 90px; align-items: center; margin-bottom: 7px; }
-  .logo-box { width: 76px; height: 56px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; color: #1d4f2e; }
-  .logo-box img { max-width: 76px; max-height: 56px; object-fit: contain; }
-  .company { text-align: center; }
-  .company h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
-  .company p { margin: 2px 0 0; font-size: 10px; }
-  .title { text-align: center; font-size: 13px; font-weight: 700; margin: 5px 0 8px; }
-  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  td, th { border: 1px solid #b9b9b9; padding: 4px 5px; vertical-align: middle; }
-  .info td { height: 24px; }
-  .label { font-weight: 700; width: 19%; }
-  .value { width: 31%; }
-  .section-head { background: #fff18c; font-weight: 700; text-align: left; }
-  .earnings th { background: #f0f0f0; text-align: left; font-size: 10px; }
-  .earnings .amount { text-align: right; width: 14%; }
-  .earnings .component { width: 36%; }
-  .summary td { font-weight: 700; }
-  .summary .number { text-align: right; }
-  .net { font-size: 13px; font-weight: 800; text-align: center; background: #f8f8f8; }
-  .advance th { background: #f0f0f0; font-size: 9px; }
-  .advance td { height: 24px; }
-  .right { text-align: right; }
-  .center { text-align: center; }
-  .muted { color: #666; }
-  .transfer td { height: 25px; }
-  .footer-note { background: #fff18c; border: 1px solid #b9b9b9; padding: 5px; font-size: 9px; margin-top: 7px; }
-  .spacer { height: 5px; }
-</style>
-</head>
-<body>
-<div class="sheet">
-  <div class="header">
-    <div class="logo-box">
-      {% if company.logo_data_uri %}<img src="{{ company.logo_data_uri }}" alt="Logo">{% else %}{{ company.initials }}{% endif %}
-    </div>
-    <div class="company">
-      <h1>{{ company.name }}</h1>
-      <p>{{ company.address }}</p>
-    </div>
-    <div></div>
-  </div>
-
-  <div class="title">Pay Slip for {{ month_name }} -{{ year }}</div>
-
-  <table class="info">
-    <tr><td class="label">Name</td><td class="value">{{ employee.name or '—' }}</td><td class="label">Permanent Account Number (PAN)</td><td class="value">{{ employee.pan or 'NA' }}</td></tr>
-    <tr><td class="label">Employee Code</td><td>{{ employee.employee_code or '—' }}</td><td class="label">Universal Account Number (UAN)</td><td>{{ employee.uan or 'NA' }}</td></tr>
-    <tr><td class="label">Function</td><td>{{ employee.function or employee.department or '—' }}</td><td class="label">ESI Number</td><td>{{ employee.esi_number or 'NA' }}</td></tr>
-    <tr><td class="label">Designation</td><td>{{ employee.designation or '—' }}</td><td class="label">PR Account Number (PRAN)</td><td>{{ employee.pran or 'NA' }}</td></tr>
-    <tr><td class="label">Location</td><td>{{ employee.location or '—' }}</td><td class="label">IFS Code</td><td>{{ employee.ifsc_code or '—' }}</td></tr>
-    <tr><td class="label">Account No.</td><td>{{ employee.account_number or '—' }}</td><td class="label">Total Sanctioned Leave</td><td>{{ attendance.paid_leave_days or 0 }} Days</td></tr>
-    <tr><td class="label">Date of joining</td><td>{{ employee.date_of_joining or '—' }}</td><td class="label">LWP (Leave Without Pay)</td><td>{{ attendance.lwp_days or 0 }} Days</td></tr>
-    <tr><td class="label">Leave availed during this Month</td><td>{{ attendance.leave_availed or attendance.paid_leave_days or 0 }} Days</td><td class="label">No. of Days Salary Paid for</td><td>{{ attendance.payable_days or attendance.salary_paid_days or 0 }} Days</td></tr>
-    <tr><td class="label">Leave Balance</td><td colspan="3">{{ attendance.leave_balance or 0 }} Days</td></tr>
-  </table>
-
-  <div class="spacer"></div>
-
-  <table class="earnings">
-    <thead><tr><th class="component">Earnings</th><th class="amount">Gross Salary</th><th class="component">Deductions</th><th class="amount">Amount</th></tr></thead>
-    <tbody>
-      {% for row_index in range(6) %}
-      <tr>
-        <td>{{ earning_rows[row_index][0] if row_index < earning_rows|length else '' }}</td>
-        <td class="amount">{{ money(earning_rows[row_index][1]) if row_index < earning_rows|length else '' }}</td>
-        <td>{{ deduction_rows[row_index][0] if row_index < deduction_rows|length else '' }}</td>
-        <td class="amount">{{ money(deduction_rows[row_index][1]) if row_index < deduction_rows|length else '' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-    <tfoot>
-      <tr class="summary"><td>Cost to Company</td><td class="number">{{ plain(totals.cost_to_company) }}</td><td>Total Deductions</td><td class="number">{{ plain(totals.total_deductions) }}</td></tr>
-      <tr><td colspan="2"></td><td class="net">Net Amount</td><td class="net">{{ plain(net_amount) }}</td></tr>
-    </tfoot>
-  </table>
-
-  <div class="spacer"></div>
-  <table class="advance">
-    <tr><th class="section-head" colspan="7">Advance Details</th></tr>
-    <tr><th>Advance Type</th><th>Date</th><th>Balance Advance Amount</th><th>Deduction Amount</th><th>Bills Received (Yes/No)</th><th>Pending/balance Amount</th><th>Remarks</th></tr>
-    {% for row in advance_rows %}
-    <tr><td>{{ row.label }}</td><td>{{ row.date }}</td><td class="right">{{ plain(row.balance) if row.balance != '' else '' }}</td><td class="right">{{ plain(row.deduction) }}</td><td class="center">{{ row.bills_received }}</td><td class="right">{{ plain(row.pending) if row.pending != '' else '' }}</td><td></td></tr>
-    {% endfor %}
-    <tr><td colspan="3"><strong>Total Advance Amount</strong></td><td class="right"><strong>{{ plain(totals.advances) }}</strong></td><td colspan="3"></td></tr>
-  </table>
-
-  <div class="spacer"></div>
-  <table class="transfer">
-    <tr><td class="label">Total Amount Transferred</td><td><strong>{{ money(net_amount) }}</strong></td></tr>
-    <tr><td class="label">Amount (in words)</td><td>{{ amount_words }}</td></tr>
-    <tr><td class="label">Transfer Date</td><td>{{ transfer.transfer_date or '—' }}{% if transfer.transfer_mode %}&nbsp;&nbsp;&nbsp;{{ transfer.transfer_mode }}{% endif %}</td></tr>
-  </table>
-
-  <div class="footer-note">*This is a computer generated slip &amp; does not require any signature</div>
-</div>
-</body>
-</html>
-"""
-
-
 def _render_payslip_html(context: Mapping[str, Any]) -> str:
-    environment = Environment(autoescape=True)
-    environment.globals["money"] = _money
-    environment.globals["plain"] = _plain_number
-    return environment.from_string(PAYSLIP_HTML_TEMPLATE).render(**context)
+    return render_designed_payslip_html(
+        context,
+        context.get("payslip_design") or {},
+    )
 
 
 def _current_employee_for_user(db: Any, tenant_id: str) -> dict[str, Any] | None:
@@ -7656,15 +8053,57 @@ def generate_or_fetch_payslip_pdf(employee_reference: str, month: int, year: int
         ) from exc
 
     now = _now()
+    branding_snapshot = dict(
+        context.get("payroll_branding_snapshot") or {}
+    )
+    pdf_update_fields: dict[str, Any] = {
+        "pdf_generated_at": now,
+        "pdf_generated_by": _current_user_id(),
+        "pdf_generated_by_name": _current_user_name(),
+        "pdf_branding_source": safe_str(
+            (context.get("company") or {}).get("branding_source")
+        ),
+        "pdf_organisation_name": safe_str(
+            (context.get("company") or {}).get("name")
+        ),
+        "pdf_payslip_design_version": int(
+            context.get("payslip_design_version") or 0
+        ),
+        "pdf_payslip_design_source": safe_str(
+            context.get("payslip_design_source")
+        ),
+        "updated_at": now,
+    }
+
+    # Payslips created before the branding/designer feature have no immutable
+    # design snapshot. On their first render under the new system, freeze the
+    # resolved organisation/design so subsequent PDFs remain consistent.
+    if (
+        context.get("payroll_branding_legacy_fallback")
+        and branding_snapshot
+        and not payslip.get("payroll_branding_snapshot")
+    ):
+        pdf_update_fields.update({
+            "payroll_branding_snapshot": _snapshot(branding_snapshot),
+            "payslip_design_snapshot": _snapshot(
+                context.get("payslip_design") or {}
+            ),
+            "payslip_design_version": int(
+                context.get("payslip_design_version") or 0
+            ),
+            "payslip_design_source": safe_str(
+                context.get("payslip_design_source")
+            ),
+            "payroll_branding_profile_key": safe_str(
+                branding_snapshot.get("profile_key")
+            ),
+            "payroll_branding_legacy_migrated_at": now,
+        })
+
     db.payslips.update_one(
         {"_id": payslip["_id"]},
         {
-            "$set": {
-                "pdf_generated_at": now,
-                "pdf_generated_by": _current_user_id(),
-                "pdf_generated_by_name": _current_user_name(),
-                "updated_at": now,
-            },
+            "$set": pdf_update_fields,
             "$inc": {"pdf_generation_count": 1},
         },
     )
@@ -7679,6 +8118,22 @@ def generate_or_fetch_payslip_pdf(employee_reference: str, month: int, year: int
             "employee_code": _employee_code(employee),
             "period_key": period_key,
             "status": status,
+            "organisation_id": safe_str(
+                (context.get("company") or {}).get("organisation_id")
+                or (context.get("company") or {}).get("organization_id")
+            ),
+            "organisation_name": safe_str(
+                (context.get("company") or {}).get("name")
+            ),
+            "branding_source": safe_str(
+                (context.get("company") or {}).get("branding_source")
+            ),
+            "payslip_design_version": int(
+                context.get("payslip_design_version") or 0
+            ),
+            "payslip_design_source": safe_str(
+                context.get("payslip_design_source")
+            ),
         },
     )
 

@@ -8,6 +8,7 @@ from .routes.auth import auth_bp
 from .routes.demo_requests import demo_requests_bp
 from .routes.billing import billing_bp
 from .routes.payroll import payroll_bp
+from .routes.payroll_branding import payroll_branding_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
 from .routes.field_visits import field_visits_bp
@@ -194,6 +195,13 @@ def create_app():
     # contains the existing legacy payroll-run endpoint.
     app.register_blueprint(payroll_bp, url_prefix="/api/v1/payroll")
 
+    # Payroll Branding / Payslip Designer APIs:
+    # organisation-specific payroll logos, draft/active payslip designs,
+    # safe live preview, design activation/reset, and designer catalog.
+    # Keep this beside Payroll because it is the presentation/branding layer
+    # for payroll output and never replaces payroll calculation logic.
+    app.register_blueprint(payroll_branding_bp, url_prefix="/api/v1/payroll-branding")
+
     # Dashboard APIs:
     # Super Admin, Admin/HR/Finance, and Employee dashboard.
     # Team Leader / Reporting Officer are employee capabilities and remain
@@ -368,6 +376,8 @@ def create_app():
                 "Leave Management",
                 "Leave Balances",
                 "Payroll",
+                "Payroll Branding",
+                "Payslip Designer",
                 "Projects",
                 "Project Progress",
                 "Management Group",
@@ -404,6 +414,9 @@ def create_app():
             "leave_module": True,
             "leave_balance_module": True,
             "payroll_module": True,
+            "payroll_branding_module": True,
+            "payslip_designer_module": True,
+            "organisation_specific_payslip_branding": True,
             "notification_module": True,
             "recruitment_module": True,
             "resume_parser": ["pdf", "docx", "txt"],
@@ -449,6 +462,7 @@ def create_app():
                 "account_access",
                 "billing",
                 "payroll",
+                "payroll_branding",
                 "dashboard",
                 "attendance",
                 "field_visits",

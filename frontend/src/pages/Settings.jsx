@@ -44,6 +44,13 @@ const ATTENDANCE_REASON_MANAGER_ROLES = new Set([
   'hr_manager',
   'hr',
 ]);
+const PAYROLL_BRANDING_MANAGER_ROLES = new Set([
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
+]);
 const DEFAULT_LATE_REASON_OPTIONS = [
   { code: 'traffic_congestion', label: 'Traffic congestion' },
   { code: 'public_transport_delay', label: 'Public transport delay' },
@@ -72,6 +79,28 @@ const ALLOWED_LOGO_TYPES = new Set([
 function safeText(value, fallback = '') {
   const normalized = String(value || '').trim();
   return normalized || fallback;
+}
+
+function getPayrollProfileReference(profile = {}) {
+  return safeText(
+    profile.organisation_id ||
+      profile.organization_id ||
+      profile.organisation_code ||
+      profile.organization_code ||
+      profile.profile_key,
+    'tenant',
+  );
+}
+
+function getPayrollLogoSourceLabel(source = '') {
+  const normalized = safeText(source).toLowerCase();
+
+  if (normalized === 'payroll_branding') return 'Custom payroll logo';
+  if (normalized === 'organisation' || normalized === 'organization') {
+    return 'Organisation logo fallback';
+  }
+  if (normalized === 'tenant') return 'Company logo fallback';
+  return 'Initials fallback';
 }
 
 function getBrandingFromResponse(data = {}) {
@@ -483,11 +512,13 @@ function AttendanceReasonListEditor({
   );
 }
 
-export default function Settings({ user }) {
+export default function Settings({ user, setPage }) {
   const fileInputRef = useRef(null);
   const previewUrlRef = useRef('');
   const platformFileInputRef = useRef(null);
   const platformPreviewUrlRef = useRef('');
+  const payrollLogoInputRef = useRef(null);
+  const payrollLogoPreviewUrlRef = useRef('');
 
   const [branding, setBranding] = useState({
     tenantId: '',
@@ -502,6 +533,19 @@ export default function Settings({ user }) {
   const [removing, setRemoving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  const [payrollProfiles, setPayrollProfiles] = useState([]);
+  const [payrollSelectionMode, setPayrollSelectionMode] = useState('single');
+  const [payrollOrganisationCount, setPayrollOrganisationCount] = useState(0);
+  const [selectedPayrollProfileKey, setSelectedPayrollProfileKey] = useState('');
+  const [selectedPayrollLogoFile, setSelectedPayrollLogoFile] = useState(null);
+  const [localPayrollLogoPreview, setLocalPayrollLogoPreview] = useState('');
+  const [payrollBrandingLoading, setPayrollBrandingLoading] = useState(true);
+  const [payrollLogoSaving, setPayrollLogoSaving] = useState(false);
+  const [payrollLogoRemoving, setPayrollLogoRemoving] = useState(false);
+  const [payrollBrandingMessage, setPayrollBrandingMessage] = useState('');
+  const [payrollBrandingError, setPayrollBrandingError] = useState('');
+  const [showPayrollLogoRemoveConfirm, setShowPayrollLogoRemoveConfirm] = useState(false);
 
   const [platformBranding, setPlatformBranding] = useState({
     productName: 'YourComate',
@@ -574,6 +618,32 @@ export default function Settings({ user }) {
   const attendanceScheduleBusy =
     attendanceScheduleLoading || attendanceScheduleSaving;
 
+  const hasPayrollBrandingManagerRole =
+    isPlatformSuperadmin ||
+    userRoles.some((role) => PAYROLL_BRANDING_MANAGER_ROLES.has(role));
+  const selectedPayrollProfile = useMemo(() => {
+    if (!payrollProfiles.length) return null;
+
+    return (
+      payrollProfiles.find(
+        (profile) =>
+          getPayrollProfileReference(profile) === selectedPayrollProfileKey,
+      ) || payrollProfiles[0]
+    );
+  }, [payrollProfiles, selectedPayrollProfileKey]);
+  const savedPayrollLogoUrl = useMemo(
+    () =>
+      normalizeProfilePhotoUrl(
+        selectedPayrollProfile?.effective_logo_url ||
+          selectedPayrollProfile?.payroll_logo_url ||
+          '',
+      ),
+    [selectedPayrollProfile],
+  );
+  const previewPayrollLogoUrl = localPayrollLogoPreview || savedPayrollLogoUrl;
+  const payrollBrandingBusy =
+    payrollBrandingLoading || payrollLogoSaving || payrollLogoRemoving;
+
   const savedLogoUrl = useMemo(
     () => normalizeProfilePhotoUrl(branding.logo),
     [branding.logo],
@@ -623,6 +693,211 @@ export default function Settings({ user }) {
     if (platformFileInputRef.current) {
       platformFileInputRef.current.value = '';
     }
+  }
+
+  function clearPayrollLogoLocalPreview() {
+    if (payrollLogoPreviewUrlRef.current) {
+      URL.revokeObjectURL(payrollLogoPreviewUrlRef.current);
+      payrollLogoPreviewUrlRef.current = '';
+    }
+
+    setLocalPayrollLogoPreview('');
+  }
+
+  function resetSelectedPayrollLogoFile() {
+    clearPayrollLogoLocalPreview();
+    setSelectedPayrollLogoFile(null);
+
+    if (payrollLogoInputRef.current) {
+      payrollLogoInputRef.current.value = '';
+    }
+  }
+
+  function replacePayrollProfile(nextProfile) {
+    if (!nextProfile) return;
+
+    const nextReference = getPayrollProfileReference(nextProfile);
+    setPayrollProfiles((current) => {
+      const index = current.findIndex(
+        (profile) => getPayrollProfileReference(profile) === nextReference,
+      );
+
+      if (index < 0) return [...current, nextProfile];
+
+      return current.map((profile, profileIndex) =>
+        profileIndex === index ? nextProfile : profile,
+      );
+    });
+    setSelectedPayrollProfileKey(nextReference);
+  }
+
+  async function loadPayrollBrandingProfiles({ silent = false } = {}) {
+    if (!hasPayrollBrandingManagerRole) {
+      setPayrollBrandingLoading(false);
+      return;
+    }
+
+    if (!silent) {
+      setPayrollBrandingLoading(true);
+      setPayrollBrandingMessage('');
+    }
+    setPayrollBrandingError('');
+
+    try {
+      const data = await api('/payroll-branding/profiles');
+      const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
+
+      setPayrollProfiles(profiles);
+      setPayrollSelectionMode(
+        safeText(data?.selection_mode, profiles.length <= 1 ? 'single' : 'multiple'),
+      );
+      setPayrollOrganisationCount(
+        Number(data?.organisation_count ?? profiles.length) || profiles.length,
+      );
+      setSelectedPayrollProfileKey((current) => {
+        const exists = profiles.some(
+          (profile) => getPayrollProfileReference(profile) === current,
+        );
+        return exists ? current : getPayrollProfileReference(profiles[0] || {});
+      });
+    } catch (requestError) {
+      setPayrollProfiles([]);
+      setPayrollSelectionMode('single');
+      setPayrollOrganisationCount(0);
+      setPayrollBrandingError(
+        requestError?.message ||
+          'Unable to load payroll branding. Please refresh and try again.',
+      );
+    } finally {
+      setPayrollBrandingLoading(false);
+    }
+  }
+
+  function handlePayrollProfileChange(event) {
+    resetSelectedPayrollLogoFile();
+    setSelectedPayrollProfileKey(event.target.value);
+    setPayrollBrandingMessage('');
+    setPayrollBrandingError('');
+    setShowPayrollLogoRemoveConfirm(false);
+  }
+
+  function handlePayrollLogoFileChange(event) {
+    const file = event.target.files?.[0] || null;
+
+    setPayrollBrandingMessage('');
+    setPayrollBrandingError('');
+
+    if (!file) {
+      resetSelectedPayrollLogoFile();
+      return;
+    }
+
+    if (!ALLOWED_LOGO_TYPES.has(String(file.type || '').toLowerCase())) {
+      setPayrollBrandingError('Payroll logo must be JPG, JPEG, PNG, or WEBP.');
+      resetSelectedPayrollLogoFile();
+      return;
+    }
+
+    if (file.size > MAX_LOGO_BYTES) {
+      setPayrollBrandingError('Payroll logo must be 3 MB or smaller.');
+      resetSelectedPayrollLogoFile();
+      return;
+    }
+
+    clearPayrollLogoLocalPreview();
+    const previewUrl = URL.createObjectURL(file);
+    payrollLogoPreviewUrlRef.current = previewUrl;
+    setSelectedPayrollLogoFile(file);
+    setLocalPayrollLogoPreview(previewUrl);
+  }
+
+  async function uploadPayrollLogo(event) {
+    event.preventDefault();
+
+    if (!selectedPayrollProfile) {
+      setPayrollBrandingError('Select an organisation before uploading a payroll logo.');
+      return;
+    }
+
+    if (!selectedPayrollLogoFile) {
+      setPayrollBrandingError('Select a payroll logo before uploading.');
+      return;
+    }
+
+    const reference = getPayrollProfileReference(selectedPayrollProfile);
+    const formData = new FormData();
+    formData.append('logo', selectedPayrollLogoFile);
+
+    setPayrollLogoSaving(true);
+    setPayrollBrandingMessage('');
+    setPayrollBrandingError('');
+
+    try {
+      const data = await api(
+        `/payroll-branding/profiles/${encodeURIComponent(reference)}/logo`,
+        { method: 'POST', body: formData },
+      );
+      replacePayrollProfile(data?.profile);
+      resetSelectedPayrollLogoFile();
+      setPayrollBrandingMessage(
+        data?.message || 'Payroll logo uploaded successfully.',
+      );
+    } catch (requestError) {
+      setPayrollBrandingError(
+        requestError?.message || 'Unable to upload the payroll logo. Please try again.',
+      );
+    } finally {
+      setPayrollLogoSaving(false);
+    }
+  }
+
+  async function removePayrollLogo() {
+    if (!selectedPayrollProfile?.has_custom_payroll_logo) {
+      setShowPayrollLogoRemoveConfirm(false);
+      return;
+    }
+
+    const reference = getPayrollProfileReference(selectedPayrollProfile);
+    setPayrollLogoRemoving(true);
+    setPayrollBrandingMessage('');
+    setPayrollBrandingError('');
+
+    try {
+      const data = await api(
+        `/payroll-branding/profiles/${encodeURIComponent(reference)}/logo`,
+        { method: 'DELETE' },
+      );
+      replacePayrollProfile(data?.profile);
+      resetSelectedPayrollLogoFile();
+      setShowPayrollLogoRemoveConfirm(false);
+      setPayrollBrandingMessage(
+        data?.message || 'Custom payroll logo removed successfully.',
+      );
+    } catch (requestError) {
+      setPayrollBrandingError(
+        requestError?.message || 'Unable to remove the payroll logo. Please try again.',
+      );
+    } finally {
+      setPayrollLogoRemoving(false);
+    }
+  }
+
+  function openPayslipDesigner() {
+    if (!selectedPayrollProfile) return;
+
+    const reference = getPayrollProfileReference(selectedPayrollProfile);
+    try {
+      sessionStorage.setItem('sds_hrms_payslip_designer_organisation', reference);
+    } catch (_error) {
+      // Navigation still works when browser storage is unavailable.
+    }
+
+    if (typeof setPage === 'function') {
+      setPage('payslip_designer');
+      return;
+    }
+
+    setPayrollBrandingError('Payslip Designer navigation is unavailable.');
   }
 
   async function loadBranding({ silent = false } = {}) {
@@ -741,6 +1016,13 @@ export default function Settings({ user }) {
     loadAttendanceSchedule();
     loadAttendanceReasonSettings();
 
+    if (hasPayrollBrandingManagerRole) {
+      loadPayrollBrandingProfiles();
+    } else {
+      setPayrollBrandingLoading(false);
+      setPayrollProfiles([]);
+    }
+
     if (isPlatformSuperadmin) {
       loadPlatformBranding();
     } else {
@@ -757,8 +1039,12 @@ export default function Settings({ user }) {
       if (platformPreviewUrlRef.current) {
         URL.revokeObjectURL(platformPreviewUrlRef.current);
       }
+
+      if (payrollLogoPreviewUrlRef.current) {
+        URL.revokeObjectURL(payrollLogoPreviewUrlRef.current);
+      }
     };
-  }, [isPlatformSuperadmin]);
+  }, [isPlatformSuperadmin, hasPayrollBrandingManagerRole]);
 
   function updateAttendanceScheduleField(name, value) {
     setAttendanceSchedule((current) => ({
@@ -2418,7 +2704,519 @@ export default function Settings({ user }) {
           to { transform: rotate(360deg); }
         }
 
+        .payroll-branding-panel {
+          position: relative;
+          overflow: hidden;
+          margin-bottom: 24px;
+          padding: 28px;
+          border: 1px solid #dfe9e2;
+          border-radius: 24px;
+          background: #ffffff;
+          box-shadow: 0 14px 36px rgba(28, 71, 47, 0.07);
+        }
+
+        .payroll-branding-panel::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 4px;
+          background: #397e51;
+        }
+
+        .payroll-branding-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 20px;
+          padding-bottom: 20px;
+          border-bottom: 1px solid #e7eee9;
+        }
+
+        .payroll-branding-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          margin-bottom: 8px;
+          color: #397e51;
+          font-size: 0.72rem;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .payroll-branding-heading h1 {
+          margin: 0;
+          color: #17251d;
+          font-size: 1.52rem;
+          font-weight: 850;
+          letter-spacing: -0.025em;
+        }
+
+        .payroll-branding-heading p {
+          max-width: 760px;
+          margin: 8px 0 0;
+          color: #6e7f74;
+          font-size: 0.9rem;
+          line-height: 1.65;
+        }
+
+        .payroll-branding-refresh {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          height: 40px;
+          flex: 0 0 40px;
+          border: 1px solid #d7e4da;
+          border-radius: 12px;
+          background: #f8fbf9;
+          color: #397e51;
+          cursor: pointer;
+        }
+
+        .payroll-branding-refresh:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
+        .payroll-organisation-selector {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 18px;
+          margin-top: 20px;
+          padding: 16px 18px;
+          border: 1px solid #e1ebe4;
+          border-radius: 16px;
+          background: #f8fbf9;
+        }
+
+        .payroll-organisation-selector-copy {
+          min-width: 0;
+        }
+
+        .payroll-organisation-selector-copy span {
+          display: block;
+          color: #6e7f74;
+          font-size: 0.72rem;
+          font-weight: 750;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+
+        .payroll-organisation-selector-copy strong {
+          display: block;
+          margin-top: 4px;
+          color: #17251d;
+          font-size: 0.96rem;
+          font-weight: 800;
+        }
+
+        .payroll-organisation-select {
+          min-width: 260px;
+          padding: 11px 38px 11px 13px;
+          border: 1px solid #cddbd1;
+          border-radius: 12px;
+          background: #ffffff;
+          color: #25362c;
+          font: inherit;
+          font-size: 0.88rem;
+          font-weight: 700;
+          outline: none;
+        }
+
+        .payroll-organisation-select:focus {
+          border-color: #397e51;
+          box-shadow: 0 0 0 3px rgba(57, 126, 81, 0.1);
+        }
+
+        .payroll-branding-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+          gap: 20px;
+          margin-top: 20px;
+        }
+
+        .payroll-brand-preview,
+        .payroll-brand-editor {
+          border: 1px solid #e0e9e2;
+          border-radius: 18px;
+          background: #ffffff;
+        }
+
+        .payroll-brand-preview {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 330px;
+          padding: 28px;
+          background: #f8fbf9;
+        }
+
+        .payroll-brand-preview-card {
+          width: min(100%, 390px);
+          padding: 28px 24px;
+          border: 1px solid #dce7df;
+          border-radius: 18px;
+          background: #ffffff;
+          text-align: center;
+          box-shadow: 0 12px 30px rgba(29, 65, 44, 0.07);
+        }
+
+        .payroll-logo-preview {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 112px;
+          height: 90px;
+          margin: 0 auto 17px;
+          padding: 10px;
+          overflow: hidden;
+          border: 1px solid #d9e6dd;
+          border-radius: 14px;
+          background: #ffffff;
+          color: #397e51;
+          font-size: 1.35rem;
+          font-weight: 900;
+        }
+
+        .payroll-logo-preview img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+
+        .payroll-brand-preview-card h2 {
+          margin: 0;
+          color: #17251d;
+          font-size: 1.18rem;
+          font-weight: 850;
+        }
+
+        .payroll-brand-preview-card > p {
+          margin: 7px 0 0;
+          color: #718078;
+          font-size: 0.82rem;
+          line-height: 1.5;
+        }
+
+        .payroll-brand-preview-divider {
+          height: 1px;
+          margin: 20px 0;
+          background: #e5ece7;
+        }
+
+        .payroll-brand-preview-title {
+          margin: 0;
+          color: #25362c;
+          font-size: 1.05rem;
+          font-weight: 850;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+
+        .payroll-brand-status-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          margin-top: 18px;
+          text-align: left;
+        }
+
+        .payroll-brand-status-item {
+          padding: 11px 12px;
+          border: 1px solid #e4ece6;
+          border-radius: 12px;
+          background: #fbfdfb;
+        }
+
+        .payroll-brand-status-item span {
+          display: block;
+          color: #7a8980;
+          font-size: 0.66rem;
+          font-weight: 750;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+        }
+
+        .payroll-brand-status-item strong {
+          display: block;
+          margin-top: 4px;
+          color: #25362c;
+          font-size: 0.78rem;
+          font-weight: 800;
+        }
+
+        .payroll-brand-editor {
+          padding: 24px;
+        }
+
+        .payroll-brand-editor h2 {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          margin: 0;
+          color: #17251d;
+          font-size: 1.08rem;
+          font-weight: 850;
+        }
+
+        .payroll-brand-editor > p {
+          margin: 8px 0 19px;
+          color: #6e7f74;
+          font-size: 0.86rem;
+          line-height: 1.6;
+        }
+
+        .payroll-logo-dropzone {
+          display: flex;
+          align-items: center;
+          gap: 13px;
+          min-height: 84px;
+          padding: 16px;
+          border: 1px dashed #b8cdbd;
+          border-radius: 15px;
+          background: #f8fbf9;
+          cursor: pointer;
+          transition: border-color 0.18s ease, background 0.18s ease;
+        }
+
+        .payroll-logo-dropzone:hover {
+          border-color: #397e51;
+          background: #f3f8f4;
+        }
+
+        .payroll-logo-dropzone.is-disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
+        .payroll-logo-dropzone input {
+          display: none;
+        }
+
+        .payroll-logo-dropzone-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 42px;
+          height: 42px;
+          flex: 0 0 42px;
+          border-radius: 12px;
+          background: #e9f3ec;
+          color: #397e51;
+        }
+
+        .payroll-logo-dropzone strong,
+        .payroll-logo-dropzone span {
+          display: block;
+        }
+
+        .payroll-logo-dropzone strong {
+          color: #25362c;
+          font-size: 0.87rem;
+          font-weight: 800;
+        }
+
+        .payroll-logo-dropzone span span {
+          margin-top: 3px;
+          color: #7b8a81;
+          font-size: 0.75rem;
+        }
+
+        .payroll-logo-file-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 11px;
+          padding: 10px 12px;
+          border-radius: 11px;
+          background: #f0f7f2;
+          color: #397e51;
+          font-size: 0.78rem;
+          font-weight: 700;
+        }
+
+        .payroll-brand-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 17px;
+        }
+
+        .payroll-brand-actions button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 42px;
+          padding: 0 15px;
+          border-radius: 12px;
+          font: inherit;
+          font-size: 0.8rem;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .payroll-logo-save {
+          border: 1px solid #397e51;
+          background: #397e51;
+          color: #ffffff;
+        }
+
+        .payroll-logo-remove {
+          border: 1px solid #e0caca;
+          background: #fff8f8;
+          color: #9d3d3d;
+        }
+
+        .payroll-designer-open {
+          border: 1px solid #cbded0;
+          background: #ffffff;
+          color: #2b7346;
+        }
+
+        .payroll-brand-actions button:disabled {
+          cursor: not-allowed;
+          opacity: 0.5;
+        }
+
+        .payroll-brand-note {
+          margin-top: 16px;
+          padding: 12px 13px;
+          border: 1px solid #e0e9e2;
+          border-radius: 12px;
+          background: #fbfdfb;
+          color: #617168;
+          font-size: 0.76rem;
+          line-height: 1.55;
+        }
+
+        .payroll-brand-message {
+          display: flex;
+          align-items: flex-start;
+          gap: 9px;
+          margin-top: 14px;
+          padding: 11px 13px;
+          border-radius: 11px;
+          font-size: 0.8rem;
+          font-weight: 700;
+        }
+
+        .payroll-brand-message.success {
+          border: 1px solid #cee4d4;
+          background: #f1f8f3;
+          color: #2f6f45;
+        }
+
+        .payroll-brand-message.error {
+          border: 1px solid #efd1d1;
+          background: #fff6f6;
+          color: #983f3f;
+        }
+
+        .payroll-brand-loading,
+        .payroll-brand-permission {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          min-height: 130px;
+          margin-top: 20px;
+          padding: 20px;
+          border: 1px solid #e2ebe4;
+          border-radius: 16px;
+          background: #f8fbf9;
+          color: #687970;
+          font-size: 0.85rem;
+          font-weight: 700;
+          text-align: center;
+        }
+
+        .payroll-confirm-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 10000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          background: rgba(20, 34, 26, 0.42);
+        }
+
+        .payroll-confirm-dialog {
+          width: min(100%, 430px);
+          padding: 22px;
+          border-radius: 18px;
+          background: #ffffff;
+          box-shadow: 0 24px 70px rgba(18, 43, 27, 0.22);
+        }
+
+        .payroll-confirm-dialog h3 {
+          margin: 0;
+          color: #17251d;
+          font-size: 1.08rem;
+          font-weight: 850;
+        }
+
+        .payroll-confirm-dialog p {
+          margin: 9px 0 0;
+          color: #697970;
+          font-size: 0.85rem;
+          line-height: 1.6;
+        }
+
+        .payroll-confirm-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-top: 20px;
+        }
+
+        .payroll-confirm-actions button {
+          min-height: 40px;
+          padding: 0 15px;
+          border-radius: 11px;
+          font: inherit;
+          font-size: 0.8rem;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .payroll-confirm-cancel {
+          border: 1px solid #d7e1da;
+          background: #ffffff;
+          color: #52645a;
+        }
+
+        .payroll-confirm-remove {
+          border: 1px solid #9d3d3d;
+          background: #9d3d3d;
+          color: #ffffff;
+        }
+
+        .payroll-confirm-actions button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
         @media (max-width: 880px) {
+          .payroll-branding-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .payroll-organisation-selector {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .payroll-organisation-select {
+            width: 100%;
+            min-width: 0;
+          }
+
           .platform-branding-layout,
           .tenant-branding-layout,
           .attendance-reason-editor-grid {
@@ -2431,6 +3229,28 @@ export default function Settings({ user }) {
         }
 
         @media (max-width: 560px) {
+          .payroll-branding-panel {
+            padding: 20px 16px;
+            border-radius: 18px;
+          }
+
+          .payroll-branding-heading {
+            gap: 12px;
+          }
+
+          .payroll-brand-preview,
+          .payroll-brand-editor {
+            padding: 18px 14px;
+          }
+
+          .payroll-brand-status-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .payroll-brand-actions button {
+            flex: 1 1 100%;
+          }
+
           .platform-branding-panel,
           .tenant-branding-panel,
           .attendance-settings-panel {
@@ -2725,6 +3545,339 @@ export default function Settings({ user }) {
           )}
         </section>
 
+      )}
+
+      <section className="payroll-branding-panel">
+        <div className="payroll-branding-heading">
+          <div>
+            <span className="payroll-branding-kicker">
+              <Building2 size={15} /> Payroll Branding
+            </span>
+            <h1>Organisation Payslip Identity</h1>
+            <p>
+              Set the logo used on payroll documents for each organisation. Payslips
+              automatically use the employee&apos;s organisation; HR never needs to
+              choose the organisation while processing monthly payroll.
+            </p>
+          </div>
+
+          {hasPayrollBrandingManagerRole && (
+            <button
+              type="button"
+              className="payroll-branding-refresh"
+              onClick={() => loadPayrollBrandingProfiles()}
+              disabled={payrollBrandingBusy}
+              title="Refresh payroll branding"
+              aria-label="Refresh payroll branding"
+            >
+              <RefreshCw
+                size={18}
+                className={payrollBrandingLoading ? 'tenant-brand-spin' : ''}
+              />
+            </button>
+          )}
+        </div>
+
+        {!hasPayrollBrandingManagerRole ? (
+          <div className="payroll-brand-permission">
+            <ShieldCheck size={19} />
+            Payroll branding is available to tenant HR and administrators who manage
+            payroll configuration.
+          </div>
+        ) : payrollBrandingLoading ? (
+          <div className="payroll-brand-loading">
+            <LoaderCircle size={21} className="tenant-brand-spin" />
+            Loading organisation payroll branding...
+          </div>
+        ) : payrollBrandingError && !payrollProfiles.length ? (
+          <div className="payroll-brand-message error">
+            <span>{payrollBrandingError}</span>
+          </div>
+        ) : (
+          <>
+            {payrollProfiles.length > 0 && (
+              <div className="payroll-organisation-selector">
+                <div className="payroll-organisation-selector-copy">
+                  <span>
+                    {payrollSelectionMode === 'multiple'
+                      ? `${payrollOrganisationCount} organisations available`
+                      : 'Payroll organisation'}
+                  </span>
+                  <strong>
+                    {payrollSelectionMode === 'multiple'
+                      ? 'Choose which organisation you want to configure.'
+                      : safeText(
+                          selectedPayrollProfile?.organisation_name ||
+                            selectedPayrollProfile?.organization_name,
+                          branding.companyName,
+                        )}
+                  </strong>
+                </div>
+
+                {payrollSelectionMode === 'multiple' && (
+                  <select
+                    className="payroll-organisation-select"
+                    value={selectedPayrollProfileKey}
+                    onChange={handlePayrollProfileChange}
+                    disabled={payrollBrandingBusy}
+                    aria-label="Select payroll organisation"
+                  >
+                    {payrollProfiles.map((profile) => {
+                      const reference = getPayrollProfileReference(profile);
+                      const name = safeText(
+                        profile.organisation_name || profile.organization_name,
+                        'Organisation',
+                      );
+                      const code = safeText(
+                        profile.organisation_code || profile.organization_code,
+                      );
+
+                      return (
+                        <option key={reference} value={reference}>
+                          {name}{code ? ` (${code})` : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                )}
+              </div>
+            )}
+
+            {selectedPayrollProfile ? (
+              <div className="payroll-branding-layout">
+                <div className="payroll-brand-preview">
+                  <div className="payroll-brand-preview-card">
+                    <div className="payroll-logo-preview">
+                      {previewPayrollLogoUrl ? (
+                        <img
+                          src={previewPayrollLogoUrl}
+                          alt={`${safeText(
+                            selectedPayrollProfile.organisation_name ||
+                              selectedPayrollProfile.organization_name,
+                            'Organisation',
+                          )} payroll logo`}
+                          onError={(event) => {
+                            event.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        safeText(
+                          selectedPayrollProfile.organisation_name ||
+                            selectedPayrollProfile.organization_name,
+                          branding.companyName,
+                        )
+                          .split(/\s+/)
+                          .map((word) => word[0])
+                          .join('')
+                          .slice(0, 3)
+                          .toUpperCase()
+                      )}
+                    </div>
+
+                    <h2>
+                      {safeText(
+                        selectedPayrollProfile.organisation_name ||
+                          selectedPayrollProfile.organization_name,
+                        branding.companyName,
+                      )}
+                    </h2>
+                    {selectedPayrollProfile.address && (
+                      <p>{selectedPayrollProfile.address}</p>
+                    )}
+
+                    <div className="payroll-brand-preview-divider" />
+                    <p className="payroll-brand-preview-title">Payslip</p>
+
+                    <div className="payroll-brand-status-grid">
+                      <div className="payroll-brand-status-item">
+                        <span>Logo source</span>
+                        <strong>
+                          {getPayrollLogoSourceLabel(selectedPayrollProfile.logo_source)}
+                        </strong>
+                      </div>
+                      <div className="payroll-brand-status-item">
+                        <span>Active design</span>
+                        <strong>
+                          {selectedPayrollProfile.has_active_custom_design
+                            ? `Custom v${selectedPayrollProfile.active_version || 1}`
+                            : 'System default'}
+                        </strong>
+                      </div>
+                      <div className="payroll-brand-status-item">
+                        <span>Designer draft</span>
+                        <strong>
+                          {selectedPayrollProfile.has_draft
+                            ? `Draft v${selectedPayrollProfile.draft_version || 1}`
+                            : 'No pending draft'}
+                        </strong>
+                      </div>
+                      <div className="payroll-brand-status-item">
+                        <span>Payroll mapping</span>
+                        <strong>Automatic by employee organisation</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <form className="payroll-brand-editor" onSubmit={uploadPayrollLogo}>
+                  <h2>
+                    <ImagePlus size={21} /> Payroll Logo
+                  </h2>
+                  <p>
+                    Upload a dedicated payroll logo for this organisation. If you do
+                    not upload one, payroll automatically falls back to the
+                    organisation logo, then the tenant company logo, then initials.
+                  </p>
+
+                  <label
+                    className={`payroll-logo-dropzone${
+                      payrollBrandingBusy ? ' is-disabled' : ''
+                    }`}
+                  >
+                    <span className="payroll-logo-dropzone-icon">
+                      <UploadCloud size={23} />
+                    </span>
+                    <span>
+                      <strong>
+                        {selectedPayrollLogoFile
+                          ? 'Choose a different payroll logo'
+                          : 'Select payroll logo'}
+                      </strong>
+                      <span>JPG, JPEG, PNG, or WEBP · Maximum 3 MB</span>
+                    </span>
+                    <input
+                      ref={payrollLogoInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                      onChange={handlePayrollLogoFileChange}
+                      disabled={payrollBrandingBusy}
+                    />
+                  </label>
+
+                  {selectedPayrollLogoFile && (
+                    <div className="payroll-logo-file-meta">
+                      <CheckCircle2 size={17} />
+                      <span>
+                        {selectedPayrollLogoFile.name} ·{' '}
+                        {formatFileSize(selectedPayrollLogoFile.size)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="payroll-brand-actions">
+                    <button
+                      type="submit"
+                      className="payroll-logo-save"
+                      disabled={!selectedPayrollLogoFile || payrollBrandingBusy}
+                    >
+                      {payrollLogoSaving ? (
+                        <LoaderCircle size={17} className="tenant-brand-spin" />
+                      ) : (
+                        <UploadCloud size={17} />
+                      )}
+                      {payrollLogoSaving ? 'Uploading...' : 'Upload Payroll Logo'}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="payroll-logo-remove"
+                      onClick={() => setShowPayrollLogoRemoveConfirm(true)}
+                      disabled={
+                        !selectedPayrollProfile.has_custom_payroll_logo ||
+                        payrollBrandingBusy
+                      }
+                    >
+                      <Trash2 size={17} />
+                      Remove Custom Logo
+                    </button>
+
+                    <button
+                      type="button"
+                      className="payroll-designer-open"
+                      onClick={openPayslipDesigner}
+                      disabled={payrollBrandingBusy}
+                    >
+                      <Type size={17} />
+                      Open Payslip Designer
+                    </button>
+                  </div>
+
+                  <div className="payroll-brand-note">
+                    The organisation name is fetched from the employee&apos;s organisation
+                    master record. This setting controls payroll presentation only; it
+                    never changes salary calculations, statutory deductions, or payroll
+                    approval data.
+                  </div>
+
+                  {payrollBrandingMessage && (
+                    <div className="payroll-brand-message success">
+                      <CheckCircle2 size={18} />
+                      <span>{payrollBrandingMessage}</span>
+                    </div>
+                  )}
+
+                  {payrollBrandingError && (
+                    <div className="payroll-brand-message error">
+                      <span>{payrollBrandingError}</span>
+                    </div>
+                  )}
+                </form>
+              </div>
+            ) : (
+              <div className="payroll-brand-permission">
+                No organisation is currently available for payroll branding.
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      {showPayrollLogoRemoveConfirm && selectedPayrollProfile && (
+        <div
+          className="payroll-confirm-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !payrollLogoRemoving) {
+              setShowPayrollLogoRemoveConfirm(false);
+            }
+          }}
+        >
+          <div
+            className="payroll-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payroll-logo-remove-title"
+          >
+            <h3 id="payroll-logo-remove-title">Remove custom payroll logo?</h3>
+            <p>
+              {safeText(
+                selectedPayrollProfile.organisation_name ||
+                  selectedPayrollProfile.organization_name,
+                'This organisation',
+              )}{' '}
+              will immediately fall back to its organisation/company logo or
+              initials. Existing historical payroll snapshots remain protected.
+            </p>
+            <div className="payroll-confirm-actions">
+              <button
+                type="button"
+                className="payroll-confirm-cancel"
+                onClick={() => setShowPayrollLogoRemoveConfirm(false)}
+                disabled={payrollLogoRemoving}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="payroll-confirm-remove"
+                onClick={removePayrollLogo}
+                disabled={payrollLogoRemoving}
+              >
+                {payrollLogoRemoving ? 'Removing...' : 'Remove Logo'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <section className="attendance-settings-panel">

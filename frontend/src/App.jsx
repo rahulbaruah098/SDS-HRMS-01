@@ -41,6 +41,7 @@ import Reports from './pages/Reports';
 import AuditLogs from './pages/AuditLogs.jsx';
 import Payroll from './pages/Payroll.jsx';
 import PayrollConfiguration from './pages/PayrollConfiguration.jsx';
+import PayslipDesigner from './pages/PayslipDesigner.jsx';
 import LoansAdvances from './pages/LoansAdvances.jsx';
 import Reimbursements from './pages/Reimbursements.jsx';
 import PayrollBanking from './pages/PayrollBanking.jsx';
@@ -94,6 +95,14 @@ const PAYROLL_CONFIG_ROLES = [
   'hr',
   'finance',
   'accounts_finance',
+];
+
+const PAYSLIP_DESIGNER_ROLES = [
+  'super_admin',
+  'admin',
+  'hr_admin',
+  'hr_manager',
+  'hr',
 ];
 
 const PAYROLL_LOAN_ROLES = [
@@ -574,6 +583,16 @@ const PAGE_ALIASES = {
   'salary-structures': 'payroll_configuration',
   'statutory-configuration': 'payroll_configuration',
   'statutory-config': 'payroll_configuration',
+
+  payslip_designer: 'payslip_designer',
+  payslip_design: 'payslip_designer',
+  payroll_payslip_designer: 'payslip_designer',
+  payroll_payslip_design: 'payslip_designer',
+
+  'payslip-designer': 'payslip_designer',
+  'payslip-design': 'payslip_designer',
+  'payroll-payslip-designer': 'payslip_designer',
+  'payroll-payslip-design': 'payslip_designer',
 
   loans_advances: 'loans_advances',
   loan_advances: 'loans_advances',
@@ -1104,6 +1123,16 @@ function PageRouter({ page, user, setPage }) {
     return <PayrollConfiguration setPage={setPage} user={safeUser} />;
   }
 
+  if (normalizedPage === 'payslip_designer') {
+    const userRoles = normalizeRoles(safeUser);
+
+    if (!hasAnyRole(userRoles, PAYSLIP_DESIGNER_ROLES)) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+
+    return <PayslipDesigner setPage={setPage} user={safeUser} />;
+  }
+
   if (normalizedPage === 'loans_advances') {
     const userRoles = normalizeRoles(safeUser);
 
@@ -1604,6 +1633,16 @@ export default function App() {
       const userRoles = normalizeRoles(normalizedUser);
 
       if (!hasAnyRole(userRoles, PAYROLL_CONFIG_ROLES)) {
+        setPage('dashboard');
+      }
+
+      return;
+    }
+
+    if (normalizedPage === 'payslip_designer') {
+      const userRoles = normalizeRoles(normalizedUser);
+
+      if (!hasAnyRole(userRoles, PAYSLIP_DESIGNER_ROLES)) {
         setPage('dashboard');
       }
 
