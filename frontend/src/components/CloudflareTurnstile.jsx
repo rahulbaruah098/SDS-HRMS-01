@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 const TURNSTILE_SCRIPT_ID = "cloudflare-turnstile-api";
 const TURNSTILE_SCRIPT_URL =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-const DUMMY_SITE_KEY = "1x00000000000000000000AA";
+  
+const DUMMY_SITE_KEY = "0x4AAAAAAEt0jh_XY0dFc_Qv";
 
 function loadTurnstileScript() {
   return new Promise((resolve, reject) => {
@@ -51,7 +52,7 @@ export default function CloudflareTurnstile({
   const [status, setStatus] = useState("loading");
 
   const siteKey =
-    import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || DUMMY_SITE_KEY;
+  import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY;
 
   useEffect(() => {
     onVerifyRef.current = onVerify;
