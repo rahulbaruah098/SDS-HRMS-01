@@ -167,24 +167,6 @@ return (
               ))}
             </div>
           </div>
-
-          <aside
-            className="yc-login-testing-notice"
-            aria-label="Testing phase notice"
-          >
-            <span className="yc-login-testing-notice-icon" aria-hidden="true">
-              <Icon name="warning" />
-            </span>
-
-            <div>
-              <strong>Testing phase notice</strong>
-              <p>
-                This HRMS is currently in the testing phase. If you find any
-                bug, wrong data, login issue or workflow problem, please inform
-                the IT team immediately.
-              </p>
-            </div>
-          </aside>
         </section>
 
         <section className="auth-premium-form-panel">
@@ -207,12 +189,7 @@ return (
               >
                 <span className="auth-status-badge">
                   <i /> Protected
-                </span>
-
-                <span className="yc-login-testing-status">
-                  <small>Status</small>
-                  <strong>Testing</strong>
-                </span>
+                </span> 
               </div>
             </header>
 
