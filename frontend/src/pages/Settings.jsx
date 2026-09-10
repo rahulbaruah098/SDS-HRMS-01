@@ -1485,147 +1485,396 @@ export default function Settings({ user, setPage }) {
     <div className="settings-branding-page">
       <style>{`
         .settings-branding-page {
+          --st-ink: var(--yc-ink, #15152f);
+          --st-ink-2: var(--yc-ink-2, #282443);
+          --st-purple: var(--yc-purple, #6558d9);
+          --st-purple-deep: var(--yc-purple-deep, #30275f);
+          --st-purple-soft: var(--yc-purple-soft, #eeeaff);
+          --st-cream: var(--yc-cream, #f5f0e8);
+          --st-paper: var(--yc-paper, #fffdf8);
+          --st-lime: var(--yc-lime, #dfff5f);
+          --st-cobalt: var(--yc-cobalt, #3156d8);
+          --st-sky: var(--yc-sky, #bfe7ff);
+          --st-coral: var(--yc-coral, #ff715b);
+          --st-pink: var(--yc-pink, #f4a7cf);
+          --st-lilac: var(--yc-lilac, #c9b7ff);
+          --st-mint: var(--yc-mint, #7fd0ae);
+          --st-yellow: var(--yc-yellow, #ffd95f);
+          --st-border: rgba(21, 21, 47, .14);
+          --st-border-strong: rgba(21, 21, 47, .23);
+          --st-muted: #6c6980;
+          --st-shadow-sm: 0 12px 30px rgba(21, 21, 47, .08);
+          --st-shadow-md: 0 22px 56px rgba(21, 21, 47, .12);
+          --st-shadow-lg: 0 34px 86px rgba(21, 21, 47, .16);
+          width: 100%;
+          min-width: 0;
           display: grid;
-          gap: 22px;
-        }
-
-        .platform-branding-panel {
+          gap: clamp(18px, 2vw, 28px);
+          color: var(--st-ink);
+          font-family: var(--yc-ui, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
           position: relative;
+          isolation: isolate;
+          padding: clamp(4px, .5vw, 8px);
+        }
+
+        .settings-branding-page,
+        .settings-branding-page * {
+          box-sizing: border-box;
+        }
+
+        .settings-branding-page button,
+        .settings-branding-page input,
+        .settings-branding-page select,
+        .settings-branding-page textarea {
+          font: inherit;
+        }
+
+        .settings-branding-page img,
+        .settings-branding-page svg {
+          max-width: 100%;
+        }
+
+        .settings-branding-page button {
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .settings-branding-page button:focus-visible,
+        .settings-branding-page input:focus-visible,
+        .settings-branding-page select:focus-visible,
+        .settings-branding-page textarea:focus-visible,
+        .settings-branding-page label:focus-within {
+          outline: none;
+        }
+
+        .settings-branding-page input:focus-visible,
+        .settings-branding-page select:focus-visible,
+        .settings-branding-page textarea:focus-visible {
+          border-color: var(--st-purple) !important;
+          box-shadow: 0 0 0 4px rgba(101, 88, 217, .13);
+        }
+
+        .platform-branding-panel,
+        .payroll-branding-panel,
+        .attendance-settings-panel,
+        .tenant-branding-panel {
+          position: relative;
+          min-width: 0;
           overflow: hidden;
-          border: 1px solid rgba(99, 102, 241, .24);
-          border-radius: 28px;
+          border: 1px solid rgba(21, 21, 47, .12);
+          border-radius: clamp(24px, 2.5vw, 34px);
+          padding: clamp(20px, 2.6vw, 34px);
           background:
-            radial-gradient(circle at 8% 0%, rgba(79, 70, 229, .18), transparent 34%),
-            radial-gradient(circle at 94% 8%, rgba(16, 185, 129, .13), transparent 30%),
-            linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
-          box-shadow: 0 22px 55px rgba(15, 23, 42, .09);
-          padding: clamp(20px, 3vw, 32px);
+            linear-gradient(145deg, rgba(255, 255, 255, .95), rgba(255, 253, 248, .92));
+          box-shadow: var(--st-shadow-md);
         }
 
-        .platform-branding-panel::after {
-          content: '';
+        .platform-branding-panel::before,
+        .payroll-branding-panel::before,
+        .attendance-settings-panel::before,
+        .tenant-branding-panel::before {
+          content: "";
           position: absolute;
-          width: 250px;
-          height: 250px;
-          right: -120px;
-          bottom: -145px;
-          border-radius: 50%;
-          background: rgba(16, 185, 129, .08);
+          inset: 0;
           pointer-events: none;
+          opacity: .9;
         }
 
-        .platform-branding-heading {
+        .platform-branding-panel::before {
+          background:
+            radial-gradient(circle at 0% 0%, rgba(201, 183, 255, .34), transparent 32%),
+            radial-gradient(circle at 100% 5%, rgba(191, 231, 255, .32), transparent 28%);
+        }
+
+        .payroll-branding-panel::before {
+          background:
+            radial-gradient(circle at 3% 0%, rgba(191, 231, 255, .40), transparent 34%),
+            radial-gradient(circle at 96% 10%, rgba(223, 255, 95, .18), transparent 24%);
+        }
+
+        .attendance-settings-panel::before {
+          background:
+            radial-gradient(circle at 2% 0%, rgba(127, 208, 174, .25), transparent 31%),
+            radial-gradient(circle at 98% 5%, rgba(255, 217, 95, .20), transparent 27%);
+        }
+
+        .tenant-branding-panel::before {
+          background:
+            radial-gradient(circle at 0% 0%, rgba(244, 167, 207, .18), transparent 30%),
+            radial-gradient(circle at 98% 6%, rgba(201, 183, 255, .28), transparent 30%);
+        }
+
+        .platform-branding-panel > *,
+        .payroll-branding-panel > *,
+        .attendance-settings-panel > *,
+        .tenant-branding-panel > * {
           position: relative;
           z-index: 1;
+        }
+
+        .platform-branding-panel,
+        .payroll-branding-panel,
+        .attendance-settings-panel,
+        .tenant-branding-panel,
+        .platform-brand-preview,
+        .platform-brand-editor,
+        .payroll-brand-preview,
+        .payroll-brand-editor,
+        .tenant-brand-preview,
+        .tenant-brand-editor,
+        .attendance-reason-list-card,
+        .attendance-time-card,
+        .payroll-brand-preview-card {
+          transition:
+            transform .22s ease,
+            box-shadow .22s ease,
+            border-color .22s ease,
+            background .22s ease;
+        }
+
+        .platform-branding-heading,
+        .payroll-branding-heading,
+        .attendance-settings-heading,
+        .tenant-branding-heading {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
-          gap: 18px;
-          margin-bottom: 24px;
+          gap: 20px;
+          margin-bottom: clamp(20px, 2.2vw, 30px);
+          min-width: 0;
         }
 
-        .platform-branding-kicker {
+        .platform-branding-heading > div,
+        .payroll-branding-heading > div,
+        .attendance-settings-heading > div,
+        .tenant-branding-heading > div {
+          min-width: 0;
+          max-width: 860px;
+        }
+
+        .platform-branding-kicker,
+        .payroll-branding-kicker,
+        .attendance-settings-kicker,
+        .tenant-branding-kicker {
+          width: fit-content;
+          max-width: 100%;
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          margin-bottom: 9px;
-          color: #4f46e5;
+          margin: 0 0 10px;
+          padding: 7px 11px;
+          border-radius: 999px;
           font-size: 12px;
+          line-height: 1.1;
           font-weight: 900;
           letter-spacing: .11em;
           text-transform: uppercase;
+          white-space: normal;
         }
 
-        .platform-branding-heading h1 {
+        .platform-branding-kicker {
+          color: var(--st-purple-deep);
+          background: var(--st-purple-soft);
+          border: 1px solid rgba(101, 88, 217, .15);
+        }
+
+        .payroll-branding-kicker {
+          color: #24479f;
+          background: rgba(191, 231, 255, .58);
+          border: 1px solid rgba(49, 86, 216, .14);
+        }
+
+        .attendance-settings-kicker {
+          color: #2d715b;
+          background: rgba(127, 208, 174, .19);
+          border: 1px solid rgba(73, 155, 123, .16);
+        }
+
+        .tenant-branding-kicker {
+          color: #5b407a;
+          background: rgba(201, 183, 255, .25);
+          border: 1px solid rgba(101, 88, 217, .13);
+        }
+
+        .platform-branding-heading h1,
+        .payroll-branding-heading h1,
+        .attendance-settings-heading h1,
+        .tenant-branding-heading h1 {
           margin: 0;
-          color: #0f172a;
-          font-size: clamp(25px, 3vw, 34px);
-          line-height: 1.1;
+          color: var(--st-ink);
+          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
+          font-size: clamp(30px, 3.1vw, 46px);
+          font-weight: 800;
+          line-height: .98;
+          letter-spacing: -.035em;
+          overflow-wrap: anywhere;
         }
 
-        .platform-branding-heading p {
-          max-width: 760px;
-          margin: 10px 0 0;
-          color: #64748b;
-          line-height: 1.65;
+        .platform-branding-heading p,
+        .payroll-branding-heading p,
+        .attendance-settings-heading p,
+        .tenant-branding-heading p {
+          max-width: 820px;
+          margin: 12px 0 0;
+          color: var(--st-muted);
+          font-size: 15px;
+          line-height: 1.68;
+          font-weight: 550;
+          overflow-wrap: anywhere;
         }
 
-        .platform-branding-refresh {
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
+        .platform-branding-refresh,
+        .payroll-branding-refresh,
+        .attendance-settings-refresh,
+        .tenant-branding-refresh {
+          width: 46px;
+          height: 46px;
+          flex: 0 0 46px;
           display: grid;
           place-items: center;
-          border: 1px solid #e2e8f0;
-          border-radius: 14px;
-          background: rgba(255, 255, 255, .9);
-          color: #475569;
+          border: 1px solid rgba(21, 21, 47, .13);
+          border-radius: 15px;
+          background: rgba(255, 255, 255, .84);
+          color: var(--st-purple-deep);
           cursor: pointer;
-          box-shadow: 0 10px 24px rgba(15, 23, 42, .07);
+          box-shadow: 0 10px 24px rgba(21, 21, 47, .08);
+          transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease;
         }
 
-        .platform-branding-refresh:hover:not(:disabled) {
-          color: #4f46e5;
-          border-color: #c7d2fe;
+        .platform-branding-refresh:hover:not(:disabled),
+        .payroll-branding-refresh:hover:not(:disabled),
+        .attendance-settings-refresh:hover:not(:disabled),
+        .tenant-branding-refresh:hover:not(:disabled) {
+          transform: translateY(-2px) rotate(-4deg);
+          border-color: rgba(101, 88, 217, .35);
+          background: #ffffff;
+          box-shadow: 0 15px 30px rgba(21, 21, 47, .12);
         }
 
-        .platform-branding-refresh:disabled {
+        .platform-branding-refresh:disabled,
+        .payroll-branding-refresh:disabled,
+        .attendance-settings-refresh:disabled,
+        .tenant-branding-refresh:disabled {
           cursor: not-allowed;
-          opacity: .55;
+          opacity: .48;
+          transform: none;
+          box-shadow: none;
         }
 
-        .platform-branding-layout {
-          position: relative;
-          z-index: 1;
+        .platform-branding-layout,
+        .payroll-branding-layout,
+        .tenant-branding-layout {
           display: grid;
-          grid-template-columns: minmax(270px, .9fr) minmax(340px, 1.1fr);
-          gap: 22px;
+          grid-template-columns: minmax(280px, .92fr) minmax(380px, 1.08fr);
+          gap: clamp(16px, 2vw, 24px);
           align-items: stretch;
+          min-width: 0;
         }
 
         .platform-brand-preview,
-        .platform-brand-editor {
-          border: 1px solid rgba(203, 213, 225, .74);
+        .platform-brand-editor,
+        .payroll-brand-preview,
+        .payroll-brand-editor,
+        .tenant-brand-preview,
+        .tenant-brand-editor {
+          min-width: 0;
+          border: 1px solid rgba(21, 21, 47, .11);
           border-radius: 24px;
-          background: rgba(255, 255, 255, .88);
-          backdrop-filter: blur(12px);
+          background: rgba(255, 255, 255, .78);
+          -webkit-backdrop-filter: blur(14px);
+          backdrop-filter: blur(14px);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85);
         }
 
-        .platform-brand-preview {
-          min-height: 300px;
+        .platform-brand-preview,
+        .payroll-brand-preview,
+        .tenant-brand-preview {
           display: grid;
           place-items: center;
-          padding: 28px;
+          padding: clamp(22px, 2.4vw, 30px);
+        }
+
+        .platform-brand-editor,
+        .payroll-brand-editor,
+        .tenant-brand-editor {
+          display: grid;
+          align-content: center;
+          gap: 18px;
+          padding: clamp(22px, 2.4vw, 30px);
+        }
+
+        .platform-brand-editor h2,
+        .payroll-brand-editor h2,
+        .tenant-brand-editor h2 {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          margin: 0;
+          color: var(--st-ink);
+          font-size: clamp(20px, 1.5vw, 24px);
+          line-height: 1.2;
+          font-weight: 900;
+          letter-spacing: -.02em;
+        }
+
+        .platform-brand-editor > p,
+        .payroll-brand-editor > p,
+        .tenant-brand-editor > p {
+          margin: -8px 0 0;
+          color: var(--st-muted);
+          font-size: 14.5px;
+          line-height: 1.65;
+          overflow-wrap: anywhere;
         }
 
         .platform-sidebar-preview {
-          width: min(100%, 390px);
+          position: relative;
+          width: min(100%, 420px);
           display: grid;
-          grid-template-columns: 78px minmax(0, 1fr);
-          gap: 16px;
+          grid-template-columns: 84px minmax(0, 1fr);
           align-items: center;
-          border: 1px solid #e2e8f0;
-          border-radius: 22px;
-          background: #ffffff;
-          padding: 18px;
-          box-shadow: 0 18px 38px rgba(15, 23, 42, .1);
+          gap: 18px;
+          padding: 20px;
+          border: 1px solid rgba(21, 21, 47, .12);
+          border-radius: 24px;
+          background:
+            linear-gradient(145deg, #ffffff, #fbf9ff 70%);
+          box-shadow: 0 22px 44px rgba(48, 39, 95, .12);
+          overflow: hidden;
+        }
+
+        .platform-sidebar-preview::after {
+          content: "";
+          position: absolute;
+          width: 110px;
+          height: 110px;
+          right: -54px;
+          bottom: -65px;
+          border-radius: 50%;
+          background: var(--st-lime);
+          opacity: .34;
+          pointer-events: none;
         }
 
         .platform-logo-preview {
-          width: 78px;
-          height: 78px;
+          width: 84px;
+          height: 84px;
           display: grid;
           place-items: center;
           overflow: hidden;
-          border-radius: 22px;
-          background: linear-gradient(145deg, #163f2a, #0f5132);
-          color: #ffffff;
-          font-size: 25px;
+          border-radius: 24px;
+          background:
+            linear-gradient(145deg, var(--st-purple-deep), var(--st-purple));
+          color: #fff;
+          font-size: 26px;
           font-weight: 950;
           letter-spacing: -.04em;
+          box-shadow: 0 14px 28px rgba(48, 39, 95, .24);
         }
 
-        .platform-logo-preview img {
+        .platform-logo-preview img,
+        .payroll-logo-preview img,
+        .tenant-logo-preview img {
           width: 100%;
           height: 100%;
           display: block;
@@ -1639,473 +1888,752 @@ export default function Settings({ user, setPage }) {
 
         .platform-preview-copy h2 {
           margin: 0;
-          color: #0f172a;
-          font-size: 27px;
-          line-height: 1.15;
-        }
-
-        .platform-preview-copy p {
-          margin: 7px 0 0;
-          color: #64748b;
-          font-size: 13px;
-          font-weight: 750;
-          line-height: 1.45;
+          color: var(--st-ink);
+          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
+          font-size: clamp(27px, 2.3vw, 35px);
+          line-height: 1;
+          font-weight: 800;
+          letter-spacing: -.035em;
           overflow-wrap: anywhere;
         }
 
-        .platform-brand-editor {
-          display: grid;
-          align-content: center;
-          gap: 18px;
-          padding: 26px;
-        }
-
-        .platform-brand-editor h2 {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin: 0;
-          color: #0f172a;
-          font-size: 20px;
-        }
-
-        .platform-brand-editor > p {
-          margin: -8px 0 0;
-          color: #64748b;
-          line-height: 1.6;
+        .platform-preview-copy p {
+          margin: 8px 0 0;
+          color: var(--st-muted);
+          font-size: 14px;
+          line-height: 1.5;
+          font-weight: 650;
+          overflow-wrap: anywhere;
         }
 
         .platform-tagline-field {
           display: grid;
-          gap: 8px;
+          gap: 9px;
+          min-width: 0;
         }
 
         .platform-tagline-field label {
-          color: #334155;
-          font-size: 13px;
+          color: var(--st-ink-2);
+          font-size: 14px;
+          line-height: 1.3;
           font-weight: 850;
         }
 
         .platform-tagline-input-wrap {
           position: relative;
+          min-width: 0;
         }
 
         .platform-tagline-input-wrap svg {
           position: absolute;
-          left: 14px;
+          left: 15px;
           top: 50%;
           transform: translateY(-50%);
-          color: #6366f1;
+          color: var(--st-purple);
           pointer-events: none;
         }
 
-        .platform-tagline-input {
+        .platform-tagline-input,
+        .payroll-organisation-select,
+        .attendance-time-card input,
+        .attendance-reason-edit-row input {
           width: 100%;
-          min-height: 48px;
-          border: 1px solid #cbd5e1;
-          border-radius: 15px;
-          background: #ffffff;
-          padding: 11px 14px 11px 44px;
-          color: #0f172a;
-          font: inherit;
-          font-weight: 700;
+          min-width: 0;
+          border: 1px solid rgba(21, 21, 47, .15);
+          background: rgba(255, 255, 255, .96);
+          color: var(--st-ink);
           outline: none;
+          transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
         }
 
-        .platform-tagline-input:focus {
-          border-color: #6366f1;
-          box-shadow: 0 0 0 4px rgba(99, 102, 241, .12);
+        .platform-tagline-input {
+          min-height: 50px;
+          border-radius: 16px;
+          padding: 12px 15px 12px 46px;
+          font-size: 15px;
+          font-weight: 700;
         }
 
-        .platform-tagline-input:disabled {
+        .platform-tagline-input:disabled,
+        .payroll-organisation-select:disabled,
+        .attendance-time-card input:disabled,
+        .attendance-reason-edit-row input:disabled {
           cursor: not-allowed;
-          background: #f8fafc;
-          color: #64748b;
+          background: rgba(245, 240, 232, .64);
+          color: #858097;
         }
 
         .platform-tagline-meta {
           display: flex;
           justify-content: space-between;
+          align-items: flex-start;
           gap: 12px;
-          color: #64748b;
-          font-size: 12px;
-          font-weight: 700;
+          min-width: 0;
+          color: var(--st-muted);
+          font-size: 12.5px;
+          line-height: 1.45;
+          font-weight: 650;
         }
 
-        .platform-logo-dropzone {
+        .platform-tagline-meta span:first-child {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .platform-tagline-meta span:last-child {
+          flex: 0 0 auto;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .platform-logo-dropzone,
+        .payroll-logo-dropzone,
+        .tenant-logo-dropzone {
+          min-width: 0;
           display: grid;
-          grid-template-columns: 48px minmax(0, 1fr);
-          gap: 14px;
+          grid-template-columns: 50px minmax(0, 1fr);
           align-items: center;
-          border: 1.5px dashed #a5b4fc;
+          gap: 14px;
+          border: 1.5px dashed rgba(101, 88, 217, .42);
           border-radius: 20px;
-          background: #f8faff;
+          background:
+            linear-gradient(135deg, rgba(238, 234, 255, .68), rgba(255, 255, 255, .82));
           padding: 16px;
           cursor: pointer;
-          transition: border-color .18s ease, transform .18s ease, background .18s ease;
+          transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
         }
 
-        .platform-logo-dropzone:hover {
-          border-color: #6366f1;
-          background: #f4f5ff;
-          transform: translateY(-1px);
+        .payroll-logo-dropzone {
+          border-color: rgba(49, 86, 216, .36);
+          background:
+            linear-gradient(135deg, rgba(191, 231, 255, .30), rgba(255, 255, 255, .84));
         }
 
-        .platform-logo-dropzone.is-disabled {
+        .tenant-logo-dropzone {
+          border-color: rgba(101, 88, 217, .31);
+          background:
+            linear-gradient(135deg, rgba(201, 183, 255, .22), rgba(255, 255, 255, .84));
+        }
+
+        .platform-logo-dropzone:hover:not(.is-disabled),
+        .payroll-logo-dropzone:hover:not(.is-disabled),
+        .tenant-logo-dropzone:hover:not(.is-disabled) {
+          transform: translateY(-2px);
+          border-color: var(--st-purple);
+          background: #ffffff;
+          box-shadow: 0 14px 28px rgba(21, 21, 47, .08);
+        }
+
+        .platform-logo-dropzone.is-disabled,
+        .payroll-logo-dropzone.is-disabled,
+        .tenant-logo-dropzone.is-disabled {
           cursor: not-allowed;
-          opacity: .62;
+          opacity: .55;
           transform: none;
+          box-shadow: none;
         }
 
-        .platform-logo-dropzone input {
+        .platform-logo-dropzone input,
+        .payroll-logo-dropzone input,
+        .tenant-logo-dropzone input {
           display: none;
         }
 
-        .platform-logo-dropzone-icon {
-          width: 48px;
-          height: 48px;
+        .platform-logo-dropzone-icon,
+        .payroll-logo-dropzone-icon,
+        .tenant-logo-dropzone-icon {
+          width: 50px;
+          height: 50px;
           display: grid;
           place-items: center;
           border-radius: 16px;
-          background: #e0e7ff;
-          color: #4f46e5;
+          color: var(--st-purple-deep);
+          background: var(--st-purple-soft);
+        }
+
+        .payroll-logo-dropzone-icon {
+          color: #24479f;
+          background: rgba(191, 231, 255, .58);
+        }
+
+        .tenant-logo-dropzone-icon {
+          color: #5a3d79;
+          background: rgba(201, 183, 255, .30);
         }
 
         .platform-logo-dropzone strong,
-        .platform-logo-dropzone span {
+        .platform-logo-dropzone span,
+        .payroll-logo-dropzone strong,
+        .payroll-logo-dropzone span,
+        .tenant-logo-dropzone strong,
+        .tenant-logo-dropzone span {
+          min-width: 0;
           display: block;
         }
 
-        .platform-logo-dropzone strong {
-          color: #1e293b;
-          line-height: 1.4;
+        .platform-logo-dropzone strong,
+        .payroll-logo-dropzone strong,
+        .tenant-logo-dropzone strong {
+          color: var(--st-ink-2);
+          font-size: 14.5px;
+          line-height: 1.35;
+          font-weight: 850;
+          overflow-wrap: anywhere;
         }
 
-        .platform-logo-dropzone span {
+        .platform-logo-dropzone span span,
+        .payroll-logo-dropzone span span,
+        .tenant-logo-dropzone span span {
           margin-top: 4px;
-          color: #64748b;
-          font-size: 13px;
+          color: var(--st-muted);
+          font-size: 12.5px;
           line-height: 1.45;
+          font-weight: 600;
+          overflow-wrap: anywhere;
         }
 
-        .platform-logo-file-meta {
+        .platform-logo-file-meta,
+        .payroll-logo-file-meta,
+        .tenant-logo-file-meta {
+          min-width: 0;
           display: flex;
           align-items: center;
           gap: 9px;
-          min-width: 0;
+          border: 1px solid rgba(127, 208, 174, .28);
           border-radius: 14px;
-          background: #f1f5f9;
+          background: rgba(127, 208, 174, .12);
           padding: 10px 12px;
-          color: #475569;
+          color: #316f5a;
           font-size: 13px;
-          font-weight: 700;
+          font-weight: 750;
         }
 
-        .platform-logo-file-meta span {
+        .platform-logo-file-meta span,
+        .payroll-logo-file-meta span,
+        .tenant-logo-file-meta span {
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
 
-        .platform-brand-actions {
+        .platform-brand-actions,
+        .payroll-brand-actions,
+        .tenant-brand-actions,
+        .attendance-settings-actions {
           display: flex;
           align-items: center;
+          justify-content: flex-start;
           gap: 10px;
           flex-wrap: wrap;
+          min-width: 0;
         }
 
-        .platform-brand-actions button {
-          width: auto;
-          min-height: 43px;
+        .attendance-settings-actions {
+          justify-content: flex-end;
+        }
+
+        .platform-brand-actions button,
+        .payroll-brand-actions button,
+        .tenant-brand-actions button,
+        .attendance-settings-actions button,
+        .attendance-reason-list-footer button {
+          min-height: 44px;
+          max-width: 100%;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
-          border-radius: 14px;
-          padding: 10px 16px;
+          border-radius: 999px;
+          padding: 10px 17px;
+          font-size: 13.5px;
+          line-height: 1.2;
           font-weight: 850;
           cursor: pointer;
+          transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
+          white-space: normal;
+          text-align: center;
         }
 
-        .platform-brand-save {
-          border: 1px solid #4f46e5;
-          background: linear-gradient(135deg, #4f46e5, #6366f1);
+        .platform-brand-save,
+        .payroll-logo-save,
+        .tenant-logo-save,
+        .attendance-reasons-save {
+          border: 1px solid var(--st-purple-deep);
+          background: var(--st-purple-deep);
           color: #ffffff;
-          box-shadow: 0 12px 24px rgba(79, 70, 229, .22);
+          box-shadow: 0 12px 25px rgba(48, 39, 95, .20);
         }
 
-        .platform-logo-remove {
-          border: 1px solid #fecaca;
-          background: #fff1f2;
-          color: #be123c;
+        .payroll-logo-save {
+          border-color: var(--st-cobalt);
+          background: var(--st-cobalt);
+          box-shadow: 0 12px 25px rgba(49, 86, 216, .19);
         }
 
-        .platform-brand-actions button:disabled {
+        .attendance-reasons-save {
+          border-color: #2f765b;
+          background: #2f765b;
+          box-shadow: 0 12px 25px rgba(47, 118, 91, .18);
+        }
+
+        .platform-brand-save:hover:not(:disabled),
+        .payroll-logo-save:hover:not(:disabled),
+        .tenant-logo-save:hover:not(:disabled),
+        .attendance-reasons-save:hover:not(:disabled) {
+          transform: translateY(-2px);
+          color: var(--st-ink);
+          background: var(--st-lime);
+          border-color: var(--st-lime);
+          box-shadow: 0 15px 30px rgba(21, 21, 47, .14);
+        }
+
+        .platform-logo-remove,
+        .payroll-logo-remove,
+        .tenant-logo-remove {
+          border: 1px solid rgba(167, 64, 82, .22);
+          background: rgba(255, 113, 91, .09);
+          color: #a74052;
+        }
+
+        .platform-logo-remove:hover:not(:disabled),
+        .payroll-logo-remove:hover:not(:disabled),
+        .tenant-logo-remove:hover:not(:disabled) {
+          transform: translateY(-2px);
+          border-color: rgba(167, 64, 82, .42);
+          background: rgba(255, 113, 91, .15);
+        }
+
+        .payroll-designer-open,
+        .attendance-reasons-reset {
+          border: 1px solid rgba(21, 21, 47, .14);
+          background: rgba(255, 255, 255, .88);
+          color: var(--st-purple-deep);
+        }
+
+        .payroll-designer-open:hover:not(:disabled),
+        .attendance-reasons-reset:hover:not(:disabled) {
+          transform: translateY(-2px);
+          border-color: rgba(101, 88, 217, .34);
+          background: var(--st-purple-soft);
+        }
+
+        .platform-brand-actions button:disabled,
+        .payroll-brand-actions button:disabled,
+        .tenant-brand-actions button:disabled,
+        .attendance-settings-actions button:disabled,
+        .attendance-reason-list-footer button:disabled {
           cursor: not-allowed;
-          opacity: .55;
-          box-shadow: none;
+          opacity: .46;
+          transform: none !important;
+          box-shadow: none !important;
         }
 
+        .platform-brand-permission,
+        .payroll-brand-permission,
+        .tenant-brand-permission,
+        .attendance-reason-permission,
         .platform-brand-message,
-        .platform-brand-permission {
+        .payroll-brand-message,
+        .tenant-brand-message,
+        .attendance-reason-message {
+          min-width: 0;
           display: flex;
           align-items: flex-start;
-          gap: 9px;
-          border-radius: 14px;
-          padding: 12px 14px;
-          font-size: 14px;
+          gap: 10px;
+          border-radius: 16px;
+          padding: 13px 15px;
+          font-size: 13.5px;
+          line-height: 1.55;
           font-weight: 700;
-          line-height: 1.5;
+          overflow-wrap: anywhere;
         }
 
-        .platform-brand-message.success {
-          border: 1px solid #bbf7d0;
-          background: #f0fdf4;
-          color: #166534;
+        .platform-brand-permission,
+        .payroll-brand-permission,
+        .tenant-brand-permission,
+        .attendance-reason-permission {
+          border: 1px solid rgba(49, 86, 216, .16);
+          background: rgba(191, 231, 255, .24);
+          color: #304f97;
         }
 
-        .platform-brand-message.error {
-          border: 1px solid #fecaca;
-          background: #fff1f2;
-          color: #b91c1c;
+        .platform-brand-message.success,
+        .payroll-brand-message.success,
+        .tenant-brand-message.success,
+        .attendance-reason-message.success {
+          border: 1px solid rgba(73, 155, 123, .21);
+          background: rgba(127, 208, 174, .14);
+          color: #2f7159;
         }
 
-        .platform-brand-permission {
-          border: 1px solid #dbeafe;
-          background: #eff6ff;
-          color: #1e40af;
+        .platform-brand-message.error,
+        .payroll-brand-message.error,
+        .tenant-brand-message.error,
+        .attendance-reason-message.error {
+          border: 1px solid rgba(167, 64, 82, .21);
+          background: rgba(255, 113, 91, .09);
+          color: #9d394c;
         }
 
-        .platform-brand-loading {
-          min-height: 240px;
+        .platform-brand-loading,
+        .payroll-brand-loading,
+        .tenant-brand-loading,
+        .attendance-settings-loading {
+          min-height: 220px;
           display: grid;
           place-items: center;
-          color: #64748b;
+          color: var(--st-muted);
+          font-size: 14px;
           font-weight: 800;
+          text-align: center;
         }
 
-        .platform-brand-loading span {
-          display: inline-flex;
-          align-items: center;
+        .platform-brand-loading span,
+        .tenant-brand-loading span,
+        .attendance-settings-loading span,
+        .payroll-brand-loading {
           gap: 9px;
         }
 
-        .attendance-settings-panel {
-          position: relative;
-          overflow: hidden;
-          border: 1px solid rgba(22, 101, 52, .22);
-          border-radius: 28px;
-          background:
-            radial-gradient(circle at 4% 0%, rgba(34, 197, 94, .15), transparent 30%),
-            radial-gradient(circle at 96% 4%, rgba(14, 165, 233, .11), transparent 28%),
-            linear-gradient(145deg, #ffffff 0%, #f6fbf8 100%);
-          box-shadow: 0 22px 55px rgba(15, 23, 42, .09);
-          padding: clamp(20px, 3vw, 32px);
+        .platform-brand-loading span,
+        .tenant-brand-loading span,
+        .attendance-settings-loading span {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-wrap: wrap;
         }
 
-        .attendance-settings-panel::after {
-          content: '';
-          position: absolute;
-          width: 230px;
-          height: 230px;
-          right: -125px;
-          bottom: -150px;
-          border-radius: 50%;
-          background: rgba(34, 197, 94, .07);
-          pointer-events: none;
+        .tenant-brand-spin {
+          animation: settings-spin .82s linear infinite;
         }
 
-        .attendance-settings-heading {
-          position: relative;
-          z-index: 1;
+        @keyframes settings-spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .payroll-organisation-selector {
+          min-width: 0;
           display: flex;
-          align-items: flex-start;
+          align-items: center;
           justify-content: space-between;
           gap: 18px;
-          margin-bottom: 20px;
+          margin: 0 0 18px;
+          padding: 15px 17px;
+          border: 1px solid rgba(49, 86, 216, .14);
+          border-radius: 18px;
+          background: rgba(191, 231, 255, .20);
         }
 
-        .attendance-settings-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 9px;
-          color: #15803d;
+        .payroll-organisation-selector-copy {
+          min-width: 0;
+          display: grid;
+          gap: 4px;
+        }
+
+        .payroll-organisation-selector-copy span {
+          color: #5e6c8e;
           font-size: 12px;
-          font-weight: 900;
-          letter-spacing: .11em;
+          line-height: 1.3;
+          font-weight: 800;
           text-transform: uppercase;
+          letter-spacing: .08em;
         }
 
-        .attendance-settings-heading h1 {
-          margin: 0;
-          color: #0f172a;
-          font-size: clamp(25px, 3vw, 34px);
-          line-height: 1.1;
+        .payroll-organisation-selector-copy strong {
+          color: var(--st-ink);
+          font-size: 14.5px;
+          line-height: 1.4;
+          font-weight: 850;
+          overflow-wrap: anywhere;
         }
 
-        .attendance-settings-heading p {
-          max-width: 780px;
-          margin: 10px 0 0;
-          color: #64748b;
-          line-height: 1.65;
+        .payroll-organisation-select {
+          width: min(100%, 370px);
+          min-height: 46px;
+          flex: 0 1 370px;
+          border-radius: 14px;
+          padding: 10px 40px 10px 13px;
+          font-size: 14px;
+          font-weight: 750;
         }
 
-        .attendance-settings-refresh {
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
+        .payroll-brand-preview {
+          align-items: stretch;
+          background:
+            linear-gradient(145deg, rgba(255, 255, 255, .90), rgba(236, 247, 255, .65));
+        }
+
+        .payroll-brand-preview-card {
+          width: min(100%, 470px);
+          min-width: 0;
+          margin: auto;
+          padding: clamp(20px, 2.2vw, 28px);
+          border: 1px solid rgba(21, 21, 47, .12);
+          border-radius: 22px;
+          background: #fffefa;
+          box-shadow: 0 18px 40px rgba(21, 21, 47, .10);
+          text-align: center;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .payroll-brand-preview-card::before {
+          content: "";
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          height: 6px;
+          background: linear-gradient(90deg, var(--st-cobalt), var(--st-purple), var(--st-lime));
+        }
+
+        .payroll-logo-preview {
+          width: 92px;
+          height: 92px;
           display: grid;
           place-items: center;
-          border: 1px solid #d1e7d7;
-          border-radius: 14px;
-          background: rgba(255, 255, 255, .92);
-          color: #15803d;
-          cursor: pointer;
-          box-shadow: 0 10px 24px rgba(15, 23, 42, .07);
+          margin: 0 auto 14px;
+          overflow: hidden;
+          border-radius: 24px;
+          background: linear-gradient(145deg, var(--st-cobalt), var(--st-purple));
+          color: #ffffff;
+          box-shadow: 0 14px 28px rgba(49, 86, 216, .18);
+          font-size: 24px;
+          font-weight: 950;
+          letter-spacing: -.04em;
         }
 
-        .attendance-settings-refresh:disabled {
-          cursor: not-allowed;
-          opacity: .55;
+        .payroll-brand-preview-card h2 {
+          margin: 0;
+          color: var(--st-ink);
+          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
+          font-size: clamp(26px, 2vw, 34px);
+          line-height: 1.04;
+          font-weight: 800;
+          letter-spacing: -.025em;
+          overflow-wrap: anywhere;
+        }
+
+        .payroll-brand-preview-card > p:not(.payroll-brand-preview-title) {
+          max-width: 390px;
+          margin: 8px auto 0;
+          color: var(--st-muted);
+          font-size: 13px;
+          line-height: 1.5;
+          overflow-wrap: anywhere;
+        }
+
+        .payroll-brand-preview-divider {
+          height: 1px;
+          margin: 20px 0 15px;
+          background: linear-gradient(90deg, transparent, rgba(21, 21, 47, .18), transparent);
+        }
+
+        .payroll-brand-preview-title {
+          margin: 0 0 14px;
+          color: var(--st-cobalt);
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .14em;
+        }
+
+        .payroll-brand-status-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          text-align: left;
+          min-width: 0;
+        }
+
+        .payroll-brand-status-item {
+          min-width: 0;
+          display: grid;
+          gap: 5px;
+          padding: 12px;
+          border: 1px solid rgba(21, 21, 47, .09);
+          border-radius: 14px;
+          background: rgba(245, 240, 232, .46);
+        }
+
+        .payroll-brand-status-item span {
+          color: var(--st-muted);
+          font-size: 11px;
+          line-height: 1.3;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .payroll-brand-status-item strong {
+          min-width: 0;
+          color: var(--st-ink-2);
+          font-size: 12.5px;
+          line-height: 1.45;
+          font-weight: 800;
+          overflow-wrap: anywhere;
+        }
+
+        .payroll-brand-note {
+          min-width: 0;
+          border: 1px solid rgba(101, 88, 217, .13);
+          border-radius: 16px;
+          background: rgba(238, 234, 255, .52);
+          padding: 13px 14px;
+          color: #5f5878;
+          font-size: 13px;
+          line-height: 1.56;
+          font-weight: 650;
+          overflow-wrap: anywhere;
         }
 
         .attendance-settings-form {
-          position: relative;
-          z-index: 1;
           display: grid;
           gap: 18px;
+          min-width: 0;
         }
 
         .attendance-settings-meta {
+          min-width: 0;
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           justify-content: space-between;
           gap: 14px;
-          flex-wrap: wrap;
-          border: 1px solid #dcfce7;
-          border-radius: 17px;
-          background: rgba(240, 253, 244, .84);
-          padding: 12px 14px;
-          color: #166534;
-          font-size: 13px;
-          font-weight: 750;
-          line-height: 1.5;
+          padding: 13px 15px;
+          border: 1px solid rgba(21, 21, 47, .09);
+          border-radius: 16px;
+          background: rgba(255, 255, 255, .66);
+          color: var(--st-muted);
+          font-size: 12.5px;
+          line-height: 1.55;
+          font-weight: 650;
+        }
+
+        .attendance-settings-meta > span:first-child {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .attendance-settings-source {
+          flex: 0 0 auto;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border: 1px solid rgba(73, 155, 123, .18);
+          border-radius: 999px;
+          background: rgba(127, 208, 174, .13);
+          padding: 6px 10px;
+          color: #33705c;
+          font-size: 11.5px;
+          line-height: 1.2;
+          font-weight: 850;
+          white-space: nowrap;
         }
 
         .attendance-schedule-grid {
           display: grid;
           grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 12px;
+          min-width: 0;
         }
 
         .attendance-time-card {
           min-width: 0;
           display: grid;
-          gap: 8px;
-          border: 1px solid rgba(203, 213, 225, .82);
-          border-radius: 18px;
-          background: rgba(255, 255, 255, .94);
+          align-content: start;
+          gap: 7px;
           padding: 14px;
-          box-shadow: 0 12px 26px rgba(15, 23, 42, .05);
+          border: 1px solid rgba(21, 21, 47, .10);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, .76);
+        }
+
+        .attendance-time-card:hover {
+          border-color: rgba(101, 88, 217, .22);
+          box-shadow: 0 12px 25px rgba(21, 21, 47, .07);
         }
 
         .attendance-time-card label {
-          color: #0f172a;
+          color: var(--st-ink-2);
           font-size: 13px;
+          line-height: 1.3;
           font-weight: 900;
         }
 
         .attendance-time-card p {
           min-height: 38px;
           margin: 0;
-          color: #64748b;
-          font-size: 11px;
-          font-weight: 650;
+          color: var(--st-muted);
+          font-size: 11.5px;
           line-height: 1.45;
+          font-weight: 600;
+          overflow-wrap: anywhere;
         }
 
-        .attendance-time-card input[type='time'] {
-          width: 100%;
-          min-width: 0;
+        .attendance-time-card input {
           min-height: 44px;
-          border: 1px solid #cbd5e1;
-          border-radius: 12px;
-          background: #ffffff;
-          padding: 9px 10px;
-          color: #0f172a;
-          font: inherit;
+          border-radius: 13px;
+          padding: 8px 10px;
           font-size: 14px;
-          font-weight: 800;
-          outline: none;
-        }
-
-        .attendance-time-card input[type='time']:focus {
-          border-color: #22c55e;
-          box-shadow: 0 0 0 4px rgba(34, 197, 94, .11);
-        }
-
-        .attendance-time-card input[type='time']:disabled {
-          cursor: not-allowed;
-          background: #f8fafc;
-          color: #64748b;
+          font-weight: 750;
         }
 
         .attendance-time-preview {
+          min-width: 0;
           display: flex;
           align-items: center;
+          justify-content: center;
           gap: 8px;
           flex-wrap: wrap;
-          border: 1px dashed #bbf7d0;
-          border-radius: 15px;
-          background: rgba(240, 253, 244, .72);
-          padding: 11px 13px;
-          color: #166534;
-          font-size: 12px;
-          font-weight: 800;
+          border: 1px solid rgba(73, 155, 123, .16);
+          border-radius: 16px;
+          background: rgba(127, 208, 174, .11);
+          padding: 12px 14px;
+          color: #4f6c61;
+          font-size: 12.5px;
+          line-height: 1.35;
+        }
+
+        .attendance-time-preview svg {
+          color: #33705c;
         }
 
         .attendance-time-preview strong {
-          color: #14532d;
+          color: var(--st-ink-2);
+          font-size: 12.5px;
+          font-weight: 850;
+          font-variant-numeric: tabular-nums;
         }
 
-        .attendance-settings-source {
-          display: inline-flex;
-          align-items: center;
-          gap: 7px;
-          border-radius: 999px;
-          background: #dcfce7;
-          padding: 6px 10px;
-          font-size: 11px;
-          font-weight: 900;
-          letter-spacing: .04em;
-          text-transform: uppercase;
+        .attendance-time-preview span {
+          font-weight: 650;
         }
 
         .attendance-reason-editor-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 18px;
+          gap: 16px;
           align-items: start;
+          min-width: 0;
         }
 
         .attendance-reason-list-card {
           min-width: 0;
           display: grid;
           gap: 15px;
-          border: 1px solid rgba(203, 213, 225, .82);
-          border-radius: 22px;
-          background: rgba(255, 255, 255, .92);
           padding: 18px;
-          box-shadow: 0 15px 34px rgba(15, 23, 42, .06);
+          border: 1px solid rgba(21, 21, 47, .10);
+          border-radius: 20px;
+          background: rgba(255, 255, 255, .76);
         }
 
         .attendance-reason-list-heading {
+          min-width: 0;
           display: grid;
           grid-template-columns: 44px minmax(0, 1fr);
-          gap: 12px;
           align-items: start;
+          gap: 12px;
         }
 
         .attendance-reason-list-icon {
@@ -2113,35 +2641,44 @@ export default function Settings({ user, setPage }) {
           height: 44px;
           display: grid;
           place-items: center;
-          border-radius: 15px;
-          background: #dcfce7;
-          color: #15803d;
+          border-radius: 14px;
+          background: rgba(127, 208, 174, .16);
+          color: #2f7159;
+        }
+
+        .attendance-reason-list-heading > div {
+          min-width: 0;
         }
 
         .attendance-reason-list-heading h3 {
           margin: 1px 0 0;
-          color: #0f172a;
-          font-size: 18px;
+          color: var(--st-ink);
+          font-size: 16px;
+          line-height: 1.25;
+          font-weight: 900;
+          overflow-wrap: anywhere;
         }
 
         .attendance-reason-list-heading p {
           margin: 5px 0 0;
-          color: #64748b;
-          font-size: 13px;
+          color: var(--st-muted);
+          font-size: 12.5px;
           line-height: 1.5;
+          overflow-wrap: anywhere;
         }
 
         .attendance-reason-list {
           display: grid;
-          gap: 9px;
+          gap: 8px;
+          min-width: 0;
         }
 
         .attendance-reason-edit-row {
           min-width: 0;
           display: grid;
           grid-template-columns: 30px minmax(0, 1fr) auto;
-          gap: 8px;
           align-items: center;
+          gap: 8px;
         }
 
         .attendance-reason-number {
@@ -2150,1060 +2687,310 @@ export default function Settings({ user, setPage }) {
           display: grid;
           place-items: center;
           border-radius: 10px;
-          background: #f1f5f9;
-          color: #475569;
-          font-size: 12px;
+          background: rgba(238, 234, 255, .75);
+          color: var(--st-purple-deep);
+          font-size: 11px;
           font-weight: 900;
         }
 
         .attendance-reason-edit-row input {
-          width: 100%;
-          min-width: 0;
           min-height: 42px;
-          border: 1px solid #cbd5e1;
           border-radius: 12px;
-          background: #ffffff;
           padding: 9px 11px;
-          color: #0f172a;
-          font: inherit;
-          font-size: 13px;
+          font-size: 13.5px;
+          line-height: 1.35;
           font-weight: 700;
-          outline: none;
-        }
-
-        .attendance-reason-edit-row input:focus {
-          border-color: #22c55e;
-          box-shadow: 0 0 0 4px rgba(34, 197, 94, .11);
-        }
-
-        .attendance-reason-edit-row input:disabled {
-          cursor: not-allowed;
-          background: #f8fafc;
-          color: #64748b;
         }
 
         .attendance-reason-row-actions {
           display: flex;
           align-items: center;
           gap: 5px;
+          flex-wrap: nowrap;
         }
 
         .attendance-reason-row-actions button {
-          width: 32px;
-          height: 32px;
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
           display: grid;
           place-items: center;
-          border: 1px solid #dbe3eb;
-          border-radius: 10px;
+          border: 1px solid rgba(21, 21, 47, .12);
+          border-radius: 11px;
           background: #ffffff;
-          color: #475569;
+          color: var(--st-purple-deep);
           cursor: pointer;
+          transition: transform .18s ease, border-color .18s ease, background .18s ease;
         }
 
         .attendance-reason-row-actions button:hover:not(:disabled) {
-          border-color: #86efac;
-          color: #15803d;
+          transform: translateY(-1px);
+          border-color: rgba(101, 88, 217, .32);
+          background: var(--st-purple-soft);
         }
 
         .attendance-reason-row-actions .attendance-reason-delete {
-          border-color: #fecaca;
-          background: #fff1f2;
-          color: #be123c;
+          color: #a74052;
+          border-color: rgba(167, 64, 82, .18);
+          background: rgba(255, 113, 91, .07);
         }
 
         .attendance-reason-row-actions button:disabled {
           cursor: not-allowed;
-          opacity: .38;
+          opacity: .36;
+          transform: none;
         }
 
         .attendance-reason-edit-row.is-locked {
-          border-top: 1px dashed #cbd5e1;
           margin-top: 3px;
-          padding-top: 11px;
+          padding-top: 10px;
+          border-top: 1px dashed rgba(21, 21, 47, .16);
         }
 
         .attendance-reason-edit-row.is-locked .attendance-reason-number {
-          background: #e0f2fe;
-          color: #0369a1;
+          background: rgba(191, 231, 255, .44);
+          color: #3156a0;
         }
 
         .attendance-reason-locked-label {
-          border: 1px solid #bae6fd;
+          justify-self: end;
+          border: 1px solid rgba(49, 86, 216, .15);
           border-radius: 999px;
-          background: #f0f9ff;
-          padding: 5px 9px;
-          color: #0369a1;
-          font-size: 10px;
+          background: rgba(191, 231, 255, .28);
+          padding: 6px 9px;
+          color: #3156a0;
+          font-size: 10.5px;
+          line-height: 1;
           font-weight: 900;
           text-transform: uppercase;
+          letter-spacing: .06em;
+          white-space: nowrap;
         }
 
         .attendance-reason-list-footer {
+          min-width: 0;
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 10px;
           flex-wrap: wrap;
-          color: #64748b;
+          color: var(--st-muted);
           font-size: 12px;
-          font-weight: 750;
+          line-height: 1.4;
+          font-weight: 700;
         }
 
         .attendance-reason-list-footer button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          border: 1px solid #bbf7d0;
-          border-radius: 12px;
-          background: #f0fdf4;
-          padding: 8px 11px;
-          color: #166534;
-          font-weight: 850;
-          cursor: pointer;
-        }
-
-        .attendance-reason-list-footer button:disabled {
-          cursor: not-allowed;
-          opacity: .5;
-        }
-
-        .attendance-settings-actions {
-          display: flex;
-          justify-content: flex-end;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-
-        .attendance-settings-actions button {
-          min-height: 43px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          border-radius: 14px;
-          padding: 10px 16px;
-          font-weight: 850;
-          cursor: pointer;
-        }
-
-        .attendance-reasons-reset {
-          border: 1px solid #cbd5e1;
-          background: #ffffff;
-          color: #475569;
-        }
-
-        .attendance-reasons-save {
-          border: 1px solid #15803d;
-          background: linear-gradient(135deg, #15803d, #22c55e);
-          color: #ffffff;
-          box-shadow: 0 12px 24px rgba(21, 128, 61, .22);
-        }
-
-        .attendance-settings-actions button:disabled {
-          cursor: not-allowed;
-          opacity: .55;
+          min-height: 38px;
+          padding: 8px 13px;
+          border: 1px solid rgba(73, 155, 123, .20);
+          background: rgba(127, 208, 174, .12);
+          color: #2f7159;
           box-shadow: none;
         }
 
-        .attendance-reason-message,
-        .attendance-reason-permission {
-          display: flex;
-          align-items: flex-start;
-          gap: 9px;
-          border-radius: 14px;
-          padding: 12px 14px;
-          font-size: 14px;
-          font-weight: 700;
-          line-height: 1.5;
-        }
-
-        .attendance-reason-message.success {
-          border: 1px solid #bbf7d0;
-          background: #f0fdf4;
-          color: #166534;
-        }
-
-        .attendance-reason-message.error {
-          border: 1px solid #fecaca;
-          background: #fff1f2;
-          color: #b91c1c;
-        }
-
-        .attendance-reason-permission {
-          border: 1px solid #dbeafe;
-          background: #eff6ff;
-          color: #1e40af;
-        }
-
-        .attendance-settings-loading {
-          position: relative;
-          z-index: 1;
-          min-height: 240px;
-          display: grid;
-          place-items: center;
-          color: #64748b;
-          font-weight: 800;
-        }
-
-        .attendance-settings-loading span {
-          display: inline-flex;
-          align-items: center;
-          gap: 9px;
-        }
-
-        .tenant-branding-panel {
-          position: relative;
-          overflow: hidden;
-          border: 1px solid rgba(148, 163, 184, .28);
-          border-radius: 28px;
-          background:
-            radial-gradient(circle at 9% 5%, rgba(99, 102, 241, .18), transparent 32%),
-            radial-gradient(circle at 92% 10%, rgba(14, 165, 233, .14), transparent 30%),
-            linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
-          box-shadow: 0 22px 55px rgba(15, 23, 42, .09);
-          padding: clamp(20px, 3vw, 32px);
-        }
-
-        .tenant-branding-panel::after {
-          content: '';
-          position: absolute;
-          width: 220px;
-          height: 220px;
-          right: -105px;
-          bottom: -125px;
-          border-radius: 50%;
-          background: rgba(99, 102, 241, .09);
-          pointer-events: none;
-        }
-
-        .tenant-branding-heading {
-          position: relative;
-          z-index: 1;
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 18px;
-          margin-bottom: 24px;
-        }
-
-        .tenant-branding-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 9px;
-          color: #4f46e5;
-          font-size: 12px;
-          font-weight: 900;
-          letter-spacing: .11em;
-          text-transform: uppercase;
-        }
-
-        .tenant-branding-heading h1 {
-          margin: 0;
-          color: #0f172a;
-          font-size: clamp(25px, 3vw, 34px);
-          line-height: 1.1;
-        }
-
-        .tenant-branding-heading p {
-          max-width: 720px;
-          margin: 10px 0 0;
-          color: #64748b;
-          line-height: 1.65;
-        }
-
-        .tenant-branding-refresh {
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
-          display: grid;
-          place-items: center;
-          border: 1px solid #e2e8f0;
-          border-radius: 14px;
-          background: rgba(255, 255, 255, .86);
-          color: #475569;
-          cursor: pointer;
-          box-shadow: 0 10px 24px rgba(15, 23, 42, .07);
-        }
-
-        .tenant-branding-refresh:hover:not(:disabled) {
-          color: #4f46e5;
-          border-color: #c7d2fe;
-        }
-
-        .tenant-branding-refresh:disabled {
-          cursor: not-allowed;
-          opacity: .55;
-        }
-
-        .tenant-branding-layout {
-          position: relative;
-          z-index: 1;
-          display: grid;
-          grid-template-columns: minmax(250px, .86fr) minmax(330px, 1.14fr);
-          gap: 22px;
-          align-items: stretch;
-        }
-
-        .tenant-brand-preview,
-        .tenant-brand-editor {
-          border: 1px solid rgba(203, 213, 225, .74);
-          border-radius: 24px;
-          background: rgba(255, 255, 255, .86);
-          backdrop-filter: blur(12px);
+        .attendance-reason-list-footer button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(73, 155, 123, .38);
+          background: rgba(127, 208, 174, .22);
         }
 
         .tenant-brand-preview {
-          min-height: 300px;
-          display: grid;
-          place-items: center;
-          padding: 28px;
-          text-align: center;
+          min-height: 315px;
+          background:
+            linear-gradient(145deg, rgba(255, 255, 255, .88), rgba(248, 244, 255, .68));
         }
 
         .tenant-brand-preview-inner {
           width: 100%;
+          min-width: 0;
           display: grid;
-          justify-items: center;
-          gap: 16px;
+          place-items: center;
+          text-align: center;
         }
 
         .tenant-logo-preview {
-          width: 128px;
-          height: 128px;
+          width: 126px;
+          height: 126px;
           display: grid;
           place-items: center;
           overflow: hidden;
-          border: 5px solid #ffffff;
           border-radius: 32px;
-          background: linear-gradient(145deg, #eef2ff, #ecfeff);
-          box-shadow: 0 20px 44px rgba(79, 70, 229, .18);
-          color: #4338ca;
-          font-size: 36px;
+          background: linear-gradient(145deg, var(--st-purple-deep), var(--st-purple));
+          color: #ffffff;
+          box-shadow: 0 20px 42px rgba(48, 39, 95, .20);
+          font-size: 31px;
+          line-height: 1;
           font-weight: 950;
-          letter-spacing: -.04em;
-        }
-
-        .tenant-logo-preview img {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-          display: block;
-          background: #ffffff;
+          letter-spacing: -.05em;
         }
 
         .tenant-company-script {
-          margin: 0;
-          color: #172554;
-          font-family: 'Brush Script MT', 'Segoe Script', 'Lucida Handwriting', cursive;
-          font-size: clamp(31px, 4vw, 45px);
-          font-weight: 600;
-          line-height: 1.15;
-          letter-spacing: .01em;
+          max-width: 100%;
+          margin: 18px 0 0;
+          color: var(--st-ink);
+          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
+          font-size: clamp(28px, 2.5vw, 38px);
+          line-height: 1;
+          font-weight: 800;
+          letter-spacing: -.03em;
+          overflow-wrap: anywhere;
         }
 
-        .tenant-brand-preview small {
-          color: #64748b;
-          font-weight: 700;
-        }
-
-        .tenant-brand-editor {
-          display: grid;
-          align-content: center;
-          gap: 18px;
-          padding: 26px;
-        }
-
-        .tenant-brand-editor h2 {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin: 0;
-          color: #0f172a;
-          font-size: 20px;
-        }
-
-        .tenant-brand-editor > p {
-          margin: -8px 0 0;
-          color: #64748b;
-          line-height: 1.6;
-        }
-
-        .tenant-logo-dropzone {
-          display: grid;
-          grid-template-columns: 48px minmax(0, 1fr);
-          gap: 14px;
-          align-items: center;
-          border: 1.5px dashed #a5b4fc;
-          border-radius: 20px;
-          background: #f8faff;
-          padding: 16px;
-          cursor: pointer;
-          transition: border-color .18s ease, transform .18s ease, background .18s ease;
-        }
-
-        .tenant-logo-dropzone:hover {
-          border-color: #6366f1;
-          background: #f4f5ff;
-          transform: translateY(-1px);
-        }
-
-        .tenant-logo-dropzone.is-disabled {
-          cursor: not-allowed;
-          opacity: .62;
-          transform: none;
-        }
-
-        .tenant-logo-dropzone input {
-          display: none;
-        }
-
-        .tenant-logo-dropzone-icon {
-          width: 48px;
-          height: 48px;
-          display: grid;
-          place-items: center;
-          border-radius: 16px;
-          background: #e0e7ff;
-          color: #4f46e5;
-        }
-
-        .tenant-logo-dropzone strong,
-        .tenant-logo-dropzone span {
-          display: block;
-        }
-
-        .tenant-logo-dropzone strong {
-          color: #1e293b;
+        .tenant-brand-preview-inner small {
+          margin-top: 8px;
+          color: var(--st-muted);
+          font-size: 12.5px;
           line-height: 1.4;
-        }
-
-        .tenant-logo-dropzone span {
-          margin-top: 4px;
-          color: #64748b;
-          font-size: 13px;
-          line-height: 1.45;
-        }
-
-        .tenant-logo-file-meta {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          min-width: 0;
-          border-radius: 14px;
-          background: #f1f5f9;
-          padding: 10px 12px;
-          color: #475569;
-          font-size: 13px;
           font-weight: 700;
-        }
-
-        .tenant-logo-file-meta span {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .tenant-brand-actions {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-
-        .tenant-brand-actions button {
-          width: auto;
-          min-height: 43px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          border-radius: 14px;
-          padding: 10px 16px;
-          font-weight: 850;
-          cursor: pointer;
-        }
-
-        .tenant-logo-save {
-          border: 1px solid #4f46e5;
-          background: linear-gradient(135deg, #4f46e5, #6366f1);
-          color: #ffffff;
-          box-shadow: 0 12px 24px rgba(79, 70, 229, .22);
-        }
-
-        .tenant-logo-remove {
-          border: 1px solid #fecaca;
-          background: #fff1f2;
-          color: #be123c;
-        }
-
-        .tenant-brand-actions button:disabled {
-          cursor: not-allowed;
-          opacity: .55;
-          box-shadow: none;
-        }
-
-        .tenant-brand-message {
-          display: flex;
-          align-items: flex-start;
-          gap: 9px;
-          border-radius: 14px;
-          padding: 12px 14px;
-          font-size: 14px;
-          font-weight: 700;
-          line-height: 1.5;
-        }
-
-        .tenant-brand-message.success {
-          border: 1px solid #bbf7d0;
-          background: #f0fdf4;
-          color: #166534;
-        }
-
-        .tenant-brand-message.error {
-          border: 1px solid #fecaca;
-          background: #fff1f2;
-          color: #b91c1c;
-        }
-
-        .tenant-brand-permission {
-          display: flex;
-          align-items: flex-start;
-          gap: 10px;
-          border: 1px solid #dbeafe;
-          border-radius: 16px;
-          background: #eff6ff;
-          padding: 13px 14px;
-          color: #1e40af;
-          font-size: 14px;
-          font-weight: 700;
-          line-height: 1.5;
-        }
-
-        .tenant-brand-loading {
-          min-height: 240px;
-          display: grid;
-          place-items: center;
-          color: #64748b;
-          font-weight: 800;
-        }
-
-        .tenant-brand-loading span {
-          display: inline-flex;
-          align-items: center;
-          gap: 9px;
-        }
-
-        .tenant-brand-spin {
-          animation: tenantBrandSpin .8s linear infinite;
-        }
-
-        @keyframes tenantBrandSpin {
-          to { transform: rotate(360deg); }
-        }
-
-        .payroll-branding-panel {
-          position: relative;
-          overflow: hidden;
-          margin-bottom: 24px;
-          padding: 28px;
-          border: 1px solid #dfe9e2;
-          border-radius: 24px;
-          background: #ffffff;
-          box-shadow: 0 14px 36px rgba(28, 71, 47, 0.07);
-        }
-
-        .payroll-branding-panel::after {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 4px;
-          background: #397e51;
-        }
-
-        .payroll-branding-heading {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 20px;
-          padding-bottom: 20px;
-          border-bottom: 1px solid #e7eee9;
-        }
-
-        .payroll-branding-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: 7px;
-          margin-bottom: 8px;
-          color: #397e51;
-          font-size: 0.72rem;
-          font-weight: 800;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        .payroll-branding-heading h1 {
-          margin: 0;
-          color: #17251d;
-          font-size: 1.52rem;
-          font-weight: 850;
-          letter-spacing: -0.025em;
-        }
-
-        .payroll-branding-heading p {
-          max-width: 760px;
-          margin: 8px 0 0;
-          color: #6e7f74;
-          font-size: 0.9rem;
-          line-height: 1.65;
-        }
-
-        .payroll-branding-refresh {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 40px;
-          height: 40px;
-          flex: 0 0 40px;
-          border: 1px solid #d7e4da;
-          border-radius: 12px;
-          background: #f8fbf9;
-          color: #397e51;
-          cursor: pointer;
-        }
-
-        .payroll-branding-refresh:disabled {
-          cursor: not-allowed;
-          opacity: 0.55;
-        }
-
-        .payroll-organisation-selector {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 18px;
-          margin-top: 20px;
-          padding: 16px 18px;
-          border: 1px solid #e1ebe4;
-          border-radius: 16px;
-          background: #f8fbf9;
-        }
-
-        .payroll-organisation-selector-copy {
-          min-width: 0;
-        }
-
-        .payroll-organisation-selector-copy span {
-          display: block;
-          color: #6e7f74;
-          font-size: 0.72rem;
-          font-weight: 750;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-        }
-
-        .payroll-organisation-selector-copy strong {
-          display: block;
-          margin-top: 4px;
-          color: #17251d;
-          font-size: 0.96rem;
-          font-weight: 800;
-        }
-
-        .payroll-organisation-select {
-          min-width: 260px;
-          padding: 11px 38px 11px 13px;
-          border: 1px solid #cddbd1;
-          border-radius: 12px;
-          background: #ffffff;
-          color: #25362c;
-          font: inherit;
-          font-size: 0.88rem;
-          font-weight: 700;
-          outline: none;
-        }
-
-        .payroll-organisation-select:focus {
-          border-color: #397e51;
-          box-shadow: 0 0 0 3px rgba(57, 126, 81, 0.1);
-        }
-
-        .payroll-branding-layout {
-          display: grid;
-          grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-          gap: 20px;
-          margin-top: 20px;
-        }
-
-        .payroll-brand-preview,
-        .payroll-brand-editor {
-          border: 1px solid #e0e9e2;
-          border-radius: 18px;
-          background: #ffffff;
-        }
-
-        .payroll-brand-preview {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 330px;
-          padding: 28px;
-          background: #f8fbf9;
-        }
-
-        .payroll-brand-preview-card {
-          width: min(100%, 390px);
-          padding: 28px 24px;
-          border: 1px solid #dce7df;
-          border-radius: 18px;
-          background: #ffffff;
-          text-align: center;
-          box-shadow: 0 12px 30px rgba(29, 65, 44, 0.07);
-        }
-
-        .payroll-logo-preview {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 112px;
-          height: 90px;
-          margin: 0 auto 17px;
-          padding: 10px;
-          overflow: hidden;
-          border: 1px solid #d9e6dd;
-          border-radius: 14px;
-          background: #ffffff;
-          color: #397e51;
-          font-size: 1.35rem;
-          font-weight: 900;
-        }
-
-        .payroll-logo-preview img {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-        }
-
-        .payroll-brand-preview-card h2 {
-          margin: 0;
-          color: #17251d;
-          font-size: 1.18rem;
-          font-weight: 850;
-        }
-
-        .payroll-brand-preview-card > p {
-          margin: 7px 0 0;
-          color: #718078;
-          font-size: 0.82rem;
-          line-height: 1.5;
-        }
-
-        .payroll-brand-preview-divider {
-          height: 1px;
-          margin: 20px 0;
-          background: #e5ece7;
-        }
-
-        .payroll-brand-preview-title {
-          margin: 0;
-          color: #25362c;
-          font-size: 1.05rem;
-          font-weight: 850;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-        }
-
-        .payroll-brand-status-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-          margin-top: 18px;
-          text-align: left;
-        }
-
-        .payroll-brand-status-item {
-          padding: 11px 12px;
-          border: 1px solid #e4ece6;
-          border-radius: 12px;
-          background: #fbfdfb;
-        }
-
-        .payroll-brand-status-item span {
-          display: block;
-          color: #7a8980;
-          font-size: 0.66rem;
-          font-weight: 750;
-          letter-spacing: 0.05em;
-          text-transform: uppercase;
-        }
-
-        .payroll-brand-status-item strong {
-          display: block;
-          margin-top: 4px;
-          color: #25362c;
-          font-size: 0.78rem;
-          font-weight: 800;
-        }
-
-        .payroll-brand-editor {
-          padding: 24px;
-        }
-
-        .payroll-brand-editor h2 {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          margin: 0;
-          color: #17251d;
-          font-size: 1.08rem;
-          font-weight: 850;
-        }
-
-        .payroll-brand-editor > p {
-          margin: 8px 0 19px;
-          color: #6e7f74;
-          font-size: 0.86rem;
-          line-height: 1.6;
-        }
-
-        .payroll-logo-dropzone {
-          display: flex;
-          align-items: center;
-          gap: 13px;
-          min-height: 84px;
-          padding: 16px;
-          border: 1px dashed #b8cdbd;
-          border-radius: 15px;
-          background: #f8fbf9;
-          cursor: pointer;
-          transition: border-color 0.18s ease, background 0.18s ease;
-        }
-
-        .payroll-logo-dropzone:hover {
-          border-color: #397e51;
-          background: #f3f8f4;
-        }
-
-        .payroll-logo-dropzone.is-disabled {
-          cursor: not-allowed;
-          opacity: 0.55;
-        }
-
-        .payroll-logo-dropzone input {
-          display: none;
-        }
-
-        .payroll-logo-dropzone-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
-          border-radius: 12px;
-          background: #e9f3ec;
-          color: #397e51;
-        }
-
-        .payroll-logo-dropzone strong,
-        .payroll-logo-dropzone span {
-          display: block;
-        }
-
-        .payroll-logo-dropzone strong {
-          color: #25362c;
-          font-size: 0.87rem;
-          font-weight: 800;
-        }
-
-        .payroll-logo-dropzone span span {
-          margin-top: 3px;
-          color: #7b8a81;
-          font-size: 0.75rem;
-        }
-
-        .payroll-logo-file-meta {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-top: 11px;
-          padding: 10px 12px;
-          border-radius: 11px;
-          background: #f0f7f2;
-          color: #397e51;
-          font-size: 0.78rem;
-          font-weight: 700;
-        }
-
-        .payroll-brand-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          margin-top: 17px;
-        }
-
-        .payroll-brand-actions button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          min-height: 42px;
-          padding: 0 15px;
-          border-radius: 12px;
-          font: inherit;
-          font-size: 0.8rem;
-          font-weight: 800;
-          cursor: pointer;
-        }
-
-        .payroll-logo-save {
-          border: 1px solid #397e51;
-          background: #397e51;
-          color: #ffffff;
-        }
-
-        .payroll-logo-remove {
-          border: 1px solid #e0caca;
-          background: #fff8f8;
-          color: #9d3d3d;
-        }
-
-        .payroll-designer-open {
-          border: 1px solid #cbded0;
-          background: #ffffff;
-          color: #2b7346;
-        }
-
-        .payroll-brand-actions button:disabled {
-          cursor: not-allowed;
-          opacity: 0.5;
-        }
-
-        .payroll-brand-note {
-          margin-top: 16px;
-          padding: 12px 13px;
-          border: 1px solid #e0e9e2;
-          border-radius: 12px;
-          background: #fbfdfb;
-          color: #617168;
-          font-size: 0.76rem;
-          line-height: 1.55;
-        }
-
-        .payroll-brand-message {
-          display: flex;
-          align-items: flex-start;
-          gap: 9px;
-          margin-top: 14px;
-          padding: 11px 13px;
-          border-radius: 11px;
-          font-size: 0.8rem;
-          font-weight: 700;
-        }
-
-        .payroll-brand-message.success {
-          border: 1px solid #cee4d4;
-          background: #f1f8f3;
-          color: #2f6f45;
-        }
-
-        .payroll-brand-message.error {
-          border: 1px solid #efd1d1;
-          background: #fff6f6;
-          color: #983f3f;
-        }
-
-        .payroll-brand-loading,
-        .payroll-brand-permission {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 9px;
-          min-height: 130px;
-          margin-top: 20px;
-          padding: 20px;
-          border: 1px solid #e2ebe4;
-          border-radius: 16px;
-          background: #f8fbf9;
-          color: #687970;
-          font-size: 0.85rem;
-          font-weight: 700;
-          text-align: center;
         }
 
         .payroll-confirm-backdrop {
           position: fixed;
           inset: 0;
-          z-index: 10000;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 20px;
-          background: rgba(20, 34, 26, 0.42);
+          z-index: 9999;
+          display: grid;
+          place-items: center;
+          padding: 18px;
+          background: rgba(21, 21, 47, .46);
+          -webkit-backdrop-filter: blur(8px);
+          backdrop-filter: blur(8px);
+          animation: settings-fade .18s ease both;
         }
 
         .payroll-confirm-dialog {
-          width: min(100%, 430px);
-          padding: 22px;
-          border-radius: 18px;
-          background: #ffffff;
-          box-shadow: 0 24px 70px rgba(18, 43, 27, 0.22);
+          width: min(100%, 470px);
+          min-width: 0;
+          border: 1px solid rgba(255, 255, 255, .62);
+          border-radius: 24px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(201, 183, 255, .28), transparent 34%),
+            #fffdf8;
+          padding: clamp(21px, 3vw, 28px);
+          box-shadow: 0 34px 90px rgba(21, 21, 47, .28);
+          animation: settings-modal-in .22s ease both;
         }
 
         .payroll-confirm-dialog h3 {
           margin: 0;
-          color: #17251d;
-          font-size: 1.08rem;
-          font-weight: 850;
+          color: var(--st-ink);
+          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
+          font-size: clamp(27px, 3vw, 34px);
+          line-height: 1;
+          font-weight: 800;
+          letter-spacing: -.03em;
         }
 
         .payroll-confirm-dialog p {
-          margin: 9px 0 0;
-          color: #697970;
-          font-size: 0.85rem;
-          line-height: 1.6;
+          margin: 12px 0 0;
+          color: var(--st-muted);
+          font-size: 14px;
+          line-height: 1.65;
+          overflow-wrap: anywhere;
         }
 
         .payroll-confirm-actions {
           display: flex;
           justify-content: flex-end;
-          gap: 10px;
-          margin-top: 20px;
+          gap: 9px;
+          flex-wrap: wrap;
+          margin-top: 22px;
         }
 
         .payroll-confirm-actions button {
-          min-height: 40px;
-          padding: 0 15px;
-          border-radius: 11px;
-          font: inherit;
-          font-size: 0.8rem;
-          font-weight: 800;
+          min-height: 42px;
+          border-radius: 999px;
+          padding: 9px 16px;
+          font-size: 13px;
+          font-weight: 850;
           cursor: pointer;
+          transition: transform .18s ease, background .18s ease, border-color .18s ease;
         }
 
         .payroll-confirm-cancel {
-          border: 1px solid #d7e1da;
+          border: 1px solid rgba(21, 21, 47, .14);
           background: #ffffff;
-          color: #52645a;
+          color: var(--st-ink);
         }
 
         .payroll-confirm-remove {
-          border: 1px solid #9d3d3d;
-          background: #9d3d3d;
+          border: 1px solid #a74052;
+          background: #a74052;
           color: #ffffff;
+        }
+
+        .payroll-confirm-actions button:hover:not(:disabled) {
+          transform: translateY(-1px);
         }
 
         .payroll-confirm-actions button:disabled {
           cursor: not-allowed;
-          opacity: 0.55;
+          opacity: .5;
+          transform: none;
         }
 
-        @media (max-width: 880px) {
-          .payroll-branding-layout {
+        @keyframes settings-fade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes settings-modal-in {
+          from { opacity: 0; transform: translateY(10px) scale(.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        @media (min-width: 1181px) {
+          .platform-branding-panel:hover,
+          .payroll-branding-panel:hover,
+          .attendance-settings-panel:hover,
+          .tenant-branding-panel:hover {
+            border-color: rgba(101, 88, 217, .18);
+          }
+        }
+
+        @media (max-width: 1180px) {
+          .platform-branding-layout,
+          .payroll-branding-layout,
+          .tenant-branding-layout {
+            grid-template-columns: minmax(250px, .88fr) minmax(330px, 1.12fr);
+          }
+
+          .attendance-schedule-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .attendance-time-card:last-child {
+            grid-column: span 1;
+          }
+        }
+
+        @media (max-width: 980px) {
+          .settings-branding-page {
+            gap: 20px;
+            padding: 2px;
+          }
+
+          .platform-branding-panel,
+          .payroll-branding-panel,
+          .attendance-settings-panel,
+          .tenant-branding-panel {
+            padding: 22px;
+            border-radius: 28px;
+          }
+
+          .platform-branding-layout,
+          .payroll-branding-layout,
+          .tenant-branding-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .platform-brand-preview,
+          .payroll-brand-preview,
+          .tenant-brand-preview {
+            min-height: 260px;
+          }
+
+          .attendance-reason-editor-grid {
             grid-template-columns: 1fr;
           }
 
@@ -3214,145 +3001,401 @@ export default function Settings({ user, setPage }) {
 
           .payroll-organisation-select {
             width: 100%;
-            min-width: 0;
+            flex-basis: auto;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .platform-branding-heading,
+          .payroll-branding-heading,
+          .attendance-settings-heading,
+          .tenant-branding-heading {
+            gap: 14px;
           }
 
-          .platform-branding-layout,
-          .tenant-branding-layout,
-          .attendance-reason-editor-grid {
-            grid-template-columns: 1fr;
+          .platform-branding-heading h1,
+          .payroll-branding-heading h1,
+          .attendance-settings-heading h1,
+          .tenant-branding-heading h1 {
+            font-size: clamp(29px, 8vw, 38px);
+          }
+
+          .platform-branding-heading p,
+          .payroll-branding-heading p,
+          .attendance-settings-heading p,
+          .tenant-branding-heading p {
+            font-size: 14.5px;
           }
 
           .attendance-schedule-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+
+          .attendance-settings-meta {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .attendance-settings-source {
+            width: fit-content;
+          }
+
+          .platform-brand-actions,
+          .payroll-brand-actions,
+          .tenant-brand-actions,
+          .attendance-settings-actions {
+            align-items: stretch;
+          }
+
+          .platform-brand-actions button,
+          .payroll-brand-actions button,
+          .tenant-brand-actions button {
+            flex: 1 1 calc(50% - 8px);
+          }
+
+          .attendance-settings-actions button {
+            flex: 1 1 auto;
+          }
         }
 
         @media (max-width: 560px) {
-          .payroll-branding-panel {
-            padding: 20px 16px;
+          .settings-branding-page {
+            gap: 16px;
+          }
+
+          .platform-branding-panel,
+          .payroll-branding-panel,
+          .attendance-settings-panel,
+          .tenant-branding-panel {
+            padding: 17px;
+            border-radius: 22px;
+          }
+
+          .platform-branding-heading,
+          .payroll-branding-heading,
+          .attendance-settings-heading,
+          .tenant-branding-heading {
+            margin-bottom: 18px;
+          }
+
+          .platform-branding-refresh,
+          .payroll-branding-refresh,
+          .attendance-settings-refresh,
+          .tenant-branding-refresh {
+            width: 42px;
+            height: 42px;
+            flex-basis: 42px;
+            border-radius: 13px;
+          }
+
+          .platform-branding-kicker,
+          .payroll-branding-kicker,
+          .attendance-settings-kicker,
+          .tenant-branding-kicker {
+            font-size: 10.5px;
+            padding: 6px 9px;
+          }
+
+          .platform-branding-heading h1,
+          .payroll-branding-heading h1,
+          .attendance-settings-heading h1,
+          .tenant-branding-heading h1 {
+            font-size: 31px;
+          }
+
+          .platform-branding-heading p,
+          .payroll-branding-heading p,
+          .attendance-settings-heading p,
+          .tenant-branding-heading p {
+            margin-top: 9px;
+            font-size: 14px;
+            line-height: 1.58;
+          }
+
+          .platform-brand-preview,
+          .platform-brand-editor,
+          .payroll-brand-preview,
+          .payroll-brand-editor,
+          .tenant-brand-preview,
+          .tenant-brand-editor {
+            border-radius: 19px;
+            padding: 17px;
+          }
+
+          .platform-sidebar-preview {
+            grid-template-columns: 66px minmax(0, 1fr);
+            gap: 13px;
+            padding: 15px;
             border-radius: 18px;
           }
 
-          .payroll-branding-heading {
-            gap: 12px;
+          .platform-logo-preview {
+            width: 66px;
+            height: 66px;
+            border-radius: 18px;
+            font-size: 21px;
           }
 
-          .payroll-brand-preview,
-          .payroll-brand-editor {
-            padding: 18px 14px;
+          .platform-preview-copy h2 {
+            font-size: 27px;
+          }
+
+          .platform-tagline-meta {
+            flex-direction: column;
+            gap: 3px;
+          }
+
+          .platform-logo-dropzone,
+          .payroll-logo-dropzone,
+          .tenant-logo-dropzone {
+            grid-template-columns: 44px minmax(0, 1fr);
+            gap: 11px;
+            padding: 13px;
+            border-radius: 16px;
+          }
+
+          .platform-logo-dropzone-icon,
+          .payroll-logo-dropzone-icon,
+          .tenant-logo-dropzone-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 13px;
+          }
+
+          .platform-brand-actions button,
+          .payroll-brand-actions button,
+          .tenant-brand-actions button,
+          .attendance-settings-actions button {
+            flex: 1 1 100%;
+            width: 100%;
+          }
+
+          .payroll-brand-preview-card {
+            padding: 20px 15px;
+            border-radius: 18px;
           }
 
           .payroll-brand-status-grid {
             grid-template-columns: 1fr;
           }
 
-          .payroll-brand-actions button {
-            flex: 1 1 100%;
+          .payroll-logo-preview {
+            width: 78px;
+            height: 78px;
+            border-radius: 20px;
+            font-size: 21px;
           }
 
-          .platform-branding-panel,
-          .tenant-branding-panel,
-          .attendance-settings-panel {
-            border-radius: 22px;
-            padding: 18px;
+          .payroll-organisation-selector {
+            padding: 13px;
+            border-radius: 15px;
           }
 
           .attendance-schedule-grid {
             grid-template-columns: 1fr;
           }
 
-          .platform-branding-heading,
-          .tenant-branding-heading,
-          .attendance-settings-heading {
-            align-items: center;
+          .attendance-time-card p {
+            min-height: 0;
+          }
+
+          .attendance-time-preview {
+            justify-content: flex-start;
+            gap: 7px;
+          }
+
+          .attendance-time-preview > span:not(:last-child) {
+            overflow-wrap: anywhere;
           }
 
           .attendance-reason-list-card {
-            border-radius: 18px;
-            padding: 15px;
+            padding: 14px;
+            border-radius: 17px;
           }
 
           .attendance-reason-edit-row {
             grid-template-columns: 28px minmax(0, 1fr);
-          }
-
-          .attendance-reason-row-actions,
-          .attendance-reason-locked-label {
-            grid-column: 2;
-            justify-content: flex-end;
-          }
-
-          .attendance-settings-actions button {
-            flex: 1 1 100%;
-          }
-
-          .platform-brand-preview,
-          .platform-brand-editor {
-            border-radius: 20px;
-          }
-
-          .platform-brand-preview {
-            min-height: 250px;
-            padding: 20px 14px;
-          }
-
-          .platform-brand-editor {
-            padding: 20px 16px;
-          }
-
-          .platform-sidebar-preview {
-            grid-template-columns: 64px minmax(0, 1fr);
-            gap: 13px;
-            padding: 15px;
-          }
-
-          .platform-logo-preview {
-            width: 64px;
-            height: 64px;
-            border-radius: 18px;
-            font-size: 21px;
-          }
-
-          .platform-preview-copy h2 {
-            font-size: 23px;
-          }
-
-          .platform-brand-actions button {
-            flex: 1 1 100%;
-          }
-
-          .tenant-branding-panel {
-            border-radius: 22px;
-            padding: 18px;
-          }
-
-          .tenant-branding-heading {
             align-items: center;
           }
 
-          .tenant-brand-preview,
-          .tenant-brand-editor {
-            border-radius: 20px;
+          .attendance-reason-number {
+            width: 28px;
+            height: 28px;
           }
 
-          .tenant-brand-preview {
-            min-height: 260px;
-            padding: 22px 16px;
+          .attendance-reason-row-actions {
+            grid-column: 2;
+            justify-content: flex-end;
+            padding-top: 2px;
           }
 
-          .tenant-brand-editor {
-            padding: 20px 16px;
+          .attendance-reason-locked-label {
+            grid-column: 2;
+            justify-self: end;
           }
 
           .tenant-logo-preview {
-            width: 110px;
-            height: 110px;
-            border-radius: 28px;
+            width: 108px;
+            height: 108px;
+            border-radius: 27px;
           }
 
-          .tenant-brand-actions button {
-            flex: 1 1 100%;
+          .tenant-company-script {
+            font-size: 30px;
+          }
+
+          .payroll-confirm-actions {
+            flex-direction: column-reverse;
+          }
+
+          .payroll-confirm-actions button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .settings-branding-page {
+            padding: 0;
+          }
+
+          .platform-branding-panel,
+          .payroll-branding-panel,
+          .attendance-settings-panel,
+          .tenant-branding-panel {
+            padding: 15px;
+            border-radius: 19px;
+          }
+
+          .platform-branding-heading,
+          .payroll-branding-heading,
+          .attendance-settings-heading,
+          .tenant-branding-heading {
+            gap: 10px;
+          }
+
+          .platform-branding-heading h1,
+          .payroll-branding-heading h1,
+          .attendance-settings-heading h1,
+          .tenant-branding-heading h1 {
+            font-size: 28px;
+          }
+
+          .platform-branding-refresh,
+          .payroll-branding-refresh,
+          .attendance-settings-refresh,
+          .tenant-branding-refresh {
+            width: 40px;
+            height: 40px;
+            flex-basis: 40px;
+          }
+
+          .platform-sidebar-preview {
+            grid-template-columns: 58px minmax(0, 1fr);
+            gap: 10px;
+            padding: 12px;
+          }
+
+          .platform-logo-preview {
+            width: 58px;
+            height: 58px;
+            border-radius: 16px;
+            font-size: 19px;
+          }
+
+          .platform-preview-copy h2 {
+            font-size: 24px;
+          }
+
+          .platform-preview-copy p {
+            font-size: 12.5px;
+          }
+
+          .platform-brand-editor,
+          .payroll-brand-editor,
+          .tenant-brand-editor,
+          .platform-brand-preview,
+          .payroll-brand-preview,
+          .tenant-brand-preview {
+            padding: 14px;
+          }
+
+          .attendance-reason-list-heading {
+            grid-template-columns: 40px minmax(0, 1fr);
+            gap: 10px;
+          }
+
+          .attendance-reason-list-icon {
+            width: 40px;
+            height: 40px;
+          }
+
+          .attendance-reason-edit-row input {
+            font-size: 13px;
+          }
+
+          .attendance-reason-row-actions button {
+            width: 36px;
+            height: 36px;
+            flex-basis: 36px;
+          }
+
+          .tenant-logo-preview {
+            width: 96px;
+            height: 96px;
+            border-radius: 24px;
+          }
+
+          .payroll-confirm-backdrop {
+            padding: 12px;
+          }
+
+          .payroll-confirm-dialog {
+            padding: 20px 17px;
+            border-radius: 20px;
+          }
+        }
+
+        @media (hover: none), (pointer: coarse) {
+          .platform-branding-refresh,
+          .payroll-branding-refresh,
+          .attendance-settings-refresh,
+          .tenant-branding-refresh {
+            min-width: 44px;
+            min-height: 44px;
+          }
+
+          .attendance-reason-row-actions button {
+            min-width: 38px;
+            min-height: 38px;
+          }
+
+          .platform-brand-actions button,
+          .payroll-brand-actions button,
+          .tenant-brand-actions button,
+          .attendance-settings-actions button,
+          .attendance-reason-list-footer button {
+            min-height: 46px;
+          }
+
+          .platform-logo-dropzone:hover:not(.is-disabled),
+          .payroll-logo-dropzone:hover:not(.is-disabled),
+          .tenant-logo-dropzone:hover:not(.is-disabled),
+          .platform-branding-refresh:hover:not(:disabled),
+          .payroll-branding-refresh:hover:not(:disabled),
+          .attendance-settings-refresh:hover:not(:disabled),
+          .tenant-branding-refresh:hover:not(:disabled) {
+            transform: none;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .settings-branding-page *,
+          .settings-branding-page *::before,
+          .settings-branding-page *::after {
+            scroll-behavior: auto !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
           }
         }
       `}</style>
