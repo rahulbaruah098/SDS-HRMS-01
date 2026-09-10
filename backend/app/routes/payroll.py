@@ -127,6 +127,7 @@ from app.services.payroll_branding_service import (
     resolve_snapshot_for_employee,
 )
 from app.utils.auth import audit, roles_required
+from app.utils.notification_service import send_fcm_to_users as centralized_send_fcm_to_users
 from app.utils.serializers import clean_doc
 
 
@@ -2354,6 +2355,126 @@ def _insert_notifications(
         })
 
     db.notifications.insert_many(docs)
+
+    # -----------------------------------------------------------------------
+    # Device push delivery
+    #
+    # IMPORTANT:
+    # The existing MongoDB insert above is intentionally preserved unchanged.
+    # This additive block restores only the missing FCM delivery path, so
+    # payroll/reimbursement/loan Notification Centre behaviour remains intact.
+    # Push delivery failures must never roll back or break a completed payroll
+    # business action.
+    # -----------------------------------------------------------------------
+    for notification_doc in docs:
+        recipient_user_id = safe_str(notification_doc.get("user_id"))
+        notification_id = notification_doc.get("_id")
+
+        if not recipient_user_id:
+            continue
+
+        push_meta = _snapshot(dict(notification_doc.get("meta") or {}))
+        push_meta.setdefault("notification_type", notification_doc.get("notification_type") or "payroll")
+        push_meta.setdefault("priority", notification_doc.get("priority") or "high")
+        push_meta.setdefault("target", notification_doc.get("target") or target_page)
+        push_meta.setdefault("page", notification_doc.get("target") or target_page)
+        push_meta.setdefault("target_scope", notification_doc.get("target_scope") or "selected_users")
+        push_meta.setdefault("audience", notification_doc.get("audience") or "selected_users")
+        push_meta.setdefault("show_popup", notification_doc.get("show_popup", True))
+
+        source_id = safe_str(
+            push_meta.get("source_id")
+            or push_meta.get("run_id")
+            or push_meta.get("reimbursement_id")
+            or push_meta.get("loan_advance_id")
+            or push_meta.get("payslip_id")
+        )
+        if source_id:
+            push_meta.setdefault("source_id", source_id)
+
+        if notification_id:
+            push_meta["notification_id"] = str(notification_id)
+
+        attempt_at = _now()
+
+        try:
+            fcm_result = centralized_send_fcm_to_users(
+                db,
+                [recipient_user_id],
+                title,
+                body,
+                meta=push_meta,
+                tenant_id=tenant_id,
+            )
+        except Exception as exc:
+            # FCM is a delivery channel only. Never fail an already-completed
+            # payroll/loan/reimbursement action because push delivery failed.
+            current_app.logger.exception(
+                "Payroll notification FCM delivery failed user=%s title=%s error=%s",
+                recipient_user_id,
+                title,
+                exc,
+            )
+            fcm_result = {
+                "sent": 0,
+                "failed": 1,
+                "skipped": False,
+                "reason": "fcm_delivery_exception",
+                "token_count": 0,
+                "errors": [{
+                    "error": safe_str(exc),
+                    "type": exc.__class__.__name__,
+                }],
+            }
+
+        sent_count = int(fcm_result.get("sent") or 0)
+        failed_count = int(fcm_result.get("failed") or 0)
+        skipped = bool(fcm_result.get("skipped"))
+        reason = safe_str(fcm_result.get("reason"))
+
+        if sent_count > 0:
+            push_status = "sent"
+            delivery_status = "delivered_to_fcm"
+            failure_reason = ""
+        elif skipped:
+            push_status = f"skipped_{reason}" if reason else "skipped"
+            delivery_status = "persisted"
+            failure_reason = reason
+        elif failed_count > 0:
+            push_status = "failed"
+            delivery_status = "persisted"
+            errors = fcm_result.get("errors") or []
+            first_error = (
+                safe_str(errors[0].get("error"))
+                if isinstance(errors, list)
+                and errors
+                and isinstance(errors[0], dict)
+                else ""
+            )
+            failure_reason = first_error or reason or "fcm_send_failed"
+        else:
+            push_status = "not_sent"
+            delivery_status = "persisted"
+            failure_reason = reason
+
+        if notification_id:
+            db.notifications.update_one(
+                {"_id": notification_id},
+                {
+                    "$set": {
+                        "fcm_result": _snapshot(fcm_result),
+                        "fcm_sent_at": attempt_at,
+                        "delivery_status": delivery_status,
+                        "push_status": push_status,
+                        "push_attempt_count": 1,
+                        "last_push_attempt_at": attempt_at,
+                        "push_sent_at": attempt_at if sent_count > 0 else "",
+                        "failure_reason": failure_reason,
+                        "device_count": int(fcm_result.get("token_count") or 0),
+                        "updated_at": _now(),
+                    }
+                },
+            )
 
 
 # ----------------------------- Loans & advances ----------------------------
