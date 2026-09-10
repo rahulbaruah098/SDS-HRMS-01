@@ -32,6 +32,7 @@ from app.services.payroll_config_service import (
     delete_active_salary_structure_revision,
     delete_statutory_config_draft,
     delete_active_statutory_config_revision,
+    delete_superseded_statutory_config_revision,
     get_effective_salary_structure,
     get_effective_statutory_config,
     list_salary_structure_history,
@@ -864,6 +865,43 @@ def delete_active_statutory_config_route(statutory_config_id: str):
             "Active statutory configuration revision deleted successfully. "
             "You can now activate the corrected draft revision."
         ),
+        deleted_statutory_config_id=safe_str(config.get("_id")),
+        statutory_config=config,
+    )
+
+@payroll_bp.delete("/statutory-config/<statutory_config_id>/superseded")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_CONFIG_ROLES)
+def delete_superseded_statutory_config_route(statutory_config_id: str):
+    """Safely delete a superseded statutory revision used only for correction."""
+    db = get_db()
+    payload = _request_payload()
+    tenant_id = _requested_tenant_id(payload)
+
+    config = delete_superseded_statutory_config_revision(
+        db,
+        tenant_id=tenant_id,
+        statutory_config_id=statutory_config_id,
+        actor_id=_current_user_id(),
+    )
+
+    audit(
+        "payroll_statutory_config_superseded_revision_deleted",
+        "statutory_configs",
+        config.get("_id"),
+        {
+            "tenant_id": tenant_id,
+            "state_code": config.get("state_code"),
+            "version": config.get("version"),
+            "effective_from": config.get("effective_from"),
+            "effective_to": config.get("effective_to"),
+            "deletion_type": config.get("deletion_type")
+            or "superseded_revision_correction",
+        },
+    )
+
+    return _success(
+        "Superseded statutory configuration revision deleted successfully.",
         deleted_statutory_config_id=safe_str(config.get("_id")),
         statutory_config=config,
     )

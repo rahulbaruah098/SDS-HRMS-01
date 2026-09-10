@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable
 
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 
 
 class PayrollConfigError(Exception):
@@ -229,12 +230,58 @@ def end_of_previous_day(value: datetime) -> datetime:
 
 
 def next_revision_number(collection: Any, query: dict[str, Any]) -> int:
-    existing = collection.find_one(query, sort=[("version", -1)])
+    """Return the next monotonic revision number for a revision sequence.
+
+    Revision numbers are audit identifiers and must never be reused.  Soft-deleted
+    active/superseded revisions therefore still participate in version sequencing.
+    Callers may pass their normal live-record query (including is_deleted filters);
+    this helper deliberately removes only that lifecycle filter before finding the
+    highest version ever issued for the same revision sequence.
+    """
+    sequence_query = {
+        key: value
+        for key, value in (query or {}).items()
+        if key != "is_deleted"
+    }
+    existing = collection.find_one(sequence_query, sort=[("version", -1)])
 
     try:
         return int(existing.get("version", 0)) + 1 if existing else 1
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError):
         return 1
+
+
+def insert_revision_document(
+    collection: Any,
+    document: dict[str, Any],
+    sequence_query: dict[str, Any],
+    *,
+    conflict_code: str,
+    conflict_message: str,
+    max_attempts: int = 3,
+) -> Any:
+    """Insert a new revision without reusing an already-issued version number.
+
+    The retry also closes the small race where two users save a new draft at the
+    same time after both initially observe the same latest version.
+    """
+    attempts = max(1, int(max_attempts or 1))
+
+    for _ in range(attempts):
+        document["version"] = next_revision_number(collection, sequence_query)
+        try:
+            return collection.insert_one(document)
+        except DuplicateKeyError:
+            # Re-read the highest version and retry with the next value.  This also
+            # repairs legacy collisions caused by soft-deleted revisions being
+            # excluded from the previous sequence lookup.
+            continue
+
+    raise PayrollConfigError(
+        conflict_message,
+        status_code=409,
+        code=conflict_code,
+    )
 
 
 def ensure_unique_codes(items: Iterable[dict[str, Any]], field_name: str) -> None:
@@ -579,8 +626,16 @@ def save_salary_structure_draft(
         "employee_id": document["employee_id"],
         "is_deleted": {"$ne": True},
     }
-    document["version"] = next_revision_number(db.salary_structures, employee_query)
-    result = db.salary_structures.insert_one(document)
+    result = insert_revision_document(
+        db.salary_structures,
+        document,
+        employee_query,
+        conflict_code="salary_structure_revision_version_conflict",
+        conflict_message=(
+            "The salary structure revision could not be saved because its version "
+            "changed concurrently. Please refresh and try again."
+        ),
+    )
     return db.salary_structures.find_one({"_id": result.inserted_id})
 
 
@@ -1233,8 +1288,16 @@ def save_statutory_config_draft(
         "state_code": document["state_code"],
         "is_deleted": {"$ne": True},
     }
-    document["version"] = next_revision_number(db.statutory_configs, revision_query)
-    result = db.statutory_configs.insert_one(document)
+    result = insert_revision_document(
+        db.statutory_configs,
+        document,
+        revision_query,
+        conflict_code="statutory_config_revision_version_conflict",
+        conflict_message=(
+            "The statutory configuration revision could not be saved because its "
+            "version changed concurrently. Please refresh and try again."
+        ),
+    )
     return db.statutory_configs.find_one({"_id": result.inserted_id})
 
 
@@ -1400,6 +1463,110 @@ def delete_active_statutory_config_revision(
     )
 
     return active
+
+
+def delete_superseded_statutory_config_revision(
+    db: Any,
+    *,
+    tenant_id: str,
+    statutory_config_id: Any,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Soft-delete a superseded statutory revision used only for correction.
+
+    Superseded revisions are normally immutable history.  This correction action
+    is allowed only while no persisted payslip references the revision.  The
+    document is retained as deleted audit history and its version number remains
+    permanently reserved, preventing future duplicate-key/version reuse.
+    """
+    config_id = object_id_or_none(statutory_config_id)
+
+    if not config_id:
+        raise PayrollConfigError(
+            "Invalid statutory configuration id.",
+            code="invalid_statutory_config_id",
+        )
+
+    tenant_id = safe_str(tenant_id)
+    revision = db.statutory_configs.find_one({
+        "_id": config_id,
+        "tenant_id": tenant_id,
+        "status": "superseded",
+        "is_deleted": {"$ne": True},
+    })
+
+    if not revision:
+        raise PayrollConfigError(
+            "Superseded statutory configuration revision not found.",
+            status_code=404,
+            code="superseded_statutory_config_not_found",
+        )
+
+    # Do not allow correction deletion once historical payroll depends on the
+    # exact revision.  Accept either string or ObjectId storage for compatibility.
+    referenced_payslip = db.payslips.find_one({
+        "tenant_id": tenant_id,
+        "statutory_config_id": {"$in": [safe_str(config_id), config_id]},
+        "is_deleted": {"$ne": True},
+    })
+    if referenced_payslip:
+        raise PayrollConfigError(
+            (
+                "This superseded statutory revision cannot be deleted because "
+                "one or more payroll records already use it. Keep the historical "
+                "revision and create a new corrected revision instead."
+            ),
+            status_code=409,
+            code="statutory_config_superseded_revision_in_use",
+        )
+
+    current_time = now_utc()
+    result = db.statutory_configs.update_one(
+        {
+            "_id": config_id,
+            "tenant_id": tenant_id,
+            "status": "superseded",
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "is_deleted": True,
+                "deleted_by": safe_str(actor_id),
+                "deleted_at": current_time,
+                "deletion_type": "superseded_revision_correction",
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            }
+        },
+    )
+
+    if result.modified_count != 1:
+        raise PayrollConfigError(
+            "Superseded statutory revision could not be deleted because it changed.",
+            status_code=409,
+            code="statutory_config_superseded_delete_conflict",
+        )
+
+    # If an older revision points forward to the deleted revision, remove only
+    # that pointer.  We do not rewrite historical effective dates here.
+    db.statutory_configs.update_one(
+        {
+            "tenant_id": tenant_id,
+            "state_code": revision.get("state_code"),
+            "status": "superseded",
+            "superseded_by": safe_str(revision.get("_id")),
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$unset": {"superseded_by": ""},
+            "$set": {
+                "updated_by": safe_str(actor_id),
+                "updated_at": current_time,
+            },
+        },
+    )
+
+    return revision
 
 
 def activate_statutory_config_revision(

@@ -1501,6 +1501,48 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     }
   }
 
+  async function deleteSupersededStatutoryRevision(document = {}) {
+    const id = documentId(document);
+
+    if (!id || normalizeKey(document.status) !== 'superseded') {
+      alerts.warning('Only superseded statutory revisions can be deleted with this action.', 'Superseded Revision Required');
+      return;
+    }
+
+    const confirmed = await alerts.confirm(
+      `Delete superseded statutory revision ${safeText(document.state_code, 'ALL')} Version ${document.version || '—'}? This revision will remain reserved in audit history and cannot be reused. Deletion is blocked if payroll records already depend on it.`,
+      {
+        title: 'Delete Superseded Statutory Revision',
+        confirmText: 'Delete Superseded',
+      },
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingStatutoryId(id);
+      const data = await api(`/payroll/statutory-config/${encodeURIComponent(id)}/superseded`, {
+        method: 'DELETE',
+        body: JSON.stringify(tenantParams()),
+      });
+      await loadStatutoryHistory(safeText(document.state_code, stateCode));
+      await loadEmployeeStatutoryReadiness(selectedEmployee);
+      alerts.success(
+        data.message || 'Superseded statutory revision deleted successfully.',
+        'Superseded Revision Deleted',
+      );
+    } catch (error) {
+      alerts.error(
+        error.message || 'Unable to delete the superseded statutory revision.',
+        'Delete Superseded Revision Failed',
+      );
+    } finally {
+      setDeletingStatutoryId('');
+    }
+  }
+
   async function deleteStatutoryDraft(document = {}) {
     const id = documentId(document);
 
@@ -2681,6 +2723,29 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                           title="Delete an accidentally activated statutory revision"
                         >
                           {deletingStatutoryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Active
+                        </button>
+                      </>
+                    ) : normalizeKey(item.status) === 'superseded' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            startStatutoryRevision(statutoryFormFromDocument(item));
+                            scrollToConfigSection('statutory', 'payroll-statutory-rules');
+                          }}
+                          title="Create a new editable draft using this superseded revision as the base"
+                        >
+                          Edit / New Draft
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-light"
+                          disabled={deletingStatutoryId === documentId(item)}
+                          onClick={() => deleteSupersededStatutoryRevision(item)}
+                          title="Delete this superseded revision if no payroll history depends on it"
+                        >
+                          {deletingStatutoryId === documentId(item) ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} Delete Superseded
                         </button>
                       </>
                     ) : (
