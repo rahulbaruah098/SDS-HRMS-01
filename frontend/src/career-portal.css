@@ -1717,14 +1717,14 @@
   --yc-career-ease: cubic-bezier(.22, 1, .36, 1);
 
   position: relative;
-  isolation: isolate;
+ isolation: auto;
   display: flex;
   width: 100%;
   min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
   flex-direction: column;
-  overflow-x: clip;
+ overflow-x: visible;
   color: var(--yc-career-ink);
   background:
     radial-gradient(circle at 8% 4%, rgba(121, 219, 238, .14), transparent 24%),
@@ -4243,15 +4243,21 @@ body.yc-career-submission-open .yc-career-toast-region {
    ========================================================================== */
 
 .yc-career-topbar {
-  position: sticky;
-  z-index: 70;
+  position: fixed;
+  z-index: 1000;
   top: 0;
+  right: 0;
+  left: 0;
   width: 100%;
   min-width: 0;
   border-bottom: 1px solid rgba(171,181,211,.48);
-  background: rgba(252,253,255,.94);
+  background: rgba(252,253,255,.96);
   box-shadow: 0 12px 30px rgba(34,38,110,.075);
   backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+.yc-career-route-stage {
+  padding-top: 82px;
 }
 
 .yc-career-topbar-inner {
@@ -5175,7 +5181,7 @@ body,
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow-x: clip;
+  overflow-x: visible;
 }
 
 .yc-career-page img,
@@ -5418,6 +5424,10 @@ body,
     min-height: 72px;
   }
 
+   .yc-career-route-stage {
+    padding-top: 72px;
+  }
+
   .yc-career-powered {
     max-width: 46%;
   }
@@ -5442,6 +5452,10 @@ body,
     width: calc(100% - 24px) !important;
   }
 
+
+   .yc-career-route-stage {
+    padding-top: 68px;
+    
   .yc-career-topbar-inner {
     min-height: 68px;
     gap: 10px;
