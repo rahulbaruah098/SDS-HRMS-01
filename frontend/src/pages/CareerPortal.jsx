@@ -1711,7 +1711,7 @@ function CareerJobsView({ companyKey, jobSlug }) {
 
     return (
       <PublicLayout {...layoutProps}>
-        <main className="yc-career-main">
+        <main className="yc-career-main yc-career-editorial-main">
           <div className="yc-career-shell">
             <button
               type="button"
@@ -1724,140 +1724,156 @@ function CareerJobsView({ companyKey, jobSlug }) {
               All open positions
             </button>
 
-            <div className="yc-career-detail-layout">
-              <article className="yc-career-panel">
+            <header className="yc-career-editorial-detail-hero">
+              <div className="yc-career-editorial-detail-heading">
                 <span className="yc-career-eyebrow">
                   <BriefcaseBusiness size={14} />
                   Open position
                 </span>
                 <h1 className="yc-career-detail-title">{job.job_title}</h1>
-                <span className="yc-career-detail-ref">
-                  {job.reference_no || 'Vacancy reference not specified'}
-                </span>
-
-                <div style={{ marginTop: 18 }}>
-                  <JobMeta job={job} />
+                <div className="yc-career-editorial-detail-refline">
+                  <div>
+                    <span className="yc-career-editorial-detail-ref-label">Position ID</span>
+                    <span className="yc-career-detail-ref">
+                      {job.reference_no || 'Vacancy reference not specified'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="yc-career-editorial-detail-ref-label">Openings</span>
+                    <span className="yc-career-editorial-detail-ref-value">
+                      {job.vacancies || 1}{' '}
+                      {Number(job.vacancies || 1) === 1 ? 'position' : 'positions'}
+                    </span>
+                  </div>
                 </div>
+              </div>
 
-                <div className="yc-career-detail-content-grid">
-                  <section className="yc-career-section">
-                    <h3>About the role</h3>
+              <div className="yc-career-editorial-detail-meta">
+                <button
+                  type="button"
+                  className="yc-career-btn yc-career-btn-primary yc-career-editorial-hero-apply"
+                  onClick={() => {
+                    setShowApplication(true);
+                    showNotice(
+                      'info',
+                      'Application form opened',
+                      'Upload your resume first. Detected details will fill the form and remain editable.',
+                      5200,
+                    );
+                  }}
+                >
+                  Apply now
+                  <ArrowRight size={15} />
+                </button>
+              </div>
+            </header>
+
+            <div className="yc-career-editorial-detail-layout">
+              <article className="yc-career-editorial-detail-content">
+                <section className="yc-career-editorial-section">
+                  <div className="yc-career-editorial-section-index">01</div>
+                  <div>
+                    <h2>About the role</h2>
                     <p>
-                      {job.description ||
-                        'Role description is not available.'}
+                      {job.description || 'Role description is not available.'}
                     </p>
-                  </section>
+                  </div>
+                </section>
 
-                  {Array.isArray(job.responsibilities) &&
-                  job.responsibilities.length ? (
-                    <section className="yc-career-section">
-                      <h3>Responsibilities</h3>
+                {Array.isArray(job.responsibilities) &&
+                job.responsibilities.length ? (
+                  <section className="yc-career-editorial-section">
+                    <div className="yc-career-editorial-section-index">02</div>
+                    <div>
+                      <h2>Responsibilities</h2>
                       <ul className="yc-career-list">
                         {job.responsibilities.map((item) => (
                           <li key={String(item)}>{item}</li>
                         ))}
                       </ul>
-                    </section>
-                  ) : null}
+                    </div>
+                  </section>
+                ) : null}
 
-                  {job.qualification ? (
-                    <section className="yc-career-section">
-                      <h3>Qualification</h3>
+                {job.qualification ? (
+                  <section className="yc-career-editorial-section">
+                    <div className="yc-career-editorial-section-index">03</div>
+                    <div>
+                      <h2>Qualification</h2>
                       <p>{job.qualification}</p>
-                    </section>
-                  ) : null}
+                    </div>
+                  </section>
+                ) : null}
 
-                  {Array.isArray(job.required_skills) &&
-                  job.required_skills.length ? (
-                    <section className="yc-career-section">
-                      <h3>Required skills</h3>
-                      <div className="yc-career-chip-list">
-                        {job.required_skills.map((skill) => (
-                          <span
-                            className="yc-career-chip"
-                            key={String(skill)}
-                          >
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
+                {Array.isArray(job.required_skills) &&
+                job.required_skills.length ? (
+                  <section className="yc-career-editorial-section">
+                    <div className="yc-career-editorial-section-index">04</div>
+                    <div>
+                      <h2>Required skills</h2>
+                      <p className="yc-career-editorial-skills-text">
+                        {job.required_skills.join(', ')}
+                      </p>
+                    </div>
+                  </section>
+                ) : null}
               </article>
 
-              <aside className="yc-career-panel yc-career-panel-sticky">
-                <div className="yc-career-panel-head">
-                  <h3>Position summary</h3>
-                  <p>Review the main details before applying.</p>
-                </div>
-
-                <div className="yc-career-summary-content">
-                  <dl className="yc-career-summary-list">
-                    <div className="yc-career-summary-row">
-                      <dt>Department</dt>
-                      <dd>{job.department || 'Not specified'}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Employment</dt>
-                      <dd>{displayLabel(job.employment_type)}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Work mode</dt>
-                      <dd>{displayLabel(job.work_mode)}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Location</dt>
-                      <dd>{job.work_location || 'Not specified'}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Experience</dt>
-                      <dd>{job.required_experience || 'Not specified'}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Vacancies</dt>
-                      <dd>{job.vacancies || 1}</dd>
-                    </div>
-                    <div className="yc-career-summary-row">
-                      <dt>Apply by</dt>
-                      <dd>{dateText(job.closing_date)}</dd>
-                    </div>
-                    {job.salary_visible ? (
-                      <div className="yc-career-summary-row">
-                        <dt>Salary range</dt>
-                        <dd>
-                          {currencyText(job.salary_min, job.currency)} –{' '}
-                          {currencyText(job.salary_max, job.currency)}
-                        </dd>
-                      </div>
-                    ) : null}
-                  </dl>
-
-                  <button
-                    type="button"
-                    className="yc-career-btn yc-career-btn-primary yc-career-summary-apply"
-                    onClick={() => {
-                      setShowApplication(true);
-                      showNotice(
-                        'info',
-                        'Application form opened',
-                        'Upload your resume first. Detected details will fill the form and remain editable.',
-                        5200,
-                      );
-                    }}
-                  >
-                    Apply for this position
-                    <ArrowRight size={15} />
-                  </button>
-
-                  <div className="yc-career-alert yc-career-summary-alert">
-                    <ShieldCheck size={16} />
-                    <span>
-                      Resume extraction and the match score support human review.
-                      They do not automatically decide your application.
-                    </span>
+              <aside className="yc-career-editorial-apply-card">
+                <div className="yc-career-editorial-apply-head">
+                  <span className="yc-career-editorial-apply-icon">
+                    <BriefcaseBusiness size={17} />
+                  </span>
+                  <div>
+                    <h3>Apply for this position</h3>
+                    <p>Review the role summary, then continue to the application.</p>
                   </div>
                 </div>
+
+                <div className="yc-career-editorial-summary-label">Role summary</div>
+                <dl className="yc-career-editorial-summary-list">
+                  <div><dt>Department</dt><dd>{job.department || 'Not specified'}</dd></div>
+                  <div><dt>Employment</dt><dd>{displayLabel(job.employment_type)}</dd></div>
+                  <div><dt>Work mode</dt><dd>{displayLabel(job.work_mode)}</dd></div>
+                  <div><dt>Location</dt><dd>{job.work_location || 'Not specified'}</dd></div>
+                  <div><dt>Experience</dt><dd>{job.required_experience || 'Not specified'}</dd></div>
+                  <div><dt>Vacancies</dt><dd>{job.vacancies || 1}</dd></div>
+                  <div><dt>Apply by</dt><dd>{dateText(job.closing_date)}</dd></div>
+                  {job.salary_visible ? (
+                    <div>
+                      <dt>Salary range</dt>
+                      <dd>
+                        {currencyText(job.salary_min, job.currency)} –{' '}
+                        {currencyText(job.salary_max, job.currency)}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+
+                <div className="yc-career-alert yc-career-editorial-apply-alert">
+                  <ShieldCheck size={16} />
+                  <span>
+                    Resume extraction and the match score support human review.
+                    They do not automatically decide your application.
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className="yc-career-btn yc-career-btn-primary yc-career-btn-block yc-career-editorial-apply-bottom"
+                  onClick={() => {
+                    setShowApplication(true);
+                    showNotice(
+                      'info',
+                      'Application form opened',
+                      'Upload your resume first. Detected details will fill the form and remain editable.',
+                      5200,
+                    );
+                  }}
+                >
+                  Apply now
+                  <ArrowRight size={15} />
+                </button>
               </aside>
             </div>
           </div>
@@ -1898,177 +1914,150 @@ function CareerJobsView({ companyKey, jobSlug }) {
 
   return (
     <PublicLayout {...layoutProps}>
-      <main className="yc-career-main">
+      <main className="yc-career-main yc-career-editorial-main">
         <div className="yc-career-shell">
-          <section className="yc-career-hero">
-            <div className="yc-career-hero-content">
+          <section className="yc-career-editorial-hero">
+            <div className="yc-career-editorial-hero-copy">
               <span className="yc-career-eyebrow">
                 <span aria-hidden="true">👋</span>
                 Join our team
               </span>
-
-              <h1>
-                Build meaningful work with{' '}
-                {company.company_name || 'us'}.
-              </h1>
-
-              <p className="yc-career-hero-description">
-                Discover open opportunities, understand each role clearly and
-                apply directly to the team responsible for hiring.
+              <h1>Careers</h1>
+              <p className="yc-career-editorial-kicker">
+                Build meaningful work with {company.company_name || 'our organisation'}.
               </p>
+              <a
+                className="yc-career-editorial-jump"
+                href="#open-positions"
+              >
+                View current openings
+                <ArrowRight size={15} />
+              </a>
+            </div>
 
-              <div className="yc-career-hero-highlights">
-                <div className="yc-career-hero-highlight">
-                  <span aria-hidden="true">📄</span>
-                  <div>
-                    <strong>Resume-assisted application</strong>
-                    <p>
-                      Upload your resume to prefill editable application details.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="yc-career-hero-highlight">
-                  <span aria-hidden="true">✨</span>
-                  <div>
-                    <strong>Clear role-match preview</strong>
-                    <p>
-                      Review an explainable match summary before submitting.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="yc-career-hero-highlight">
-                  <span aria-hidden="true">🤝</span>
-                  <div>
-                    <strong>Human-led hiring</strong>
-                    <p>
-                      Every application and hiring decision is reviewed by people.
-                    </p>
-                  </div>
-                </div>
+            <div className="yc-career-editorial-mosaic" aria-label="Recruitment experience highlights">
+              <div className="yc-career-editorial-mosaic-card is-large">
+                <span aria-hidden="true">📄</span>
+                <strong>Resume-assisted application</strong>
+                <p>Upload your resume to prefill editable application details.</p>
+              </div>
+              <div className="yc-career-editorial-mosaic-card is-top">
+                <span aria-hidden="true">✨</span>
+                <strong>Clear role-match preview</strong>
+                <p>Review an explainable match summary before submitting.</p>
+              </div>
+              <div className="yc-career-editorial-mosaic-card is-bottom">
+                <span aria-hidden="true">🤝</span>
+                <strong>Human-led hiring</strong>
+                <p>Every application and hiring decision is reviewed by people.</p>
               </div>
             </div>
           </section>
 
-          <div
-            className="yc-career-toolbar"
-            id="open-positions"
-          >
-            <div className="yc-career-heading">
-              <h2>Open positions</h2>
-              <p>
-                {jobs.length}{' '}
-                {jobs.length === 1 ? 'vacancy' : 'vacancies'} currently
-                available
-              </p>
+          <section className="yc-career-editorial-openings" id="open-positions">
+            <div className="yc-career-editorial-openings-head">
+              <div className="yc-career-heading">
+                <span className="yc-career-editorial-section-label">Opportunities</span>
+                <h2>Current openings</h2>
+                <p>
+                  {jobs.length} {jobs.length === 1 ? 'vacancy' : 'vacancies'} currently available
+                </p>
+              </div>
             </div>
 
-            <form
-              className="yc-career-search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setAppliedSearch(search.trim());
-              }}
-            >
-              <Search size={16} />
-              <input
-                className="yc-career-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search role, department or skill"
-                aria-label="Search open positions"
+            {jobs.length ? (
+              <div className="yc-career-editorial-jobs-table">
+                <div className="yc-career-editorial-job-columns" aria-hidden="true">
+                  <span>Role</span>
+                  <span>Team</span>
+                  <span>Location</span>
+                  <span>Type</span>
+                  <span />
+                </div>
+
+                {jobs.map((item) => (
+                  <article
+                    className="yc-career-editorial-job-row"
+                    key={recordId(item) || item.public_slug}
+                  >
+                    <div className="yc-career-editorial-job-role">
+                      <div className="yc-career-editorial-job-title-line">
+                        <h3>{item.job_title}</h3>
+                      </div>
+
+                      <dl className="yc-career-editorial-role-facts">
+                        <div>
+                          <dt>Position ID</dt>
+                          <dd>{item.reference_no || 'Open position'}</dd>
+                        </div>
+                        <div>
+                          <dt>Openings</dt>
+                          <dd>
+                            {item.vacancies || 1}{' '}
+                            {Number(item.vacancies || 1) === 1 ? 'position' : 'positions'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Required skills</dt>
+                          <dd>
+                            {Array.isArray(item.required_skills) && item.required_skills.length
+                              ? item.required_skills.join(', ')
+                              : 'Not specified'}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+
+                    <div className="yc-career-editorial-job-cell" data-label="Team">
+                      {item.department || 'Not specified'}
+                    </div>
+                    <div className="yc-career-editorial-job-cell" data-label="Location">
+                      {item.work_location || 'Not specified'}
+                    </div>
+                    <div className="yc-career-editorial-job-cell" data-label="Type">
+                      {displayLabel(item.employment_type || 'permanent')}
+                      <small>{displayLabel(item.work_mode || 'office')}</small>
+                    </div>
+
+                    <div className="yc-career-editorial-job-action">
+                      <button
+                        type="button"
+                        className="yc-career-btn yc-career-btn-primary"
+                        onClick={() =>
+                          goTo(
+                            `${careerPath}/jobs/${encodeURIComponent(item.public_slug)}`,
+                            `Opening ${item.job_title}…`,
+                          )
+                        }
+                      >
+                        View role
+                        <ChevronRight size={14} />
+                      </button>
+                      <small>
+                        {item.closing_date
+                          ? `Apply by ${dateText(item.closing_date)}`
+                          : 'Applications open'}
+                      </small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="No open positions"
+                message={
+                  appliedSearch
+                    ? 'No current vacancy matches your search. Try another role, department or skill.'
+                    : 'There are no published vacancies at the moment. Please check this page again later.'
+                }
               />
-            </form>
-          </div>
-
-          {jobs.length ? (
-            <section className="yc-career-jobs">
-              {jobs.map((item) => (
-                <article
-                  className="yc-career-job-card"
-                  key={recordId(item) || item.public_slug}
-                >
-                  <div className="yc-career-job-head">
-                    <div>
-                      <h3>{item.job_title}</h3>
-                      <span className="yc-career-job-ref">
-                        {item.reference_no || 'Open position'}
-                      </span>
-                    </div>
-                    <span className="yc-career-badge">
-                      {item.vacancies || 1}{' '}
-                      {Number(item.vacancies || 1) === 1
-                        ? 'opening'
-                        : 'openings'}
-                    </span>
-                  </div>
-
-                  <JobMeta job={item} />
-
-                  <p>
-                    {item.description ||
-                      'Open this vacancy to review the complete role details.'}
-                  </p>
-
-                  {Array.isArray(item.required_skills) &&
-                  item.required_skills.length ? (
-                    <div className="yc-career-chip-list">
-                      {item.required_skills.slice(0, 5).map((skill) => (
-                        <span
-                          className="yc-career-chip"
-                          key={String(skill)}
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                      {item.required_skills.length > 5 ? (
-                        <span className="yc-career-chip">
-                          +{item.required_skills.length - 5}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <div className="yc-career-card-foot">
-                    <small>
-                      {item.closing_date
-                        ? `Apply by ${dateText(item.closing_date)}`
-                        : 'Applications currently open'}
-                    </small>
-                    <button
-                      type="button"
-                      className="yc-career-btn yc-career-btn-primary"
-                      onClick={() =>
-                        goTo(
-                          `${careerPath}/jobs/${encodeURIComponent(
-                            item.public_slug,
-                          )}`,
-                          `Opening ${item.job_title}…`,
-                        )
-                      }
-                    >
-                      View role
-                      <ChevronRight size={14} />
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </section>
-          ) : (
-            <EmptyState
-              title="No open positions"
-              message={
-                appliedSearch
-                  ? 'No current vacancy matches your search. Try another role, department or skill.'
-                  : 'There are no published vacancies at the moment. Please check this page again later.'
-              }
-            />
-          )}
+            )}
+          </section>
         </div>
       </main>
     </PublicLayout>
   );
+
 }
 
 function OfferResponseView({ responseToken }) {
