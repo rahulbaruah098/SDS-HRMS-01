@@ -52,6 +52,21 @@ REQUIRED_EARNING_COMPONENT_CODES = {
     "other_allowances",
 }
 
+SDS_SALARY_COMPONENT_RULES = {
+    "basic": {"percentage": 50.0, "base_component": "gross_salary"},
+    "hra": {"percentage": 50.0, "base_component": "basic"},
+    "medical_allowance": {"percentage": 40.0, "base_component": "basic"},
+    "other_allowances": {"percentage": 10.0, "base_component": "basic"},
+}
+
+SDS_PF_WAGE_COMPONENT_CODES = [
+    "basic",
+    "hra",
+    "medical_allowance",
+]
+SDS_PF_RATE_PERCENT = 12.0
+SDS_PF_WAGE_CEILING = 15000.0
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -428,6 +443,39 @@ def normalize_salary_component(
     return component
 
 
+
+def enforce_sds_salary_component_rules(
+    components: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Normalize the four SDS earnings to the approved Gross-based formula.
+
+    ``gross_salary`` is a calculation-engine base, not a stored salary component.
+    The calculation service derives Gross from configured CTC (including employer
+    PF) before resolving these four earnings.
+    """
+    by_code = {component["code"]: component for component in components}
+
+    for code, rule in SDS_SALARY_COMPONENT_RULES.items():
+        component = by_code.get(code)
+        if not component or not component.get("is_active"):
+            continue
+
+        component["category"] = "earning"
+        component["calculation_type"] = "percentage"
+        component.pop("amount", None)
+        component.pop("balance_of", None)
+        component.pop("minimum_amount", None)
+        component.pop("statutory_rule", None)
+        component["percentage"] = rule["percentage"]
+        component["base_component"] = rule["base_component"]
+        component["prorate_on_lwp"] = True
+        component["include_in_gross"] = True
+        component["include_in_ctc"] = True
+        component["show_in_earnings"] = True
+        component["show_in_deductions"] = False
+
+    return components
+
 def build_salary_structure_document(
     payload: dict[str, Any],
     *,
@@ -505,6 +553,7 @@ def build_salary_structure_document(
         for index, component in enumerate(raw_components)
     ]
     ensure_unique_codes(components, "salary component")
+    components = enforce_sds_salary_component_rules(components)
 
     active_earning_codes = {
         component["code"]
@@ -994,6 +1043,13 @@ def normalize_professional_tax_slabs(raw_slabs: Any) -> list[dict[str, Any]]:
 
 
 def normalize_pf_config(raw_pf: Any) -> dict[str, Any]:
+    """Normalize PF using the final SDS statutory rule.
+
+    PF remains optional, but whenever enabled its calculation contract is fixed:
+    Basic + HRA + Medical Allowance, 12% employee, 12% employer, capped at
+    Rs. 15,000 PF wage. Legacy higher-wage flags are retained in the document for
+    schema compatibility but are forced off so they cannot bypass the SDS ceiling.
+    """
     raw_pf = raw_pf or {}
 
     if not isinstance(raw_pf, dict):
@@ -1003,38 +1059,13 @@ def normalize_pf_config(raw_pf: Any) -> dict[str, Any]:
 
     return {
         "enabled": enabled,
-        "employee_rate_percent": percentage_value(
-            raw_pf.get("employee_rate_percent"),
-            "pf.employee_rate_percent",
-            required=enabled,
-        ),
-        "employer_rate_percent": percentage_value(
-            raw_pf.get("employer_rate_percent"),
-            "pf.employer_rate_percent",
-            required=enabled,
-        ),
-        "wage_ceiling": money_value(
-            raw_pf.get("wage_ceiling"),
-            "pf.wage_ceiling",
-            required=enabled,
-        ),
-        "wage_base_component_codes": [
-            normalize_code(value)
-            for value in raw_pf.get("wage_base_component_codes", ["basic"])
-            if normalize_code(value)
-        ],
-        "allow_higher_wage_contribution": boolean_value(
-            raw_pf.get("allow_higher_wage_contribution"),
-            default=False,
-        ),
-        "employee_higher_wage_enabled": boolean_value(
-            raw_pf.get("employee_higher_wage_enabled"),
-            default=False,
-        ),
-        "employer_higher_wage_enabled": boolean_value(
-            raw_pf.get("employer_higher_wage_enabled"),
-            default=False,
-        ),
+        "employee_rate_percent": SDS_PF_RATE_PERCENT if enabled else None,
+        "employer_rate_percent": SDS_PF_RATE_PERCENT if enabled else None,
+        "wage_ceiling": SDS_PF_WAGE_CEILING if enabled else None,
+        "wage_base_component_codes": list(SDS_PF_WAGE_COMPONENT_CODES),
+        "allow_higher_wage_contribution": False,
+        "employee_higher_wage_enabled": False,
+        "employer_higher_wage_enabled": False,
         "show_employer_pf_as_earning": boolean_value(
             raw_pf.get("show_employer_pf_as_earning"),
             default=True,
@@ -1044,7 +1075,6 @@ def normalize_pf_config(raw_pf: Any) -> dict[str, Any]:
             default=True,
         ),
     }
-
 
 def normalize_esi_config(raw_esi: Any) -> dict[str, Any]:
     raw_esi = raw_esi or {}
@@ -1218,9 +1248,8 @@ def build_statutory_config_document(
         "pf": normalize_pf_config(payload.get("pf", existing.get("pf", {}))),
         "professional_tax": {
             "enabled": pt_enabled,
-            "basis": normalize_code(
-                professional_tax_raw.get("basis") or "gross_salary"
-            ),
+            # SDS/Assam Professional Tax is always based on Gross Salary.
+            "basis": "gross_salary",
             "slabs": pt_slabs,
         },
         "esi": normalize_esi_config(payload.get("esi", existing.get("esi", {}))),

@@ -36,6 +36,20 @@ const REQUIRED_EARNING_CODES = new Set([
   'other_allowances',
 ]);
 
+const SDS_SALARY_COMPONENT_RULES = {
+  basic: { percentage: 50, base_component: 'gross_salary' },
+  hra: { percentage: 50, base_component: 'basic' },
+  medical_allowance: { percentage: 40, base_component: 'basic' },
+  other_allowances: { percentage: 10, base_component: 'basic' },
+};
+
+const SDS_PF_RULE = {
+  employee_rate_percent: 12,
+  employer_rate_percent: 12,
+  wage_ceiling: 15000,
+  wage_base_component_codes: 'basic,hra,medical_allowance',
+};
+
 const COMPONENT_CATEGORIES = [
   ['earning', 'Earning'],
   ['employer_contribution', 'Employer Contribution'],
@@ -198,88 +212,60 @@ function documentId(document = {}) {
   return safeText(document._id || document.id);
 }
 
+function applySdsSalaryComponentRule(component = {}) {
+  const code = normalizeKey(component.code);
+  const rule = SDS_SALARY_COMPONENT_RULES[code];
+
+  if (!rule) {
+    return component;
+  }
+
+  return {
+    ...component,
+    code,
+    category: 'earning',
+    calculation_type: 'percentage',
+    amount: '',
+    percentage: rule.percentage,
+    base_component: rule.base_component,
+    balance_of: 'monthly_ctc',
+    minimum_amount: '0',
+    statutory_rule: '',
+    prorate_on_lwp: true,
+    include_in_gross: true,
+    include_in_ctc: true,
+    show_in_earnings: true,
+    show_in_deductions: false,
+    is_active: true,
+  };
+}
+
 function defaultSalaryComponents() {
   return [
-    {
+    applySdsSalaryComponentRule({
       editor_id: nextComponentEditorId(),
       code: 'basic',
       label: 'Basic',
-      category: 'earning',
-      calculation_type: 'fixed',
-      amount: '',
-      percentage: '',
-      base_component: 'monthly_ctc',
-      balance_of: 'monthly_ctc',
-      minimum_amount: '0',
-      statutory_rule: '',
-      prorate_on_lwp: true,
-      include_in_gross: true,
-      include_in_ctc: true,
-      show_in_earnings: true,
-      show_in_deductions: false,
       taxable: true,
-      is_active: true,
-    },
-    {
+    }),
+    applySdsSalaryComponentRule({
       editor_id: nextComponentEditorId(),
       code: 'hra',
       label: 'HRA',
-      category: 'earning',
-      calculation_type: 'fixed',
-      amount: '',
-      percentage: '',
-      base_component: 'basic',
-      balance_of: 'monthly_ctc',
-      minimum_amount: '0',
-      statutory_rule: '',
-      prorate_on_lwp: true,
-      include_in_gross: true,
-      include_in_ctc: true,
-      show_in_earnings: true,
-      show_in_deductions: false,
       taxable: true,
-      is_active: true,
-    },
-    {
+    }),
+    applySdsSalaryComponentRule({
       editor_id: nextComponentEditorId(),
       code: 'medical_allowance',
       label: 'Medical Allowance',
-      category: 'earning',
-      calculation_type: 'fixed',
-      amount: '',
-      percentage: '',
-      base_component: 'monthly_ctc',
-      balance_of: 'monthly_ctc',
-      minimum_amount: '0',
-      statutory_rule: '',
-      prorate_on_lwp: true,
-      include_in_gross: true,
-      include_in_ctc: true,
-      show_in_earnings: true,
-      show_in_deductions: false,
       taxable: true,
-      is_active: true,
-    },
-    {
+    }),
+    applySdsSalaryComponentRule({
       editor_id: nextComponentEditorId(),
       code: 'other_allowances',
       label: 'Other Allowances',
-      category: 'earning',
-      calculation_type: 'balancing',
-      amount: '',
-      percentage: '',
-      base_component: 'monthly_ctc',
-      balance_of: 'monthly_ctc',
-      minimum_amount: '0',
-      statutory_rule: '',
-      prorate_on_lwp: true,
-      include_in_gross: true,
-      include_in_ctc: true,
-      show_in_earnings: true,
-      show_in_deductions: false,
       taxable: true,
-      is_active: true,
-    },
+    }),
   ];
 }
 
@@ -303,7 +289,7 @@ function emptySalaryForm() {
 }
 
 function componentFromDocument(component = {}) {
-  return {
+  return applySdsSalaryComponentRule({
     editor_id: safeText(component.editor_id) || nextComponentEditorId(),
     code: safeText(component.code),
     label: safeText(component.label),
@@ -322,7 +308,7 @@ function componentFromDocument(component = {}) {
     show_in_deductions: component.show_in_deductions === true,
     taxable: component.taxable !== false,
     is_active: component.is_active !== false,
-  };
+  });
 }
 
 function salaryFormFromDocument(document = {}) {
@@ -359,10 +345,10 @@ function emptyStatutoryForm(stateCode = 'ALL') {
     notes: '',
     pf: {
       enabled: false,
-      employee_rate_percent: '',
-      employer_rate_percent: '',
-      wage_ceiling: '',
-      wage_base_component_codes: 'basic',
+      employee_rate_percent: SDS_PF_RULE.employee_rate_percent,
+      employer_rate_percent: SDS_PF_RULE.employer_rate_percent,
+      wage_ceiling: SDS_PF_RULE.wage_ceiling,
+      wage_base_component_codes: SDS_PF_RULE.wage_base_component_codes,
       allow_higher_wage_contribution: false,
       employee_higher_wage_enabled: false,
       employer_higher_wage_enabled: false,
@@ -412,15 +398,13 @@ function statutoryFormFromDocument(document = {}) {
     notes: safeText(document.notes),
     pf: {
       enabled: pf.enabled === true,
-      employee_rate_percent: pf.employee_rate_percent ?? '',
-      employer_rate_percent: pf.employer_rate_percent ?? '',
-      wage_ceiling: pf.wage_ceiling ?? '',
-      wage_base_component_codes: Array.isArray(pf.wage_base_component_codes)
-        ? pf.wage_base_component_codes.join(',')
-        : safeText(pf.wage_base_component_codes, 'basic'),
-      allow_higher_wage_contribution: pf.allow_higher_wage_contribution === true,
-      employee_higher_wage_enabled: pf.employee_higher_wage_enabled === true,
-      employer_higher_wage_enabled: pf.employer_higher_wage_enabled === true,
+      employee_rate_percent: SDS_PF_RULE.employee_rate_percent,
+      employer_rate_percent: SDS_PF_RULE.employer_rate_percent,
+      wage_ceiling: SDS_PF_RULE.wage_ceiling,
+      wage_base_component_codes: SDS_PF_RULE.wage_base_component_codes,
+      allow_higher_wage_contribution: false,
+      employee_higher_wage_enabled: false,
+      employer_higher_wage_enabled: false,
       show_employer_pf_as_earning: pf.show_employer_pf_as_earning !== false,
       show_employer_pf_as_deduction: pf.show_employer_pf_as_deduction !== false,
     },
@@ -697,14 +681,6 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
 
     if (statutoryForm.effective_to && statutoryForm.effective_from && statutoryForm.effective_to < statutoryForm.effective_from) {
       issues.push({ location: 'Step 4 · Statutory rules → Effective to', message: 'Effective-to date cannot be earlier than effective-from.' });
-    }
-
-    if (statutoryForm.pf.enabled) {
-      [['employee_rate_percent', 'Employee PF rate'], ['employer_rate_percent', 'Employer PF rate'], ['wage_ceiling', 'PF wage ceiling']].forEach(([field, label]) => {
-        if (statutoryForm.pf[field] === '') {
-          issues.push({ location: `Step 4 · Statutory rules → Provident Fund → ${label}`, message: `${label} is required while PF is enabled.` });
-        }
-      });
     }
 
     if (statutoryForm.esi.enabled) {
@@ -1003,9 +979,36 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
   function updateComponent(index, field, value) {
     setSalaryForm((current) => ({
       ...current,
-      components: current.components.map((component, componentIndex) =>
-        componentIndex === index ? { ...component, [field]: value } : component,
-      ),
+      components: current.components.map((component, componentIndex) => {
+        if (componentIndex !== index) {
+          return component;
+        }
+
+        const code = normalizeKey(component.code);
+        const protectedFields = new Set([
+          'code',
+          'category',
+          'calculation_type',
+          'amount',
+          'percentage',
+          'base_component',
+          'balance_of',
+          'minimum_amount',
+          'statutory_rule',
+          'prorate_on_lwp',
+          'include_in_gross',
+          'include_in_ctc',
+          'show_in_earnings',
+          'show_in_deductions',
+          'is_active',
+        ]);
+
+        if (REQUIRED_EARNING_CODES.has(code) && protectedFields.has(field)) {
+          return applySdsSalaryComponentRule(component);
+        }
+
+        return { ...component, [field]: value };
+      }),
     }));
   }
 
@@ -1081,26 +1084,30 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       annual_ctc: numberOrBlank(salaryForm.annual_ctc),
       currency: salaryForm.currency,
       notes: salaryForm.notes,
-      components: salaryForm.components.map((component, index) => ({
-        code: normalizeKey(component.code),
-        label: component.label,
-        category: component.category,
-        calculation_type: component.calculation_type,
-        amount: numberOrBlank(component.amount),
-        percentage: numberOrBlank(component.percentage),
-        base_component: normalizeKey(component.base_component),
-        balance_of: normalizeKey(component.balance_of),
-        minimum_amount: numberOrBlank(component.minimum_amount || 0),
-        statutory_rule: normalizeKey(component.statutory_rule),
-        prorate_on_lwp: component.prorate_on_lwp,
-        include_in_gross: component.include_in_gross,
-        include_in_ctc: component.include_in_ctc,
-        show_in_earnings: component.show_in_earnings,
-        show_in_deductions: component.show_in_deductions,
-        taxable: component.taxable,
-        is_active: component.is_active,
-        display_order: index + 1,
-      })),
+      components: salaryForm.components.map((component, index) => {
+        const normalized = applySdsSalaryComponentRule(component);
+
+        return {
+          code: normalizeKey(normalized.code),
+          label: normalized.label,
+          category: normalized.category,
+          calculation_type: normalized.calculation_type,
+          amount: numberOrBlank(normalized.amount),
+          percentage: numberOrBlank(normalized.percentage),
+          base_component: normalizeKey(normalized.base_component),
+          balance_of: normalizeKey(normalized.balance_of),
+          minimum_amount: numberOrBlank(normalized.minimum_amount || 0),
+          statutory_rule: normalizeKey(normalized.statutory_rule),
+          prorate_on_lwp: normalized.prorate_on_lwp,
+          include_in_gross: normalized.include_in_gross,
+          include_in_ctc: normalized.include_in_ctc,
+          show_in_earnings: normalized.show_in_earnings,
+          show_in_deductions: normalized.show_in_deductions,
+          taxable: normalized.taxable,
+          is_active: normalized.is_active,
+          display_order: index + 1,
+        };
+      }),
     };
   }
 
@@ -1253,11 +1260,32 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
   }
 
   function updateStatutorySection(section, field, value) {
+    const protectedPfFields = new Set([
+      'employee_rate_percent',
+      'employer_rate_percent',
+      'wage_ceiling',
+      'wage_base_component_codes',
+      'allow_higher_wage_contribution',
+      'employee_higher_wage_enabled',
+      'employer_higher_wage_enabled',
+    ]);
+
     setStatutoryForm((current) => ({
       ...current,
       [section]: {
         ...current[section],
-        [field]: value,
+        ...(section === 'pf' && protectedPfFields.has(field) ? {} : { [field]: value }),
+        ...(section === 'pf'
+          ? {
+              employee_rate_percent: SDS_PF_RULE.employee_rate_percent,
+              employer_rate_percent: SDS_PF_RULE.employer_rate_percent,
+              wage_ceiling: SDS_PF_RULE.wage_ceiling,
+              wage_base_component_codes: SDS_PF_RULE.wage_base_component_codes,
+              allow_higher_wage_contribution: false,
+              employee_higher_wage_enabled: false,
+              employer_higher_wage_enabled: false,
+            }
+          : {}),
       },
     }));
   }
@@ -1350,16 +1378,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       notes: statutoryForm.notes,
       pf: {
         ...statutoryForm.pf,
-        employee_rate_percent: numberOrBlank(statutoryForm.pf.employee_rate_percent),
-        employer_rate_percent: numberOrBlank(statutoryForm.pf.employer_rate_percent),
-        wage_ceiling: numberOrBlank(statutoryForm.pf.wage_ceiling),
+        employee_rate_percent: SDS_PF_RULE.employee_rate_percent,
+        employer_rate_percent: SDS_PF_RULE.employer_rate_percent,
+        wage_ceiling: SDS_PF_RULE.wage_ceiling,
         wage_base_component_codes: listFromCommaText(
-          statutoryForm.pf.wage_base_component_codes,
+          SDS_PF_RULE.wage_base_component_codes,
         ),
+        allow_higher_wage_contribution: false,
+        employee_higher_wage_enabled: false,
+        employer_higher_wage_enabled: false,
       },
       professional_tax: {
         enabled: statutoryForm.professional_tax.enabled,
-        basis: normalizeKey(statutoryForm.professional_tax.basis),
+        basis: 'gross_salary',
         slabs: statutoryForm.professional_tax.slabs.map((slab) => ({
           minimum_amount: numberOrBlank(slab.minimum_amount),
           maximum_amount: slab.maximum_amount === ''
@@ -1991,7 +2022,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                     <div>
                       <span className="payroll-config-kicker">Dynamic breakup</span>
                       <h2>Salary components</h2>
-                      <p>No percentage is assumed. Enter fixed values or define percentage bases explicitly.</p>
+                      <p>SDS formula: Basic 50% of Gross, HRA 50% of Basic, Medical 40% of Basic, Other Allowance 10% of Basic.</p>
                     </div>
                     <button type="button" className="secondary" onClick={addComponent}>
                       <Plus size={16} /> Add Component
@@ -2001,6 +2032,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                   <div className="payroll-component-list">
                     {salaryForm.components.map((component, index) => {
                       const expanded = expandedComponent === index;
+                      const isSdsRequiredComponent = REQUIRED_EARNING_CODES.has(normalizeKey(component.code));
                       return (
                         <article className="payroll-component-row" key={component.editor_id || `salary-component-${index}`}>
                           <button
@@ -2036,6 +2068,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                     placeholder="component_code"
                                     autoComplete="off"
                                     spellCheck={false}
+                                    disabled={isSdsRequiredComponent}
                                   />
                                 </label>
                                 <label>
@@ -2051,6 +2084,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                   <select
                                     value={component.category}
                                     onChange={(event) => updateComponent(index, 'category', event.target.value)}
+                                    disabled={isSdsRequiredComponent}
                                   >
                                     {COMPONENT_CATEGORIES.map(([value, label]) => (
                                       <option key={value} value={value}>{label}</option>
@@ -2064,6 +2098,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                     onChange={(event) =>
                                       updateComponent(index, 'calculation_type', event.target.value)
                                     }
+                                    disabled={isSdsRequiredComponent}
                                   >
                                     {CALCULATION_TYPES.map(([value, label]) => (
                                       <option key={value} value={value}>{label}</option>
@@ -2097,6 +2132,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                         onChange={(event) =>
                                           updateComponent(index, 'percentage', event.target.value)
                                         }
+                                        disabled={isSdsRequiredComponent}
                                       />
                                     </label>
                                     <label>
@@ -2106,7 +2142,8 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                         onChange={(event) =>
                                           updateComponent(index, 'base_component', event.target.value)
                                         }
-                                        placeholder="basic or monthly_ctc"
+                                        placeholder="basic or gross_salary"
+                                        disabled={isSdsRequiredComponent}
                                       />
                                     </label>
                                   </>
@@ -2169,11 +2206,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                                       onChange={(event) =>
                                         updateComponent(index, field, event.target.checked)
                                       }
+                                      disabled={isSdsRequiredComponent && field !== 'taxable'}
                                     />
                                     {label}
                                   </label>
                                 ))}
                               </div>
+
+                              {isSdsRequiredComponent ? (
+                                <div className="payroll-config-notice">
+                                  <ShieldCheck size={16} />
+                                  This required SDS earning follows the approved payroll formula and is locked here.
+                                </div>
+                              ) : null}
 
                               <div className="payroll-component-actions">
                                 <button
@@ -2447,27 +2492,29 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
               <div className="payroll-config-form-grid">
                 <label>
                   Employee rate (%)
-                  <input type="number" min="0" max="100" step="0.0001" value={statutoryForm.pf.employee_rate_percent} onChange={(event) => updateStatutorySection('pf', 'employee_rate_percent', event.target.value)} />
+                  <input type="number" value={SDS_PF_RULE.employee_rate_percent} disabled />
                 </label>
                 <label>
                   Employer rate (%)
-                  <input type="number" min="0" max="100" step="0.0001" value={statutoryForm.pf.employer_rate_percent} onChange={(event) => updateStatutorySection('pf', 'employer_rate_percent', event.target.value)} />
+                  <input type="number" value={SDS_PF_RULE.employer_rate_percent} disabled />
                 </label>
                 <label>
                   Wage ceiling
-                  <input type="number" min="0" step="0.01" value={statutoryForm.pf.wage_ceiling} onChange={(event) => updateStatutorySection('pf', 'wage_ceiling', event.target.value)} />
+                  <input type="number" value={SDS_PF_RULE.wage_ceiling} disabled />
                 </label>
                 <label>
                   Wage-base component codes
-                  <input value={statutoryForm.pf.wage_base_component_codes} onChange={(event) => updateStatutorySection('pf', 'wage_base_component_codes', event.target.value)} placeholder="basic,dearness_allowance" />
+                  <input value={SDS_PF_RULE.wage_base_component_codes} disabled />
                 </label>
+              </div>
+
+              <div className="payroll-config-notice">
+                <ShieldCheck size={16} />
+                SDS PF is fixed at 12% employee + 12% employer on Basic + HRA + Medical Allowance, capped at ₹15,000 PF wage. Higher-wage override is not permitted.
               </div>
 
               <div className="payroll-config-check-grid">
                 {[
-                  ['allow_higher_wage_contribution', 'Allow higher-wage contribution'],
-                  ['employee_higher_wage_enabled', 'Employee higher-wage enabled'],
-                  ['employer_higher_wage_enabled', 'Employer higher-wage enabled'],
                   ['show_employer_pf_as_earning', 'Show employer PF in earnings'],
                   ['show_employer_pf_as_deduction', 'Show employer PF in deductions'],
                 ].map(([field, label]) => (

@@ -30,6 +30,23 @@ HUNDRED = Decimal("100")
 MONEY_QUANTUM = Decimal("0.01")
 RUPEE_QUANTUM = Decimal("1")
 
+SDS_GROSS_COMPONENT_CODES = (
+    "basic",
+    "hra",
+    "medical_allowance",
+    "other_allowances",
+)
+SDS_PF_WAGE_COMPONENT_CODES = (
+    "basic",
+    "hra",
+    "medical_allowance",
+)
+SDS_PF_RATE_PERCENT = Decimal("12")
+SDS_PF_WAGE_CEILING = Decimal("15000")
+SDS_PF_WAGE_GROSS_RATIO = Decimal("0.95")
+SDS_UNCAPPED_EMPLOYER_PF_GROSS_RATIO = Decimal("0.114")
+SDS_CAPPED_PF_AMOUNT = Decimal("1800")
+
 SUPPORTED_ROUNDING_MODES = {
     "nearest_rupee",
     "two_decimals",
@@ -433,6 +450,9 @@ def _component_metadata(
 def _resolve_non_statutory_components(
     salary_structure: Mapping[str, Any],
     components: Sequence[Mapping[str, Any]],
+    *,
+    preset_amounts: Mapping[str, Decimal] | None = None,
+    gross_salary: Decimal | None = None,
 ) -> dict[str, Decimal]:
     monthly_ctc = _decimal(
         salary_structure.get("monthly_ctc", salary_structure.get("monthlyCtc")),
@@ -449,7 +469,10 @@ def _resolve_non_statutory_components(
         annual_ctc = monthly_ctc * Decimal("12")
 
     by_code = {component["code"]: component for component in components}
-    resolved: dict[str, Decimal] = {}
+    resolved: dict[str, Decimal] = {
+        _normalize_code(code): Decimal(str(value))
+        for code, value in (preset_amounts or {}).items()
+    }
     resolving: set[str] = set()
 
     def resolve(code: str) -> Decimal:
@@ -458,6 +481,8 @@ def _resolve_non_statutory_components(
             return monthly_ctc
         if normalized_code == "annual_ctc":
             return annual_ctc
+        if normalized_code in {"gross", "gross_salary"} and gross_salary is not None:
+            return gross_salary
         if normalized_code in resolved:
             return resolved[normalized_code]
         if normalized_code in resolving:
@@ -523,6 +548,43 @@ def _resolve_non_statutory_components(
     return resolved
 
 
+def _sds_contractual_salary_amounts(
+    monthly_ctc: Decimal,
+    *,
+    pf_enabled: bool,
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """Derive SDS contractual Gross and the four prescribed earning components.
+
+    Monthly CTC includes employer PF. When PF is enabled, first test the capped
+    branch (Gross = CTC - 1,800). If that Gross would leave PF wage below
+    15,000, solve the uncapped equation CTC = Gross * 1.114 instead.
+    """
+
+    if pf_enabled:
+        capped_gross = monthly_ctc - SDS_CAPPED_PF_AMOUNT
+        capped_pf_wage = capped_gross * SDS_PF_WAGE_GROSS_RATIO
+        if capped_gross >= ZERO and capped_pf_wage >= SDS_PF_WAGE_CEILING:
+            gross_salary = capped_gross
+        else:
+            gross_salary = monthly_ctc / (
+                ONE + SDS_UNCAPPED_EMPLOYER_PF_GROSS_RATIO
+            )
+    else:
+        gross_salary = monthly_ctc
+
+    basic = gross_salary * Decimal("0.50")
+    hra = basic * Decimal("0.50")
+    medical_allowance = basic * Decimal("0.40")
+    other_allowances = basic * Decimal("0.10")
+
+    return gross_salary, {
+        "basic": basic,
+        "hra": hra,
+        "medical_allowance": medical_allowance,
+        "other_allowances": other_allowances,
+    }
+
+
 def _wage_from_codes(
     amount_by_code: Mapping[str, Decimal],
     codes: Sequence[Any],
@@ -563,64 +625,24 @@ def _pf_values(
             "employer_amount": ZERO,
         }
 
-    employee_rate = _decimal(
-        pf_config.get("employee_rate_percent"),
-        "statutory_config.pf.employee_rate_percent",
-        minimum=ZERO,
-        maximum=HUNDRED,
-    ) or ZERO
-    employer_rate = _decimal(
-        pf_config.get("employer_rate_percent"),
-        "statutory_config.pf.employer_rate_percent",
-        minimum=ZERO,
-        maximum=HUNDRED,
-    ) or ZERO
-    ceiling = _decimal(
-        pf_config.get("wage_ceiling"),
-        "statutory_config.pf.wage_ceiling",
-        minimum=ZERO,
-    ) or ZERO
-
-    codes = pf_config.get("wage_base_component_codes") or [
-        "basic",
-        "hra",
-        "medical_allowance",
-    ]
-    if not isinstance(codes, Sequence) or isinstance(codes, (str, bytes)):
-        raise PayrollCalculationError(
-            "statutory_config.pf.wage_base_component_codes must be a list.",
-            code="invalid_pf_wage_base_codes",
-            field="statutory_config.pf.wage_base_component_codes",
-        )
-
+    # Final SDS rule: PF wage is always Basic + HRA + Medical Allowance.
+    # Old/manual wage-base configuration and higher-wage flags are deliberately
+    # not allowed to change this wage or bypass the statutory 15,000 ceiling.
     base_wage = _wage_from_codes(
         amount_by_code,
-        codes,
+        SDS_PF_WAGE_COMPONENT_CODES,
         field="statutory_config.pf.wage_base_component_codes",
     )
-    allow_higher = _bool_value(
-        pf_config.get("allow_higher_wage_contribution"),
-        default=False,
-    )
-    employee_higher = allow_higher and _bool_value(
-        pf_config.get("employee_higher_wage_enabled"),
-        default=False,
-    )
-    employer_higher = allow_higher and _bool_value(
-        pf_config.get("employer_higher_wage_enabled"),
-        default=False,
-    )
-
-    employee_wage = base_wage if employee_higher else min(base_wage, ceiling)
-    employer_wage = base_wage if employer_higher else min(base_wage, ceiling)
+    calculation_wage = min(base_wage, SDS_PF_WAGE_CEILING)
+    amount = calculation_wage * SDS_PF_RATE_PERCENT / HUNDRED
 
     return {
         "enabled": True,
         "base_wage": base_wage,
-        "employee_wage": employee_wage,
-        "employer_wage": employer_wage,
-        "employee_amount": employee_wage * employee_rate / HUNDRED,
-        "employer_amount": employer_wage * employer_rate / HUNDRED,
+        "employee_wage": calculation_wage,
+        "employer_wage": calculation_wage,
+        "employee_amount": amount,
+        "employer_amount": amount,
     }
 
 
@@ -689,19 +711,10 @@ def _professional_tax_amount(
     if not _bool_value(pt_config.get("enabled"), default=False):
         return ZERO, gross_salary
 
-    basis_code = _normalize_code(pt_config.get("basis") or "gross_salary")
-    if basis_code in {"gross", "gross_salary", "payable_gross_salary"}:
-        basis = gross_salary
-    elif basis_code == "monthly_ctc":
-        basis = monthly_ctc
-    elif basis_code in amount_by_code:
-        basis = amount_by_code[basis_code]
-    else:
-        raise PayrollCalculationError(
-            f"Professional Tax basis is not available: {basis_code}.",
-            code="professional_tax_basis_not_found",
-            field="statutory_config.professional_tax.basis",
-        )
+    # Final SDS/Assam rule: Professional Tax is always based on Gross Salary.
+    # Keep the existing configurable slab engine, but do not permit an old
+    # monthly-CTC/component basis to change the payroll result.
+    basis = gross_salary
 
     slabs = pt_config.get("slabs")
     if not isinstance(slabs, list) or not slabs:
@@ -976,19 +989,6 @@ def calculate_payroll(
     ) or ZERO
     components = _active_components(salary_structure)
     lwp = _resolve_lwp(attendance, statutory_config)
-    full_amounts = _resolve_non_statutory_components(salary_structure, components)
-
-    balancing_components = [
-        component
-        for component in components
-        if component.get("calculation_type") == "balancing"
-    ]
-    if len(balancing_components) > 1:
-        raise PayrollCalculationError(
-            "Only one active balancing salary component is supported.",
-            code="multiple_balancing_components",
-            field="salary_structure.components",
-        )
 
     pf_config = statutory_config.get("pf") or {}
     esi_config = statutory_config.get("esi") or {}
@@ -1004,25 +1004,66 @@ def calculate_payroll(
             field="statutory_config",
         )
 
-    # A balancing component can safely account for employer PF because PF is
-    # normally based on Basic. It cannot safely close a CTC containing an ESI
-    # employer contribution based on gross salary without creating a circular
-    # equation, so that unsupported combination is rejected explicitly.
-    if balancing_components and _bool_value(esi_config.get("enabled"), False):
-        esi_wage_base = _normalize_code(esi_config.get("wage_base") or "gross_salary")
-        if esi_wage_base in {"gross", "gross_salary", "payable_gross_salary"}:
-            raise PayrollCalculationError(
-                "A balancing salary component cannot be combined with gross-based ESI because it creates a circular CTC calculation. Use fixed components or a non-gross ESI wage base.",
-                code="balancing_esi_calculation_cycle",
-                field="salary_structure.components",
-            )
+    component_codes = {component["code"] for component in components}
+    missing_sds_components = [
+        code for code in SDS_GROSS_COMPONENT_CODES if code not in component_codes
+    ]
+    if missing_sds_components:
+        raise PayrollCalculationError(
+            "SDS salary structure is missing required earning component(s): "
+            + ", ".join(missing_sds_components)
+            + ".",
+            code="sds_salary_components_required",
+            field="salary_structure.components",
+        )
+
+    unexpected_gross_components = [
+        component["code"]
+        for component in components
+        if component.get("calculation_type") != "statutory"
+        and component.get("include_in_gross")
+        and component["code"] not in SDS_GROSS_COMPONENT_CODES
+    ]
+    if unexpected_gross_components:
+        raise PayrollCalculationError(
+            "SDS Gross Salary must consist only of Basic, HRA, Medical Allowance, "
+            "and Other Allowance. Unexpected gross component(s): "
+            + ", ".join(unexpected_gross_components)
+            + ".",
+            code="sds_unexpected_gross_component",
+            field="salary_structure.components",
+        )
+
+    contractual_gross_target, sds_amounts = _sds_contractual_salary_amounts(
+        monthly_ctc,
+        pf_enabled=_bool_value(pf_config.get("enabled"), default=False),
+    )
+    full_amounts = _resolve_non_statutory_components(
+        salary_structure,
+        components,
+        preset_amounts=sds_amounts,
+        gross_salary=contractual_gross_target,
+    )
+
+    balancing_components = [
+        component
+        for component in components
+        if component.get("calculation_type") == "balancing"
+        and component["code"] not in full_amounts
+    ]
+    if len(balancing_components) > 1:
+        raise PayrollCalculationError(
+            "Only one active balancing salary component is supported.",
+            code="multiple_balancing_components",
+            field="salary_structure.components",
+        )
 
     contractual_pf = _pf_values(pf_config, full_amounts)
 
     contractual_gross_before_balance = _sum(
         full_amounts.get(component["code"], ZERO)
         for component in components
-        if component.get("calculation_type") not in {"statutory", "balancing"}
+        if component.get("calculation_type") != "statutory"
         and component.get("include_in_gross")
     )
     contractual_esi = _esi_values(
@@ -1031,6 +1072,9 @@ def calculate_payroll(
         contractual_gross_before_balance,
     )
 
+    # Preserve support for a non-SDS, non-gross balancing component if an
+    # existing structure uses one. The four SDS Gross components themselves
+    # are already fully resolved above and are never used to balance CTC.
     if balancing_components:
         balancing = balancing_components[0]
         code = balancing["code"]
@@ -1060,8 +1104,9 @@ def calculate_payroll(
         occupied_ctc = _sum(
             full_amounts.get(component["code"], ZERO)
             for component in components
-            if component.get("calculation_type") not in {"statutory", "balancing"}
+            if component.get("calculation_type") != "statutory"
             and component.get("include_in_ctc")
+            and component["code"] != code
         )
         occupied_ctc += Decimal(str(contractual_pf["employer_amount"]))
         occupied_ctc += Decimal(str(contractual_esi["employer_amount"]))

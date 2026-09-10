@@ -12,6 +12,7 @@ additional testing dependency is required in the HRMS backend.
 
 import copy
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ SPEC = importlib.util.spec_from_file_location(
     "payroll_calculation_service_under_test",
     SERVICE_PATH,
 )
+
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Unable to load payroll calculation service: {SERVICE_PATH}")
 
@@ -40,57 +42,10 @@ def component_amount(lines: list[dict[str, Any]], code: str) -> int | float:
 
 
 class PayrollCalculationServiceTests(unittest.TestCase):
-    """Covers reference-payslip and high-risk payroll calculation rules."""
+    """Covers the final SDS payroll calculation contract and high-risk rules."""
 
     def setUp(self) -> None:
-        # The fourth earning is intentionally balancing. With the statutory
-        # employer PF contribution, it resolves to the ₹2,075 shown in the
-        # attached SDS reference payslip.
-        self.salary_structure = {
-            "employee_id": "employee-rahul",
-            "monthly_ctc": 29470,
-            "annual_ctc": 353640,
-            "currency": "INR",
-            "components": [
-                {
-                    "code": "basic",
-                    "label": "Basic",
-                    "category": "earning",
-                    "calculation_type": "fixed",
-                    "amount": 13835,
-                    "display_order": 10,
-                    "prorate_on_lwp": True,
-                },
-                {
-                    "code": "hra",
-                    "label": "HRA",
-                    "category": "earning",
-                    "calculation_type": "fixed",
-                    "amount": 6918,
-                    "display_order": 20,
-                    "prorate_on_lwp": True,
-                },
-                {
-                    "code": "medical_allowance",
-                    "label": "Medical Allowance",
-                    "category": "earning",
-                    "calculation_type": "fixed",
-                    "amount": 4842,
-                    "display_order": 30,
-                    "prorate_on_lwp": True,
-                },
-                {
-                    "code": "other_allowances",
-                    "label": "Other Allowances",
-                    "category": "earning",
-                    "calculation_type": "balancing",
-                    "balance_of": "monthly_ctc",
-                    "minimum_amount": 0,
-                    "display_order": 40,
-                    "prorate_on_lwp": True,
-                },
-            ],
-        }
+        self.salary_structure = self.sds_salary(22800)
 
         self.statutory_config = {
             "state_code": "AS",
@@ -100,9 +55,6 @@ class PayrollCalculationServiceTests(unittest.TestCase):
                 "employee_rate_percent": 12,
                 "employer_rate_percent": 12,
                 "wage_ceiling": 15000,
-                # SDS PF wage base is Basic + HRA + Medical Allowance.
-                # When that combined wage exceeds the statutory ₹15,000 ceiling,
-                # employee and employer PF are both calculated on ₹15,000.
                 "wage_base_component_codes": [
                     "basic",
                     "hra",
@@ -143,9 +95,6 @@ class PayrollCalculationServiceTests(unittest.TestCase):
             },
             "esi": {"enabled": False},
             "tds": {"mode": "manual"},
-            # The production divisor is deliberately unresolved. Zero-LWP
-            # calculations remain allowed; a positive LWP requires an explicit
-            # configured divisor.
             "lwp": {
                 "divisor_mode": None,
                 "fixed_days": None,
@@ -191,20 +140,69 @@ class PayrollCalculationServiceTests(unittest.TestCase):
             inputs=copy.deepcopy(inputs if inputs is not None else {"tds_amount": 0}),
         )
 
-    def simple_salary(self, gross_salary: int | float) -> dict[str, Any]:
+    def sds_salary(self, monthly_ctc: int | float) -> dict[str, Any]:
         return {
-            "monthly_ctc": gross_salary,
+            "employee_id": "employee-rahul",
+            "monthly_ctc": monthly_ctc,
+            "annual_ctc": round(float(monthly_ctc) * 12, 2),
             "currency": "INR",
             "components": [
                 {
                     "code": "basic",
                     "label": "Basic",
                     "category": "earning",
-                    "calculation_type": "fixed",
-                    "amount": gross_salary,
+                    "calculation_type": "percentage",
+                    "percentage": 50,
+                    "base_component": "gross_salary",
                     "display_order": 10,
                     "prorate_on_lwp": True,
-                }
+                    "include_in_gross": True,
+                    "include_in_ctc": True,
+                    "show_in_earnings": True,
+                    "is_active": True,
+                },
+                {
+                    "code": "hra",
+                    "label": "HRA",
+                    "category": "earning",
+                    "calculation_type": "percentage",
+                    "percentage": 50,
+                    "base_component": "basic",
+                    "display_order": 20,
+                    "prorate_on_lwp": True,
+                    "include_in_gross": True,
+                    "include_in_ctc": True,
+                    "show_in_earnings": True,
+                    "is_active": True,
+                },
+                {
+                    "code": "medical_allowance",
+                    "label": "Medical Allowance",
+                    "category": "earning",
+                    "calculation_type": "percentage",
+                    "percentage": 40,
+                    "base_component": "basic",
+                    "display_order": 30,
+                    "prorate_on_lwp": True,
+                    "include_in_gross": True,
+                    "include_in_ctc": True,
+                    "show_in_earnings": True,
+                    "is_active": True,
+                },
+                {
+                    "code": "other_allowances",
+                    "label": "Other Allowances",
+                    "category": "earning",
+                    "calculation_type": "percentage",
+                    "percentage": 10,
+                    "base_component": "basic",
+                    "display_order": 40,
+                    "prorate_on_lwp": True,
+                    "include_in_gross": True,
+                    "include_in_ctc": True,
+                    "show_in_earnings": True,
+                    "is_active": True,
+                },
             ],
         }
 
@@ -221,45 +219,151 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         config["tds"] = {"mode": tds_mode}
         return config
 
-    def test_reference_payslip_totals_and_component_layout(self) -> None:
+    def test_ctc_22800_exact_sds_breakup_and_net(self) -> None:
+        """A: exact approved SDS reference calculation for monthly CTC 22,800."""
         result = self.calculate()
 
         self.assertEqual(result["currency"], "INR")
-        self.assertEqual(result["totals"]["gross_salary"], 27670)
-        self.assertEqual(result["totals"]["payable_gross_salary"], 27670)
+        self.assertEqual(result["totals"]["monthly_ctc_configured"], 22800)
+        self.assertEqual(result["totals"]["gross_salary"], 21000)
+        self.assertEqual(result["totals"]["payable_gross_salary"], 21000)
+
+        self.assertEqual(component_amount(result["earnings"], "basic"), 10500)
+        self.assertEqual(component_amount(result["earnings"], "hra"), 5250)
+        self.assertEqual(component_amount(result["earnings"], "medical_allowance"), 4200)
+        self.assertEqual(component_amount(result["earnings"], "other_allowances"), 1050)
+
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 19950)
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
+        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
         self.assertEqual(result["totals"]["pf_employee"], 1800)
         self.assertEqual(result["totals"]["pf_employer"], 1800)
-        self.assertEqual(result["totals"]["professional_tax"], 208)
-        self.assertEqual(result["totals"]["cost_to_company"], 29470)
-        self.assertEqual(result["totals"]["total_deductions"], 3808)
-        self.assertEqual(result["totals"]["net_amount"], 25662)
-        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["totals"]["professional_tax"], 180)
 
-        self.assertEqual(component_amount(result["earnings"], "basic"), 13835)
-        self.assertEqual(component_amount(result["earnings"], "hra"), 6918)
-        self.assertEqual(
-            component_amount(result["earnings"], "medical_allowance"),
-            4842,
-        )
-        self.assertEqual(
-            component_amount(result["earnings"], "other_allowances"),
-            2075,
-        )
+        self.assertEqual(result["totals"]["employer_contribution_total"], 1800)
+        self.assertEqual(result["totals"]["cost_to_company"], 22800)
+        self.assertEqual(result["totals"]["total_deductions"], 3780)
+        self.assertEqual(result["totals"]["net_amount"], 19020)
+
         self.assertEqual(component_amount(result["earnings"], "pf_employer"), 1800)
-
-        self.assertEqual(component_amount(result["deductions"], "tds"), 0)
         self.assertEqual(component_amount(result["deductions"], "pf_employee"), 1800)
         self.assertEqual(
             component_amount(result["deductions"], "pf_employer_pass_through"),
             1800,
         )
-        self.assertEqual(component_amount(result["deductions"], "lwp_deduction"), 0)
-        self.assertEqual(
-            component_amount(result["deductions"], "professional_tax"),
-            208,
+        self.assertEqual(component_amount(result["deductions"], "professional_tax"), 180)
+
+    def test_pf_below_ceiling_uses_actual_pf_wage(self) -> None:
+        """B: below ceiling uses actual Basic+HRA+MA wage, not zero and not 15,000."""
+        result = self.calculate(salary_structure=self.sds_salary(13368))
+
+        self.assertEqual(result["totals"]["gross_salary"], 12000)
+        self.assertEqual(component_amount(result["earnings"], "basic"), 6000)
+        self.assertEqual(component_amount(result["earnings"], "hra"), 3000)
+        self.assertEqual(component_amount(result["earnings"], "medical_allowance"), 2400)
+        self.assertEqual(component_amount(result["earnings"], "other_allowances"), 600)
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 11400)
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 11400)
+        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 11400)
+        self.assertEqual(result["totals"]["pf_employee"], 1368)
+        self.assertEqual(result["totals"]["pf_employer"], 1368)
+        self.assertEqual(result["totals"]["professional_tax"], 0)
+        self.assertEqual(result["totals"]["cost_to_company"], 13368)
+        self.assertEqual(result["totals"]["net_amount"], 10632)
+
+    def test_pf_wage_exactly_15000_produces_1800_each(self) -> None:
+        """C: PF wage exactly at ceiling must still produce 1,800 each."""
+        # PF wage = 95% of Gross, so Gross = 15000 / 0.95.
+        gross = 15000 / 0.95
+        monthly_ctc = gross + 1800
+        result = self.calculate(salary_structure=self.sds_salary(monthly_ctc))
+
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 15000)
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
+        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
+        self.assertEqual(result["totals"]["pf_employee"], 1800)
+        self.assertEqual(result["totals"]["pf_employer"], 1800)
+
+    def test_higher_wage_flags_do_not_bypass_pf_ceiling(self) -> None:
+        config = copy.deepcopy(self.statutory_config)
+        config["pf"].update(
+            {
+                "employee_rate_percent": 99,
+                "employer_rate_percent": 99,
+                "wage_ceiling": 999999,
+                "wage_base_component_codes": ["basic"],
+                "allow_higher_wage_contribution": True,
+                "employee_higher_wage_enabled": True,
+                "employer_higher_wage_enabled": True,
+            }
         )
 
+        result = self.calculate(statutory_config=config)
+
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 19950)
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
+        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
+        self.assertEqual(result["totals"]["pf_employee"], 1800)
+        self.assertEqual(result["totals"]["pf_employer"], 1800)
+
+    def test_professional_tax_gross_exactly_15000_is_zero(self) -> None:
+        """D: Gross exactly 15,000 => PT 0."""
+        config = self.config_without_pf()
+        result = self.calculate(
+            salary_structure=self.sds_salary(15000),
+            statutory_config=config,
+            inputs={},
+        )
+        self.assertEqual(result["totals"]["gross_salary"], 15000)
+        self.assertEqual(result["totals"]["professional_tax"], 0)
+
+    def test_professional_tax_gross_just_above_15000_is_180(self) -> None:
+        """E: Gross just above 15,000 => PT 180."""
+        config = self.config_without_pf()
+        result = self.calculate(
+            salary_structure=self.sds_salary(15001),
+            statutory_config=config,
+            inputs={},
+        )
+        self.assertEqual(result["totals"]["gross_salary"], 15001)
+        self.assertEqual(result["totals"]["professional_tax"], 180)
+
+    def test_professional_tax_gross_exactly_25000_is_208(self) -> None:
+        """F: Gross exactly 25,000 => PT 208."""
+        config = self.config_without_pf()
+        result = self.calculate(
+            salary_structure=self.sds_salary(25000),
+            statutory_config=config,
+            inputs={},
+        )
+        self.assertEqual(result["totals"]["gross_salary"], 25000)
+        self.assertEqual(result["totals"]["professional_tax"], 208)
+
+    def test_employer_pf_is_not_double_deducted_from_net(self) -> None:
+        """G: Net is Gross - employee PF - PT when no other employee deduction exists."""
+        result = self.calculate()
+
+        expected_net = (
+            result["totals"]["gross_salary"]
+            - result["totals"]["pf_employee"]
+            - result["totals"]["professional_tax"]
+        )
+        self.assertEqual(expected_net, 19020)
+        self.assertEqual(result["totals"]["net_amount"], expected_net)
+
+    def test_ctc_equals_gross_plus_employer_pf_without_other_employer_contribution(self) -> None:
+        """H: employer PF is inside configured CTC and reconciles exactly."""
+        result = self.calculate()
+
+        self.assertEqual(result["totals"]["esi_employer"], 0)
+        self.assertEqual(
+            result["totals"]["cost_to_company"],
+            result["totals"]["gross_salary"] + result["totals"]["pf_employer"],
+        )
+        self.assertEqual(result["totals"]["cost_to_company"], 22800)
+
     def test_paid_leave_is_tracking_only_and_does_not_reduce_salary(self) -> None:
+        """J: paid leave must remain non-deductible."""
         attendance = copy.deepcopy(self.attendance)
         attendance["paid_leave_days"] = 5
 
@@ -269,7 +373,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         self.assertFalse(result["attendance"]["paid_leave_affects_salary"])
         self.assertEqual(result["attendance"]["proration_factor"], 1.0)
         self.assertEqual(result["totals"]["lwp_deduction"], 0)
-        self.assertEqual(result["totals"]["net_amount"], 25662)
+        self.assertEqual(result["totals"]["net_amount"], 19020)
 
     def test_positive_lwp_requires_an_explicit_divisor_policy(self) -> None:
         attendance = copy.deepcopy(self.attendance)
@@ -281,32 +385,34 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "lwp_divisor_not_configured")
         self.assertEqual(context.exception.field, "statutory_config.lwp.divisor_mode")
 
-    def test_calendar_day_lwp_prorates_only_configured_earnings_once(self) -> None:
+    def test_calendar_day_lwp_prorates_salary_once_and_recalculates_pf(self) -> None:
+        """I: existing LWP behavior remains, with PF recomputed on payable earnings."""
         config = copy.deepcopy(self.statutory_config)
         config["lwp"]["divisor_mode"] = "calendar_days"
         attendance = copy.deepcopy(self.attendance)
-        attendance["lwp_days"] = 2
+        attendance["lwp_days"] = 1
 
         result = self.calculate(statutory_config=config, attendance=attendance)
 
         self.assertEqual(result["attendance"]["divisor_days"], 30.0)
-        self.assertEqual(result["attendance"]["payable_days"], 28.0)
+        self.assertEqual(result["attendance"]["payable_days"], 29.0)
         self.assertAlmostEqual(
             result["attendance"]["proration_factor"],
-            28 / 30,
+            29 / 30,
             places=8,
         )
-        self.assertEqual(result["totals"]["gross_salary"], 27670)
-        self.assertEqual(result["totals"]["payable_gross_salary"], 25825)
-        self.assertEqual(result["totals"]["lwp_deduction"], 1845)
-        self.assertEqual(result["totals"]["total_deductions"], 5653)
-        self.assertEqual(result["totals"]["net_amount"], 23817)
 
-        basic_line = next(
-            line for line in result["earnings"] if line["code"] == "basic"
-        )
-        self.assertEqual(basic_line["full_amount"], 13835)
-        self.assertEqual(basic_line["payable_amount"], 12913)
+        self.assertEqual(result["totals"]["gross_salary"], 21000)
+        self.assertEqual(result["totals"]["payable_gross_salary"], 20300)
+        self.assertEqual(result["totals"]["lwp_deduction"], 700)
+
+        # PF wage remains above ceiling after one-day LWP, so both PF values stay capped.
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
+        self.assertEqual(result["totals"]["pf_employee"], 1800)
+        self.assertEqual(result["totals"]["pf_employer"], 1800)
+
+        # Employer PF pass-through cancels only employer contribution; no double deduction.
+        self.assertEqual(result["totals"]["net_amount"], 18320)
 
     def test_fixed_30_day_lwp_policy_is_independent_of_calendar_length(self) -> None:
         config = copy.deepcopy(self.statutory_config)
@@ -321,7 +427,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         self.assertEqual(result["attendance"]["total_days"], 31.0)
         self.assertEqual(result["attendance"]["divisor_days"], 30.0)
         self.assertEqual(result["attendance"]["payable_days"], 29.0)
-        self.assertEqual(result["totals"]["lwp_deduction"], 922)
+        self.assertEqual(result["totals"]["lwp_deduction"], 700)
 
     def test_working_day_lwp_policy_uses_attendance_working_days(self) -> None:
         config = copy.deepcopy(self.statutory_config)
@@ -334,64 +440,10 @@ class PayrollCalculationServiceTests(unittest.TestCase):
 
         self.assertEqual(result["attendance"]["divisor_days"], 26.0)
         self.assertEqual(result["attendance"]["payable_days"], 25.0)
-        self.assertEqual(result["totals"]["lwp_deduction"], 1064)
-
-    def test_pf_uses_configured_wage_components_and_statutory_ceiling(self) -> None:
-        result = self.calculate()
-
-        self.assertEqual(result["statutory"]["pf"]["base_wage"], 25595)
-        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
-        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
-        self.assertEqual(result["totals"]["pf_employee"], 1800)
-        self.assertEqual(result["totals"]["pf_employer"], 1800)
-
-    def test_pf_below_ceiling_uses_actual_configured_wage(self) -> None:
-        config = copy.deepcopy(self.statutory_config)
-        config["pf"]["wage_base_component_codes"] = ["basic"]
-
-        result = self.calculate(statutory_config=config)
-
-        self.assertEqual(result["statutory"]["pf"]["base_wage"], 13835)
-        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 13835)
-        self.assertEqual(result["totals"]["pf_employee"], 1660)
-        self.assertEqual(result["totals"]["pf_employer"], 1660)
-
-    def test_pf_higher_wage_flags_can_be_configured_separately(self) -> None:
-        config = copy.deepcopy(self.statutory_config)
-        config["pf"]["allow_higher_wage_contribution"] = True
-        config["pf"]["employee_higher_wage_enabled"] = True
-        config["pf"]["employer_higher_wage_enabled"] = False
-
-        result = self.calculate(statutory_config=config)
-
-        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 25595)
-        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
-        self.assertEqual(result["totals"]["pf_employee"], 3071)
-        self.assertEqual(result["totals"]["pf_employer"], 1800)
-
-    def test_assam_professional_tax_slab_boundaries(self) -> None:
-        config = self.config_without_pf()
-
-        cases = (
-            (15000, 0),
-            (15001, 180),
-            (24999, 180),
-            (25000, 208),
-            (50000, 208),
-        )
-        for gross_salary, expected_tax in cases:
-            with self.subTest(gross_salary=gross_salary):
-                result = self.calculate(
-                    salary_structure=self.simple_salary(gross_salary),
-                    statutory_config=config,
-                    inputs={},
-                )
-                self.assertEqual(
-                    result["totals"]["professional_tax"],
-                    expected_tax,
-                )
+        self.assertEqual(result["totals"]["lwp_deduction"], 808)
 
     def test_manual_tds_must_be_supplied_and_is_not_estimated(self) -> None:
+        """K: manual TDS still requires an explicit payroll input."""
         with self.assertRaises(PayrollCalculationError) as context:
             self.calculate(inputs={})
 
@@ -402,7 +454,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         self.assertEqual(result["statutory"]["tds"]["mode"], "manual")
         self.assertFalse(result["statutory"]["tds"]["calculated_by_engine"])
         self.assertEqual(result["totals"]["tds"], 1250)
-        self.assertEqual(result["totals"]["net_amount"], 24412)
+        self.assertEqual(result["totals"]["net_amount"], 17770)
 
     def test_only_active_or_recoverable_advances_are_deducted(self) -> None:
         result = self.calculate(
@@ -429,8 +481,8 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result["totals"]["advances"], 500)
-        self.assertEqual(result["totals"]["total_deductions"], 4308)
-        self.assertEqual(result["totals"]["net_amount"], 25162)
+        self.assertEqual(result["totals"]["total_deductions"], 4280)
+        self.assertEqual(result["totals"]["net_amount"], 18520)
         self.assertEqual(len(result["advance_details"]), 1)
         self.assertEqual(result["advance_details"][0]["reference_id"], "advance-active")
         self.assertEqual(
@@ -439,6 +491,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         )
 
     def test_advance_total_mismatch_is_rejected(self) -> None:
+        """L: explicit advance total must reconcile to recoverable advance rows."""
         with self.assertRaises(PayrollCalculationError) as context:
             self.calculate(
                 inputs={
@@ -456,57 +509,69 @@ class PayrollCalculationServiceTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "advance_total_mismatch")
 
-    def test_two_decimal_rounding_preserves_paise(self) -> None:
+    def test_two_decimal_rounding_preserves_paise_below_pf_ceiling(self) -> None:
+        """M: two-decimal mode preserves paise in uncapped PF calculations."""
         config = copy.deepcopy(self.statutory_config)
         config["rounding_mode"] = "two_decimals"
+
+        # Pick a CTC that resolves below PF ceiling and produces paise.
+        result = self.calculate(
+            salary_structure=self.sds_salary(13368.55),
+            statutory_config=config,
+        )
+
+        self.assertIsInstance(result["totals"]["pf_employee"], float)
+        self.assertIsInstance(result["totals"]["pf_employer"], float)
+        self.assertEqual(
+            result["totals"]["pf_employee"],
+            result["totals"]["pf_employer"],
+        )
+        self.assertEqual(
+            round(result["totals"]["cost_to_company"], 2),
+            round(
+                result["totals"]["gross_salary"]
+                + result["totals"]["pf_employer"],
+                2,
+            ),
+        )
+
+    def test_pf_configuration_cannot_switch_to_basic_only(self) -> None:
+        config = copy.deepcopy(self.statutory_config)
         config["pf"]["wage_base_component_codes"] = ["basic"]
 
         result = self.calculate(statutory_config=config)
 
-        self.assertEqual(result["totals"]["pf_employee"], 1660.2)
-        self.assertEqual(result["totals"]["pf_employer"], 1660.2)
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 19950)
+        self.assertEqual(result["totals"]["pf_employee"], 1800)
+        self.assertEqual(result["totals"]["pf_employer"], 1800)
 
-    def test_missing_pf_wage_component_is_rejected(self) -> None:
+    def test_pf_rate_and_ceiling_configuration_cannot_override_sds_rule(self) -> None:
         config = copy.deepcopy(self.statutory_config)
-        config["pf"]["wage_base_component_codes"] = ["nonexistent_component"]
+        config["pf"]["employee_rate_percent"] = 1
+        config["pf"]["employer_rate_percent"] = 50
+        config["pf"]["wage_ceiling"] = 999999
 
-        with self.assertRaises(PayrollCalculationError) as context:
-            self.calculate(statutory_config=config)
+        result = self.calculate(statutory_config=config)
 
-        self.assertEqual(context.exception.code, "statutory_wage_component_not_found")
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
+        self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
+        self.assertEqual(result["totals"]["pf_employee"], 1800)
+        self.assertEqual(result["totals"]["pf_employer"], 1800)
 
-    def test_circular_percentage_component_dependency_is_rejected(self) -> None:
-        salary = {
-            "monthly_ctc": 20000,
-            "components": [
-                {
-                    "code": "basic",
-                    "label": "Basic",
-                    "category": "earning",
-                    "calculation_type": "percentage",
-                    "percentage": 50,
-                    "base_component": "hra",
-                },
-                {
-                    "code": "hra",
-                    "label": "HRA",
-                    "category": "earning",
-                    "calculation_type": "percentage",
-                    "percentage": 50,
-                    "base_component": "basic",
-                },
-            ],
-        }
-        config = self.config_without_pf()
+    def test_professional_tax_basis_configuration_cannot_override_gross(self) -> None:
+        config = copy.deepcopy(self.statutory_config)
+        config["pf"] = {"enabled": False}
+        config["tds"] = {"mode": "disabled"}
+        config["professional_tax"]["basis"] = "monthly_ctc"
 
-        with self.assertRaises(PayrollCalculationError) as context:
-            self.calculate(
-                salary_structure=salary,
-                statutory_config=config,
-                inputs={},
-            )
+        result = self.calculate(
+            salary_structure=self.sds_salary(15001),
+            statutory_config=config,
+            inputs={},
+        )
 
-        self.assertEqual(context.exception.code, "salary_component_dependency_cycle")
+        self.assertEqual(result["totals"]["gross_salary"], 15001)
+        self.assertEqual(result["totals"]["professional_tax"], 180)
 
     def test_negative_net_salary_is_rejected(self) -> None:
         config = self.config_without_pf(tds_mode="manual")
@@ -514,7 +579,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
 
         with self.assertRaises(PayrollCalculationError) as context:
             self.calculate(
-                salary_structure=self.simple_salary(1000),
+                salary_structure=self.sds_salary(1000),
                 statutory_config=config,
                 inputs={"tds_amount": 2000},
             )
@@ -523,12 +588,10 @@ class PayrollCalculationServiceTests(unittest.TestCase):
         self.assertEqual(context.exception.field, "deductions")
 
     def test_result_contains_only_json_serialisable_money_values(self) -> None:
-        import json
-
         result = self.calculate()
         encoded = json.dumps(result)
 
-        self.assertIn('"net_amount": 25662', encoded)
+        self.assertIn('"net_amount": 19020', encoded)
 
 
 if __name__ == "__main__":
