@@ -581,7 +581,11 @@ def _pf_values(
         minimum=ZERO,
     ) or ZERO
 
-    codes = pf_config.get("wage_base_component_codes") or ["basic"]
+    codes = pf_config.get("wage_base_component_codes") or [
+        "basic",
+        "hra",
+        "medical_allowance",
+    ]
     if not isinstance(codes, Sequence) or isinstance(codes, (str, bytes)):
         raise PayrollCalculationError(
             "statutory_config.pf.wage_base_component_codes must be a list.",

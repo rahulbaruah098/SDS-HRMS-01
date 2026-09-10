@@ -100,11 +100,14 @@ class PayrollCalculationServiceTests(unittest.TestCase):
                 "employee_rate_percent": 12,
                 "employer_rate_percent": 12,
                 "wage_ceiling": 15000,
-                # The reference payslip's ₹1,800 PF cannot be produced from
-                # Basic ₹13,835 alone. This fixture deliberately uses a
-                # configurable PF wage base that exceeds the ceiling, without
-                # claiming which additional component SDS ultimately adopts.
-                "wage_base_component_codes": ["basic", "hra"],
+                # SDS PF wage base is Basic + HRA + Medical Allowance.
+                # When that combined wage exceeds the statutory ₹15,000 ceiling,
+                # employee and employer PF are both calculated on ₹15,000.
+                "wage_base_component_codes": [
+                    "basic",
+                    "hra",
+                    "medical_allowance",
+                ],
                 "allow_higher_wage_contribution": False,
                 "employee_higher_wage_enabled": False,
                 "employer_higher_wage_enabled": False,
@@ -336,7 +339,7 @@ class PayrollCalculationServiceTests(unittest.TestCase):
     def test_pf_uses_configured_wage_components_and_statutory_ceiling(self) -> None:
         result = self.calculate()
 
-        self.assertEqual(result["statutory"]["pf"]["base_wage"], 20753)
+        self.assertEqual(result["statutory"]["pf"]["base_wage"], 25595)
         self.assertEqual(result["statutory"]["pf"]["employee_wage"], 15000)
         self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
         self.assertEqual(result["totals"]["pf_employee"], 1800)
@@ -361,9 +364,9 @@ class PayrollCalculationServiceTests(unittest.TestCase):
 
         result = self.calculate(statutory_config=config)
 
-        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 20753)
+        self.assertEqual(result["statutory"]["pf"]["employee_wage"], 25595)
         self.assertEqual(result["statutory"]["pf"]["employer_wage"], 15000)
-        self.assertEqual(result["totals"]["pf_employee"], 2490)
+        self.assertEqual(result["totals"]["pf_employee"], 3071)
         self.assertEqual(result["totals"]["pf_employer"], 1800)
 
     def test_assam_professional_tax_slab_boundaries(self) -> None:
