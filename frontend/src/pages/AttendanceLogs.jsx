@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity,
   BadgeCheck,
   BriefcaseBusiness,
   Building2,
@@ -825,26 +824,46 @@ export default function AttendanceLogs() {
           --attendance-muted: #5d6d8d;
           --attendance-border: rgba(16, 26, 58, .14);
           --attendance-primary: #6658dc;
-          --attendance-primary-soft: #f1efff;
+          --attendance-primary-deep: #40348d;
           --attendance-blue: #3766db;
           --attendance-cyan: #18b5c8;
           --attendance-teal: #34c9c4;
-          --attendance-yellow: #d8ff43;
+          --attendance-danger: #d84d68;
+
           position: relative;
           display: grid;
           gap: clamp(18px, 2vw, 26px);
           width: 100%;
+          min-width: 0;
+          max-width: 100%;
           padding-bottom: 34px;
           color: var(--attendance-ink);
         }
 
+        .attendance-log-page *,
+        .attendance-log-page *::before,
+        .attendance-log-page *::after {
+          box-sizing: border-box;
+        }
+
+        .attendance-log-page > *,
         .attendance-hero,
-        .attendance-panel {
-          border: 1px solid rgba(171, 181, 211, .70);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow:
-            8px 10px 0 #c4ccff,
-            0 24px 42px rgba(34, 38, 110, .10);
+        .attendance-panel,
+        .attendance-kpi-grid,
+        .attendance-filter-form,
+        .attendance-date-actions,
+        .attendance-table-wrap,
+        .attendance-mobile-list {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .attendance-log-page img,
+        .attendance-log-page input,
+        .attendance-log-page select,
+        .attendance-log-page button {
+          max-width: 100%;
         }
 
         .attendance-hero {
@@ -857,37 +876,28 @@ export default function AttendanceLogs() {
           gap: clamp(22px, 3vw, 40px);
           min-height: 275px;
           padding: clamp(25px, 3vw, 42px);
+          border: 1px solid rgba(154, 164, 205, .58);
           border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
+            radial-gradient(circle at 8% 7%, rgba(105, 217, 208, .24), transparent 28%),
+            radial-gradient(circle at 94% 4%, rgba(153, 164, 245, .22), transparent 31%),
             linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
           box-shadow:
             12px 14px 0 #c6d8f7,
             0 28px 48px rgba(34, 38, 110, .13);
         }
 
-        .attendance-hero::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 175px;
-          height: 175px;
-          right: 8%;
-          bottom: -98px;
-          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-          background: linear-gradient(
-            145deg,
-            rgba(105, 217, 208, .30),
-            rgba(132, 181, 241, .28)
-          );
-          transform: rotate(-18deg);
+        .attendance-hero::before,
+        .attendance-hero::after {
+          content: none;
+          display: none;
         }
 
         .attendance-hero-copy {
           position: relative;
           z-index: 1;
           max-width: 900px;
+          min-width: 0;
         }
 
         .attendance-eyebrow,
@@ -928,6 +938,7 @@ export default function AttendanceLogs() {
           font-weight: 760;
           line-height: .94;
           letter-spacing: -.058em;
+          overflow-wrap: anywhere;
         }
 
         .attendance-hero h1 em {
@@ -965,7 +976,6 @@ export default function AttendanceLogs() {
         .attendance-refresh-button {
           position: relative;
           z-index: 1;
-          flex: 0 0 auto;
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -974,8 +984,8 @@ export default function AttendanceLogs() {
           padding: 0 19px;
           border: 1px solid rgba(65, 55, 161, .18);
           border-radius: 18px;
-          background: rgba(255, 255, 255, .90);
           color: #40348d;
+          background: rgba(255, 255, 255, .90);
           box-shadow:
             6px 7px 0 #b9d7ff,
             0 14px 25px rgba(44, 75, 116, .10);
@@ -1010,71 +1020,37 @@ export default function AttendanceLogs() {
           display: flex;
           align-items: center;
           gap: 14px;
+          min-width: 0;
           min-height: 122px;
           padding: 18px;
           border: 1px solid rgba(171, 181, 211, .66);
           border-radius: 22px;
           background: #edf6ff;
-          box-shadow:
-            7px 9px 0 #b9d7ff,
-            0 18px 30px rgba(34, 38, 110, .09);
-          transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease;
+          box-shadow: 7px 9px 0 #b9d7ff, 0 18px 30px rgba(34, 38, 110, .09);
+          transition: transform 210ms cubic-bezier(.22,1,.36,1), box-shadow 210ms ease;
         }
 
         .attendance-kpi:nth-child(2) {
           background: #eaf8f4;
-          box-shadow:
-            7px 9px 0 #aee6d9,
-            0 18px 30px rgba(34, 38, 110, .09);
+          box-shadow: 7px 9px 0 #aee6d9, 0 18px 30px rgba(34, 38, 110, .09);
         }
 
         .attendance-kpi:nth-child(3) {
           background: #fff4d5;
-          box-shadow:
-            7px 9px 0 #ffe0a5,
-            0 18px 30px rgba(34, 38, 110, .09);
+          box-shadow: 7px 9px 0 #ffe0a5, 0 18px 30px rgba(34, 38, 110, .09);
         }
 
         .attendance-kpi:nth-child(4) {
           background: #f1efff;
-          box-shadow:
-            7px 9px 0 #c9c0ff,
-            0 18px 30px rgba(34, 38, 110, .09);
+          box-shadow: 7px 9px 0 #c9c0ff, 0 18px 30px rgba(34, 38, 110, .09);
         }
 
         .attendance-kpi:hover {
           transform: translateY(-4px);
         }
 
-        .attendance-kpi-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 48px;
-          height: 48px;
-          flex: 0 0 48px;
-          border-radius: 16px;
-          color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .18);
-          animation: attendance-kpi-float 3.2s ease-in-out infinite;
-        }
-
-        .attendance-kpi:nth-child(2) .attendance-kpi-icon {
-          background: linear-gradient(145deg, #16835f, #34c9c4);
-          animation-delay: -.7s;
-        }
-
-        .attendance-kpi:nth-child(3) .attendance-kpi-icon {
-          background: linear-gradient(145deg, #da7b12, #f5b94f);
-          animation-delay: -1.4s;
-        }
-
-        .attendance-kpi:nth-child(4) .attendance-kpi-icon {
-          background: linear-gradient(145deg, #3766db, #18b5c8);
-          animation-delay: -2.1s;
+        .attendance-kpi > div {
+          min-width: 0;
         }
 
         .attendance-kpi span {
@@ -1099,13 +1075,18 @@ export default function AttendanceLogs() {
           display: block;
           margin-top: 6px;
           color: var(--attendance-muted);
+          font-size: 11px;
           line-height: 1.4;
           font-weight: 750;
+          overflow-wrap: anywhere;
         }
 
         .attendance-panel {
           overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
           border-radius: clamp(26px, 2.2vw, 36px);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow: 8px 10px 0 #c4ccff, 0 24px 42px rgba(34, 38, 110, .10);
         }
 
         .attendance-filter-header {
@@ -1114,17 +1095,25 @@ export default function AttendanceLogs() {
           justify-content: space-between;
           gap: 18px;
           padding: 24px 26px 18px;
+          background:
+            linear-gradient(180deg, rgba(245, 248, 255, .82), rgba(255,255,255,.30));
         }
 
         .attendance-filter-heading {
           display: flex;
           align-items: flex-start;
           gap: 11px;
+          min-width: 0;
         }
 
         .attendance-filter-heading > svg {
+          flex: 0 0 auto;
           margin-top: 4px;
           color: var(--attendance-primary);
+        }
+
+        .attendance-filter-heading > div {
+          min-width: 0;
         }
 
         .attendance-filter-heading h2 {
@@ -1138,6 +1127,7 @@ export default function AttendanceLogs() {
         }
 
         .attendance-filter-heading p {
+          max-width: 780px;
           margin: 7px 0 0;
           color: var(--attendance-muted);
           font-size: 13px;
@@ -1147,10 +1137,10 @@ export default function AttendanceLogs() {
         .attendance-filter-form {
           display: grid;
           grid-template-columns:
-            minmax(250px, 1.7fr)
-            minmax(180px, .9fr)
-            minmax(165px, .8fr)
-            minmax(175px, .85fr);
+            minmax(260px, 1.55fr)
+            minmax(180px, .95fr)
+            minmax(165px, .75fr)
+            minmax(175px, .8fr);
           gap: 12px;
           padding: 0 26px 15px;
         }
@@ -1177,6 +1167,7 @@ export default function AttendanceLogs() {
 
         .attendance-input-wrap {
           position: relative;
+          min-width: 0;
         }
 
         .attendance-input-wrap > svg {
@@ -1191,18 +1182,17 @@ export default function AttendanceLogs() {
         .attendance-field input,
         .attendance-field select {
           width: 100%;
+          min-width: 0;
           min-height: 47px;
+          padding: 0 14px;
           border: 1px solid rgba(151, 161, 197, .58);
           border-radius: 15px;
           outline: none;
-          background: rgba(255, 255, 255, .94);
           color: var(--attendance-ink);
+          background: rgba(255, 255, 255, .94);
           font: inherit;
-          padding: 0 14px;
-          transition:
-            border-color 170ms ease,
-            box-shadow 170ms ease,
-            transform 170ms ease;
+          font-weight: 650;
+          transition: border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease;
         }
 
         .attendance-input-wrap input {
@@ -1212,9 +1202,7 @@ export default function AttendanceLogs() {
         .attendance-field input:focus,
         .attendance-field select:focus {
           border-color: rgba(102, 88, 220, .65);
-          box-shadow:
-            4px 5px 0 rgba(102, 88, 220, .14),
-            0 0 0 4px rgba(102, 88, 220, .08);
+          box-shadow: 4px 5px 0 rgba(102, 88, 220, .14), 0 0 0 4px rgba(102, 88, 220, .08);
           transform: translateY(-1px);
         }
 
@@ -1227,15 +1215,14 @@ export default function AttendanceLogs() {
           min-height: 47px;
           padding: 0 18px;
           border-radius: 15px;
+          white-space: nowrap;
         }
 
         .attendance-primary-button {
           align-self: end;
           color: #fff;
           background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow:
-            5px 6px 0 #a9d6f5,
-            0 14px 25px rgba(36, 74, 128, .16);
+          box-shadow: 5px 6px 0 #a9d6f5, 0 14px 25px rgba(36, 74, 128, .16);
         }
 
         .attendance-secondary-button {
@@ -1256,14 +1243,13 @@ export default function AttendanceLogs() {
         .attendance-error {
           padding: 16px 18px;
           border: 1px solid rgba(216, 77, 104, .28);
-          background: #fff0f2;
           color: #a2344d;
+          background: #fff0f2;
           box-shadow: 4px 5px 0 #f2c2cc;
           font-weight: 800;
         }
 
         .attendance-table-wrap {
-          width: 100%;
           overflow-x: auto;
           overflow-y: hidden;
           border-top: 1px solid rgba(171, 181, 211, .42);
@@ -1283,15 +1269,15 @@ export default function AttendanceLogs() {
 
         .attendance-table {
           width: 100%;
-          min-width: 1320px;
+          min-width: 1260px;
           border-collapse: collapse;
           table-layout: auto;
         }
 
         .attendance-table th {
           padding: 14px 17px;
-          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
           color: #536381;
+          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
           font-size: 10px;
           font-weight: 950;
           letter-spacing: .07em;
@@ -1307,7 +1293,7 @@ export default function AttendanceLogs() {
         }
 
         .attendance-table tbody tr {
-          transition: background 180ms ease;
+          transition: background 180ms ease, transform 180ms ease;
         }
 
         .attendance-table tbody tr:hover {
@@ -1371,26 +1357,26 @@ export default function AttendanceLogs() {
         }
 
         .attendance-status-badge.success {
-          background: #eaf8f4;
           color: #047857;
+          background: #eaf8f4;
           box-shadow: 2px 3px 0 #aee6d9;
         }
 
         .attendance-status-badge.warning {
-          background: #fff4d5;
           color: #9a6817;
+          background: #fff4d5;
           box-shadow: 2px 3px 0 #ffe0a5;
         }
 
         .attendance-status-badge.danger {
-          background: #fff0f2;
           color: #a2344d;
+          background: #fff0f2;
           box-shadow: 2px 3px 0 #f2c2cc;
         }
 
         .attendance-status-badge.holiday {
-          background: #f1efff;
           color: #40348d;
+          background: #f1efff;
           box-shadow: 2px 3px 0 #c9c0ff;
         }
 
@@ -1400,20 +1386,20 @@ export default function AttendanceLogs() {
         }
 
         .attendance-mode-badge.office {
-          background: #edf6ff;
           color: #245da8;
+          background: #edf6ff;
           box-shadow: 2px 3px 0 #b9d7ff;
         }
 
         .attendance-mode-badge.wfh {
-          background: #f1efff;
           color: #40348d;
+          background: #f1efff;
           box-shadow: 2px 3px 0 #c9c0ff;
         }
 
         .attendance-mode-badge.field {
-          background: #eaf8f4;
           color: #047857;
+          background: #eaf8f4;
           box-shadow: 2px 3px 0 #aee6d9;
         }
 
@@ -1451,9 +1437,10 @@ export default function AttendanceLogs() {
           padding: 0 13px;
           border: 1px solid rgba(102, 88, 220, .22);
           border-radius: 13px;
-          background: #f1efff;
           color: #40348d;
+          background: #f1efff;
           box-shadow: 3px 4px 0 #c9c0ff;
+          white-space: nowrap;
         }
 
         .attendance-loading {
@@ -1483,9 +1470,9 @@ export default function AttendanceLogs() {
           gap: 10px;
           padding: 48px 20px;
           border: 1px dashed rgba(102, 88, 220, .34);
+          color: var(--attendance-muted);
           background: linear-gradient(145deg, #f8f7ff, #effbf8);
           box-shadow: 4px 5px 0 rgba(52,43,120,.07);
-          color: var(--attendance-muted);
         }
 
         .attendance-empty-state svg {
@@ -1512,6 +1499,7 @@ export default function AttendanceLogs() {
           gap: 16px;
           padding: 18px 24px;
           border-top: 1px solid rgba(171, 181, 211, .42);
+          background: rgba(248, 250, 255, .72);
         }
 
         .attendance-pagination p {
@@ -1524,6 +1512,8 @@ export default function AttendanceLogs() {
           display: flex;
           align-items: center;
           gap: 8px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
         }
 
         .attendance-page-button {
@@ -1534,8 +1524,8 @@ export default function AttendanceLogs() {
           height: 40px;
           border: 1px solid rgba(102, 88, 220, .20);
           border-radius: 13px;
-          background: #f1efff;
           color: #40348d;
+          background: #f1efff;
           box-shadow: 3px 4px 0 #c9c0ff;
         }
 
@@ -1546,22 +1536,24 @@ export default function AttendanceLogs() {
 
         .attendance-page-indicator {
           min-width: 88px;
-          text-align: center;
           color: #40348d;
           font-size: 13px;
           font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
         }
 
         .attendance-mobile-list {
           display: none;
           gap: 12px;
-          padding: 0 16px 18px;
+          padding: 16px;
           border-top: 1px solid rgba(171, 181, 211, .42);
         }
 
         .attendance-mobile-card {
           display: grid;
           gap: 13px;
+          min-width: 0;
           padding: 17px;
           border: 1px solid rgba(171, 181, 211, .62);
           border-radius: 21px;
@@ -1584,10 +1576,6 @@ export default function AttendanceLogs() {
           box-shadow: 5px 6px 0 #c9c0ff;
         }
 
-        .attendance-mobile-card:first-child {
-          margin-top: 16px;
-        }
-
         .attendance-mobile-top,
         .attendance-mobile-bottom {
           display: flex;
@@ -1596,12 +1584,18 @@ export default function AttendanceLogs() {
           gap: 12px;
         }
 
+        .attendance-mobile-top > div,
+        .attendance-mobile-bottom > div {
+          min-width: 0;
+        }
+
         .attendance-mobile-card h3 {
           margin: 0;
           color: var(--attendance-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
           font-size: 20px;
           font-weight: 760;
+          overflow-wrap: anywhere;
         }
 
         .attendance-mobile-card p {
@@ -1618,6 +1612,7 @@ export default function AttendanceLogs() {
         }
 
         .attendance-mobile-meta article {
+          min-width: 0;
           padding: 11px;
           border: 1px solid rgba(171, 181, 211, .45);
           border-radius: 15px;
@@ -1639,6 +1634,7 @@ export default function AttendanceLogs() {
           margin-top: 5px;
           color: var(--attendance-ink);
           font-size: 13px;
+          overflow-wrap: anywhere;
         }
 
         .attendance-modal-backdrop {
@@ -1648,35 +1644,46 @@ export default function AttendanceLogs() {
           display: grid;
           place-items: center;
           padding: 22px;
+          overflow-y: auto;
           background: rgba(14, 22, 42, .56);
           backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          overscroll-behavior: contain;
         }
 
         .attendance-modal {
           width: min(880px, 100%);
-          max-height: min(90vh, 880px);
+          max-height: min(90dvh, 880px);
           overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
           border: 1px solid rgba(171, 181, 211, .70);
           border-radius: 28px;
           background:
             radial-gradient(circle at 0% 0%, rgba(105,217,208,.12), transparent 26%),
             radial-gradient(circle at 100% 0%, rgba(102,88,220,.10), transparent 28%),
             #fff;
-          box-shadow:
-            10px 12px 0 #c4ccff,
-            0 34px 90px rgba(9, 16, 35, .30);
+          box-shadow: 10px 12px 0 #c4ccff, 0 34px 90px rgba(9, 16, 35, .30);
           animation: attendance-modal-enter .2s ease-out;
         }
 
         .attendance-modal-header {
+          position: sticky;
+          z-index: 2;
+          top: 0;
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 20px;
           padding: 27px 28px 22px;
           border-bottom: 1px solid rgba(171, 181, 211, .46);
-          background: rgba(255,255,255,.92);
+          background: rgba(255,255,255,.94);
           backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+        }
+
+        .attendance-modal-header > div {
+          min-width: 0;
         }
 
         .attendance-modal-header h2 {
@@ -1686,6 +1693,7 @@ export default function AttendanceLogs() {
           font-size: 30px;
           font-weight: 760;
           letter-spacing: -.04em;
+          overflow-wrap: anywhere;
         }
 
         .attendance-modal-header p {
@@ -1702,8 +1710,8 @@ export default function AttendanceLogs() {
           flex: 0 0 42px;
           border: 1px solid rgba(102,88,220,.18);
           border-radius: 13px;
-          background: #fff;
           color: #40348d;
+          background: #fff;
           box-shadow: 3px 4px 0 rgba(52,43,120,.08);
         }
 
@@ -1717,6 +1725,7 @@ export default function AttendanceLogs() {
         .attendance-detail-card {
           display: flex;
           gap: 12px;
+          min-width: 0;
           padding: 17px;
           border: 1px solid rgba(171, 181, 211, .50);
           border-radius: 18px;
@@ -1787,6 +1796,7 @@ export default function AttendanceLogs() {
 
         .attendance-reason-grid article,
         .attendance-location-grid article {
+          min-width: 0;
           padding: 16px;
           border: 1px solid rgba(171, 181, 211, .50);
           border-radius: 17px;
@@ -1808,20 +1818,26 @@ export default function AttendanceLogs() {
           margin-top: 7px;
           color: var(--attendance-ink);
           line-height: 1.5;
+          overflow-wrap: anywhere;
         }
 
         .attendance-location-heading {
           display: flex;
           align-items: center;
           gap: 8px;
-          color: #40348d;
+          color: var(--attendance-ink);
+        }
+
+        .attendance-location-heading svg {
+          flex: 0 0 auto;
+          color: var(--attendance-primary);
         }
 
         .attendance-location-grid p {
-          min-height: 42px;
-          margin: 11px 0;
+          margin: 10px 0 12px;
           color: var(--attendance-muted);
-          line-height: 1.5;
+          line-height: 1.55;
+          overflow-wrap: anywhere;
         }
 
         .attendance-location-grid a,
@@ -1830,45 +1846,48 @@ export default function AttendanceLogs() {
           align-items: center;
           gap: 7px;
           color: #40348d;
+          font-size: 12px;
           font-weight: 900;
           text-decoration: none;
+          overflow-wrap: anywhere;
         }
 
         .attendance-photo-link {
-          padding: 13px 15px;
-          border: 1px solid rgba(102, 88, 220, .20);
-          border-radius: 15px;
+          padding: 12px 14px;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 14px;
           background: #f1efff;
           box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .attendance-metadata-list {
           display: grid;
-          gap: 1px;
-          overflow: hidden;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
           margin: 0;
-          border: 1px solid rgba(171, 181, 211, .50);
-          border-radius: 17px;
-          background: rgba(171, 181, 211, .30);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
         }
 
         .attendance-metadata-list > div {
-          display: grid;
-          grid-template-columns: minmax(170px, .55fr) minmax(0, 1fr);
-          gap: 18px;
-          padding: 14px 16px;
-          background: #fff;
+          min-width: 0;
+          padding: 14px;
+          border: 1px solid rgba(171, 181, 211, .48);
+          border-radius: 15px;
+          background: #f8faff;
         }
 
         .attendance-metadata-list dt {
-          color: #4e5a70;
-          font-weight: 900;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .07em;
+          text-transform: uppercase;
         }
 
         .attendance-metadata-list dd {
-          margin: 0;
-          color: #27344c;
+          margin: 6px 0 0;
+          color: var(--attendance-ink);
+          font-size: 13px;
+          line-height: 1.5;
           white-space: pre-wrap;
           overflow-wrap: anywhere;
         }
@@ -1877,32 +1896,35 @@ export default function AttendanceLogs() {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 18px;
-          padding: 22px 28px 27px;
+          gap: 16px;
+          padding: 22px 28px 28px;
         }
 
         .attendance-modal-footer p {
           margin: 0;
           color: var(--attendance-muted);
-          font-size: 12px;
-        }
-
-        @keyframes attendance-refresh-idle {
-          0%, 84% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+          font-size: 11px;
+          line-height: 1.5;
         }
 
         @keyframes attendance-spin {
           to { transform: rotate(360deg); }
         }
 
+        @keyframes attendance-refresh-idle {
+          0%, 72%, 100% { transform: rotate(0); }
+          82% { transform: rotate(150deg); }
+          92% { transform: rotate(360deg); }
+        }
+
         @keyframes attendance-kpi-float {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-3px) rotate(-3deg); }
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-4px); }
         }
 
         @keyframes attendance-skeleton {
-          to { background-position: -220% 0; }
+          0% { background-position: 200% 0; }
+          100% { background-position: -20% 0; }
         }
 
         @keyframes attendance-modal-enter {
@@ -1910,25 +1932,55 @@ export default function AttendanceLogs() {
             opacity: 0;
             transform: translateY(12px) scale(.985);
           }
-
           to {
             opacity: 1;
             transform: translateY(0) scale(1);
           }
         }
 
-        @media (max-width: 1180px) {
+        @media (max-width: 1280px) {
           .attendance-kpi-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .attendance-filter-form,
+          .attendance-filter-form {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .attendance-date-actions {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+
+          .attendance-primary-button,
+          .attendance-secondary-button {
+            width: 100%;
+          }
         }
 
-        @media (max-width: 980px) {
+        @media (max-width: 1050px) {
+          .attendance-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .attendance-refresh-button {
+            justify-self: start;
+          }
+
+          .attendance-table {
+            min-width: 1160px;
+          }
+        }
+
+        @media (max-width: 900px) {
+          .attendance-filter-header {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .attendance-filter-header > .attendance-secondary-button {
+            align-self: flex-start;
+          }
+
           .attendance-table-wrap {
             display: none;
           }
@@ -1936,47 +1988,96 @@ export default function AttendanceLogs() {
           .attendance-mobile-list {
             display: grid;
           }
-
-          .attendance-mobile-top {
-            align-items: flex-start;
-          }
-
-          .attendance-mobile-top > small {
-            flex: 0 0 auto;
-            text-align: right;
-          }
-
-          .attendance-mobile-bottom {
-            align-items: flex-start;
-          }
-
-          .attendance-mobile-bottom .attendance-location-cell {
-            min-width: 0;
-            flex: 1 1 auto;
-          }
-
-          .attendance-mobile-bottom .attendance-view-button {
-            flex: 0 0 auto;
-          }
         }
 
-        @media (max-width: 720px) {
+        @media (max-width: 820px) {
           .attendance-log-page {
-            gap: 17px;
+            gap: 18px;
           }
 
           .attendance-hero {
-            grid-template-columns: 1fr;
             min-height: 0;
-            padding: 20px;
-            border-radius: 26px;
-            box-shadow:
-              6px 7px 0 #c6d8f7,
-              0 18px 30px rgba(34, 38, 110, .10);
+            padding: 26px;
           }
 
           .attendance-hero h1 {
-            font-size: clamp(36px, 10vw, 52px);
+            font-size: clamp(38px, 8vw, 58px);
+          }
+
+          .attendance-kpi-grid {
+            gap: 12px;
+          }
+
+          .attendance-filter-form,
+          .attendance-date-actions {
+            grid-template-columns: 1fr;
+          }
+
+          .attendance-filter-header,
+          .attendance-filter-form,
+          .attendance-date-actions {
+            padding-left: 20px;
+            padding-right: 20px;
+          }
+
+          .attendance-filter-form {
+            padding-bottom: 12px;
+          }
+
+          .attendance-date-actions {
+            padding-bottom: 20px;
+          }
+
+          .attendance-pagination {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .attendance-pagination-controls {
+            justify-content: space-between;
+          }
+
+          .attendance-modal-backdrop {
+            padding: 12px;
+            align-items: start;
+          }
+
+          .attendance-modal {
+            width: 100%;
+            max-height: calc(100dvh - 24px);
+            border-radius: 23px;
+          }
+
+          .attendance-modal-header,
+          .attendance-detail-grid,
+          .attendance-modal-section,
+          .attendance-modal-footer {
+            padding-left: 20px;
+            padding-right: 20px;
+          }
+
+          .attendance-reason-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 680px) {
+          .attendance-log-page {
+            gap: 15px;
+          }
+
+          .attendance-hero {
+            padding: 22px 18px;
+            border-radius: 26px;
+            box-shadow: 7px 9px 0 #c6d8f7, 0 20px 34px rgba(34,38,110,.11);
+          }
+
+          .attendance-hero h1 {
+            font-size: clamp(34px, 12vw, 50px);
+          }
+
+          .attendance-hero p {
+            font-size: 12px;
           }
 
           .attendance-refresh-button {
@@ -1988,115 +2089,182 @@ export default function AttendanceLogs() {
           }
 
           .attendance-kpi {
-            min-height: 102px;
+            min-height: 105px;
+          }
+
+          .attendance-panel {
+            border-radius: 22px;
+            box-shadow: 5px 7px 0 #c4ccff, 0 18px 30px rgba(34,38,110,.09);
           }
 
           .attendance-filter-header {
-            align-items: flex-start;
-            flex-direction: column;
-            padding: 21px 18px 16px;
+            padding: 18px 17px 15px;
           }
 
-          .attendance-filter-form,
-          .attendance-date-actions {
-            grid-template-columns: 1fr;
-            padding-left: 18px;
-            padding-right: 18px;
+          .attendance-filter-form {
+            padding: 0 17px 12px;
           }
 
           .attendance-date-actions {
-            padding-bottom: 20px;
+            padding: 0 17px 18px;
           }
 
-          .attendance-primary-button,
-          .attendance-secondary-button {
-            width: 100%;
+          .attendance-error,
+          .attendance-empty-state {
+            margin-left: 17px;
+            margin-right: 17px;
           }
 
-          .attendance-mobile-meta {
-            grid-template-columns: 1fr 1fr;
-          }
-
-          .attendance-pagination {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .attendance-pagination-controls {
-            width: 100%;
-            justify-content: space-between;
-          }
-
-          .attendance-modal-backdrop {
-            align-items: end;
-            padding: 0;
-          }
-
-          .attendance-modal {
-            width: 100%;
-            max-height: 93vh;
-            border-radius: 25px 25px 0 0;
-            box-shadow: 0 -20px 60px rgba(18,23,36,.22);
-          }
-
-          .attendance-modal-header,
-          .attendance-modal-section,
-          .attendance-modal-footer {
-            padding-left: 19px;
-            padding-right: 19px;
-          }
-
-          .attendance-detail-grid,
-          .attendance-reason-grid,
-          .attendance-location-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .attendance-detail-grid {
-            padding: 18px 18px 2px;
-          }
-
-          .attendance-metadata-list > div {
-            grid-template-columns: 1fr;
-            gap: 6px;
-          }
-
-          .attendance-modal-footer {
-            align-items: stretch;
-            flex-direction: column;
-          }
-        }
-
-        @media (max-width: 460px) {
-          .attendance-hero {
-            padding: 16px;
-          }
-
-          .attendance-hero h1 {
-            font-size: clamp(32px, 11vw, 44px);
+          .attendance-mobile-list {
+            padding: 14px;
           }
 
           .attendance-mobile-top,
           .attendance-mobile-bottom {
-            align-items: flex-start;
+            align-items: stretch;
             flex-direction: column;
-          }
-
-          .attendance-mobile-top > small {
-            text-align: left;
-          }
-
-          .attendance-mobile-meta {
-            grid-template-columns: 1fr;
           }
 
           .attendance-mobile-bottom .attendance-view-button {
             width: 100%;
           }
 
+          .attendance-mobile-meta {
+            grid-template-columns: 1fr;
+          }
+
+          .attendance-pagination {
+            padding: 16px;
+          }
+
+          .attendance-pagination-controls {
+            display: grid;
+            grid-template-columns: 40px minmax(0, 1fr) 40px;
+            width: 100%;
+          }
+
+          .attendance-page-indicator {
+            min-width: 0;
+          }
+
+          .attendance-detail-grid,
+          .attendance-location-grid,
+          .attendance-metadata-list {
+            grid-template-columns: 1fr;
+          }
+
+          .attendance-modal-header {
+            padding-top: 20px;
+          }
+
+          .attendance-modal-header h2 {
+            font-size: 26px;
+          }
+
+          .attendance-modal-footer {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .attendance-modal-footer .attendance-secondary-button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .attendance-hero {
+            padding: 20px 15px;
+          }
+
+          .attendance-hero h1 {
+            font-size: clamp(31px, 11vw, 43px);
+          }
+
+          .attendance-eyebrow,
+          .attendance-section-kicker {
+            max-width: 100%;
+            white-space: normal;
+          }
+
+          .attendance-kpi {
+            padding: 16px;
+            border-radius: 19px;
+          }
+
+          .attendance-filter-heading {
+            gap: 9px;
+          }
+
+          .attendance-filter-heading h2 {
+            font-size: 25px;
+          }
+
+          .attendance-filter-header > .attendance-secondary-button,
+          .attendance-primary-button,
+          .attendance-secondary-button {
+            width: 100%;
+          }
+
+          .attendance-mobile-card {
+            padding: 15px;
+            border-radius: 18px;
+          }
+
           .attendance-status-badge,
           .attendance-mode-badge {
-            max-width: 100%;
+            white-space: normal;
+            min-width: 0;
+            text-align: center;
+          }
+
+          .attendance-modal-backdrop {
+            padding: 0;
+          }
+
+          .attendance-modal {
+            min-height: 100dvh;
+            max-height: 100dvh;
+            border: 0;
+            border-radius: 0;
+            box-shadow: none;
+          }
+
+          .attendance-modal-header,
+          .attendance-detail-grid,
+          .attendance-modal-section,
+          .attendance-modal-footer {
+            padding-left: 15px;
+            padding-right: 15px;
+          }
+
+          .attendance-modal-header {
+            gap: 12px;
+          }
+        }
+
+        @media (max-width: 380px) {
+          .attendance-log-page {
+            gap: 13px;
+          }
+
+          .attendance-hero {
+            padding: 18px 13px;
+          }
+
+          .attendance-kpi,
+          .attendance-mobile-card {
+            padding: 13px;
+          }
+
+          .attendance-filter-header,
+          .attendance-filter-form,
+          .attendance-date-actions {
+            padding-left: 13px;
+            padding-right: 13px;
+          }
+
+          .attendance-mobile-list {
+            padding: 12px;
           }
         }
 
@@ -2104,8 +2272,10 @@ export default function AttendanceLogs() {
           .attendance-log-page *,
           .attendance-log-page *::before,
           .attendance-log-page *::after {
-            animation: none !important;
-            transition: none !important;
+            scroll-behavior: auto !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
           }
         }
       `}</style>
@@ -2141,10 +2311,6 @@ export default function AttendanceLogs() {
 
       <div className="attendance-kpi-grid">
         <article className="attendance-kpi">
-          <span className="attendance-kpi-icon">
-            <Activity size={22} />
-          </span>
-
           <div>
             <span>Total records</span>
             <strong>{total.toLocaleString('en-IN')}</strong>
@@ -2153,10 +2319,6 @@ export default function AttendanceLogs() {
         </article>
 
         <article className="attendance-kpi">
-          <span className="attendance-kpi-icon">
-            <UserRound size={22} />
-          </span>
-
           <div>
             <span>Employees visible</span>
             <strong>{uniqueEmployees.toLocaleString('en-IN')}</strong>
@@ -2165,10 +2327,6 @@ export default function AttendanceLogs() {
         </article>
 
         <article className="attendance-kpi">
-          <span className="attendance-kpi-icon">
-            <BadgeCheck size={22} />
-          </span>
-
           <div>
             <span>Present records</span>
             <strong>{presentCount.toLocaleString('en-IN')}</strong>
@@ -2177,10 +2335,6 @@ export default function AttendanceLogs() {
         </article>
 
         <article className="attendance-kpi">
-          <span className="attendance-kpi-icon">
-            <Navigation size={22} />
-          </span>
-
           <div>
             <span>WFH / Field</span>
             <strong>{mobileCount.toLocaleString('en-IN')}</strong>

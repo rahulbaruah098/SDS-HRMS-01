@@ -937,79 +937,129 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Presentation-only: keep the employee selector pinned while the salary
-  // configuration column is still visible. This deliberately listens to
-  // scroll events from any ancestor scroll container used by the app shell.
-  useEffect(() => {
-    if (tab !== 'salary') return undefined;
+ // Presentation-only sticky employee sidebar.
+// Important: ignore scroll events originating inside the sidebar itself.
+// Reposition only when the actual page/app scroll container moves.
+useEffect(() => {
+  if (tab !== 'salary') return undefined;
 
-    const sidebar = employeeSidebarRef.current;
-    if (!sidebar) return undefined;
+  const sidebar = employeeSidebarRef.current;
+  if (!sidebar) return undefined;
 
-    const layout = sidebar.closest('.payroll-config-layout');
-    if (!layout) return undefined;
+  const layout = sidebar.closest('.payroll-config-layout');
+  if (!layout) return undefined;
 
-    let frame = 0;
+  let frame = 0;
 
-    const resetSidebar = () => {
-      sidebar.classList.remove('is-sticky-fixed', 'is-sticky-bottom');
-      sidebar.style.removeProperty('--payroll-sidebar-left');
-      sidebar.style.removeProperty('--payroll-sidebar-width');
-      sidebar.style.removeProperty('--payroll-sidebar-height');
-    };
+  const resetSidebar = () => {
+    sidebar.classList.remove('is-sticky-fixed', 'is-sticky-bottom');
+    sidebar.style.removeProperty('--payroll-sidebar-left');
+    sidebar.style.removeProperty('--payroll-sidebar-width');
+    sidebar.style.removeProperty('--payroll-sidebar-height');
+  };
 
-    const updateSidebarPosition = () => {
-      frame = 0;
+  const updateSidebarPosition = () => {
+    frame = 0;
 
-      if (window.matchMedia('(max-width: 1050px)').matches) {
-        resetSidebar();
-        return;
-      }
-
-      const topOffset = 18;
-
-      // Measure in normal flow first so fixed positioning never changes width.
-      if (sidebar.classList.contains('is-sticky-fixed') || sidebar.classList.contains('is-sticky-bottom')) {
-        sidebar.classList.remove('is-sticky-fixed', 'is-sticky-bottom');
-      }
-
-      const layoutRect = layout.getBoundingClientRect();
-      const sidebarRect = sidebar.getBoundingClientRect();
-      const sidebarHeight = sidebarRect.height;
-      const sidebarWidth = sidebarRect.width;
-
-      sidebar.style.setProperty('--payroll-sidebar-left', `${layoutRect.left}px`);
-      sidebar.style.setProperty('--payroll-sidebar-width', `${sidebarWidth}px`);
-      sidebar.style.setProperty('--payroll-sidebar-height', `${sidebarHeight}px`);
-
-      if (layoutRect.top > topOffset) {
-        return;
-      }
-
-      if (layoutRect.bottom <= sidebarHeight + topOffset) {
-        sidebar.classList.add('is-sticky-bottom');
-        return;
-      }
-
-      sidebar.classList.add('is-sticky-fixed');
-    };
-
-    const scheduleUpdate = () => {
-      if (frame) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(updateSidebarPosition);
-    };
-
-    scheduleUpdate();
-    window.addEventListener('resize', scheduleUpdate);
-    document.addEventListener('scroll', scheduleUpdate, true);
-
-    return () => {
-      if (frame) cancelAnimationFrame(frame);
-      window.removeEventListener('resize', scheduleUpdate);
-      document.removeEventListener('scroll', scheduleUpdate, true);
+    // Mobile/tablet layout must remain normal-flow.
+    if (
+      window.matchMedia('(max-width: 1050px)').matches
+      || window.matchMedia('(pointer: coarse)').matches
+    ) {
       resetSidebar();
-    };
-  }, [tab, filteredEmployees.length]);
+      return;
+    }
+
+    const topOffset = 18;
+    const layoutRect = layout.getBoundingClientRect();
+
+    // IMPORTANT:
+    // Do not repeatedly remove/re-add fixed positioning just to measure it.
+    // That behaviour was interrupting scrolling on some browsers/devices.
+    const sidebarWidth =
+      sidebar.offsetWidth
+      || Number.parseFloat(
+        getComputedStyle(sidebar).getPropertyValue('--payroll-sidebar-width'),
+      )
+      || 0;
+
+    const sidebarHeight = sidebar.offsetHeight;
+
+    sidebar.style.setProperty(
+      '--payroll-sidebar-left',
+      `${layoutRect.left}px`,
+    );
+
+    if (sidebarWidth) {
+      sidebar.style.setProperty(
+        '--payroll-sidebar-width',
+        `${sidebarWidth}px`,
+      );
+    }
+
+    if (sidebarHeight) {
+      sidebar.style.setProperty(
+        '--payroll-sidebar-height',
+        `${sidebarHeight}px`,
+      );
+    }
+
+    if (layoutRect.top > topOffset) {
+      sidebar.classList.remove('is-sticky-fixed', 'is-sticky-bottom');
+      return;
+    }
+
+    if (layoutRect.bottom <= sidebarHeight + topOffset) {
+      sidebar.classList.remove('is-sticky-fixed');
+      sidebar.classList.add('is-sticky-bottom');
+      return;
+    }
+
+    sidebar.classList.remove('is-sticky-bottom');
+    sidebar.classList.add('is-sticky-fixed');
+  };
+
+  const scheduleUpdate = (event) => {
+    // Critical fix:
+    // scrolling the employee list must NOT trigger sidebar repositioning.
+    if (
+      event?.target instanceof Node
+      && sidebar.contains(event.target)
+    ) {
+      return;
+    }
+
+    if (frame) {
+      cancelAnimationFrame(frame);
+    }
+
+    frame = requestAnimationFrame(updateSidebarPosition);
+  };
+
+  scheduleUpdate();
+
+  window.addEventListener('scroll', scheduleUpdate, { passive: true });
+  window.addEventListener('resize', scheduleUpdate, { passive: true });
+
+  // Keep support for app-shell scroll containers,
+  // but do not process scrolling occurring inside the sidebar.
+  document.addEventListener('scroll', scheduleUpdate, {
+    capture: true,
+    passive: true,
+  });
+
+  return () => {
+    if (frame) {
+      cancelAnimationFrame(frame);
+    }
+
+    window.removeEventListener('scroll', scheduleUpdate);
+    window.removeEventListener('resize', scheduleUpdate);
+    document.removeEventListener('scroll', scheduleUpdate, true);
+
+    resetSidebar();
+  };
+}, [tab, filteredEmployees.length]);
 
   useEffect(() => {
     if (selectedEmployeeId) {
@@ -3497,15 +3547,17 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         }
 
         .payroll-config-sidebar {
-          position: relative;
-          align-self: start;
-          display: grid;
-          grid-template-rows: auto auto minmax(0, 1fr);
-          gap: 14px;
-          height: fit-content;
-          max-height: calc(100vh - 36px);
-          overflow: hidden;
-        }
+  position: relative;
+  align-self: start;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  height: fit-content;
+  max-height: calc(100dvh - 36px);
+  overflow: visible;
+}
 
         .payroll-config-layout {
           position: relative;
@@ -3580,12 +3632,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         }
 
         .payroll-config-employee-list {
-          display: grid;
-          gap: 9px;
-          min-height: 0;
-          overflow: auto;
-          padding-right: 3px;
-        }
+  display: grid;
+  gap: 9px;
+  min-height: 0;
+  max-height: calc(100dvh - 210px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 3px;
+}
 
         .payroll-config-employee-list button {
           display: grid;
@@ -4070,6 +4126,30 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
+
+
+        @media (pointer: coarse) {
+  .payroll-config-sidebar,
+  .payroll-config-sidebar.is-sticky-fixed,
+  .payroll-config-sidebar.is-sticky-bottom {
+    position: static;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .payroll-config-employee-list {
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
 
         @media (max-width: 820px) {
           .payroll-config-page {
