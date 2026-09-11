@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from bson import ObjectId
 from pymongo import ReturnDocument
-from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from app.extensions import get_db
@@ -3546,8 +3546,11 @@ def upload_payroll_reimbursement_receipt():
         ) from exc
 
     uploaded_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    # Store the canonical payroll receipt route for all new uploads.
+    # Older records may still contain:
+    # reimbursements/<tenant>/receipts/<filename>
     reference = (
-        f"reimbursements/{tenant_folder}/receipts/{final_name}"
+        f"payroll/reimbursements/receipts/{tenant_folder}/{final_name}"
     )
     receipt = {
         "reference": reference,
@@ -3563,6 +3566,178 @@ def upload_payroll_reimbursement_receipt():
         "Receipt uploaded successfully.",
         receipt=receipt,
     )
+
+
+@payroll_bp.get("/reimbursements/receipts/<tenant_folder>/<filename>")
+@tenant_module_required("payroll")
+@roles_required(*PAYROLL_REIMBURSEMENT_ACCESS_ROLES)
+def serve_payroll_reimbursement_receipt(
+    tenant_folder: str,
+    filename: str,
+):
+    """Serve an uploaded reimbursement receipt to an authorised HRMS user."""
+
+    normalized_tenant_folder = secure_filename(
+        safe_str(tenant_folder).lower()
+    )
+    normalized_filename = secure_filename(filename)
+
+    if (
+        not normalized_tenant_folder
+        or normalized_tenant_folder != safe_str(tenant_folder).lower()
+        or not normalized_filename
+        or normalized_filename != filename
+    ):
+        raise PayrollReimbursementError(
+            "Invalid reimbursement receipt path.",
+            status_code=400,
+            code="invalid_reimbursement_receipt_path",
+        )
+
+    current_tenant_id = _current_tenant_id()
+    current_tenant_folder = (
+        secure_filename(current_tenant_id.lower()) or "sds"
+    )
+
+    # Normal users can access receipts only inside their own tenant folder.
+    # Super admins may access another tenant while using the tenant-scoped
+    # reimbursement management screen.
+    if normalized_tenant_folder == current_tenant_folder:
+        receipt_tenant_id = current_tenant_id
+    elif "super_admin" in _current_roles():
+        receipt_tenant_id = normalized_tenant_folder
+    else:
+        raise PayrollReimbursementError(
+            "You cannot access reimbursement receipts for another company.",
+            status_code=403,
+            code="reimbursement_receipt_tenant_forbidden",
+        )
+
+    extension = (
+        normalized_filename.rsplit(".", 1)[-1].lower()
+        if "." in normalized_filename
+        else ""
+    )
+
+    if extension not in REIMBURSEMENT_RECEIPT_ALLOWED_EXTENSIONS:
+        raise PayrollReimbursementError(
+            "Unsupported reimbursement receipt type.",
+            status_code=404,
+            code="reimbursement_receipt_not_found",
+        )
+
+    # A receipt must be attached to an active reimbursement record before it
+    # can be viewed. Accept both the historical reference format and the new
+    # canonical payroll reference so previously uploaded claims keep working.
+    reference_candidates = [
+        (
+            f"reimbursements/{normalized_tenant_folder}/receipts/"
+            f"{normalized_filename}"
+        ),
+        (
+            f"/api/v1/reimbursements/{normalized_tenant_folder}/receipts/"
+            f"{normalized_filename}"
+        ),
+        (
+            f"payroll/reimbursements/receipts/"
+            f"{normalized_tenant_folder}/{normalized_filename}"
+        ),
+        (
+            f"/api/v1/payroll/reimbursements/receipts/"
+            f"{normalized_tenant_folder}/{normalized_filename}"
+        ),
+    ]
+
+    db = get_db()
+    reimbursement = db["payroll_reimbursements"].find_one({
+        "tenant_id": receipt_tenant_id,
+        "is_deleted": {"$ne": True},
+        "items.receipts.reference": {"$in": reference_candidates},
+    })
+
+    if not reimbursement:
+        raise PayrollReimbursementError(
+            "The reimbursement receipt was not found.",
+            status_code=404,
+            code="reimbursement_receipt_not_found",
+        )
+
+    _assert_reimbursement_record_access(
+        db,
+        receipt_tenant_id,
+        reimbursement,
+    )
+
+    receipt_directory = os.path.abspath(
+        os.path.join(
+            _reimbursement_receipt_upload_root(),
+            normalized_tenant_folder,
+            "receipts",
+        )
+    )
+    receipt_path = os.path.abspath(
+        os.path.join(receipt_directory, normalized_filename)
+    )
+
+    try:
+        common_path = os.path.commonpath(
+            [receipt_directory, receipt_path]
+        )
+    except ValueError:
+        common_path = ""
+
+    if (
+        common_path != receipt_directory
+        or not os.path.isfile(receipt_path)
+    ):
+        raise PayrollReimbursementError(
+            "The reimbursement receipt file was not found.",
+            status_code=404,
+            code="reimbursement_receipt_file_not_found",
+        )
+
+    detected_extension = _detect_reimbursement_receipt_extension(
+        receipt_path
+    )
+
+    if detected_extension not in {"pdf", "jpg", "png"}:
+        raise PayrollReimbursementError(
+            "The reimbursement receipt file is invalid.",
+            status_code=404,
+            code="invalid_reimbursement_receipt_content",
+        )
+
+    mime_type = REIMBURSEMENT_RECEIPT_MIME_TYPES[
+        detected_extension
+    ]
+
+    original_filename = normalized_filename
+    for item in reimbursement.get("items") or []:
+        for receipt in item.get("receipts") or []:
+            if safe_str(receipt.get("reference")) in reference_candidates:
+                original_filename = (
+                    secure_filename(
+                        safe_str(receipt.get("filename"))
+                    )
+                    or normalized_filename
+                )
+                break
+        if original_filename != normalized_filename:
+            break
+
+    response = send_file(
+        receipt_path,
+        mimetype=mime_type,
+        as_attachment=False,
+        download_name=original_filename,
+        conditional=True,
+    )
+    response.headers["Content-Disposition"] = (
+        f'inline; filename="{original_filename}"'
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+
+    return response
 
 
 @payroll_bp.get("/reimbursements")

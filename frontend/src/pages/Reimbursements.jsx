@@ -365,6 +365,90 @@ function workflowHistory(record) {
   return Array.isArray(history) ? [...history].reverse() : [];
 }
 
+function sameIdentifier(left, right) {
+  const leftValue = safeText(left, '');
+  const rightValue = safeText(right, '');
+
+  return Boolean(leftValue && rightValue && leftValue === rightValue);
+}
+
+function wasCancelledByEmployee(record = {}) {
+  if (normalizeKey(record.status) !== 'cancelled') {
+    return false;
+  }
+
+  const employeeUserId = safeText(
+    record.user_id || record.employee_user_id,
+    '',
+  );
+  const cancelledBy = safeText(record.cancelled_by, '');
+
+  return sameIdentifier(employeeUserId, cancelledBy);
+}
+
+function receiptUrl(reference) {
+  const value = safeText(reference, '');
+
+  if (!value) {
+    return '';
+  }
+
+  // Current backend route:
+  // /api/v1/payroll/reimbursements/receipts/<tenant>/<filename>
+  //
+  // Older reimbursement records may still contain the legacy shape:
+  // /api/v1/reimbursements/<tenant>/receipts/<filename>
+  // Normalize those stored references before building the request URL.
+  const normalizeReceiptPath = (pathValue) => {
+    const rawPath = safeText(pathValue, '');
+
+    if (!rawPath) {
+      return '';
+    }
+
+    const legacyMatch = rawPath.match(
+      /^\/?(?:api\/v1\/)?reimbursements\/([^/]+)\/receipts\/(.+)$/i,
+    );
+
+    if (legacyMatch) {
+      return `/payroll/reimbursements/receipts/${legacyMatch[1]}/${legacyMatch[2]}`;
+    }
+
+    const currentMatch = rawPath.match(
+      /^\/?(?:api\/v1\/)?payroll\/reimbursements\/receipts\/([^/]+)\/(.+)$/i,
+    );
+
+    if (currentMatch) {
+      return `/payroll/reimbursements/receipts/${currentMatch[1]}/${currentMatch[2]}`;
+    }
+
+    if (rawPath.startsWith('/api/v1/')) {
+      return rawPath.slice('/api/v1'.length);
+    }
+
+    return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  };
+
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const parsed = new URL(value);
+      const normalizedPath = normalizeReceiptPath(parsed.pathname);
+
+      if (
+        normalizedPath.startsWith('/payroll/reimbursements/receipts/')
+      ) {
+        return getApiUrl(normalizedPath);
+      }
+
+      return value;
+    } catch {
+      return value;
+    }
+  }
+
+  return getApiUrl(normalizeReceiptPath(value));
+}
+
 function actionTitle(action) {
   const titles = {
     hr_review: 'Complete HR Review',
@@ -404,6 +488,7 @@ export default function Reimbursements({ user = {} }) {
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
   const [uploadingReceiptIndex, setUploadingReceiptIndex] = useState(-1);
+  const [viewingReceiptReference, setViewingReceiptReference] = useState('');
 
   const [showDraftForm, setShowDraftForm] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
@@ -416,14 +501,22 @@ export default function Reimbursements({ user = {} }) {
   const [showWorkflow, setShowWorkflow] = useState(true);
   const [showItems, setShowItems] = useState(true);
 
+  const visibleItems = useMemo(() => {
+    if (!canManage) {
+      return items;
+    }
+
+    return items.filter((item) => !wasCancelledByEmployee(item));
+  }, [canManage, items]);
+
   const filteredItems = useMemo(() => {
     const term = normalizeKey(search);
 
     if (!term) {
-      return items;
+      return visibleItems;
     }
 
-    return items.filter((item) => {
+    return visibleItems.filter((item) => {
       const itemText = (item.items || [])
         .map((row) => `${row.description} ${row.vendor} ${row.invoice_number}`)
         .join(' ');
@@ -445,20 +538,20 @@ export default function Reimbursements({ user = {} }) {
 
       return haystack.includes(term);
     });
-  }, [items, search]);
+  }, [visibleItems, search]);
 
   const metrics = useMemo(() => {
-    const pendingHr = items.filter(
+    const pendingHr = visibleItems.filter(
       (item) => normalizeKey(item.status) === 'pending_hr_review',
     ).length;
-    const pendingFinance = items.filter(
+    const pendingFinance = visibleItems.filter(
       (item) => normalizeKey(item.status) === 'pending_finance_approval',
     ).length;
-    const approved = items.reduce(
+    const approved = visibleItems.reduce(
       (total, item) => total + toNumber(item.approved_amount, 0),
       0,
     );
-    const paid = items
+    const paid = visibleItems
       .filter((item) => normalizeKey(item.status) === 'paid')
       .reduce(
         (total, item) =>
@@ -467,13 +560,13 @@ export default function Reimbursements({ user = {} }) {
       );
 
     return {
-      total: items.length,
+      total: visibleItems.length,
       pendingHr,
       pendingFinance,
       approved,
       paid,
     };
-  }, [items]);
+  }, [visibleItems]);
 
   function tenantParams() {
     if (!superAdmin || !tenantId.trim()) {
@@ -570,8 +663,12 @@ export default function Reimbursements({ user = {} }) {
         const updatedSelection = rows.find(
           (row) => recordId(row) === desiredId,
         );
+        const selectionIsHidden =
+          canManage &&
+          updatedSelection &&
+          wasCancelledByEmployee(updatedSelection);
 
-        setSelectedRecord(updatedSelection || null);
+        setSelectedRecord(selectionIsHidden ? null : updatedSelection || null);
       }
 
       return rows;
@@ -862,6 +959,91 @@ export default function Reimbursements({ user = {} }) {
     }
   }
 
+  async function viewReceipt(receipt = {}) {
+    const reference = safeText(receipt.reference, '');
+
+    if (!reference) {
+      alerts.warning(
+        'No receipt document is attached to this expense item.',
+        'Receipt Not Available',
+      );
+      return;
+    }
+
+    const targetUrl = receiptUrl(reference);
+
+    if (!targetUrl) {
+      alerts.error(
+        'The receipt document link is invalid.',
+        'Receipt View Failed',
+      );
+      return;
+    }
+
+    let previewWindow = null;
+
+    try {
+      setViewingReceiptReference(reference);
+
+      previewWindow = window.open('', '_blank');
+
+      if (previewWindow) {
+        previewWindow.document.title = safeText(
+          receipt.filename,
+          'Reimbursement Receipt',
+        );
+        previewWindow.document.body.innerHTML =
+          '<div style="font-family:Arial,sans-serif;padding:24px;color:#334155;">Loading receipt…</div>';
+      }
+
+      const token = getToken();
+      const response = await fetch(targetUrl, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            'Unable to open the reimbursement receipt.',
+          ),
+        );
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.opener = null;
+        previewWindow.location.href = objectUrl;
+      } else {
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+
+      window.setTimeout(() => {
+        window.URL.revokeObjectURL(objectUrl);
+      }, 60_000);
+    } catch (error) {
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.close();
+      }
+
+      alerts.error(
+        error.message || 'Unable to open the reimbursement receipt.',
+        'Receipt View Failed',
+      );
+    } finally {
+      setViewingReceiptReference('');
+    }
+  }
+
   function validateDraft() {
     if (canManage && !draft.employee_id) {
       return 'Select an employee.';
@@ -1060,6 +1242,22 @@ export default function Reimbursements({ user = {} }) {
     } finally {
       setActionLoading('');
     }
+  }
+
+  async function openHrReview(record) {
+    const id = recordId(record);
+
+    if (!id || !assertTenant()) {
+      return;
+    }
+
+    const detailedRecord = await loadDetail(id);
+
+    if (!detailedRecord) {
+      return;
+    }
+
+    openAction('hr_review', detailedRecord);
   }
 
   function openAction(action, record) {
@@ -1334,7 +1532,7 @@ export default function Reimbursements({ user = {} }) {
               className="reim-btn reim-btn-success"
               onClick={(event) => {
                 event.stopPropagation();
-                openAction('hr_review', record);
+                openHrReview(record);
               }}
               disabled={busy}
             >
@@ -2101,6 +2299,175 @@ export default function Reimbursements({ user = {} }) {
           box-shadow: 0 30px 90px rgba(15, 23, 42, 0.3);
         }
 
+        .reim-modal.is-review-modal {
+          width: min(980px, 100%);
+        }
+
+        .reim-review-summary {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .reim-review-summary article {
+          min-width: 0;
+          padding: 12px 13px;
+          border: 1px solid #e3e8f0;
+          border-radius: 12px;
+          background: #f8fafc;
+        }
+
+        .reim-review-summary span {
+          display: block;
+          margin-bottom: 4px;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .04em;
+          text-transform: uppercase;
+        }
+
+        .reim-review-summary strong {
+          display: block;
+          overflow-wrap: anywhere;
+          font-size: 13px;
+        }
+
+        .reim-review-purpose {
+          padding: 14px;
+          border: 1px solid #e1e7ef;
+          border-radius: 13px;
+          background: #fff;
+        }
+
+        .reim-review-purpose span {
+          display: block;
+          margin-bottom: 6px;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .reim-review-purpose p {
+          margin: 0;
+          color: #27324a;
+          font-size: 13px;
+          line-height: 1.6;
+          white-space: pre-wrap;
+        }
+
+        .reim-review-items {
+          display: grid;
+          gap: 12px;
+        }
+
+        .reim-review-item {
+          display: grid;
+          gap: 12px;
+          padding: 15px;
+          border: 1px solid #dfe6ef;
+          border-radius: 14px;
+          background: #fbfcfe;
+        }
+
+        .reim-review-item-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .reim-review-item-head strong {
+          font-size: 14px;
+        }
+
+        .reim-review-item-head span {
+          color: #172033;
+          font-size: 15px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .reim-review-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px 14px;
+        }
+
+        .reim-review-field {
+          min-width: 0;
+        }
+
+        .reim-review-field.is-wide {
+          grid-column: 1 / -1;
+        }
+
+        .reim-review-field span {
+          display: block;
+          margin-bottom: 4px;
+          color: #718096;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .reim-review-field strong,
+        .reim-review-field p {
+          margin: 0;
+          overflow-wrap: anywhere;
+          color: #27324a;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .reim-review-receipts {
+          display: grid;
+          gap: 8px;
+          padding-top: 10px;
+          border-top: 1px dashed #cfd8e6;
+        }
+
+        .reim-review-receipt {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 11px;
+          border: 1px solid #dce4ee;
+          border-radius: 11px;
+          background: #fff;
+        }
+
+        .reim-review-receipt-meta {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          min-width: 0;
+        }
+
+        .reim-review-receipt-meta div {
+          min-width: 0;
+        }
+
+        .reim-review-receipt-meta strong,
+        .reim-review-receipt-meta small {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .reim-review-receipt-meta strong {
+          font-size: 12px;
+        }
+
+        .reim-review-receipt-meta small {
+          margin-top: 3px;
+          color: #64748b;
+          font-size: 10px;
+        }
+
         .reim-modal-head {
           display: flex;
           align-items: flex-start;
@@ -2249,6 +2616,23 @@ export default function Reimbursements({ user = {} }) {
         }
 
         @media (max-width: 760px) {
+          .reim-review-summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .reim-review-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .reim-review-field.is-wide {
+            grid-column: auto;
+          }
+
+          .reim-review-receipt {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
           .reim-hero {
             flex-direction: column;
             padding: 20px;
@@ -2719,6 +3103,63 @@ export default function Reimbursements({ user = {} }) {
                             {safeText(item.invoice_number)} · Receipts:{' '}
                             {(item.receipts || []).length}
                           </small>
+
+                          {(item.receipts || []).length ? (
+                            <div
+                              className="reim-review-receipts"
+                              style={{ marginTop: 10 }}
+                            >
+                              {(item.receipts || []).map(
+                                (receipt, receiptIndex) => (
+                                  <div
+                                    className="reim-review-receipt"
+                                    key={`${safeText(
+                                      receipt.reference,
+                                      receiptIndex,
+                                    )}-${receiptIndex}`}
+                                  >
+                                    <div className="reim-review-receipt-meta">
+                                      <Paperclip size={16} />
+                                      <div>
+                                        <strong>
+                                          {safeText(
+                                            receipt.filename,
+                                            `Receipt ${receiptIndex + 1}`,
+                                          )}
+                                        </strong>
+                                        <small>
+                                          {[
+                                            safeText(receipt.mime_type, ''),
+                                            formatFileSize(receipt.size_bytes),
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' · ') || 'Attached document'}
+                                        </small>
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      className="reim-btn reim-btn-secondary"
+                                      onClick={() => viewReceipt(receipt)}
+                                      disabled={
+                                        viewingReceiptReference ===
+                                        safeText(receipt.reference, '')
+                                      }
+                                    >
+                                      {viewingReceiptReference ===
+                                      safeText(receipt.reference, '') ? (
+                                        <Loader2 size={14} className="spin" />
+                                      ) : (
+                                        <FileText size={14} />
+                                      )}
+                                      View Receipt
+                                    </button>
+                                  </div>
+                                ),
+                              )}
+                            </div>
+                          ) : null}
                         </article>
                       ))
                     ) : (
@@ -3210,7 +3651,9 @@ export default function Reimbursements({ user = {} }) {
       {actionModal && actionRecord ? (
         <div className="reim-modal-backdrop" role="presentation">
           <div
-            className="reim-modal"
+            className={`reim-modal ${
+              actionModal === 'hr_review' ? 'is-review-modal' : ''
+            }`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="reimbursement-action-title"
@@ -3243,13 +3686,213 @@ export default function Reimbursements({ user = {} }) {
             <form onSubmit={executeAction}>
               <div className="reim-modal-body">
                 {actionModal === 'hr_review' ? (
-                  <div className="reim-warning">
-                    <AlertTriangle size={17} />
-                    <span>
-                      Confirm that the business purpose, expense items and receipt
-                      references have been checked before sending this claim to Finance.
-                    </span>
-                  </div>
+                  <>
+                    <div className="reim-review-summary">
+                      <article>
+                        <span>Employee</span>
+                        <strong>
+                          {safeText(actionRecord.employee_name, 'Employee')}
+                        </strong>
+                      </article>
+                      <article>
+                        <span>Employee Code</span>
+                        <strong>{safeText(actionRecord.employee_code)}</strong>
+                      </article>
+                      <article>
+                        <span>Claim Type</span>
+                        <strong>
+                          {reimbursementTypeLabel(
+                            actionRecord.type || actionRecord.claim_type,
+                          )}
+                        </strong>
+                      </article>
+                      <article>
+                        <span>Claimed Amount</span>
+                        <strong>
+                          {formatCurrency(actionRecord.claimed_amount)}
+                        </strong>
+                      </article>
+                      <article>
+                        <span>Status</span>
+                        <strong>{labelFromKey(actionRecord.status)}</strong>
+                      </article>
+                      <article>
+                        <span>Created</span>
+                        <strong>{formatDate(actionRecord.created_at)}</strong>
+                      </article>
+                      <article>
+                        <span>Submitted</span>
+                        <strong>
+                          {formatDate(
+                            actionRecord.submitted_at ||
+                              actionRecord.updated_at,
+                          )}
+                        </strong>
+                      </article>
+                      <article>
+                        <span>Expense Items</span>
+                        <strong>
+                          {(actionRecord.items || []).length}
+                        </strong>
+                      </article>
+                    </div>
+
+                    <div className="reim-review-purpose">
+                      <span>Purpose / Business Reason</span>
+                      <p>{safeText(actionRecord.purpose)}</p>
+                    </div>
+
+                    <div className="reim-expense-head">
+                      <div>
+                        <strong>Submitted Expense Items</strong>
+                        <div
+                          style={{
+                            color: '#64748b',
+                            fontSize: 11,
+                            marginTop: 3,
+                          }}
+                        >
+                          Review every item and its supporting receipt before
+                          completing HR Review.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="reim-review-items">
+                      {(actionRecord.items || []).length ? (
+                        actionRecord.items.map((item, index) => (
+                          <article
+                            className="reim-review-item"
+                            key={item.item_id || index}
+                          >
+                            <div className="reim-review-item-head">
+                              <strong>
+                                Item {index + 1} ·{' '}
+                                {reimbursementTypeLabel(
+                                  item.type || item.category,
+                                )}
+                              </strong>
+                              <span>{formatCurrency(item.amount)}</span>
+                            </div>
+
+                            <div className="reim-review-grid">
+                              <div className="reim-review-field">
+                                <span>Expense Date</span>
+                                <strong>
+                                  {formatDate(item.expense_date, false)}
+                                </strong>
+                              </div>
+                              <div className="reim-review-field">
+                                <span>Vendor</span>
+                                <strong>{safeText(item.vendor)}</strong>
+                              </div>
+                              <div className="reim-review-field">
+                                <span>Invoice Number</span>
+                                <strong>
+                                  {safeText(item.invoice_number)}
+                                </strong>
+                              </div>
+                              <div className="reim-review-field">
+                                <span>Project ID</span>
+                                <strong>{safeText(item.project_id)}</strong>
+                              </div>
+                              <div className="reim-review-field">
+                                <span>Project Name</span>
+                                <strong>{safeText(item.project_name)}</strong>
+                              </div>
+                              <div className="reim-review-field">
+                                <span>Location</span>
+                                <strong>{safeText(item.location)}</strong>
+                              </div>
+                              <div className="reim-review-field is-wide">
+                                <span>Description</span>
+                                <p>{safeText(item.description)}</p>
+                              </div>
+                            </div>
+
+                            <div className="reim-review-receipts">
+                              {(item.receipts || []).length ? (
+                                (item.receipts || []).map(
+                                  (receipt, receiptIndex) => (
+                                    <div
+                                      className="reim-review-receipt"
+                                      key={`${safeText(
+                                        receipt.reference,
+                                        receiptIndex,
+                                      )}-${receiptIndex}`}
+                                    >
+                                      <div className="reim-review-receipt-meta">
+                                        <Paperclip size={17} />
+                                        <div>
+                                          <strong>
+                                            {safeText(
+                                              receipt.filename,
+                                              `Receipt ${receiptIndex + 1}`,
+                                            )}
+                                          </strong>
+                                          <small>
+                                            {[
+                                              safeText(
+                                                receipt.mime_type,
+                                                '',
+                                              ),
+                                              formatFileSize(
+                                                receipt.size_bytes,
+                                              ),
+                                              receipt.uploaded_at
+                                                ? `Uploaded ${formatDate(
+                                                    receipt.uploaded_at,
+                                                  )}`
+                                                : '',
+                                            ]
+                                              .filter(Boolean)
+                                              .join(' · ') ||
+                                              'Supporting document attached'}
+                                          </small>
+                                        </div>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        className="reim-btn reim-btn-secondary"
+                                        onClick={() => viewReceipt(receipt)}
+                                        disabled={
+                                          viewingReceiptReference ===
+                                          safeText(receipt.reference, '')
+                                        }
+                                      >
+                                        {viewingReceiptReference ===
+                                        safeText(receipt.reference, '') ? (
+                                          <Loader2
+                                            size={14}
+                                            className="spin"
+                                          />
+                                        ) : (
+                                          <FileText size={14} />
+                                        )}
+                                        View Receipt
+                                      </button>
+                                    </div>
+                                  ),
+                                )
+                              ) : (
+                                <div className="reim-warning">
+                                  <AlertTriangle size={16} />
+                                  <span>
+                                    No receipt is attached to this expense item.
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="reim-empty" style={{ minHeight: 120 }}>
+                          No submitted expense items are available.
+                        </div>
+                      )}
+                    </div>
+                  </>
                 ) : null}
 
                 {actionModal === 'approve' ? (
@@ -3478,7 +4121,9 @@ export default function Reimbursements({ user = {} }) {
                 {!['reject', 'cancel'].includes(actionModal) ? (
                   <div className="reim-field">
                     <label htmlFor="reimbursement-action-note">
-                      Action note
+                      {actionModal === 'hr_review'
+                        ? 'HR review note'
+                        : 'Action note'}
                     </label>
                     <textarea
                       id="reimbursement-action-note"
