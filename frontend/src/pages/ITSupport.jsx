@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
@@ -37,7 +37,6 @@ import {
   IT_SUPPORT_PRIORITY_OPTIONS,
   IT_SUPPORT_STATUS_OPTIONS,
 } from '../data/modules';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_ESCALATION_TYPES = [
   { value: 'software_application', label: 'Software / Application Problem' },
@@ -47,6 +46,9 @@ const DEFAULT_ESCALATION_TYPES = [
   { value: 'security_issue', label: 'Security Issue' },
   { value: 'major_problem', label: 'Other Major Problem' },
 ];
+
+const IT_SUPPORT_NOTICE_HIDE_MS = 3600;
+const IT_SUPPORT_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const accountAccessCategories = [
   { value: 'forgot_password', label: 'Forgot password' },
@@ -234,6 +236,122 @@ function canUpdateWorkStatus(ticket = {}, profile = {}, manageAccess = false, wo
   );
 }
 
+
+function pageCountFor(rows = [], pageSize = 10) {
+  if (pageSize === 'all') return 1;
+  return Math.max(1, Math.ceil((rows?.length || 0) / Number(pageSize || 10)));
+}
+
+function paginateRows(rows = [], page = 1, pageSize = 10) {
+  if (pageSize === 'all') return rows;
+
+  const size = Number(pageSize || 10);
+  const safePage = Math.max(1, Number(page || 1));
+  const start = (safePage - 1) * size;
+  return rows.slice(start, start + size);
+}
+
+function ITSupportInlineMessage({ feedback, onClose, className = '' }) {
+  if (!feedback?.message) return null;
+
+  return (
+    <div
+      className={`it-inline-feedback ${feedback.type || 'info'} ${className}`.trim()}
+      role="status"
+    >
+      <span className="it-inline-feedback-icon">
+        {feedback.loading ? (
+          <Loader2 size={15} className="spin" />
+        ) : feedback.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : feedback.type === 'error' || feedback.type === 'warning' ? (
+          <ShieldAlert size={15} />
+        ) : (
+          <Headphones size={15} />
+        )}
+      </span>
+
+      <span className="it-inline-feedback-copy">
+        {feedback.title ? <strong>{feedback.title}</strong> : null}
+        <span>{feedback.message}</span>
+      </span>
+
+      <button
+        type="button"
+        className="it-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function ITPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  label = 'tickets',
+}) {
+  const pageCount = pageSize === 'all'
+    ? 1
+    : Math.max(1, Math.ceil(Number(total || 0) / Number(pageSize || 10)));
+
+  if (!total) return null;
+
+  return (
+    <div className="it-pagination">
+      <div className="it-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>{label}</span>
+      </div>
+
+      <div className="it-pagination-controls">
+        <label className="it-page-size-control">
+          <span>View</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(event.target.value === 'all' ? 'all' : Number(event.target.value))}
+            aria-label={`Number of ${label} to show`}
+          >
+            <option value="all">View All</option>
+            {IT_SUPPORT_PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="it-page-button"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1 || pageSize === 'all'}
+        >
+          Previous
+        </button>
+
+        <span className="it-page-indicator">
+          Page {Math.min(page, pageCount)} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="it-page-button"
+          onClick={() => onPageChange(Math.min(pageCount, page + 1))}
+          disabled={page >= pageCount || pageSize === 'all'}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StarRating({ value, onChange }) {
   return (
     <div className="rating-picker">
@@ -282,24 +400,108 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page {
   --it-ink: #101a3a;
   --it-copy: #5d6d8d;
-  --it-violet: #6658dc;
-  --it-violet-deep: #40348d;
-  --it-blue: #3766db;
-  --it-cyan: #18b5c8;
-  --it-teal: #34c9c4;
+  --it-violet: #4d77dd;
+  --it-violet-deep: #575092;
+  --it-blue: #4d77dd;
+  --it-cyan: #2eb2b9;
+  --it-teal: #2eb2b9;
   --it-yellow: #d8ff43;
   --it-danger: #d84d68;
   --it-line: rgba(16, 26, 58, .14);
   display: grid !important;
-  gap: clamp(18px, 2vw, 26px) !important;
+  gap: clamp(16px, 1.8vw, 24px) !important;
   width: 100% !important;
   min-width: 0 !important;
+  max-width: 100% !important;
+  padding-right: clamp(8px, 1vw, 14px) !important;
+  overflow-x: visible !important;
   color: var(--it-ink);
+  background: transparent !important;
+  background-image: none !important;
 }
 
 .it-support-page,
 .it-support-page * {
   box-sizing: border-box;
+}
+
+.it-support-page > *,
+.it-support-page section,
+.it-support-page article,
+.it-support-page form,
+.it-support-page nav,
+.it-support-page aside,
+.it-support-page label,
+.it-support-page .ticket-list,
+.it-support-page .account-access-list,
+.it-support-page .it-action-stack,
+.it-support-page .it-filter-action-stack,
+.it-support-page .it-account-action-stack {
+  min-width: 0 !important;
+  max-width: 100%;
+}
+
+.it-support-page > *,
+.it-support-page .panel,
+.it-support-page .grievance-hero,
+.it-support-page .grievance-stats,
+.it-support-page .it-section-tabs,
+.it-support-page .it-section-content {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.it-support-page h1,
+.it-support-page h2,
+.it-support-page h3,
+.it-support-page h4,
+.it-support-page p,
+.it-support-page strong,
+.it-support-page small,
+.it-support-page span,
+.it-support-page dd {
+  overflow-wrap: anywhere;
+}
+
+.it-support-page svg {
+  flex: 0 0 auto;
+}
+
+.it-support-page::before,
+.it-support-page::after,
+.it-support-page .grievance-hero::before,
+.it-support-page .grievance-hero::after,
+.it-support-page .panel::before,
+.it-support-page .panel::after,
+.it-support-page .mini-stat-card::before,
+.it-support-page .mini-stat-card::after,
+.it-support-page .profile-prefill-card::before,
+.it-support-page .profile-prefill-card::after,
+.it-support-page .it-my-ticket-summary-card::before,
+.it-support-page .it-my-ticket-summary-card::after,
+.it-support-page .it-team-strip::before,
+.it-support-page .it-team-strip::after,
+.it-support-page .filter-bar::before,
+.it-support-page .filter-bar::after,
+.it-support-page .account-access-toolbar::before,
+.it-support-page .account-access-toolbar::after,
+.it-support-page .ticket-card::before,
+.it-support-page .ticket-card::after,
+.it-support-page .account-access-ticket::before,
+.it-support-page .account-access-ticket::after,
+.it-support-page .it-context-panel::before,
+.it-support-page .it-context-panel::after,
+.it-support-page .account-access-editor::before,
+.it-support-page .account-access-editor::after,
+.it-support-page .it-section-tabs::before,
+.it-support-page .it-section-tabs::after,
+.it-support-page .it-pagination::before,
+.it-support-page .it-pagination::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+  background-image: none !important;
 }
 
 .it-support-page input,
@@ -310,38 +512,42 @@ const IT_SUPPORT_SHEET_STYLES = `
   max-width: 100%;
 }
 
+.it-support-page input,
+.it-support-page select,
+.it-support-page textarea {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.it-support-page button {
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+}
+
 .it-support-page .grievance-hero.it-hero {
   position: relative !important;
   isolation: isolate;
   overflow: hidden !important;
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) auto !important;
-  gap: clamp(22px, 3vw, 40px) !important;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 300px) !important;
+  gap: clamp(20px, 3vw, 36px) !important;
   align-items: center !important;
-  min-height: 275px !important;
-  padding: clamp(25px, 3vw, 42px) !important;
+  min-height: 250px !important;
+  padding: clamp(24px, 3vw, 40px) !important;
   border: 1px solid rgba(154,164,205,.58) !important;
   border-radius: clamp(28px, 2.7vw, 40px) !important;
-  background:
-    radial-gradient(circle at 8% 6%, rgba(105,217,208,.26), transparent 29%),
-    radial-gradient(circle at 95% 4%, rgba(153,164,245,.24), transparent 31%),
-    linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%) !important;
+  background: linear-gradient(
+    90deg,
+    #d3f4fb 0%,
+    #f7fcfb 34%,
+    #fffdf8 52%,
+    #fbf8fa 68%,
+    #f0edfb 100%
+  ) !important;
   box-shadow:
-    12px 14px 0 #c6d8f7,
-    0 28px 48px rgba(34,38,110,.13) !important;
-}
-
-.it-support-page .grievance-hero.it-hero::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  width: 175px;
-  height: 175px;
-  right: 8%;
-  bottom: -98px;
-  border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-  background: linear-gradient(145deg, rgba(105,217,208,.30), rgba(132,181,241,.28));
-  transform: rotate(-18deg);
+    10px 12px 0 #b9d7ff,
+    0 26px 44px rgba(70,92,140,.12) !important;
 }
 
 .it-support-page .eyebrow {
@@ -355,8 +561,8 @@ const IT_SUPPORT_SHEET_STYLES = `
   border: 0 !important;
   border-radius: 999px !important;
   color: #fff !important;
-  background: #342b78 !important;
-  box-shadow: 4px 5px 0 #18b5c8 !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 4px 5px 0 #575092 !important;
   font-size: 9px !important;
   font-weight: 950 !important;
   line-height: 1 !important;
@@ -396,6 +602,12 @@ const IT_SUPPORT_SHEET_STYLES = `
   justify-content: flex-end !important;
   gap: 10px !important;
   flex-wrap: wrap !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.it-support-page .grievance-hero-actions .it-action-stack {
+  width: min(320px, 100%) !important;
 }
 
 .it-support-page .ghost-btn,
@@ -439,41 +651,41 @@ const IT_SUPPORT_SHEET_STYLES = `
   padding: 10px 16px !important;
   border: 0 !important;
   color: #fff !important;
-  background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8) !important;
-  box-shadow: 5px 6px 0 #a9d6f5, 0 14px 25px rgba(36,74,128,.16) !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 6px 7px 0 #575092, 0 14px 25px rgba(67,116,170,.16) !important;
 }
 
 .it-support-page .ghost-btn,
 .it-support-page .secondary {
   min-height: 44px !important;
   padding: 9px 14px !important;
-  border: 1px solid rgba(65,55,161,.18) !important;
-  color: #40348d !important;
-  background: rgba(255,255,255,.92) !important;
-  box-shadow: 3px 4px 0 rgba(52,43,120,.10) !important;
+  border: 1px solid rgba(77,119,221,.18) !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 5px 6px 0 #575092 !important;
 }
 
 .it-support-page .danger {
   min-height: 44px !important;
   padding: 9px 14px !important;
-  border: 1px solid rgba(216,77,104,.22) !important;
-  color: #a2344d !important;
-  background: #fff0f2 !important;
-  box-shadow: 3px 4px 0 #f2c2cc !important;
+  border: 1px solid rgba(77,119,221,.18) !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 5px 6px 0 #575092 !important;
 }
 
 .it-support-page .ghost-btn.active,
 .it-support-page .ticket-actions .ghost-btn.active {
   color: #fff !important;
-  background: #342b78 !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
   border-color: transparent !important;
-  box-shadow: 4px 5px 0 #18b5c8 !important;
+  box-shadow: 5px 6px 0 #575092 !important;
 }
 
 .it-support-page .it-support-refresh-btn {
   min-height: 54px !important;
   padding-inline: 18px !important;
-  box-shadow: 6px 7px 0 #b9d7ff, 0 14px 25px rgba(44,75,116,.10) !important;
+  box-shadow: 6px 7px 0 #575092, 0 14px 25px rgba(67,116,170,.12) !important;
 }
 
 .it-support-page .it-support-refresh-btn svg:first-child {
@@ -548,9 +760,11 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page .it-support-grid,
 .it-support-page .grievance-grid.it-support-grid {
   display: grid !important;
-  grid-template-columns: minmax(380px, .86fr) minmax(0, 1.14fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
   gap: 22px !important;
   align-items: start !important;
+  width: 100% !important;
+  min-width: 0 !important;
   margin: 0 !important;
 }
 
@@ -562,14 +776,14 @@ const IT_SUPPORT_SHEET_STYLES = `
   overflow: hidden !important;
   border: 1px solid rgba(171,181,211,.70) !important;
   border-radius: clamp(26px, 2.2vw, 36px) !important;
-  background: linear-gradient(145deg, #ffffff, #f7fbff) !important;
+  background: #ffffff !important;
   box-shadow: 8px 10px 0 #c4ccff, 0 24px 42px rgba(34,38,110,.10) !important;
 }
 
 .it-support-page .grievance-form-panel,
 .it-support-page .it-my-ticket-summary-panel,
 .it-support-page > .grievance-list-panel {
-  padding: clamp(20px, 2vw, 28px) !important;
+  padding: clamp(18px, 2vw, 28px) !important;
 }
 
 .it-support-page .section-heading {
@@ -577,7 +791,14 @@ const IT_SUPPORT_SHEET_STYLES = `
   align-items: flex-start !important;
   justify-content: space-between !important;
   gap: 16px !important;
+  width: 100% !important;
+  min-width: 0 !important;
   margin-bottom: 18px !important;
+}
+
+.it-support-page .section-heading > div {
+  flex: 1 1 auto;
+  min-width: 0 !important;
 }
 
 .it-support-page .section-heading h2 {
@@ -616,7 +837,7 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page .profile-prefill-card {
   margin: 0 0 18px !important;
   padding: 17px !important;
-  background: linear-gradient(145deg, #edf6ff, #f1efff) !important;
+  background: #f5f5ff !important;
   box-shadow: 5px 6px 0 #c9c0ff !important;
 }
 
@@ -633,7 +854,9 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page .ticket-meta-grid {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  gap: 10px !important;
+  gap: 12px !important;
+  width: 100% !important;
+  min-width: 0 !important;
 }
 
 .it-support-page .profile-prefill-grid > div,
@@ -751,11 +974,17 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page .it-my-ticket-summary-card {
   display: grid !important;
   grid-template-columns: auto minmax(0, 1fr) !important;
-  gap: 18px !important;
+  gap: clamp(14px, 2vw, 20px) !important;
   align-items: center !important;
-  padding: 20px !important;
-  background: linear-gradient(145deg, #edf6ff, #f1efff) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: clamp(16px, 2vw, 20px) !important;
+  background: #f5f5ff !important;
   box-shadow: 5px 6px 0 #c9c0ff !important;
+}
+
+.it-support-page .it-my-ticket-summary-copy {
+  min-width: 0 !important;
 }
 
 .it-support-page .it-my-ticket-summary-icon {
@@ -765,8 +994,8 @@ const IT_SUPPORT_SHEET_STYLES = `
   place-items: center !important;
   border-radius: 22px !important;
   color: #fff !important;
-  background: linear-gradient(145deg, #6658dc, #18b5c8) !important;
-  box-shadow: 4px 5px 0 #b9d7ff !important;
+  background: linear-gradient(145deg, #4d77dd, #2eb2b9) !important;
+  box-shadow: 4px 5px 0 #575092 !important;
   animation: itIconFloat 3.2s ease-in-out infinite;
 }
 
@@ -835,16 +1064,22 @@ const IT_SUPPORT_SHEET_STYLES = `
 .it-support-page .filter-bar,
 .it-support-page .account-access-toolbar {
   display: grid !important;
-  grid-template-columns: auto repeat(4, minmax(130px, 1fr)) minmax(170px, 1.2fr) auto !important;
-  gap: 10px !important;
-  align-items: center !important;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)) !important;
+  gap: 12px !important;
+  align-items: end !important;
+  width: 100% !important;
+  min-width: 0 !important;
   margin: 0 0 18px !important;
-  padding: 13px !important;
-  background: linear-gradient(145deg, #f8fbff, #f7f4ff) !important;
+  padding: 14px !important;
+  background: #f8f9ff !important;
 }
 
 .it-support-page .account-access-toolbar {
-  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(150px, .6fr)) auto !important;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)) !important;
+}
+
+.it-support-page .filter-label {
+  grid-column: 1 / -1;
 }
 
 .it-support-page .filter-label {
@@ -872,7 +1107,7 @@ const IT_SUPPORT_SHEET_STYLES = `
   padding: 18px !important;
   border: 1px solid rgba(171,181,211,.62) !important;
   border-radius: 22px !important;
-  background: linear-gradient(145deg, #ffffff, #f7fbff) !important;
+  background: #ffffff !important;
   box-shadow: 5px 6px 0 rgba(52,43,120,.08) !important;
   transition:
     transform 190ms ease,
@@ -882,19 +1117,19 @@ const IT_SUPPORT_SHEET_STYLES = `
 
 .it-support-page .it-ticket-card:nth-child(3n + 1),
 .it-support-page .account-access-ticket:nth-child(3n + 1) {
-  background: linear-gradient(145deg, #edf6ff, #ffffff) !important;
+  background: #ffffff !important;
   box-shadow: 5px 6px 0 #b9d7ff !important;
 }
 
 .it-support-page .it-ticket-card:nth-child(3n + 2),
 .it-support-page .account-access-ticket:nth-child(3n + 2) {
-  background: linear-gradient(145deg, #eaf8f4, #ffffff) !important;
+  background: #ffffff !important;
   box-shadow: 5px 6px 0 #aee6d9 !important;
 }
 
 .it-support-page .it-ticket-card:nth-child(3n + 3),
 .it-support-page .account-access-ticket:nth-child(3n + 3) {
-  background: linear-gradient(145deg, #f1efff, #ffffff) !important;
+  background: #ffffff !important;
   box-shadow: 5px 6px 0 #c9c0ff !important;
 }
 
@@ -911,13 +1146,26 @@ const IT_SUPPORT_SHEET_STYLES = `
 
 .it-support-page .ticket-topline,
 .it-support-page .account-access-ticket-head,
-.it-support-page .account-access-ticket-meta,
 .it-support-page .account-access-ticket-actions {
   display: flex !important;
   align-items: flex-start !important;
   justify-content: space-between !important;
   gap: 10px !important;
   flex-wrap: wrap !important;
+  min-width: 0 !important;
+}
+
+.it-support-page .account-access-ticket-meta {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important;
+  gap: 8px 12px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.it-support-page .account-access-ticket-meta > span {
+  min-width: 0 !important;
+  overflow-wrap: anywhere;
 }
 
 .it-support-page .ticket-topline strong {
@@ -1000,21 +1248,30 @@ const IT_SUPPORT_SHEET_STYLES = `
 }
 
 .it-support-page .ticket-actions {
-  display: flex !important;
-  flex-wrap: wrap !important;
-  gap: 9px !important;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-width: 0 !important;
   margin-top: 15px !important;
+}
+
+.it-support-page .ticket-actions > button {
+  width: 100% !important;
+  min-width: 0 !important;
 }
 
 .it-support-page .it-context-panel,
 .it-support-page .account-access-editor {
   display: grid !important;
   gap: 12px !important;
+  width: 100% !important;
+  min-width: 0 !important;
   margin-top: 14px !important;
-  padding: 15px !important;
+  padding: clamp(12px, 1.8vw, 15px) !important;
   border: 1px solid rgba(102,88,220,.22) !important;
   border-radius: 19px !important;
-  background: linear-gradient(145deg, #f1efff, #eef9ff) !important;
+  background: #f7f6ff !important;
   box-shadow: 4px 5px 0 #c9c0ff !important;
 }
 
@@ -1048,10 +1305,10 @@ const IT_SUPPORT_SHEET_STYLES = `
 }
 
 .it-support-page .rating-picker button.active {
-  color: #c27a00;
-  background: #fff4d5;
-  border-color: #ffe0a5;
-  box-shadow: 3px 4px 0 #ffe0a5;
+  color: #fff;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+  border-color: transparent;
+  box-shadow: 3px 4px 0 #575092;
 }
 
 .it-support-page .it-sheet-backdrop {
@@ -1079,10 +1336,7 @@ const IT_SUPPORT_SHEET_STYLES = `
   overflow: hidden !important;
   border: 1px solid rgba(171,181,211,.70) !important;
   border-radius: 30px !important;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(105,217,208,.12), transparent 26%),
-    radial-gradient(circle at 100% 0%, rgba(102,88,220,.10), transparent 28%),
-    #fff !important;
+  background: #ffffff !important;
   box-shadow: 10px 12px 0 #c4ccff, 0 34px 90px rgba(9,16,35,.30) !important;
   animation: itSheetSlideIn .28s cubic-bezier(.2,.8,.2,1) both;
 }
@@ -1118,10 +1372,10 @@ const IT_SUPPORT_SHEET_STYLES = `
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  border: 1px solid rgba(102,88,220,.18);
-  color: #40348d;
-  background: #fff;
-  box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+  border: 1px solid rgba(77,119,221,.18);
+  color: #fff;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+  box-shadow: 4px 5px 0 #575092;
 }
 
 .it-support-page .it-sheet-stats {
@@ -1151,7 +1405,7 @@ const IT_SUPPORT_SHEET_STYLES = `
 }
 
 .it-support-page .account-access-desk {
-  margin-top: 20px;
+  margin-top: 0;
 }
 
 .it-support-page .account-access-ticket-meta {
@@ -1161,74 +1415,571 @@ const IT_SUPPORT_SHEET_STYLES = `
   font-size: 12px;
 }
 
-@media (max-width: 1366px) {
-  .it-support-page .grievance-stats {
-    grid-template-columns: repeat(3, minmax(0,1fr)) !important;
+
+.it-support-page .it-section-content {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  animation: itSectionReveal .18s ease both;
+}
+
+.it-support-page .it-section-content.panel {
+  padding: clamp(20px, 2vw, 28px) !important;
+}
+
+@keyframes itSectionReveal {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
   }
 
-  .it-support-page .filter-bar {
-    grid-template-columns: auto repeat(2, minmax(140px,1fr)) !important;
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.it-support-page .it-section-tabs {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  width: 100% !important;
+  padding: 12px !important;
+  border: 1px solid rgba(171,181,211,.62) !important;
+  border-radius: 22px !important;
+  background: #ffffff !important;
+  box-shadow: 6px 7px 0 #c4ccff, 0 16px 28px rgba(34,38,110,.08) !important;
+}
+
+.it-support-page .it-section-tab {
+  min-width: 0 !important;
+  min-height: 62px !important;
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto !important;
+  gap: 10px !important;
+  align-items: center !important;
+  padding: 11px 14px !important;
+  border: 1px solid rgba(77,119,221,.22) !important;
+  border-radius: 16px !important;
+  color: #4767b4 !important;
+  background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%) !important;
+  box-shadow: 3px 4px 0 rgba(87,80,146,.16) !important;
+  text-align: left !important;
+  cursor: pointer !important;
+}
+
+.it-support-page .it-section-tab:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: rgba(46,178,185,.46) !important;
+}
+
+.it-support-page .it-section-tab.active {
+  border-color: transparent !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 5px 6px 0 #575092 !important;
+}
+
+.it-support-page .it-section-tab:disabled {
+  cursor: not-allowed !important;
+  opacity: .46 !important;
+}
+
+.it-support-page .it-section-tab-copy {
+  min-width: 0 !important;
+  display: grid !important;
+  gap: 3px !important;
+}
+
+.it-support-page .it-section-tab-copy strong {
+  font-size: 12px !important;
+  font-weight: 950 !important;
+  line-height: 1.2 !important;
+}
+
+.it-support-page .it-section-tab-copy small {
+  color: #6b7692 !important;
+  font-size: 9px !important;
+  font-weight: 750 !important;
+  line-height: 1.25 !important;
+}
+
+.it-support-page .it-section-tab.active .it-section-tab-copy small {
+  color: rgba(255,255,255,.78) !important;
+}
+
+.it-support-page .it-section-tab-count {
+  display: inline-grid !important;
+  place-items: center !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  padding-inline: 7px !important;
+  border-radius: 10px !important;
+  color: #40348d !important;
+  background: #fff !important;
+  box-shadow: 2px 3px 0 rgba(52,43,120,.10) !important;
+  font-size: 10px !important;
+  font-weight: 950 !important;
+}
+
+.it-support-page .it-section-tab.active .it-section-tab-count {
+  color: #4d77dd !important;
+}
+
+.it-support-page .it-action-stack,
+.it-support-page .it-filter-action-stack,
+.it-support-page .it-account-action-stack {
+  display: grid !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+}
+
+.it-support-page .it-filter-action-stack {
+  align-self: stretch !important;
+}
+
+.it-support-page .it-filter-action-stack > button,
+.it-support-page .it-account-action-stack > button {
+  width: 100% !important;
+}
+
+.it-support-page .it-inline-feedback {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto !important;
+  gap: 9px !important;
+  align-items: start !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 10px 11px !important;
+  border: 1px solid rgba(102,88,220,.18) !important;
+  border-radius: 12px !important;
+  color: #40348d !important;
+  background: #f1efff !important;
+  box-shadow: 3px 4px 0 #c9c0ff !important;
+  font-size: 10px !important;
+  line-height: 1.45 !important;
+}
+
+.it-support-page .it-inline-feedback.success {
+  border-color: rgba(4,120,87,.18) !important;
+  color: #047857 !important;
+  background: #eaf8f4 !important;
+  box-shadow: 3px 4px 0 #aee6d9 !important;
+}
+
+.it-support-page .it-inline-feedback.warning {
+  border-color: rgba(154,104,23,.18) !important;
+  color: #9a6817 !important;
+  background: #fff4d5 !important;
+  box-shadow: 3px 4px 0 #ffe0a5 !important;
+}
+
+.it-support-page .it-inline-feedback.error {
+  border-color: rgba(162,52,77,.18) !important;
+  color: #a2344d !important;
+  background: #fff0f2 !important;
+  box-shadow: 3px 4px 0 #f2c2cc !important;
+}
+
+.it-support-page .it-inline-feedback-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: 0 0 22px !important;
+}
+
+.it-support-page .it-inline-feedback-copy {
+  min-width: 0 !important;
+}
+
+.it-support-page .it-inline-feedback-copy strong,
+.it-support-page .it-inline-feedback-copy span {
+  display: block !important;
+  overflow-wrap: anywhere !important;
+}
+
+.it-support-page .it-inline-feedback-copy strong {
+  margin-bottom: 2px !important;
+  font-weight: 950 !important;
+}
+
+.it-support-page .it-inline-feedback-copy span {
+  font-weight: 750 !important;
+}
+
+.it-support-page .it-inline-feedback-close {
+  width: 24px !important;
+  min-width: 24px !important;
+  height: 24px !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  margin: -2px -3px -2px 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  color: currentColor !important;
+  background: rgba(255,255,255,.58) !important;
+  box-shadow: none !important;
+  font-size: 17px !important;
+  line-height: 1 !important;
+}
+
+.it-support-page .it-inline-feedback-close:hover {
+  transform: none !important;
+  filter: none !important;
+  background: #fff !important;
+}
+
+.it-support-page .it-ticket-action-feedback {
+  margin-top: 10px !important;
+}
+
+.it-support-page .it-pagination {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 14px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 0 15px !important;
+  padding: 12px 13px !important;
+  border: 1px solid rgba(171,181,211,.52) !important;
+  border-radius: 16px !important;
+  background: #f8f9ff !important;
+  box-shadow: 3px 4px 0 rgba(52,43,120,.07) !important;
+}
+
+.it-support-page .it-pagination-copy {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 6px !important;
+  min-width: 0 !important;
+  color: var(--it-copy) !important;
+  font-size: 10px !important;
+  font-weight: 850 !important;
+}
+
+.it-support-page .it-pagination-copy strong {
+  color: var(--it-ink) !important;
+  font-size: 13px !important;
+  font-weight: 950 !important;
+}
+
+.it-support-page .it-pagination-controls {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex-wrap: wrap !important;
+}
+
+.it-support-page .it-page-size-control {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  color: var(--it-copy) !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+  white-space: nowrap !important;
+}
+
+.it-support-page .it-page-size-control select {
+  min-width: 108px !important;
+  height: 38px !important;
+  padding: 0 30px 0 10px !important;
+  border: 1px solid rgba(102,88,220,.20) !important;
+  border-radius: 12px !important;
+  color: #40348d !important;
+  background: #f1efff !important;
+  box-shadow: 2px 3px 0 #c9c0ff !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+}
+
+.it-support-page .it-page-button {
+  min-width: 78px !important;
+  height: 38px !important;
+  padding: 0 11px !important;
+  border: 1px solid rgba(77,119,221,.18) !important;
+  border-radius: 12px !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%) !important;
+  box-shadow: 4px 5px 0 #575092 !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+  cursor: pointer !important;
+}
+
+.it-support-page .it-page-button:disabled {
+  cursor: not-allowed !important;
+  opacity: .42 !important;
+}
+
+.it-support-page .it-page-indicator {
+  min-width: 82px !important;
+  color: var(--it-copy) !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+
+.it-support-page .it-section-tabs-holder {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+@media (max-width: 1366px) {
+  .it-support-page .grievance-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .it-support-page .it-section-tab {
+    padding-inline: 11px !important;
+  }
+
+  .it-support-page .it-section-tab-copy small {
+    font-size: 8px !important;
   }
 }
 
 @media (max-width: 1180px) {
+  .it-support-page .grievance-hero.it-hero {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+  }
+
+  .it-support-page .grievance-hero-actions {
+    justify-content: flex-start !important;
+  }
+
+  .it-support-page .grievance-hero-actions .it-action-stack {
+    width: min(420px, 100%) !important;
+  }
+
   .it-support-page .it-support-grid,
   .it-support-page .grievance-grid.it-support-grid {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
   }
-}
 
-@media (max-width: 900px) {
+  .it-support-page .it-section-tab-copy small {
+    display: none !important;
+  }
+
+  .it-support-page .it-section-tab {
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+    min-height: 56px !important;
+  }
+
   .it-support-page .filter-bar,
   .it-support-page .account-access-toolbar {
-    grid-template-columns: repeat(2, minmax(0,1fr)) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 
   .it-support-page .filter-label,
   .it-support-page .filter-bar input,
-  .it-support-page .filter-bar .ghost-btn,
-  .it-support-page .account-access-toolbar input,
-  .it-support-page .account-access-toolbar button {
+  .it-support-page .account-access-toolbar input {
     grid-column: 1 / -1 !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .it-support-page {
+    gap: 18px !important;
+  }
+
+  .it-support-page .it-section-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    padding: 10px !important;
+  }
+
+  .it-support-page .it-section-tab {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 52px !important;
+    padding: 9px 10px !important;
+    text-align: center !important;
+  }
+
+  .it-support-page .it-section-tab > svg,
+  .it-support-page .it-section-tab-count {
+    display: none !important;
+  }
+
+  .it-support-page .it-section-tab-copy {
+    display: block !important;
+    text-align: center !important;
+  }
+
+  .it-support-page .it-section-tab-copy strong {
+    font-size: 11px !important;
+  }
+
+  .it-support-page .it-pagination {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .it-support-page .it-pagination-controls {
+    justify-content: flex-start !important;
   }
 
   .it-support-page .ticket-meta-grid {
-    grid-template-columns: repeat(2, minmax(0,1fr)) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .it-support-page .account-access-ticket-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: end !important;
+  }
+
+  .it-support-page .it-account-action-stack {
+    min-width: 180px !important;
   }
 }
 
 @media (max-width: 760px) {
   .it-support-page {
-    gap: 16px !important;
+    gap: 14px !important;
+    padding-right: 8px !important;
+    overflow-x: visible !important;
   }
 
   .it-support-page .grievance-hero.it-hero {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 16px !important;
     min-height: 0 !important;
-    padding: 20px !important;
-    border-radius: 26px !important;
-    box-shadow: 6px 7px 0 #c6d8f7, 0 18px 30px rgba(34,38,110,.10) !important;
+    padding: 18px !important;
+    border-radius: 24px !important;
+    box-shadow: 4px 5px 0 #c6d8f7, 0 14px 24px rgba(34,38,110,.09) !important;
   }
 
   .it-support-page .it-hero h1 {
-    font-size: clamp(36px,10vw,52px) !important;
+    font-size: clamp(34px, 10vw, 50px) !important;
+    line-height: .98 !important;
+  }
+
+  .it-support-page .it-hero p {
+    margin-top: 12px !important;
+    font-size: 12px !important;
   }
 
   .it-support-page .grievance-hero-actions,
+  .it-support-page .grievance-hero-actions .it-action-stack,
   .it-support-page .grievance-hero-actions .ghost-btn {
-    width: 100%;
+    width: 100% !important;
   }
 
   .it-support-page .grievance-stats {
-    grid-template-columns: repeat(2, minmax(0,1fr)) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
+
+  .it-support-page .mini-stat-card {
+    min-height: 88px !important;
+    padding: 14px !important;
+    border-radius: 17px !important;
+    box-shadow: 4px 5px 0 rgba(185,215,255,.9), 0 12px 22px rgba(34,38,110,.07) !important;
+  }
+
+  /* Mobile/app navigation: compact 2 × 2 headings-only grid. */
+  .it-support-page .it-section-tabs {
+    position: relative !important;
+    top: auto !important;
+    z-index: 1 !important;
+    align-self: start !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 8px !important;
+    border-radius: 16px !important;
+    background: rgba(255,255,255,.97) !important;
+    box-shadow: 4px 5px 0 #c4ccff, 0 12px 24px rgba(34,38,110,.10) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    overflow: visible !important;
+    isolation: isolate;
+  }
+
+  .it-support-page .it-section-tabs-holder {
+    position: relative !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .it-support-page .it-section-tab {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 44px !important;
+    padding: 8px 10px !important;
+    border-radius: 11px !important;
+    text-align: center !important;
+  }
+
+  .it-support-page .it-section-tab > svg,
+  .it-support-page .it-section-tab-count,
+  .it-support-page .it-section-tab-copy small {
+    display: none !important;
+  }
+
+  .it-support-page .it-section-tab-copy {
+    display: block !important;
+    width: 100% !important;
+    text-align: center !important;
+  }
+
+  .it-support-page .it-section-tab-copy strong {
+    display: block !important;
+    font-size: 10.5px !important;
+    line-height: 1.2 !important;
   }
 
   .it-support-page .grievance-form-panel,
   .it-support-page .it-my-ticket-summary-panel,
-  .it-support-page > .grievance-list-panel {
-    padding: 18px !important;
-    border-radius: 22px !important;
-    box-shadow: 5px 6px 0 #c4ccff, 0 17px 28px rgba(34,38,110,.09) !important;
+  .it-support-page > .grievance-list-panel,
+  .it-support-page .it-section-content.panel {
+    padding: 16px !important;
+    border-radius: 20px !important;
+    box-shadow: 4px 5px 0 #c4ccff, 0 14px 24px rgba(34,38,110,.08) !important;
+  }
+
+  .it-support-page .section-heading {
+    gap: 10px !important;
+    margin-bottom: 15px !important;
+  }
+
+  .it-support-page .section-heading h2 {
+    font-size: clamp(24px, 7vw, 31px) !important;
+  }
+
+  .it-support-page .section-heading p {
+    margin-top: 6px !important;
+    font-size: 11px !important;
+  }
+
+  .it-support-page .profile-prefill-card,
+  .it-support-page .it-my-ticket-summary-card,
+  .it-support-page .it-team-strip,
+  .it-support-page .filter-bar,
+  .it-support-page .account-access-toolbar,
+  .it-support-page .it-context-panel,
+  .it-support-page .account-access-editor,
+  .it-support-page .account-access-ticket,
+  .it-support-page .it-ticket-card {
+    max-width: 100% !important;
   }
 
   .it-support-page .profile-prefill-grid,
@@ -1238,39 +1989,98 @@ const IT_SUPPORT_SHEET_STYLES = `
   .it-support-page .account-access-editor-grid,
   .it-support-page .filter-bar,
   .it-support-page .account-access-toolbar {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
   .it-support-page .filter-label,
   .it-support-page .filter-bar input,
   .it-support-page .filter-bar .ghost-btn,
+  .it-support-page .filter-bar .it-filter-action-stack,
   .it-support-page .account-access-toolbar input,
-  .it-support-page .account-access-toolbar button {
+  .it-support-page .account-access-toolbar button,
+  .it-support-page .account-access-toolbar .it-filter-action-stack {
     grid-column: auto !important;
   }
 
-  .it-support-page .it-my-ticket-summary-card {
-    grid-template-columns: 1fr !important;
+  .it-support-page .filter-bar,
+  .it-support-page .account-access-toolbar {
+    padding: 12px !important;
+    gap: 10px !important;
+    border-radius: 16px !important;
   }
 
-  .it-support-page .ticket-topline {
-    flex-direction: column;
+  .it-support-page .it-my-ticket-summary-card {
+    grid-template-columns: minmax(0, 1fr) !important;
+    justify-items: start !important;
+  }
+
+  .it-support-page .it-my-ticket-summary-icon {
+    width: 54px !important;
+    height: 54px !important;
+    border-radius: 17px !important;
+  }
+
+  .it-support-page .ticket-topline,
+  .it-support-page .account-access-ticket-head {
+    flex-direction: column !important;
+    align-items: stretch !important;
   }
 
   .it-support-page .ticket-badges {
-    justify-content: flex-start;
+    justify-content: flex-start !important;
   }
 
   .it-support-page .ticket-actions {
-    display: grid !important;
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  .it-support-page .ticket-actions .ghost-btn,
-  .it-support-page .ticket-actions .primary,
-  .it-support-page .ticket-actions .secondary,
-  .it-support-page .ticket-actions .danger {
-    width: 100%;
+  .it-support-page .account-access-ticket-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+  }
+
+  .it-support-page .it-account-action-stack {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .it-support-page .it-team-strip {
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    padding: 14px !important;
+  }
+
+  .it-support-page .it-pagination {
+    gap: 10px !important;
+    padding: 11px !important;
+    border-radius: 14px !important;
+  }
+
+  .it-support-page .it-pagination-controls {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    width: 100% !important;
+    gap: 8px !important;
+  }
+
+  .it-support-page .it-page-size-control,
+  .it-support-page .it-page-indicator {
+    grid-column: 1 / -1 !important;
+  }
+
+  .it-support-page .it-page-size-control {
+    justify-content: space-between !important;
+    width: 100% !important;
+  }
+
+  .it-support-page .it-page-size-control select {
+    width: min(170px, 56vw) !important;
+    min-width: 0 !important;
+  }
+
+  .it-support-page .it-page-button {
+    width: 100% !important;
+    min-width: 0 !important;
   }
 
   .it-support-page .it-sheet-backdrop {
@@ -1293,7 +2103,7 @@ const IT_SUPPORT_SHEET_STYLES = `
   }
 
   .it-support-page .it-sheet-stats {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
     padding: 12px 14px !important;
   }
 
@@ -1301,6 +2111,7 @@ const IT_SUPPORT_SHEET_STYLES = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
   }
 
   .it-support-page .it-sheet-stats strong {
@@ -1313,36 +2124,102 @@ const IT_SUPPORT_SHEET_STYLES = `
 }
 
 @media (max-width: 430px) {
+  .it-support-page {
+    gap: 12px !important;
+  }
+
   .it-support-page .grievance-hero.it-hero {
-    padding: 16px !important;
+    padding: 15px !important;
+    border-radius: 20px !important;
   }
 
   .it-support-page .it-hero h1 {
-    font-size: clamp(32px,11vw,44px) !important;
+    font-size: clamp(30px, 11vw, 42px) !important;
+  }
+
+  .it-support-page .eyebrow {
+    padding: 8px 10px !important;
+    font-size: 8px !important;
   }
 
   .it-support-page .grievance-stats {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
   .it-support-page .mini-stat-card {
-    min-height: 76px !important;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    min-height: 72px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+    padding: 13px !important;
   }
 
   .it-support-page .mini-stat-card strong {
-    margin-top: 0;
+    margin-top: 0 !important;
+  }
+
+  .it-support-page .it-section-tabs {
+    gap: 6px !important;
+    padding: 7px !important;
+    border-radius: 14px !important;
+  }
+
+  .it-support-page .it-section-tab {
+    min-height: 40px !important;
+    padding: 7px 8px !important;
+  }
+
+  .it-support-page .it-section-tab-copy strong {
+    font-size: 9.5px !important;
   }
 
   .it-support-page .section-heading {
-    flex-direction: column;
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .it-support-page .section-heading > svg {
+    display: none !important;
+  }
+
+  .it-support-page .grievance-form-panel,
+  .it-support-page .it-my-ticket-summary-panel,
+  .it-support-page > .grievance-list-panel,
+  .it-support-page .it-section-content.panel {
+    padding: 14px !important;
+    border-radius: 18px !important;
+    box-shadow: 3px 4px 0 #c4ccff, 0 12px 20px rgba(34,38,110,.07) !important;
+  }
+
+  .it-support-page .profile-prefill-card,
+  .it-support-page .it-my-ticket-summary-card,
+  .it-support-page .it-team-strip,
+  .it-support-page .filter-bar,
+  .it-support-page .account-access-toolbar,
+  .it-support-page .it-context-panel,
+  .it-support-page .account-access-editor,
+  .it-support-page .account-access-ticket,
+  .it-support-page .it-ticket-card {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
   }
 
   .it-support-page .it-team-strip {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .it-support-page .it-page-size-control {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .it-support-page .it-page-size-control select {
+    width: 100% !important;
+  }
+
+  .it-support-page .it-page-indicator {
+    min-width: 0 !important;
   }
 }
 
@@ -1357,7 +2234,6 @@ const IT_SUPPORT_SHEET_STYLES = `
 `;
 
 export default function ITSupport() {
-  const alerts = useCustomAlert();
 
   const [profile, setProfile] = useState({});
   const [permissions, setPermissions] = useState({
@@ -1400,6 +2276,17 @@ const [selectedTicket, setSelectedTicket] = useState(null);
 const [panelMode, setPanelMode] = useState('');
 const [activeActionKey, setActiveActionKey] = useState('');
 const [showMyTicketsSheet, setShowMyTicketsSheet] = useState(false);
+
+  const [activeSection, setActiveSection] = useState('raise');
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
+
+  const [myTicketPage, setMyTicketPage] = useState(1);
+  const [myTicketPageSize, setMyTicketPageSize] = useState(10);
+  const [accountAccessPage, setAccountAccessPage] = useState(1);
+  const [accountAccessPageSize, setAccountAccessPageSize] = useState(10);
+  const [deskPage, setDeskPage] = useState(1);
+  const [deskPageSize, setDeskPageSize] = useState(10);
 
   const [accountAccessTickets, setAccountAccessTickets] = useState([]);
   const [accountAccessLoading, setAccountAccessLoading] = useState(false);
@@ -1448,6 +2335,77 @@ const [showMyTicketsSheet, setShowMyTicketsSheet] = useState(false);
       pendingReview: myTicketRows.filter((item) => canReviewTicket(item, profile)).length,
     };
   }, [allStatRows, myTicketRows, profile]);
+
+  const myTicketPageCount = pageCountFor(myTicketRows, myTicketPageSize);
+  const accountAccessPageCount = pageCountFor(accountAccessTickets, accountAccessPageSize);
+  const deskPageCount = pageCountFor(deskTicketRows, deskPageSize);
+
+  const pagedMyTicketRows = useMemo(
+    () => paginateRows(myTicketRows, Math.min(myTicketPage, myTicketPageCount), myTicketPageSize),
+    [myTicketRows, myTicketPage, myTicketPageCount, myTicketPageSize],
+  );
+  const pagedAccountAccessTickets = useMemo(
+    () => paginateRows(accountAccessTickets, Math.min(accountAccessPage, accountAccessPageCount), accountAccessPageSize),
+    [accountAccessTickets, accountAccessPage, accountAccessPageCount, accountAccessPageSize],
+  );
+  const pagedDeskTicketRows = useMemo(
+    () => paginateRows(deskTicketRows, Math.min(deskPage, deskPageCount), deskPageSize),
+    [deskTicketRows, deskPage, deskPageCount, deskPageSize],
+  );
+
+  function clearInlineFeedback(scope) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scope)) return current;
+      const next = { ...current };
+      delete next[scope];
+      return next;
+    });
+  }
+
+  function showInlineFeedback(scope, type, message, title = '', options = {}) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => ({
+      ...current,
+      [scope]: {
+        type,
+        message,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scope] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          const next = { ...current };
+          delete next[scope];
+          return next;
+        });
+        delete feedbackTimersRef.current[scope];
+      }, IT_SUPPORT_NOTICE_HIDE_MS);
+    }
+  }
+
+  function changeSection(section) {
+    closePanel();
+    setShowMyTicketsSheet(false);
+    setActiveSection(section);
+  }
 
   function updateTicketForm(key, value) {
     setTicketForm((prev) => ({
@@ -1561,10 +2519,24 @@ function closePanel() {
 }
 
 
-async function loadAccountAccessTickets(nextFilters = accountAccessFilters) {
+async function loadAccountAccessTickets(
+  nextFilters = accountAccessFilters,
+  feedbackScope = '',
+) {
   if (!canManageAccountAccess) return;
 
   setAccountAccessLoading(true);
+
+  if (feedbackScope) {
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Loading account-access requests with the selected filters...',
+      'Applying Filters',
+      { loading: true },
+    );
+  }
+
   try {
     const params = new URLSearchParams();
     Object.entries(nextFilters).forEach(([key, value]) => {
@@ -1575,9 +2547,25 @@ async function loadAccountAccessTickets(nextFilters = accountAccessFilters) {
     const response = await api(`/account-access/requests?${params.toString()}`);
     const payload = response?.data || response || {};
     const rows = payload.items || payload.requests || payload.tickets || [];
-    setAccountAccessTickets(Array.isArray(rows) ? rows : []);
+    const nextRows = Array.isArray(rows) ? rows : [];
+
+    setAccountAccessTickets(nextRows);
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        `${nextRows.length} account-access request${nextRows.length === 1 ? '' : 's'} loaded.`,
+        'Filters Applied',
+      );
+    }
   } catch (err) {
-    alerts.error(err.message || 'Unable to load account-access requests.', 'Account Access Load Failed');
+    showInlineFeedback(
+      feedbackScope || 'account-filter',
+      'error',
+      err.message || 'Unable to load account-access requests.',
+      'Account Access Load Failed',
+    );
   } finally {
     setAccountAccessLoading(false);
   }
@@ -1600,6 +2588,7 @@ function updateAccountAccessDraft(ticket, key, value) {
 
 async function saveAccountAccessTicket(ticket) {
   const id = ticket.ticket_id || ticket.ticket_no || ticket._id;
+  const feedbackScope = `account-save:${id}`;
   const draft = {
     status: ticket.status || 'open',
     assigned_to_name: ticket.assigned_to_name || '',
@@ -1609,27 +2598,60 @@ async function saveAccountAccessTicket(ticket) {
   };
 
   if (draft.status === 'resolved' && !normalizeText(draft.resolution_remarks)) {
-    alerts.warning('Resolution remarks are required before resolving the request.', 'Resolution Required');
+    showInlineFeedback(
+      feedbackScope,
+      'warning',
+      'Resolution remarks are required before resolving the request.',
+      'Resolution Required',
+    );
     return;
   }
 
   setAccountAccessSaving(id);
+  showInlineFeedback(
+    feedbackScope,
+    'info',
+    'Saving the latest account-access update...',
+    'Saving Update',
+    { loading: true },
+  );
+
   try {
     await api(`/account-access/requests/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(draft),
     });
-    alerts.success('Account-access request updated successfully.', 'Request Updated');
+    showInlineFeedback(
+      feedbackScope,
+      'success',
+      'Account-access request updated successfully.',
+      'Request Updated',
+    );
     await loadAccountAccessTickets();
   } catch (err) {
-    alerts.error(err.message || 'Unable to update account-access request.', 'Update Failed');
+    showInlineFeedback(
+      feedbackScope,
+      'error',
+      err.message || 'Unable to update account-access request.',
+      'Update Failed',
+    );
   } finally {
     setAccountAccessSaving('');
   }
 }
 
-async function loadData() {
+async function loadData({ feedbackScope = '' } = {}) {
   setLoading(true);
+
+  if (feedbackScope) {
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Refreshing IT support data...',
+      'Refreshing',
+      { loading: true },
+    );
+  }
 
   try {
     const [profileRes, optionsRes, myRes] = await Promise.all([
@@ -1698,21 +2720,46 @@ async function loadData() {
 
     setMyTickets(myRes.tickets || []);
     setTeamTickets(teamRes.tickets || []);
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'IT support data refreshed successfully.',
+        'Refresh Complete',
+      );
+    }
   } catch (err) {
-    alerts.error(err.message || 'Unable to load IT support data.', 'IT Support Load Failed');
+    showInlineFeedback(
+      feedbackScope || 'refresh',
+      'error',
+      err.message || 'Unable to load IT support data.',
+      'IT Support Load Failed',
+    );
   } finally {
     setLoading(false);
   }
 }
 
-async function loadTeamTickets() {
+async function loadTeamTickets(feedbackScope = '') {
     if (!canSeeDesk) return;
 
     setLoading(true);
 
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Loading IT support tickets with the selected filters...',
+        'Applying Filters',
+        { loading: true },
+      );
+    }
+
     try {
       const data = await getItSupportTickets(filters);
-      setTeamTickets(data.tickets || []);
+      const nextTickets = data.tickets || [];
+      setTeamTickets(nextTickets);
       applyPermissionData(data);
 
       setOptions((prev) => ({
@@ -1721,8 +2768,22 @@ async function loadTeamTickets() {
         it_heads: data.it_heads || prev.it_heads,
         team_slots: data.team_slots || prev.team_slots,
       }));
+
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'success',
+          `${nextTickets.length} support ticket${nextTickets.length === 1 ? '' : 's'} loaded.`,
+          'Filters Applied',
+        );
+      }
     } catch (err) {
-      alerts.error(err.message || 'Unable to load IT support tickets.', 'Ticket Load Failed');
+      showInlineFeedback(
+        feedbackScope || 'desk-filter',
+        'error',
+        err.message || 'Unable to load IT support tickets.',
+        'Ticket Load Failed',
+      );
     } finally {
       setLoading(false);
     }
@@ -1730,18 +2791,36 @@ async function loadTeamTickets() {
 
   async function handleCreateTicket(event) {
     event.preventDefault();
+    const feedbackScope = 'create-ticket';
 
     if (!normalizeText(ticketForm.subject)) {
-      alerts.warning('Subject is required.', 'Missing Subject');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Subject is required.',
+        'Missing Subject',
+      );
       return;
     }
 
     if (!normalizeText(ticketForm.description)) {
-      alerts.warning('Description is required.', 'Missing Description');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Description is required.',
+        'Missing Description',
+      );
       return;
     }
 
     setSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Submitting your IT support request...',
+      'Submitting Ticket',
+      { loading: true },
+    );
 
     try {
       await createItSupportTicket({
@@ -1752,10 +2831,20 @@ async function loadTeamTickets() {
       });
 
       setTicketForm(emptyTicketForm);
-      alerts.success('IT support ticket submitted successfully to the IT Department.', 'Ticket Submitted');
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'IT support ticket submitted successfully to the IT Department.',
+        'Ticket Submitted',
+      );
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to submit IT support ticket.', 'Ticket Submit Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to submit IT support ticket.',
+        'Ticket Submit Failed',
+      );
     } finally {
       setSaving(false);
     }
@@ -1763,26 +2852,54 @@ async function loadTeamTickets() {
 
   async function handleAssign(event) {
     event.preventDefault();
+    const feedbackScope = activeActionKey ? `ticket:${activeActionKey}` : 'ticket-action';
 
     if (!selectedTicket) {
-      alerts.warning('Please select a ticket first.', 'Ticket Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a ticket first.',
+        'Ticket Required',
+      );
       return;
     }
 
     if (!assignForm.assigned_to_employee_id) {
-      alerts.warning('Please select an IT Department member.', 'Assignee Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select an IT Department member.',
+        'Assignee Required',
+      );
       return;
     }
 
     setPanelSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Saving the ticket assignment...',
+      'Saving Assignment',
+      { loading: true },
+    );
 
     try {
       await assignItSupportTicket(ticketId(selectedTicket), assignForm);
-      alerts.success('IT support ticket assigned successfully.', 'Ticket Assigned');
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'IT support ticket assigned successfully.',
+        'Ticket Assigned',
+      );
       closePanel();
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to assign ticket.', 'Assignment Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to assign ticket.',
+        'Assignment Failed',
+      );
     } finally {
       setPanelSaving(false);
     }
@@ -1790,22 +2907,42 @@ async function loadTeamTickets() {
 
   async function handleStatusUpdate(event) {
     event.preventDefault();
+    const feedbackScope = activeActionKey ? `ticket:${activeActionKey}` : 'ticket-action';
 
     if (!selectedTicket) {
-      alerts.warning('Please select a ticket first.', 'Ticket Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a ticket first.',
+        'Ticket Required',
+      );
       return;
     }
 
     if (statusForm.status === 'resolved' && !normalizeText(statusForm.resolution_note || statusForm.status_note)) {
-      alerts.warning('Resolution note is required before marking ticket as resolved.', 'Resolution Note Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Resolution note is required before marking ticket as resolved.',
+        'Resolution Note Required',
+      );
       return;
     }
 
     setPanelSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Saving the latest ticket status...',
+      'Updating Status',
+      { loading: true },
+    );
 
     try {
       await updateItSupportTicketStatus(ticketId(selectedTicket), statusForm);
-      alerts.success(
+      showInlineFeedback(
+        feedbackScope,
+        'success',
         statusForm.status === 'resolved'
           ? 'Ticket marked as resolved. The requester can now give a review from My IT Tickets.'
           : 'IT support ticket status updated successfully.',
@@ -1814,7 +2951,12 @@ async function loadTeamTickets() {
       closePanel();
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to update ticket status.', 'Status Update Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to update ticket status.',
+        'Status Update Failed',
+      );
     } finally {
       setPanelSaving(false);
     }
@@ -1822,18 +2964,36 @@ async function loadTeamTickets() {
 
   async function handleEscalate(event) {
     event.preventDefault();
+    const feedbackScope = activeActionKey ? `ticket:${activeActionKey}` : 'ticket-action';
 
     if (!selectedTicket) {
-      alerts.warning('Please select a ticket first.', 'Ticket Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a ticket first.',
+        'Ticket Required',
+      );
       return;
     }
 
     if (!normalizeText(escalationForm.escalation_reason)) {
-      alerts.warning('Escalation reason is required.', 'Escalation Reason Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Escalation reason is required.',
+        'Escalation Reason Required',
+      );
       return;
     }
 
     setPanelSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Escalating this ticket to Super Admin...',
+      'Escalating Ticket',
+      { loading: true },
+    );
 
     try {
       await escalateItSupportTicket(ticketId(selectedTicket), {
@@ -1841,11 +3001,21 @@ async function loadTeamTickets() {
         escalation_reason: normalizeText(escalationForm.escalation_reason),
       });
 
-      alerts.success('IT support ticket escalated to Super Admin successfully.', 'Ticket Escalated');
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'IT support ticket escalated to Super Admin successfully.',
+        'Ticket Escalated',
+      );
       closePanel();
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to escalate ticket.', 'Escalation Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to escalate ticket.',
+        'Escalation Failed',
+      );
     } finally {
       setPanelSaving(false);
     }
@@ -1853,21 +3023,44 @@ async function loadTeamTickets() {
 
   async function handleReview(event) {
     event.preventDefault();
+    const feedbackScope = activeActionKey ? `ticket:${activeActionKey}` : 'ticket-action';
 
     if (!selectedTicket) {
-      alerts.warning('Please select a ticket first.', 'Ticket Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a ticket first.',
+        'Ticket Required',
+      );
       return;
     }
 
     setPanelSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Submitting your review...',
+      'Submitting Review',
+      { loading: true },
+    );
 
     try {
       await reviewItSupportTicket(ticketId(selectedTicket), reviewForm);
-      alerts.success('Review submitted successfully. The IT support ticket is now closed.', 'Review Submitted');
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'Review submitted successfully. The IT support ticket is now closed.',
+        'Review Submitted',
+      );
       closePanel();
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to submit review.', 'Review Submit Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to submit review.',
+        'Review Submit Failed',
+      );
     } finally {
       setPanelSaving(false);
     }
@@ -1875,26 +3068,54 @@ async function loadTeamTickets() {
 
   async function handleReopen(event) {
     event.preventDefault();
+    const feedbackScope = activeActionKey ? `ticket:${activeActionKey}` : 'ticket-action';
 
     if (!selectedTicket) {
-      alerts.warning('Please select a ticket first.', 'Ticket Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a ticket first.',
+        'Ticket Required',
+      );
       return;
     }
 
     if (!normalizeText(reopenForm.reason)) {
-      alerts.warning('Reopen reason is required.', 'Reopen Reason Required');
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
+        'Reopen reason is required.',
+        'Reopen Reason Required',
+      );
       return;
     }
 
     setPanelSaving(true);
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Reopening this IT support ticket...',
+      'Reopening Ticket',
+      { loading: true },
+    );
 
     try {
       await reopenItSupportTicket(ticketId(selectedTicket), reopenForm);
-      alerts.success('IT support ticket reopened successfully.', 'Ticket Reopened');
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'IT support ticket reopened successfully.',
+        'Ticket Reopened',
+      );
       closePanel();
       await loadData();
     } catch (err) {
-      alerts.error(err.message || 'Unable to reopen ticket.', 'Reopen Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        err.message || 'Unable to reopen ticket.',
+        'Reopen Failed',
+      );
     } finally {
       setPanelSaving(false);
     }
@@ -2138,6 +3359,11 @@ function renderTicketActionPanel(ticket, section = 'desk') {
           </button>
         </form>
       ) : null}
+
+      <ITSupportInlineMessage
+        feedback={inlineFeedback[`ticket:${currentActionKey}`]}
+        onClose={() => clearInlineFeedback(`ticket:${currentActionKey}`)}
+      />
     </div>
   );
 }
@@ -2312,6 +3538,14 @@ function renderTicketCard(ticket, section = 'my') {
         ) : null}
       </div>
 
+      {!isActionOpen ? (
+        <ITSupportInlineMessage
+          feedback={inlineFeedback[`ticket:${currentActionKey}`]}
+          onClose={() => clearInlineFeedback(`ticket:${currentActionKey}`)}
+          className="it-ticket-action-feedback"
+        />
+      ) : null}
+
       {renderTicketActionPanel(ticket, section)}
     </article>
   );
@@ -2334,20 +3568,171 @@ function renderTicketCard(ticket, section = 'my') {
   }, [canManageAccountAccess]);
 
   useEffect(() => {
-    if (!showMyTicketsSheet) return undefined;
+    if (!showMyTicketsSheet || typeof document === 'undefined') return undefined;
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    const blockBackgroundScroll = (event) => {
+      const sheet = document.querySelector('.it-my-ticket-sheet');
+      if (sheet && sheet.contains(event.target)) return;
+      event.preventDefault();
+    };
+
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        closePanel();
+        setShowMyTicketsSheet(false);
+      }
+    };
+
+    document.addEventListener('wheel', blockBackgroundScroll, { passive: false });
+    document.addEventListener('touchmove', blockBackgroundScroll, { passive: false });
+    window.addEventListener('keydown', closeOnEscape);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+      window.removeEventListener('keydown', closeOnEscape);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
     };
   }, [showMyTicketsSheet]);
 
+  useEffect(() => {
+    function dismissInlineFeedback(event) {
+      if (event.target?.closest?.('.it-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+      setInlineFeedback({});
+    }
+
+    document.addEventListener('pointerdown', dismissInlineFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissInlineFeedback);
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    setMyTicketPage((current) => Math.min(current, myTicketPageCount));
+  }, [myTicketPageCount]);
+
+  useEffect(() => {
+    setAccountAccessPage((current) => Math.min(current, accountAccessPageCount));
+  }, [accountAccessPageCount]);
+
+  useEffect(() => {
+    setDeskPage((current) => Math.min(current, deskPageCount));
+  }, [deskPageCount]);
+
+  useEffect(() => {
+    if (activeSection === 'account' && !canManageAccountAccess) {
+      setActiveSection(canSeeDesk ? 'desk' : 'raise');
+    }
+
+    if (activeSection === 'desk' && !canSeeDesk) {
+      setActiveSection('raise');
+    }
+  }, [activeSection, canManageAccountAccess, canSeeDesk]);
+
   const rows = profileRows(profile);
 
+  const sectionTabsElement = (
+    <nav
+      className="it-section-tabs"
+      aria-label="IT support sections"
+    >
+      <button
+        type="button"
+        className={`it-section-tab ${activeSection === 'raise' ? 'active' : ''}`}
+        onClick={() => changeSection('raise')}
+        aria-pressed={activeSection === 'raise'}
+      >
+        <Laptop size={18} />
+        <span className="it-section-tab-copy">
+          <strong>Raise Ticket</strong>
+          <small>Create a new IT support request</small>
+        </span>
+      </button>
+
+      <button
+        type="button"
+        className={`it-section-tab ${activeSection === 'my' ? 'active' : ''}`}
+        onClick={() => changeSection('my')}
+        aria-pressed={activeSection === 'my'}
+      >
+        <Headphones size={18} />
+        <span className="it-section-tab-copy">
+          <strong>My IT Tickets</strong>
+          <small>Track your raised tickets and reviews</small>
+        </span>
+        <span className="it-section-tab-count">{myTicketRows.length}</span>
+      </button>
+
+      <button
+        type="button"
+        className={`it-section-tab ${activeSection === 'desk' ? 'active' : ''}`}
+        onClick={() => changeSection('desk')}
+        aria-pressed={activeSection === 'desk'}
+        disabled={!canSeeDesk}
+      >
+        <Headphones size={18} />
+        <span className="it-section-tab-copy">
+          <strong>{superAdminEscalatedAccess ? 'Escalated Desk' : 'Support Desk'}</strong>
+          <small>
+            {canSeeDesk
+              ? superAdminEscalatedAccess
+                ? 'Review tenant escalations'
+                : 'Assign, update and resolve IT tickets'
+              : 'Available to the IT support team'}
+          </small>
+        </span>
+        <span className="it-section-tab-count">{deskTicketRows.length}</span>
+      </button>
+
+      <button
+        type="button"
+        className={`it-section-tab ${activeSection === 'account' ? 'active' : ''}`}
+        onClick={() => changeSection('account')}
+        aria-pressed={activeSection === 'account'}
+        disabled={!canManageAccountAccess}
+      >
+        <ShieldAlert size={18} />
+        <span className="it-section-tab-copy">
+          <strong>Account Access</strong>
+          <small>
+            {canManageAccountAccess
+              ? 'Manage pre-login employee requests'
+              : 'Available to authorised support managers'}
+          </small>
+        </span>
+        <span className="it-section-tab-count">{accountAccessTickets.length}</span>
+      </button>
+    </nav>
+  );
+
   return (
-    <div className="it-support-page">
+    <div className="page-grid it-support-page">
       <style>{IT_SUPPORT_SHEET_STYLES}</style>
 
       <section className="grievance-hero it-hero">
@@ -2362,10 +3747,21 @@ function renderTicketCard(ticket, section = 'my') {
         </div>
 
         <div className="grievance-hero-actions">
-          <button type="button" className="ghost-btn it-support-refresh-btn" onClick={loadData}>
-            <RefreshCw size={16} />
-            Refresh
-          </button>
+          <div className="it-action-stack">
+            <button
+              type="button"
+              className="ghost-btn it-support-refresh-btn"
+              onClick={() => loadData({ feedbackScope: 'refresh' })}
+            >
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+
+            <ITSupportInlineMessage
+              feedback={inlineFeedback.refresh}
+              onClose={() => clearInlineFeedback('refresh')}
+            />
+          </div>
         </div>
       </section>
 
@@ -2396,7 +3792,12 @@ function renderTicketCard(ticket, section = 'my') {
         </div>
       </section>
 
-      <div className="grievance-grid it-support-grid">
+      <div className="it-section-tabs-holder">
+        {sectionTabsElement}
+      </div>
+
+      {activeSection === 'raise' ? (
+        <div className="it-section-content it-section-content-raise grievance-grid it-support-grid">
         <section className="panel grievance-form-panel">
           <div className="section-heading">
             <div>
@@ -2473,55 +3874,66 @@ function renderTicketCard(ticket, section = 'my') {
               />
             </label>
 
-            <button type="submit" className="primary" disabled={saving}>
-              {saving ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-              Submit IT Ticket
-            </button>
+            <div className="it-action-stack">
+              <button type="submit" className="primary" disabled={saving}>
+                {saving ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+                Submit IT Ticket
+              </button>
+
+              <ITSupportInlineMessage
+                feedback={inlineFeedback['create-ticket']}
+                onClose={() => clearInlineFeedback('create-ticket')}
+              />
+            </div>
           </form>
         </section>
+        </div>
+      ) : null}
 
-<section className="panel grievance-list-panel it-my-ticket-summary-panel">
-  <div className="section-heading">
-    <div>
-      <h2>My IT Tickets</h2>
-      <p>
-        Your raised IT support requests are moved to a separate panel to keep this page clean.
-      </p>
-    </div>
-    <Headphones size={22} />
-  </div>
-
-  <div className="it-my-ticket-summary-card">
-    <div className="it-my-ticket-summary-icon">
-      <Headphones size={26} />
-    </div>
-
-    <div className="it-my-ticket-summary-copy">
-      <span>Total Tickets Raised</span>
-      <strong>{myTicketRows.length}</strong>
-      <p>
-        {stats.pendingReview > 0
-          ? `${stats.pendingReview} ticket${stats.pendingReview > 1 ? 's' : ''} waiting for your review.`
-          : 'Track your raised tickets, reviews, reopen requests and resolution status.'}
-      </p>
-    </div>
-  </div>
-
-  <div className="it-my-ticket-summary-actions">
-    <button
-      type="button"
-      className="primary"
-      onClick={() => {
-        closePanel();
-        setShowMyTicketsSheet(true);
-      }}
-    >
-      <Headphones size={17} />
-      View My Tickets
-    </button>
-  </div>
-</section>
+      {activeSection === 'my' ? (
+        <section className="it-section-content panel grievance-list-panel it-my-ticket-summary-panel">
+          <div className="section-heading">
+            <div>
+              <h2>My IT Tickets</h2>
+              <p>
+                Your raised IT support requests are moved to a separate panel to keep this page clean.
+              </p>
             </div>
+            <Headphones size={22} />
+          </div>
+
+          <div className="it-my-ticket-summary-card">
+            <div className="it-my-ticket-summary-icon">
+              <Headphones size={26} />
+            </div>
+
+            <div className="it-my-ticket-summary-copy">
+              <span>Total Tickets Raised</span>
+              <strong>{myTicketRows.length}</strong>
+              <p>
+                {stats.pendingReview > 0
+                  ? `${stats.pendingReview} ticket${stats.pendingReview > 1 ? 's' : ''} waiting for your review.`
+                  : 'Track your raised tickets, reviews, reopen requests and resolution status.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="it-my-ticket-summary-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                closePanel();
+                setShowMyTicketsSheet(true);
+              }}
+            >
+              <Headphones size={17} />
+              View My Tickets
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {showMyTicketsSheet
         ? createPortal(
             <div className="it-support-page it-support-sheet-portal-root">
@@ -2590,9 +4002,23 @@ function renderTicketCard(ticket, section = 'my') {
                         <p>Loading your IT tickets...</p>
                       </div>
                     ) : myTicketRows.length ? (
-                      <div className="ticket-list">
-                        {myTicketRows.map((ticket) => renderTicketCard(ticket, 'my'))}
-                      </div>
+                      <>
+                        <ITPagination
+                          total={myTicketRows.length}
+                          page={Math.min(myTicketPage, myTicketPageCount)}
+                          pageSize={myTicketPageSize}
+                          onPageChange={setMyTicketPage}
+                          onPageSizeChange={(value) => {
+                            setMyTicketPage(1);
+                            setMyTicketPageSize(value);
+                          }}
+                          label="my tickets"
+                        />
+
+                        <div className="ticket-list">
+                          {pagedMyTicketRows.map((ticket) => renderTicketCard(ticket, 'my'))}
+                        </div>
+                      </>
                     ) : (
                       <div className="empty-state">
                         <Headphones size={30} />
@@ -2607,8 +4033,8 @@ function renderTicketCard(ticket, section = 'my') {
           )
         : null}
 
-      {canManageAccountAccess ? (
-        <section className="panel grievance-list-panel account-access-desk">
+      {activeSection === 'account' && canManageAccountAccess ? (
+        <section className="it-section-content panel grievance-list-panel account-access-desk">
           <div className="section-heading">
             <div>
               <h2>Account Access Requests</h2>
@@ -2641,16 +4067,43 @@ function renderTicketCard(ticket, section = 'my') {
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <button type="button" className="ghost-btn" onClick={() => loadAccountAccessTickets()}>
-              <RefreshCw size={16} /> Apply
-            </button>
+            <div className="it-filter-action-stack">
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => {
+                  setAccountAccessPage(1);
+                  loadAccountAccessTickets(accountAccessFilters, 'account-filter');
+                }}
+              >
+                <RefreshCw size={16} /> Apply
+              </button>
+
+              <ITSupportInlineMessage
+                feedback={inlineFeedback['account-filter']}
+                onClose={() => clearInlineFeedback('account-filter')}
+              />
+            </div>
           </div>
 
           {accountAccessLoading ? (
             <div className="empty-state"><Loader2 className="spin" size={28} /><p>Loading account-access requests...</p></div>
           ) : accountAccessTickets.length ? (
-            <div className="account-access-list">
-              {accountAccessTickets.map((ticket) => {
+            <>
+              <ITPagination
+                total={accountAccessTickets.length}
+                page={Math.min(accountAccessPage, accountAccessPageCount)}
+                pageSize={accountAccessPageSize}
+                onPageChange={setAccountAccessPage}
+                onPageSizeChange={(value) => {
+                  setAccountAccessPage(1);
+                  setAccountAccessPageSize(value);
+                }}
+                label="account-access requests"
+              />
+
+              <div className="account-access-list">
+              {pagedAccountAccessTickets.map((ticket) => {
                 const id = ticket.ticket_id || ticket.ticket_no || ticket._id;
                 const draft = {
                   status: ticket.status || 'open',
@@ -2701,24 +4154,38 @@ function renderTicketCard(ticket, section = 'my') {
                       </label>
                       <div className="account-access-ticket-actions">
                         <small>The employee will receive email updates when the backend notification service is enabled.</small>
-                        <button type="button" className="primary" disabled={accountAccessSaving === id} onClick={() => saveAccountAccessTicket(ticket)}>
-                          {accountAccessSaving === id ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
-                          Save Update
-                        </button>
+
+                        <div className="it-account-action-stack">
+                          <button
+                            type="button"
+                            className="primary"
+                            disabled={accountAccessSaving === id}
+                            onClick={() => saveAccountAccessTicket(ticket)}
+                          >
+                            {accountAccessSaving === id ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+                            Save Update
+                          </button>
+
+                          <ITSupportInlineMessage
+                            feedback={inlineFeedback[`account-save:${id}`]}
+                            onClose={() => clearInlineFeedback(`account-save:${id}`)}
+                          />
+                        </div>
                       </div>
                     </div>
                   </article>
                 );
               })}
-            </div>
+              </div>
+            </>
           ) : (
             <div className="empty-state"><ShieldAlert size={30} /><p>No account-access requests found.</p></div>
           )}
         </section>
       ) : null}
 
-      {canSeeDesk ? (
-        <section className="panel grievance-list-panel">
+      {activeSection === 'desk' && canSeeDesk ? (
+        <section className="it-section-content panel grievance-list-panel">
           <div className="section-heading">
             <div>
               <h2>
@@ -2823,9 +4290,23 @@ function renderTicketCard(ticket, section = 'my') {
               placeholder="Search ticket..."
             />
 
-            <button type="button" className="ghost-btn" onClick={loadTeamTickets}>
-              Apply
-            </button>
+            <div className="it-filter-action-stack">
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => {
+                  setDeskPage(1);
+                  loadTeamTickets('desk-filter');
+                }}
+              >
+                Apply
+              </button>
+
+              <ITSupportInlineMessage
+                feedback={inlineFeedback['desk-filter']}
+                onClose={() => clearInlineFeedback('desk-filter')}
+              />
+            </div>
           </div>
 
           {loading ? (
@@ -2834,9 +4315,23 @@ function renderTicketCard(ticket, section = 'my') {
               <p>Loading IT support desk...</p>
             </div>
           ) : deskTicketRows.length ? (
-            <div className="ticket-list">
-              {deskTicketRows.map((ticket) => renderTicketCard(ticket, 'desk'))}
-            </div>
+            <>
+              <ITPagination
+                total={deskTicketRows.length}
+                page={Math.min(deskPage, deskPageCount)}
+                pageSize={deskPageSize}
+                onPageChange={setDeskPage}
+                onPageSizeChange={(value) => {
+                  setDeskPage(1);
+                  setDeskPageSize(value);
+                }}
+                label="support tickets"
+              />
+
+              <div className="ticket-list">
+                {pagedDeskTicketRows.map((ticket) => renderTicketCard(ticket, 'desk'))}
+              </div>
+            </>
           ) : (
             <div className="empty-state">
               <Headphones size={30} />

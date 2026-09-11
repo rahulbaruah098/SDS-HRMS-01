@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Building2,
@@ -19,11 +21,13 @@ import {
   Type,
   Trash2,
   UploadCloud,
+  X,
 } from 'lucide-react';
 
 import { api, normalizeProfilePhotoUrl } from '../api/client';
 import { normalizeRoleList } from '../data/modules';
 
+const SETTINGS_POPUP_AUTO_HIDE_MS = 3600;
 const MAX_LOGO_BYTES = 3 * 1024 * 1024;
 const MAX_PLATFORM_LOGO_BYTES = 3 * 1024 * 1024;
 const DEFAULT_PLATFORM_TAGLINE = 'People, Process and Performance';
@@ -420,6 +424,119 @@ function formatSettingsTimestamp(value) {
   });
 }
 
+
+function SettingsInlineMessage({
+  message,
+  type = 'info',
+  onClose,
+  title = '',
+}) {
+  if (!message) {
+    return null;
+  }
+
+  return (
+    <div className={`settings-inline-message ${type}`} role="status">
+      <span className="settings-inline-message-icon">
+        {type === 'success' ? (
+          <CheckCircle2 size={16} />
+        ) : type === 'error' || type === 'warning' ? (
+          <AlertTriangle size={16} />
+        ) : (
+          <ShieldCheck size={16} />
+        )}
+      </span>
+
+      <span className="settings-inline-message-copy">
+        {title ? <strong>{title}</strong> : null}
+        <span>{message}</span>
+      </span>
+
+      {typeof onClose === 'function' ? (
+        <button
+          type="button"
+          className="settings-inline-message-close"
+          onClick={onClose}
+          aria-label="Dismiss message"
+        >
+          <X size={14} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SettingsConfirmPopup({ popup, onResolve }) {
+  if (!popup || typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className="settings-confirm-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !popup.busy) {
+          onResolve(false);
+        }
+      }}
+    >
+      <section
+        className={`settings-confirm-card ${popup.danger ? 'is-danger' : 'is-confirm'}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-confirm-title"
+      >
+        <header className="settings-confirm-header">
+          <div className={`settings-confirm-icon ${popup.danger ? 'is-danger' : ''}`}>
+            {popup.danger ? <AlertTriangle size={22} /> : <ShieldCheck size={22} />}
+          </div>
+
+          <div className="settings-confirm-title">
+            <span>Settings</span>
+            <h3 id="settings-confirm-title">{popup.title || 'Confirm action'}</h3>
+          </div>
+
+          <button
+            type="button"
+            className="settings-confirm-close"
+            onClick={() => onResolve(false)}
+            disabled={popup.busy}
+            aria-label="Close confirmation"
+          >
+            <X size={17} />
+          </button>
+        </header>
+
+        <div className="settings-confirm-body">
+          <p>{popup.message}</p>
+        </div>
+
+        <footer className="settings-confirm-actions">
+          <button
+            type="button"
+            className="settings-confirm-cancel"
+            onClick={() => onResolve(false)}
+            disabled={popup.busy}
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            className={`settings-confirm-submit ${popup.danger ? 'is-danger' : ''}`}
+            onClick={() => onResolve(true)}
+            disabled={popup.busy}
+          >
+            {popup.confirmLabel || 'Confirm'}
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function AttendanceReasonListEditor({
   title,
   description,
@@ -545,7 +662,9 @@ export default function Settings({ user, setPage }) {
   const [payrollLogoRemoving, setPayrollLogoRemoving] = useState(false);
   const [payrollBrandingMessage, setPayrollBrandingMessage] = useState('');
   const [payrollBrandingError, setPayrollBrandingError] = useState('');
-  const [showPayrollLogoRemoveConfirm, setShowPayrollLogoRemoveConfirm] = useState(false);
+
+  const [confirmPopup, setConfirmPopup] = useState(null);
+  const confirmResolverRef = useRef(null);
 
   const [platformBranding, setPlatformBranding] = useState({
     productName: 'YourComate',
@@ -659,6 +778,34 @@ export default function Settings({ user, setPage }) {
   const previewPlatformLogoUrl = localPlatformPreview || savedPlatformLogoUrl;
   const platformBusy = platformLoading || platformSaving || platformRemoving;
 
+  function resolveConfirm(result) {
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmPopup(null);
+
+    if (resolver) {
+      resolver(Boolean(result));
+    }
+  }
+
+  function showConfirm(messageText, title, options = {}) {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false);
+      confirmResolverRef.current = null;
+    }
+
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmPopup({
+        title,
+        message: messageText,
+        danger: Boolean(options.danger),
+        confirmLabel: options.confirmLabel || 'Confirm',
+        busy: false,
+      });
+    });
+  }
+
   function clearLocalPreview() {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
@@ -760,6 +907,9 @@ export default function Settings({ user, setPage }) {
         );
         return exists ? current : getPayrollProfileReference(profiles[0] || {});
       });
+      if (silent) {
+        setPayrollBrandingMessage('Payroll branding refreshed successfully.');
+      }
     } catch (requestError) {
       setPayrollProfiles([]);
       setPayrollSelectionMode('single');
@@ -778,7 +928,6 @@ export default function Settings({ user, setPage }) {
     setSelectedPayrollProfileKey(event.target.value);
     setPayrollBrandingMessage('');
     setPayrollBrandingError('');
-    setShowPayrollLogoRemoveConfirm(false);
   }
 
   function handlePayrollLogoFileChange(event) {
@@ -853,7 +1002,25 @@ export default function Settings({ user, setPage }) {
 
   async function removePayrollLogo() {
     if (!selectedPayrollProfile?.has_custom_payroll_logo) {
-      setShowPayrollLogoRemoveConfirm(false);
+      return;
+    }
+
+    const organisationName = safeText(
+      selectedPayrollProfile.organisation_name ||
+        selectedPayrollProfile.organization_name,
+      'This organisation',
+    );
+
+    const confirmed = await showConfirm(
+      `${organisationName} will immediately fall back to its organisation/company logo or initials. Existing historical payroll snapshots remain protected.`,
+      'Remove custom payroll logo?',
+      {
+        danger: true,
+        confirmLabel: 'Remove Logo',
+      },
+    );
+
+    if (!confirmed) {
       return;
     }
 
@@ -869,7 +1036,6 @@ export default function Settings({ user, setPage }) {
       );
       replacePayrollProfile(data?.profile);
       resetSelectedPayrollLogoFile();
-      setShowPayrollLogoRemoveConfirm(false);
       setPayrollBrandingMessage(
         data?.message || 'Custom payroll logo removed successfully.',
       );
@@ -912,6 +1078,9 @@ export default function Settings({ user, setPage }) {
 
       setBranding(getBrandingFromResponse(data));
       setCanManageBranding(Boolean(data.can_manage_branding));
+      if (silent) {
+        setMessage('Company branding refreshed successfully.');
+      }
     } catch (requestError) {
       setError(
         requestError?.message ||
@@ -936,6 +1105,9 @@ export default function Settings({ user, setPage }) {
       setPlatformBranding(nextBranding);
       setPlatformTagline(nextBranding.tagline);
       setCanManagePlatformBranding(Boolean(data.can_manage_branding));
+      if (silent) {
+        setPlatformMessage('YourComate branding refreshed successfully.');
+      }
     } catch (requestError) {
       setPlatformError(
         requestError?.message ||
@@ -973,6 +1145,9 @@ export default function Settings({ user, setPage }) {
       setAttendanceReasonSource(safeText(data?.source, 'default'));
       setAttendanceReasonUpdatedAt(safeText(data?.updated_at));
       setAttendanceReasonUpdatedBy(safeText(data?.updated_by_name));
+      if (silent) {
+        setAttendanceReasonMessage('Attendance reasons refreshed successfully.');
+      }
     } catch (requestError) {
       setCanManageAttendanceReasons(false);
       setAttendanceReasonError(
@@ -1000,6 +1175,9 @@ export default function Settings({ user, setPage }) {
       setAttendanceScheduleSource(safeText(data?.source, 'default'));
       setAttendanceScheduleUpdatedAt(safeText(data?.updated_at));
       setAttendanceScheduleUpdatedBy(safeText(data?.updated_by_name));
+      if (silent) {
+        setAttendanceScheduleMessage('Attendance timings refreshed successfully.');
+      }
     } catch (requestError) {
       setCanManageAttendanceSchedule(false);
       setAttendanceScheduleError(
@@ -1045,6 +1223,115 @@ export default function Settings({ user, setPage }) {
       }
     };
   }, [isPlatformSuperadmin, hasPayrollBrandingManagerRole]);
+
+
+  useEffect(() => {
+    const timers = [];
+    const scheduleDismiss = (value, setter) => {
+      if (!value) {
+        return;
+      }
+
+      timers.push(
+        window.setTimeout(() => {
+          setter('');
+        }, SETTINGS_POPUP_AUTO_HIDE_MS),
+      );
+    };
+
+    scheduleDismiss(message, setMessage);
+    scheduleDismiss(error, setError);
+    scheduleDismiss(platformMessage, setPlatformMessage);
+    scheduleDismiss(platformError, setPlatformError);
+    scheduleDismiss(payrollBrandingMessage, setPayrollBrandingMessage);
+    scheduleDismiss(payrollBrandingError, setPayrollBrandingError);
+    scheduleDismiss(attendanceReasonMessage, setAttendanceReasonMessage);
+    scheduleDismiss(attendanceReasonError, setAttendanceReasonError);
+    scheduleDismiss(attendanceScheduleMessage, setAttendanceScheduleMessage);
+    scheduleDismiss(attendanceScheduleError, setAttendanceScheduleError);
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [
+    message,
+    error,
+    platformMessage,
+    platformError,
+    payrollBrandingMessage,
+    payrollBrandingError,
+    attendanceReasonMessage,
+    attendanceReasonError,
+    attendanceScheduleMessage,
+    attendanceScheduleError,
+  ]);
+
+  useEffect(() => {
+    function dismissInlineMessages() {
+      setMessage('');
+      setError('');
+      setPlatformMessage('');
+      setPlatformError('');
+      setPayrollBrandingMessage('');
+      setPayrollBrandingError('');
+      setAttendanceReasonMessage('');
+      setAttendanceReasonError('');
+      setAttendanceScheduleMessage('');
+      setAttendanceScheduleError('');
+    }
+
+    document.addEventListener('pointerdown', dismissInlineMessages);
+    return () => document.removeEventListener('pointerdown', dismissInlineMessages);
+  }, []);
+
+  useEffect(() => {
+    if (!confirmPopup || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    const blockBackgroundScroll = (event) => {
+      const activePopup = document.querySelector('.settings-confirm-card');
+
+      if (activePopup && activePopup.contains(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape' && !confirmPopup.busy) {
+        resolveConfirm(false);
+      }
+    };
+
+    document.addEventListener('wheel', blockBackgroundScroll, { passive: false });
+    document.addEventListener('touchmove', blockBackgroundScroll, { passive: false });
+    window.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+      window.removeEventListener('keydown', closeOnEscape);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [confirmPopup]);
 
   function updateAttendanceScheduleField(name, value) {
     setAttendanceSchedule((current) => ({
@@ -1405,8 +1692,13 @@ export default function Settings({ user, setPage }) {
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       'Remove the global YourComate logo? The sidebar will use the YC initials until another logo is uploaded.',
+      'Remove YourComate logo?',
+      {
+        danger: true,
+        confirmLabel: 'Remove Logo',
+      },
     );
 
     if (!confirmed) {
@@ -1443,8 +1735,13 @@ export default function Settings({ user, setPage }) {
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       'Remove the company logo from this tenant? The dashboards will fall back to the company initials.',
+      'Remove company logo?',
+      {
+        danger: true,
+        confirmLabel: 'Remove Logo',
+      },
     );
 
     if (!confirmed) {
@@ -1482,39 +1779,41 @@ export default function Settings({ user, setPage }) {
     .toUpperCase() || 'YC';
 
   return (
-    <div className="settings-branding-page">
+    <div className="page-grid settings-branding-page">
       <style>{`
         .settings-branding-page {
-          --st-ink: var(--yc-ink, #15152f);
-          --st-ink-2: var(--yc-ink-2, #282443);
-          --st-purple: var(--yc-purple, #6558d9);
-          --st-purple-deep: var(--yc-purple-deep, #30275f);
-          --st-purple-soft: var(--yc-purple-soft, #eeeaff);
-          --st-cream: var(--yc-cream, #f5f0e8);
-          --st-paper: var(--yc-paper, #fffdf8);
-          --st-lime: var(--yc-lime, #dfff5f);
-          --st-cobalt: var(--yc-cobalt, #3156d8);
-          --st-sky: var(--yc-sky, #bfe7ff);
-          --st-coral: var(--yc-coral, #ff715b);
-          --st-pink: var(--yc-pink, #f4a7cf);
-          --st-lilac: var(--yc-lilac, #c9b7ff);
-          --st-mint: var(--yc-mint, #7fd0ae);
-          --st-yellow: var(--yc-yellow, #ffd95f);
-          --st-border: rgba(21, 21, 47, .14);
-          --st-border-strong: rgba(21, 21, 47, .23);
-          --st-muted: #6c6980;
-          --st-shadow-sm: 0 12px 30px rgba(21, 21, 47, .08);
-          --st-shadow-md: 0 22px 56px rgba(21, 21, 47, .12);
-          --st-shadow-lg: 0 34px 86px rgba(21, 21, 47, .16);
-          width: 100%;
-          min-width: 0;
-          display: grid;
-          gap: clamp(18px, 2vw, 28px);
-          color: var(--st-ink);
-          font-family: var(--yc-ui, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+          --st-ink: #101a3a;
+          --st-ink-2: #263553;
+          --st-purple: #6658dc;
+          --st-purple-deep: #40348d;
+          --st-purple-soft: #f1efff;
+          --st-cream: #f7fbff;
+          --st-paper: #ffffff;
+          --st-lime: #18b5c8;
+          --st-cobalt: #4f65d7;
+          --st-sky: #c6d8f7;
+          --st-coral: #d4576f;
+          --st-pink: #efb4c1;
+          --st-lilac: #c9c0ff;
+          --st-mint: #aee6d9;
+          --st-yellow: #ffe0a5;
+          --st-border: rgba(16, 26, 58, .14);
+          --st-border-strong: rgba(16, 26, 58, .23);
+          --st-muted: #5d6d8d;
+          --st-shadow-sm: 0 12px 30px rgba(34, 38, 110, .07);
+          --st-shadow-md: 0 24px 42px rgba(34, 38, 110, .10);
+          --st-shadow-lg: 0 32px 86px rgba(22, 29, 73, .26);
           position: relative;
           isolation: isolate;
-          padding: clamp(4px, .5vw, 8px);
+          display: grid;
+          gap: clamp(18px, 2vw, 26px);
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          padding: clamp(2px, .35vw, 6px);
+          padding-bottom: max(34px, env(safe-area-inset-bottom));
+          color: var(--st-ink);
+          font-family: var(--yc-ui, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
         }
 
         .settings-branding-page,
@@ -1553,54 +1852,47 @@ export default function Settings({ user, setPage }) {
           box-shadow: 0 0 0 4px rgba(101, 88, 217, .13);
         }
 
-        .platform-branding-panel,
+        .platform-branding-panel {
+          position: relative;
+          min-width: 0;
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          padding: clamp(20px, 2.6vw, 34px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            var(--st-shadow-md);
+        }
+
         .payroll-branding-panel,
         .attendance-settings-panel,
         .tenant-branding-panel {
           position: relative;
           min-width: 0;
           overflow: hidden;
-          border: 1px solid rgba(21, 21, 47, .12);
-          border-radius: clamp(24px, 2.5vw, 34px);
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
           padding: clamp(20px, 2.6vw, 34px);
-          background:
-            linear-gradient(145deg, rgba(255, 255, 255, .95), rgba(255, 253, 248, .92));
-          box-shadow: var(--st-shadow-md);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            var(--st-shadow-md);
         }
 
         .platform-branding-panel::before,
         .payroll-branding-panel::before,
         .attendance-settings-panel::before,
         .tenant-branding-panel::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          opacity: .9;
-        }
-
-        .platform-branding-panel::before {
-          background:
-            radial-gradient(circle at 0% 0%, rgba(201, 183, 255, .34), transparent 32%),
-            radial-gradient(circle at 100% 5%, rgba(191, 231, 255, .32), transparent 28%);
-        }
-
-        .payroll-branding-panel::before {
-          background:
-            radial-gradient(circle at 3% 0%, rgba(191, 231, 255, .40), transparent 34%),
-            radial-gradient(circle at 96% 10%, rgba(223, 255, 95, .18), transparent 24%);
-        }
-
-        .attendance-settings-panel::before {
-          background:
-            radial-gradient(circle at 2% 0%, rgba(127, 208, 174, .25), transparent 31%),
-            radial-gradient(circle at 98% 5%, rgba(255, 217, 95, .20), transparent 27%);
-        }
-
-        .tenant-branding-panel::before {
-          background:
-            radial-gradient(circle at 0% 0%, rgba(244, 167, 207, .18), transparent 30%),
-            radial-gradient(circle at 98% 6%, rgba(201, 183, 255, .28), transparent 30%);
+          content: none;
+          display: none;
         }
 
         .platform-branding-panel > *,
@@ -1655,44 +1947,24 @@ export default function Settings({ user, setPage }) {
         .payroll-branding-kicker,
         .attendance-settings-kicker,
         .tenant-branding-kicker {
-          width: fit-content;
-          max-width: 100%;
           display: inline-flex;
           align-items: center;
           gap: 8px;
+          width: fit-content;
+          max-width: 100%;
           margin: 0 0 10px;
-          padding: 7px 11px;
+          padding: 9px 13px;
+          border: 0;
           border-radius: 999px;
-          font-size: 12px;
-          line-height: 1.1;
-          font-weight: 900;
-          letter-spacing: .11em;
+          color: #ffffff;
+          background: #342b78;
+          box-shadow: 4px 5px 0 #18b5c8;
+          font-size: 9px;
+          line-height: 1;
+          font-weight: 950;
+          letter-spacing: .12em;
           text-transform: uppercase;
           white-space: normal;
-        }
-
-        .platform-branding-kicker {
-          color: var(--st-purple-deep);
-          background: var(--st-purple-soft);
-          border: 1px solid rgba(101, 88, 217, .15);
-        }
-
-        .payroll-branding-kicker {
-          color: #24479f;
-          background: rgba(191, 231, 255, .58);
-          border: 1px solid rgba(49, 86, 216, .14);
-        }
-
-        .attendance-settings-kicker {
-          color: #2d715b;
-          background: rgba(127, 208, 174, .19);
-          border: 1px solid rgba(73, 155, 123, .16);
-        }
-
-        .tenant-branding-kicker {
-          color: #5b407a;
-          background: rgba(201, 183, 255, .25);
-          border: 1px solid rgba(101, 88, 217, .13);
         }
 
         .platform-branding-heading h1,
@@ -1726,17 +1998,17 @@ export default function Settings({ user, setPage }) {
         .payroll-branding-refresh,
         .attendance-settings-refresh,
         .tenant-branding-refresh {
+          display: grid;
+          place-items: center;
           width: 46px;
           height: 46px;
           flex: 0 0 46px;
-          display: grid;
-          place-items: center;
-          border: 1px solid rgba(21, 21, 47, .13);
+          border: 1px solid rgba(65, 55, 161, .18);
           border-radius: 15px;
-          background: rgba(255, 255, 255, .84);
-          color: var(--st-purple-deep);
+          color: #40348d;
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
           cursor: pointer;
-          box-shadow: 0 10px 24px rgba(21, 21, 47, .08);
           transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease;
         }
 
@@ -1744,10 +2016,10 @@ export default function Settings({ user, setPage }) {
         .payroll-branding-refresh:hover:not(:disabled),
         .attendance-settings-refresh:hover:not(:disabled),
         .tenant-branding-refresh:hover:not(:disabled) {
-          transform: translateY(-2px) rotate(-4deg);
-          border-color: rgba(101, 88, 217, .35);
-          background: #ffffff;
-          box-shadow: 0 15px 30px rgba(21, 21, 47, .12);
+          transform: translateY(-2px);
+          border-color: rgba(102, 88, 220, .34);
+          background: #f8f7ff;
+          box-shadow: 4px 5px 0 rgba(52, 43, 120, .13);
         }
 
         .platform-branding-refresh:disabled,
@@ -1777,12 +2049,12 @@ export default function Settings({ user, setPage }) {
         .tenant-brand-preview,
         .tenant-brand-editor {
           min-width: 0;
-          border: 1px solid rgba(21, 21, 47, .11);
+          border: 1px solid rgba(171, 181, 211, .56);
           border-radius: 24px;
-          background: rgba(255, 255, 255, .78);
-          -webkit-backdrop-filter: blur(14px);
-          backdrop-filter: blur(14px);
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85);
+          background: rgba(255, 255, 255, .94);
+          box-shadow:
+            4px 5px 0 rgba(196, 204, 255, .58),
+            0 14px 28px rgba(34, 38, 110, .06);
         }
 
         .platform-brand-preview,
@@ -1843,18 +2115,6 @@ export default function Settings({ user, setPage }) {
           overflow: hidden;
         }
 
-        .platform-sidebar-preview::after {
-          content: "";
-          position: absolute;
-          width: 110px;
-          height: 110px;
-          right: -54px;
-          bottom: -65px;
-          border-radius: 50%;
-          background: var(--st-lime);
-          opacity: .34;
-          pointer-events: none;
-        }
 
         .platform-logo-preview {
           width: 84px;
@@ -1939,8 +2199,8 @@ export default function Settings({ user, setPage }) {
         .attendance-reason-edit-row input {
           width: 100%;
           min-width: 0;
-          border: 1px solid rgba(21, 21, 47, .15);
-          background: rgba(255, 255, 255, .96);
+          border: 1px solid rgba(151, 161, 197, .58);
+          background: rgba(255, 255, 255, .98);
           color: var(--st-ink);
           outline: none;
           transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
@@ -1988,30 +2248,27 @@ export default function Settings({ user, setPage }) {
         .platform-logo-dropzone,
         .payroll-logo-dropzone,
         .tenant-logo-dropzone {
-          min-width: 0;
           display: grid;
           grid-template-columns: 50px minmax(0, 1fr);
           align-items: center;
           gap: 14px;
-          border: 1.5px dashed rgba(101, 88, 217, .42);
-          border-radius: 20px;
-          background:
-            linear-gradient(135deg, rgba(238, 234, 255, .68), rgba(255, 255, 255, .82));
+          min-width: 0;
           padding: 16px;
+          border: 1.5px dashed rgba(102, 88, 220, .38);
+          border-radius: 18px;
+          background: linear-gradient(135deg, #f1efff, #ffffff);
           cursor: pointer;
           transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
         }
 
         .payroll-logo-dropzone {
-          border-color: rgba(49, 86, 216, .36);
-          background:
-            linear-gradient(135deg, rgba(191, 231, 255, .30), rgba(255, 255, 255, .84));
+          border-color: rgba(79, 101, 215, .34);
+          background: linear-gradient(135deg, #edf6ff, #ffffff);
         }
 
         .tenant-logo-dropzone {
-          border-color: rgba(101, 88, 217, .31);
-          background:
-            linear-gradient(135deg, rgba(201, 183, 255, .22), rgba(255, 255, 255, .84));
+          border-color: rgba(102, 88, 220, .31);
+          background: linear-gradient(135deg, #f5f3ff, #ffffff);
         }
 
         .platform-logo-dropzone:hover:not(.is-disabled),
@@ -2143,7 +2400,7 @@ export default function Settings({ user, setPage }) {
           align-items: center;
           justify-content: center;
           gap: 8px;
-          border-radius: 999px;
+          border-radius: 15px;
           padding: 10px 17px;
           font-size: 13.5px;
           line-height: 1.2;
@@ -2158,22 +2415,12 @@ export default function Settings({ user, setPage }) {
         .payroll-logo-save,
         .tenant-logo-save,
         .attendance-reasons-save {
-          border: 1px solid var(--st-purple-deep);
-          background: var(--st-purple-deep);
+          border: 1px solid rgba(76, 118, 220, .18);
           color: #ffffff;
-          box-shadow: 0 12px 25px rgba(48, 39, 95, .20);
-        }
-
-        .payroll-logo-save {
-          border-color: var(--st-cobalt);
-          background: var(--st-cobalt);
-          box-shadow: 0 12px 25px rgba(49, 86, 216, .19);
-        }
-
-        .attendance-reasons-save {
-          border-color: #2f765b;
-          background: #2f765b;
-          box-shadow: 0 12px 25px rgba(47, 118, 91, .18);
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow:
+            6px 7px 0 #595192,
+            0 14px 25px rgba(67, 116, 170, .16);
         }
 
         .platform-brand-save:hover:not(:disabled),
@@ -2181,40 +2428,44 @@ export default function Settings({ user, setPage }) {
         .tenant-logo-save:hover:not(:disabled),
         .attendance-reasons-save:hover:not(:disabled) {
           transform: translateY(-2px);
-          color: var(--st-ink);
-          background: var(--st-lime);
-          border-color: var(--st-lime);
-          box-shadow: 0 15px 30px rgba(21, 21, 47, .14);
+          color: #ffffff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          border-color: rgba(76, 118, 220, .26);
+          box-shadow:
+            7px 8px 0 #595192,
+            0 17px 30px rgba(67, 116, 170, .18);
         }
 
         .platform-logo-remove,
         .payroll-logo-remove,
         .tenant-logo-remove {
-          border: 1px solid rgba(167, 64, 82, .22);
-          background: rgba(255, 113, 91, .09);
-          color: #a74052;
+          border: 1px solid rgba(162, 52, 77, .22);
+          background: #fff0f2;
+          color: #a2344d;
+          box-shadow: 3px 4px 0 #f2c2cc;
         }
 
         .platform-logo-remove:hover:not(:disabled),
         .payroll-logo-remove:hover:not(:disabled),
         .tenant-logo-remove:hover:not(:disabled) {
           transform: translateY(-2px);
-          border-color: rgba(167, 64, 82, .42);
-          background: rgba(255, 113, 91, .15);
+          border-color: rgba(162, 52, 77, .34);
+          background: #fff0f2;
         }
 
         .payroll-designer-open,
         .attendance-reasons-reset {
-          border: 1px solid rgba(21, 21, 47, .14);
-          background: rgba(255, 255, 255, .88);
-          color: var(--st-purple-deep);
+          border: 1px solid rgba(65, 55, 161, .18);
+          background: #ffffff;
+          color: #40348d;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
         }
 
         .payroll-designer-open:hover:not(:disabled),
         .attendance-reasons-reset:hover:not(:disabled) {
           transform: translateY(-2px);
-          border-color: rgba(101, 88, 217, .34);
-          background: var(--st-purple-soft);
+          border-color: rgba(102, 88, 220, .34);
+          background: #f8f7ff;
         }
 
         .platform-brand-actions button:disabled,
@@ -2231,48 +2482,113 @@ export default function Settings({ user, setPage }) {
         .platform-brand-permission,
         .payroll-brand-permission,
         .tenant-brand-permission,
-        .attendance-reason-permission,
-        .platform-brand-message,
-        .payroll-brand-message,
-        .tenant-brand-message,
-        .attendance-reason-message {
-          min-width: 0;
+        .attendance-reason-permission {
           display: flex;
           align-items: flex-start;
           gap: 10px;
-          border-radius: 16px;
+          min-width: 0;
           padding: 13px 15px;
-          font-size: 13.5px;
-          line-height: 1.55;
-          font-weight: 700;
+          border: 1px solid rgba(79, 101, 215, .16);
+          border-radius: 14px;
+          color: #304f97;
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #c6def6;
+          font-size: 12px;
+          line-height: 1.5;
+          font-weight: 750;
           overflow-wrap: anywhere;
         }
 
-        .platform-brand-permission,
-        .payroll-brand-permission,
-        .tenant-brand-permission,
-        .attendance-reason-permission {
-          border: 1px solid rgba(49, 86, 216, .16);
-          background: rgba(191, 231, 255, .24);
-          color: #304f97;
+        .settings-inline-message {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10.5px;
+          line-height: 1.45;
         }
 
-        .platform-brand-message.success,
-        .payroll-brand-message.success,
-        .tenant-brand-message.success,
-        .attendance-reason-message.success {
-          border: 1px solid rgba(73, 155, 123, .21);
-          background: rgba(127, 208, 174, .14);
-          color: #2f7159;
+        .settings-inline-message.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
         }
 
-        .platform-brand-message.error,
-        .payroll-brand-message.error,
-        .tenant-brand-message.error,
-        .attendance-reason-message.error {
-          border: 1px solid rgba(167, 64, 82, .21);
-          background: rgba(255, 113, 91, .09);
-          color: #9d394c;
+        .settings-inline-message.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .settings-inline-message.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .settings-inline-message-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          flex: 0 0 22px;
+        }
+
+        .settings-inline-message-copy {
+          min-width: 0;
+        }
+
+        .settings-inline-message-copy strong,
+        .settings-inline-message-copy > span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .settings-inline-message-copy strong {
+          margin-bottom: 2px;
+          font-size: 10px;
+          font-weight: 950;
+        }
+
+        .settings-inline-message-copy > span {
+          font-weight: 750;
+        }
+
+        .settings-inline-message-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255, 255, 255, .52);
+          box-shadow: none;
+          opacity: .72;
+          cursor: pointer;
+        }
+
+        .settings-inline-message-close:hover {
+          transform: none !important;
+          filter: none !important;
+          opacity: 1;
+          background: rgba(255, 255, 255, .92);
         }
 
         .platform-brand-loading,
@@ -2320,9 +2636,10 @@ export default function Settings({ user, setPage }) {
           gap: 18px;
           margin: 0 0 18px;
           padding: 15px 17px;
-          border: 1px solid rgba(49, 86, 216, .14);
+          border: 1px solid rgba(79, 101, 215, .18);
           border-radius: 18px;
-          background: rgba(191, 231, 255, .20);
+          background: #edf6ff;
+          box-shadow: 3px 4px 0 #c6def6;
         }
 
         .payroll-organisation-selector-copy {
@@ -2376,16 +2693,6 @@ export default function Settings({ user, setPage }) {
           text-align: center;
           position: relative;
           overflow: hidden;
-        }
-
-        .payroll-brand-preview-card::before {
-          content: "";
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
-          height: 6px;
-          background: linear-gradient(90deg, var(--st-cobalt), var(--st-purple), var(--st-lime));
         }
 
         .payroll-logo-preview {
@@ -2544,9 +2851,10 @@ export default function Settings({ user, setPage }) {
           align-content: start;
           gap: 7px;
           padding: 14px;
-          border: 1px solid rgba(21, 21, 47, .10);
+          border: 1px solid rgba(171, 181, 211, .52);
           border-radius: 18px;
-          background: rgba(255, 255, 255, .76);
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(196, 204, 255, .46);
         }
 
         .attendance-time-card:hover {
@@ -2623,9 +2931,10 @@ export default function Settings({ user, setPage }) {
           display: grid;
           gap: 15px;
           padding: 18px;
-          border: 1px solid rgba(21, 21, 47, .10);
+          border: 1px solid rgba(171, 181, 211, .52);
           border-radius: 20px;
-          background: rgba(255, 255, 255, .76);
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(196, 204, 255, .46);
         }
 
         .attendance-reason-list-heading {
@@ -2845,85 +3154,167 @@ export default function Settings({ user, setPage }) {
           font-weight: 700;
         }
 
-        .payroll-confirm-backdrop {
+        .settings-confirm-backdrop {
           position: fixed;
           inset: 0;
-          z-index: 9999;
+          z-index: 12000;
           display: grid;
           place-items: center;
-          padding: 18px;
-          background: rgba(21, 21, 47, .46);
-          -webkit-backdrop-filter: blur(8px);
-          backdrop-filter: blur(8px);
+          width: 100vw;
+          height: 100dvh;
+          overflow: hidden;
+          padding:
+            max(18px, env(safe-area-inset-top))
+            max(18px, env(safe-area-inset-right))
+            max(18px, env(safe-area-inset-bottom))
+            max(18px, env(safe-area-inset-left));
+          background: rgba(15, 23, 42, .58);
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
+          overscroll-behavior: none;
           animation: settings-fade .18s ease both;
         }
 
-        .payroll-confirm-dialog {
-          width: min(100%, 470px);
-          min-width: 0;
-          border: 1px solid rgba(255, 255, 255, .62);
-          border-radius: 24px;
-          background:
-            radial-gradient(circle at 100% 0%, rgba(201, 183, 255, .28), transparent 34%),
-            #fffdf8;
-          padding: clamp(21px, 3vw, 28px);
-          box-shadow: 0 34px 90px rgba(21, 21, 47, .28);
+        .settings-confirm-card {
+          width: min(650px, calc(100vw - 36px));
+          max-height: min(88dvh, 720px);
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .74);
+          border-radius: 26px;
+          background: linear-gradient(145deg, #ffffff 0%, #f7fbff 55%, #f8f4ff 100%);
+          box-shadow:
+            0 32px 86px rgba(22, 29, 73, .32),
+            9px 11px 0 rgba(185, 215, 255, .46);
           animation: settings-modal-in .22s ease both;
         }
 
-        .payroll-confirm-dialog h3 {
-          margin: 0;
-          color: var(--st-ink);
-          font-family: var(--yc-display, "Cormorant Garamond", Georgia, serif);
-          font-size: clamp(27px, 3vw, 34px);
-          line-height: 1;
-          font-weight: 800;
-          letter-spacing: -.03em;
+        .settings-confirm-header {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 13px;
+          align-items: center;
+          padding: 19px 20px 16px;
+          border-bottom: 1px solid rgba(171, 181, 211, .42);
+          background: linear-gradient(135deg, rgba(237, 246, 255, .97), rgba(248, 247, 255, .98));
         }
 
-        .payroll-confirm-dialog p {
-          margin: 12px 0 0;
-          color: var(--st-muted);
-          font-size: 14px;
-          line-height: 1.65;
+        .settings-confirm-icon {
+          display: grid;
+          place-items: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+        }
+
+        .settings-confirm-icon.is-danger {
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .settings-confirm-title {
+          min-width: 0;
+        }
+
+        .settings-confirm-title > span {
+          display: block;
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .settings-confirm-title h3 {
+          margin: 4px 0 0;
+          color: #101a3a;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(22px, 2.3vw, 29px);
+          font-weight: 760;
+          line-height: 1.08;
+          letter-spacing: -.025em;
           overflow-wrap: anywhere;
         }
 
-        .payroll-confirm-actions {
-          display: flex;
-          justify-content: flex-end;
-          gap: 9px;
-          flex-wrap: wrap;
-          margin-top: 22px;
-        }
-
-        .payroll-confirm-actions button {
-          min-height: 42px;
-          border-radius: 999px;
-          padding: 9px 16px;
-          font-size: 13px;
-          font-weight: 850;
-          cursor: pointer;
-          transition: transform .18s ease, background .18s ease, border-color .18s ease;
-        }
-
-        .payroll-confirm-cancel {
-          border: 1px solid rgba(21, 21, 47, .14);
+        .settings-confirm-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          padding: 0;
+          border: 1px solid rgba(65, 55, 161, .18);
+          border-radius: 12px;
+          color: #40348d;
           background: #ffffff;
-          color: var(--st-ink);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+          cursor: pointer;
         }
 
-        .payroll-confirm-remove {
-          border: 1px solid #a74052;
-          background: #a74052;
+        .settings-confirm-body {
+          padding: 24px 22px;
+        }
+
+        .settings-confirm-body p {
+          margin: 0;
+          color: #5d6d8d;
+          font-size: 13px;
+          line-height: 1.65;
+          font-weight: 700;
+          overflow-wrap: anywhere;
+        }
+
+        .settings-confirm-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          padding: 18px 22px 22px;
+          border-top: 1px solid rgba(171, 181, 211, .38);
+          background: rgba(248, 250, 255, .72);
+        }
+
+        .settings-confirm-actions button {
+          min-height: 48px;
+          padding: 0 15px;
+          border-radius: 15px;
+          font-size: 12px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .settings-confirm-cancel {
+          border: 1px solid rgba(65, 55, 161, .18);
+          color: #40348d;
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+        }
+
+        .settings-confirm-submit {
+          border: 1px solid rgba(76, 118, 220, .18);
           color: #ffffff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow: 5px 6px 0 #595192;
         }
 
-        .payroll-confirm-actions button:hover:not(:disabled) {
-          transform: translateY(-1px);
+        .settings-confirm-submit.is-danger {
+          border-color: rgba(162, 52, 77, .22);
+          background: linear-gradient(135deg, #a2344d, #d4576f);
+          box-shadow: 4px 5px 0 #efb4c1;
         }
 
-        .payroll-confirm-actions button:disabled {
+        .settings-confirm-card.is-danger,
+        .settings-confirm-card.is-danger:hover,
+        .settings-confirm-card.is-danger .settings-confirm-submit.is-danger:hover {
+          transform: none !important;
+          filter: none !important;
+        }
+
+        .settings-confirm-actions button:disabled,
+        .settings-confirm-close:disabled {
           cursor: not-allowed;
           opacity: .5;
           transform: none;
@@ -3011,6 +3402,7 @@ export default function Settings({ user, setPage }) {
           .attendance-settings-heading,
           .tenant-branding-heading {
             gap: 14px;
+            align-items: flex-start;
           }
 
           .platform-branding-heading h1,
@@ -3244,12 +3636,8 @@ export default function Settings({ user, setPage }) {
             font-size: 30px;
           }
 
-          .payroll-confirm-actions {
-            flex-direction: column-reverse;
-          }
-
-          .payroll-confirm-actions button {
-            width: 100%;
+          .settings-confirm-actions {
+            grid-template-columns: 1fr;
           }
         }
 
@@ -3345,13 +3733,27 @@ export default function Settings({ user, setPage }) {
             border-radius: 24px;
           }
 
-          .payroll-confirm-backdrop {
-            padding: 12px;
+          .settings-confirm-backdrop {
+            padding:
+              max(10px, env(safe-area-inset-top))
+              max(10px, env(safe-area-inset-right))
+              max(10px, env(safe-area-inset-bottom))
+              max(10px, env(safe-area-inset-left));
           }
 
-          .payroll-confirm-dialog {
-            padding: 20px 17px;
+          .settings-confirm-card {
+            width: min(100%, calc(100vw - 20px));
             border-radius: 20px;
+          }
+
+          .settings-confirm-header {
+            padding: 16px 15px 14px;
+          }
+
+          .settings-confirm-body,
+          .settings-confirm-actions {
+            padding-left: 15px;
+            padding-right: 15px;
           }
         }
 
@@ -3417,7 +3819,7 @@ export default function Settings({ user, setPage }) {
             <button
               type="button"
               className="platform-branding-refresh"
-              onClick={() => loadPlatformBranding()}
+              onClick={() => loadPlatformBranding({ silent: true })}
               disabled={platformBusy}
               title="Refresh YourComate branding"
               aria-label="Refresh YourComate branding"
@@ -3571,18 +3973,19 @@ export default function Settings({ user, setPage }) {
                   </div>
                 )}
 
-                {platformMessage && (
-                  <div className="platform-brand-message success">
-                    <CheckCircle2 size={18} />
-                    <span>{platformMessage}</span>
-                  </div>
-                )}
+                <SettingsInlineMessage
+                  message={platformMessage}
+                  type="success"
+                  title="YourComate Branding"
+                  onClose={() => setPlatformMessage('')}
+                />
 
-                {platformError && (
-                  <div className="platform-brand-message error">
-                    <span>{platformError}</span>
-                  </div>
-                )}
+                <SettingsInlineMessage
+                  message={platformError}
+                  type="error"
+                  title="YourComate Branding"
+                  onClose={() => setPlatformError('')}
+                />
               </form>
             </div>
           )}
@@ -3608,7 +4011,7 @@ export default function Settings({ user, setPage }) {
             <button
               type="button"
               className="payroll-branding-refresh"
-              onClick={() => loadPayrollBrandingProfiles()}
+              onClick={() => loadPayrollBrandingProfiles({ silent: true })}
               disabled={payrollBrandingBusy}
               title="Refresh payroll branding"
               aria-label="Refresh payroll branding"
@@ -3633,9 +4036,12 @@ export default function Settings({ user, setPage }) {
             Loading organisation payroll branding...
           </div>
         ) : payrollBrandingError && !payrollProfiles.length ? (
-          <div className="payroll-brand-message error">
-            <span>{payrollBrandingError}</span>
-          </div>
+          <SettingsInlineMessage
+            message={payrollBrandingError}
+            type="error"
+            title="Payroll Branding"
+            onClose={() => setPayrollBrandingError('')}
+          />
         ) : (
           <>
             {payrollProfiles.length > 0 && (
@@ -3824,7 +4230,7 @@ export default function Settings({ user, setPage }) {
                     <button
                       type="button"
                       className="payroll-logo-remove"
-                      onClick={() => setShowPayrollLogoRemoveConfirm(true)}
+                      onClick={removePayrollLogo}
                       disabled={
                         !selectedPayrollProfile.has_custom_payroll_logo ||
                         payrollBrandingBusy
@@ -3852,18 +4258,19 @@ export default function Settings({ user, setPage }) {
                     approval data.
                   </div>
 
-                  {payrollBrandingMessage && (
-                    <div className="payroll-brand-message success">
-                      <CheckCircle2 size={18} />
-                      <span>{payrollBrandingMessage}</span>
-                    </div>
-                  )}
+                  <SettingsInlineMessage
+                    message={payrollBrandingMessage}
+                    type="success"
+                    title="Payroll Branding"
+                    onClose={() => setPayrollBrandingMessage('')}
+                  />
 
-                  {payrollBrandingError && (
-                    <div className="payroll-brand-message error">
-                      <span>{payrollBrandingError}</span>
-                    </div>
-                  )}
+                  <SettingsInlineMessage
+                    message={payrollBrandingError}
+                    type="error"
+                    title="Payroll Branding"
+                    onClose={() => setPayrollBrandingError('')}
+                  />
                 </form>
               </div>
             ) : (
@@ -3874,54 +4281,6 @@ export default function Settings({ user, setPage }) {
           </>
         )}
       </section>
-
-      {showPayrollLogoRemoveConfirm && selectedPayrollProfile && (
-        <div
-          className="payroll-confirm-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !payrollLogoRemoving) {
-              setShowPayrollLogoRemoveConfirm(false);
-            }
-          }}
-        >
-          <div
-            className="payroll-confirm-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="payroll-logo-remove-title"
-          >
-            <h3 id="payroll-logo-remove-title">Remove custom payroll logo?</h3>
-            <p>
-              {safeText(
-                selectedPayrollProfile.organisation_name ||
-                  selectedPayrollProfile.organization_name,
-                'This organisation',
-              )}{' '}
-              will immediately fall back to its organisation/company logo or
-              initials. Existing historical payroll snapshots remain protected.
-            </p>
-            <div className="payroll-confirm-actions">
-              <button
-                type="button"
-                className="payroll-confirm-cancel"
-                onClick={() => setShowPayrollLogoRemoveConfirm(false)}
-                disabled={payrollLogoRemoving}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="payroll-confirm-remove"
-                onClick={removePayrollLogo}
-                disabled={payrollLogoRemoving}
-              >
-                {payrollLogoRemoving ? 'Removing...' : 'Remove Logo'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <section className="attendance-settings-panel">
         <div className="attendance-settings-heading">
@@ -3940,7 +4299,7 @@ export default function Settings({ user, setPage }) {
           <button
             type="button"
             className="attendance-settings-refresh"
-            onClick={() => loadAttendanceSchedule()}
+            onClick={() => loadAttendanceSchedule({ silent: true })}
             disabled={attendanceScheduleBusy}
             title="Refresh attendance timings"
             aria-label="Refresh attendance timings"
@@ -4041,19 +4400,6 @@ export default function Settings({ user, setPage }) {
               </div>
             )}
 
-            {attendanceScheduleMessage && (
-              <div className="attendance-reason-message success">
-                <CheckCircle2 size={18} />
-                <span>{attendanceScheduleMessage}</span>
-              </div>
-            )}
-
-            {attendanceScheduleError && (
-              <div className="attendance-reason-message error">
-                <span>{attendanceScheduleError}</span>
-              </div>
-            )}
-
             {canEditAttendanceSchedule && (
               <div className="attendance-settings-actions">
                 <button type="button" className="attendance-reasons-reset"
@@ -4070,6 +4416,20 @@ export default function Settings({ user, setPage }) {
                 </button>
               </div>
             )}
+
+            <SettingsInlineMessage
+              message={attendanceScheduleMessage}
+              type="success"
+              title="Attendance Timings"
+              onClose={() => setAttendanceScheduleMessage('')}
+            />
+
+            <SettingsInlineMessage
+              message={attendanceScheduleError}
+              type="error"
+              title="Attendance Timings"
+              onClose={() => setAttendanceScheduleError('')}
+            />
           </form>
         )}
       </section>
@@ -4092,7 +4452,7 @@ export default function Settings({ user, setPage }) {
           <button
             type="button"
             className="attendance-settings-refresh"
-            onClick={() => loadAttendanceReasonSettings()}
+            onClick={() => loadAttendanceReasonSettings({ silent: true })}
             disabled={attendanceReasonsBusy}
             title="Refresh attendance reasons"
             aria-label="Refresh attendance reasons"
@@ -4185,19 +4545,6 @@ export default function Settings({ user, setPage }) {
               </div>
             )}
 
-            {attendanceReasonMessage && (
-              <div className="attendance-reason-message success">
-                <CheckCircle2 size={18} />
-                <span>{attendanceReasonMessage}</span>
-              </div>
-            )}
-
-            {attendanceReasonError && (
-              <div className="attendance-reason-message error">
-                <span>{attendanceReasonError}</span>
-              </div>
-            )}
-
             {canEditAttendanceReasons && (
               <div className="attendance-settings-actions">
                 <button
@@ -4224,6 +4571,20 @@ export default function Settings({ user, setPage }) {
                 </button>
               </div>
             )}
+
+            <SettingsInlineMessage
+              message={attendanceReasonMessage}
+              type="success"
+              title="Attendance Reasons"
+              onClose={() => setAttendanceReasonMessage('')}
+            />
+
+            <SettingsInlineMessage
+              message={attendanceReasonError}
+              type="error"
+              title="Attendance Reasons"
+              onClose={() => setAttendanceReasonError('')}
+            />
           </form>
         )}
       </section>
@@ -4244,7 +4605,7 @@ export default function Settings({ user, setPage }) {
           <button
             type="button"
             className="tenant-branding-refresh"
-            onClick={() => loadBranding()}
+            onClick={() => loadBranding({ silent: true })}
             disabled={busy}
             title="Refresh company branding"
             aria-label="Refresh company branding"
@@ -4361,23 +4722,26 @@ export default function Settings({ user, setPage }) {
                 </div>
               )}
 
-              {message && (
-                <div className="tenant-brand-message success">
-                  <CheckCircle2 size={18} />
-                  <span>{message}</span>
-                </div>
-              )}
+              <SettingsInlineMessage
+                message={message}
+                type="success"
+                title="Company Branding"
+                onClose={() => setMessage('')}
+              />
 
-              {error && (
-                <div className="tenant-brand-message error">
-                  <span>{error}</span>
-                </div>
-              )}
+              <SettingsInlineMessage
+                message={error}
+                type="error"
+                title="Company Branding"
+                onClose={() => setError('')}
+              />
             </form>
           </div>
         )}
       </section>
 
+
+      <SettingsConfirmPopup popup={confirmPopup} onResolve={resolveConfirm} />
     </div>
   );
 }

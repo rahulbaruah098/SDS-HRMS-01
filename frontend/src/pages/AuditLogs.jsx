@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity,
   Building2,
@@ -6,6 +7,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
   Database,
   Eye,
   Filter,
@@ -18,6 +22,8 @@ import {
 import { api } from '../api/client';
 
 const PAGE_SIZE = 50;
+const AUDIT_PAGE_SIZE_OPTIONS = [50, 100, 250];
+const AUDIT_POPUP_AUTO_HIDE_MS = 3600;
 
 function normaliseText(value = '') {
   return String(value ?? '').trim();
@@ -243,8 +249,48 @@ function matchesDateRange(row, dateFrom, dateTo) {
   return true;
 }
 
+
+function InlineActionMessage({ feedback, onClose, className = '' }) {
+  if (!feedback) {
+    return null;
+  }
+
+  return (
+    <div
+      className={`audit-inline-feedback ${feedback.type || 'info'} ${className}`.trim()}
+      role="status"
+    >
+      <div className="audit-inline-feedback-icon">
+        {feedback.loading ? (
+          <Loader2 size={15} className="audit-inline-spin" />
+        ) : feedback.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : feedback.type === 'error' || feedback.type === 'warning' ? (
+          <AlertTriangle size={15} />
+        ) : (
+          <ShieldCheck size={15} />
+        )}
+      </div>
+
+      <div className="audit-inline-feedback-copy">
+        {feedback.title ? <strong>{feedback.title}</strong> : null}
+        <span>{feedback.message}</span>
+      </div>
+
+      <button
+        type="button"
+        className="audit-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss message"
+      >
+        <X size={13} />
+      </button>
+    </div>
+  );
+}
+
 function AuditDetailsModal({ row, onClose }) {
-  if (!row) {
+  if (!row || typeof document === 'undefined') {
     return null;
   }
 
@@ -253,7 +299,7 @@ function AuditDetailsModal({ row, onClose }) {
     ? row.actor_roles.map(titleCase).filter(Boolean)
     : [];
 
-  return (
+  return createPortal(
     <div
       className="audit-modal-backdrop"
       role="presentation"
@@ -270,13 +316,13 @@ function AuditDetailsModal({ row, onClose }) {
         aria-labelledby="audit-details-title"
       >
         <header className="audit-modal-header">
-          <div>
-            <span className="audit-eyebrow">
-              <ShieldCheck size={16} />
-              Audit event
-            </span>
+          <div className="audit-modal-icon">
+            <ShieldCheck size={22} />
+          </div>
 
-            <h2 id="audit-details-title">{titleCase(row.action) || 'Recorded action'}</h2>
+          <div className="audit-modal-title">
+            <span>Audit Logs</span>
+            <h3 id="audit-details-title">{titleCase(row.action) || 'Recorded action'}</h3>
             <p>{formatDateTime(row.created_at)}</p>
           </div>
 
@@ -286,7 +332,7 @@ function AuditDetailsModal({ row, onClose }) {
             onClick={onClose}
             aria-label="Close audit details"
           >
-            <X size={20} />
+            <X size={17} />
           </button>
         </header>
 
@@ -368,7 +414,8 @@ function AuditDetailsModal({ row, onClose }) {
           </button>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -376,6 +423,7 @@ export default function AuditLogs() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
 
   const [searchInput, setSearchInput] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -391,44 +439,177 @@ export default function AuditLogs() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const inlineFeedbackTimersRef = useRef({});
+  const pendingRequestFeedbackRef = useRef('');
+  const totalRef = useRef(0);
+
+  const clearInlineFeedback = useCallback((scope) => {
+    if (!scope) {
+      return;
+    }
+
+    const timer = inlineFeedbackTimersRef.current[scope];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete inlineFeedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((previous) => {
+      if (!Object.prototype.hasOwnProperty.call(previous, scope)) {
+        return previous;
+      }
+
+      const next = { ...previous };
+      delete next[scope];
+      return next;
+    });
+  }, []);
+
+  const showInlineFeedback = useCallback(
+    (scope, type, message, title = '', options = {}) => {
+      if (!scope) {
+        return;
+      }
+
+      const existingTimer = inlineFeedbackTimersRef.current[scope];
+
+      if (existingTimer) {
+        window.clearTimeout(existingTimer);
+        delete inlineFeedbackTimersRef.current[scope];
+      }
+
+      setInlineFeedback((previous) => ({
+        ...previous,
+        [scope]: {
+          type,
+          title,
+          message,
+          loading: Boolean(options.loading),
+        },
+      }));
+
+      if (!options.loading) {
+        inlineFeedbackTimersRef.current[scope] = window.setTimeout(() => {
+          setInlineFeedback((previous) => {
+            const next = { ...previous };
+            delete next[scope];
+            return next;
+          });
+          delete inlineFeedbackTimersRef.current[scope];
+        }, AUDIT_POPUP_AUTO_HIDE_MS);
+      }
+    },
+    [],
+  );
 
   const loadAuditLogs = useCallback(
-    async ({ silent = false } = {}) => {
+    async ({ silent = false, feedbackScope = '' } = {}) => {
+      const actionScope = feedbackScope || pendingRequestFeedbackRef.current || '';
+
+      if (pendingRequestFeedbackRef.current) {
+        pendingRequestFeedbackRef.current = '';
+      }
+
       if (silent) {
         setRefreshing(true);
-      } else {
+      } else if (!actionScope) {
         setLoading(true);
+      }
+
+      if (actionScope) {
+        const loadingMessages = {
+          search: ['Searching Logs', 'Searching audit records with the selected filters...'],
+          refresh: ['Refreshing Logs', 'Checking for the latest audit activity...'],
+          reload: ['Reloading Logs', 'Reloading the current audit records...'],
+          clear: ['Clearing Filters', 'Clearing filters and restoring the audit list...'],
+        };
+        const [title, message] = loadingMessages[actionScope] || [
+          'Loading Audit Logs',
+          'Updating the audit records...',
+        ];
+
+        showInlineFeedback(actionScope, 'info', message, title, { loading: true });
       }
 
       setError('');
 
       try {
-        const data = await api(
-          `/audit_logs${buildQuery({
-            page,
-            limit: PAGE_SIZE,
-            q: appliedSearch,
-            tenant_id: appliedTenant,
-            sort_by: 'created_at',
-            sort_dir: 'desc',
-          })}`,
-        );
+        const requestLimit =
+          pageSize === 'all' ? Math.max(totalRef.current, PAGE_SIZE) : pageSize;
 
-        setRows(Array.isArray(data.items) ? data.items : []);
-        setTotal(Number(data.total || 0));
+        const fetchAuditPage = (limit) =>
+          api(
+            `/audit_logs${buildQuery({
+              page: pageSize === 'all' ? 1 : page,
+              limit,
+              q: appliedSearch,
+              tenant_id: appliedTenant,
+              sort_by: 'created_at',
+              sort_dir: 'desc',
+            })}`,
+          );
+
+        let data = await fetchAuditPage(requestLimit);
+        let nextTotal = Number(data.total || 0);
+
+        if (pageSize === 'all' && nextTotal > requestLimit) {
+          data = await fetchAuditPage(nextTotal);
+          nextTotal = Number(data.total || 0);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        totalRef.current = nextTotal;
+        setRows(items);
+        setTotal(nextTotal);
+
+        if (actionScope) {
+          const successMessages = {
+            search: [
+              'Search Complete',
+              `${items.length} audit ${items.length === 1 ? 'record' : 'records'} loaded on this page.`,
+            ],
+            refresh: [
+              'Logs Refreshed',
+              'The latest audit activity has been loaded successfully.',
+            ],
+            reload: [
+              'Logs Reloaded',
+              'The current audit records were reloaded successfully.',
+            ],
+            clear: [
+              'Filters Cleared',
+              'Audit filters were cleared and the records were restored.',
+            ],
+          };
+          const [title, message] = successMessages[actionScope] || [
+            'Audit Logs Updated',
+            'Audit records were updated successfully.',
+          ];
+
+          showInlineFeedback(actionScope, 'success', message, title);
+        }
       } catch (loadError) {
+        totalRef.current = 0;
         setRows([]);
         setTotal(0);
-        setError(
+        const message =
           loadError?.message ||
-            'Audit logs could not be loaded. Please check your access and try again.',
-        );
+          'Audit logs could not be loaded. Please check your access and try again.';
+
+        setError(message);
+
+        if (actionScope) {
+          showInlineFeedback(actionScope, 'error', message, 'Audit Logs Failed');
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [appliedSearch, appliedTenant, page],
+    [appliedSearch, appliedTenant, page, pageSize, showInlineFeedback],
   );
 
   useEffect(() => {
@@ -436,15 +617,75 @@ export default function AuditLogs() {
   }, [loadAuditLogs]);
 
   useEffect(() => {
-    function closeOnEscape(event) {
+    return () => {
+      Object.values(inlineFeedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      inlineFeedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    function dismissInlineFeedback() {
+      Object.values(inlineFeedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      inlineFeedbackTimersRef.current = {};
+      setInlineFeedback({});
+    }
+
+    document.addEventListener('pointerdown', dismissInlineFeedback);
+    return () => document.removeEventListener('pointerdown', dismissInlineFeedback);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedRow || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    const blockBackgroundScroll = (event) => {
+      const activeModal = document.querySelector('.audit-modal');
+
+      if (activeModal && activeModal.contains(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
+    const closeOnEscape = (event) => {
       if (event.key === 'Escape') {
         setSelectedRow(null);
       }
-    }
+    };
 
+    document.addEventListener('wheel', blockBackgroundScroll, { passive: false });
+    document.addEventListener('touchmove', blockBackgroundScroll, { passive: false });
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, []);
+
+    return () => {
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+      window.removeEventListener('keydown', closeOnEscape);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [selectedRow]);
 
   const actionOptions = useMemo(
     () =>
@@ -478,7 +719,8 @@ export default function AuditLogs() {
     [actionFilter, dateFrom, dateTo, entityFilter, rows],
   );
 
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount =
+    pageSize === 'all' ? 1 : Math.max(1, Math.ceil(total / pageSize));
 
   const actorCount = useMemo(
     () =>
@@ -501,12 +743,47 @@ export default function AuditLogs() {
 
   function applyServerFilters(event) {
     event?.preventDefault();
+
+    const nextSearch = searchInput.trim();
+    const nextTenant = tenantInput.trim();
+    const requestChanged =
+      page !== 1 ||
+      appliedSearch !== nextSearch ||
+      appliedTenant !== nextTenant;
+
+    showInlineFeedback(
+      'search',
+      'info',
+      'Searching audit records with the selected filters...',
+      'Searching Logs',
+      { loading: true },
+    );
+
+    if (!requestChanged) {
+      loadAuditLogs({ feedbackScope: 'search' });
+      return;
+    }
+
+    pendingRequestFeedbackRef.current = 'search';
     setPage(1);
-    setAppliedSearch(searchInput.trim());
-    setAppliedTenant(tenantInput.trim());
+    setAppliedSearch(nextSearch);
+    setAppliedTenant(nextTenant);
   }
 
   function clearFilters() {
+    const requiresServerReload = Boolean(appliedSearch || appliedTenant || page !== 1);
+
+    if (requiresServerReload) {
+      pendingRequestFeedbackRef.current = 'clear';
+      showInlineFeedback(
+        'clear',
+        'info',
+        'Clearing filters and restoring the audit list...',
+        'Clearing Filters',
+        { loading: true },
+      );
+    }
+
     setSearchInput('');
     setAppliedSearch('');
     setTenantInput('');
@@ -516,6 +793,25 @@ export default function AuditLogs() {
     setDateFrom('');
     setDateTo('');
     setPage(1);
+
+    if (!requiresServerReload) {
+      showInlineFeedback(
+        'clear',
+        'success',
+        'Audit filters were cleared successfully.',
+        'Filters Cleared',
+      );
+    }
+  }
+
+  function refreshAuditLogs(scope) {
+    return loadAuditLogs({ silent: true, feedbackScope: scope });
+  }
+
+  function handlePageSizeChange(event) {
+    const value = event.target.value;
+    setPage(1);
+    setPageSize(value === 'all' ? 'all' : Number(value));
   }
 
   const hasFilters = Boolean(
@@ -528,29 +824,50 @@ export default function AuditLogs() {
   );
 
   return (
-    <section className="audit-page">
+    <section className="page-grid audit-page">
       <style>{`
         .audit-page {
-          --audit-ink: #10182d;
-          --audit-muted: #65748f;
-          --audit-border: rgba(137, 153, 190, .28);
-          --audit-primary: #4f46ef;
-          --audit-primary-soft: rgba(79, 70, 239, .09);
-          position: relative;
+          --audit-ink: #101a3a;
+          --audit-muted: #5d6d8d;
+          --audit-primary: #6658dc;
+          --audit-primary-deep: #40348d;
+          --audit-cyan: #18b5c8;
+          --audit-border: rgba(16, 26, 58, .14);
+          --audit-ease: cubic-bezier(.22, 1, .36, 1);
+
           display: grid;
-          gap: 22px;
+          gap: clamp(18px, 2vw, 26px);
           width: 100%;
-          padding-bottom: 32px;
+          min-width: 0;
+          max-width: 100%;
+          padding-bottom: max(34px, env(safe-area-inset-bottom));
           color: var(--audit-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .audit-hero,
-        .audit-panel {
-          border: 1px solid var(--audit-border);
-          border-radius: 30px;
-          background: rgba(255, 255, 255, .88);
-          box-shadow: 0 20px 55px rgba(39, 53, 91, .09);
-          backdrop-filter: blur(16px);
+        .audit-page *,
+        .audit-page *::before,
+        .audit-page *::after {
+          box-sizing: border-box;
+        }
+
+        .audit-page > *,
+        .audit-page .audit-panel,
+        .audit-page .audit-filter-header,
+        .audit-page .audit-filter-form,
+        .audit-page .audit-advanced-filters,
+        .audit-page .audit-table-topbar,
+        .audit-page .audit-table-wrap,
+        .audit-page .audit-pagination {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .audit-page input,
+        .audit-page select,
+        .audit-page button {
+          max-width: 100%;
         }
 
         .audit-hero {
@@ -560,104 +877,164 @@ export default function AuditLogs() {
           align-items: center;
           justify-content: space-between;
           gap: 28px;
-          padding: 30px 34px;
-          background:
-            radial-gradient(circle at 5% 15%, rgba(96, 79, 255, .17), transparent 31%),
-            radial-gradient(circle at 95% 10%, rgba(65, 216, 181, .17), transparent 29%),
-            linear-gradient(120deg, rgba(255, 255, 255, .96), rgba(247, 250, 255, .92));
+          min-height: 250px;
+          padding: clamp(26px, 3vw, 42px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            12px 14px 0 #c6d8f7,
+            0 28px 48px rgba(34, 38, 110, .13);
         }
 
+        .audit-hero::before,
         .audit-hero::after {
-          content: '';
-          position: absolute;
-          right: -60px;
-          bottom: -85px;
-          width: 230px;
-          height: 230px;
-          border-radius: 50%;
-          border: 34px solid rgba(79, 70, 239, .05);
-          pointer-events: none;
+          content: none;
+          display: none;
         }
 
         .audit-hero-copy {
-          position: relative;
-          z-index: 1;
-          max-width: 820px;
+          min-width: 0;
+          max-width: 950px;
         }
 
         .audit-eyebrow {
           display: inline-flex;
           align-items: center;
+          width: fit-content;
+          max-width: 100%;
           gap: 8px;
-          color: #4f46ef;
-          font-size: 12px;
-          font-weight: 900;
-          letter-spacing: .1em;
+          padding: 9px 13px;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow: 4px 5px 0 #595192;
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
           text-transform: uppercase;
         }
 
         .audit-hero h1 {
-          margin: 10px 0 8px;
-          font-size: clamp(30px, 4vw, 48px);
-          line-height: 1.05;
-          letter-spacing: -.035em;
+          margin: 15px 0 10px;
+          color: var(--audit-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(42px, 5vw, 74px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.056em;
+          overflow-wrap: anywhere;
         }
 
         .audit-hero p {
-          max-width: 760px;
+          max-width: 880px;
           margin: 0;
           color: var(--audit-muted);
-          font-size: 16px;
-          line-height: 1.7;
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
         }
 
-        .audit-refresh-button,
-        .audit-primary-button,
-        .audit-secondary-button,
-        .audit-page-button,
-        .audit-view-button,
-        .audit-icon-button {
-          border: 0;
+        .audit-hero-action-stack,
+        .audit-clear-action-stack {
+          display: grid;
+          gap: 9px;
+          min-width: 0;
+        }
+
+        .audit-hero-action-stack {
+          flex: 0 0 min(330px, 100%);
+          justify-items: stretch;
+        }
+
+        .audit-clear-action-stack {
+          width: min(330px, 100%);
+          justify-items: stretch;
+        }
+
+        .audit-page button {
+          touch-action: manipulation;
           font: inherit;
+          font-weight: 900;
           cursor: pointer;
           transition:
-            transform .18s ease,
-            box-shadow .18s ease,
-            background .18s ease,
-            border-color .18s ease;
+            transform 190ms var(--audit-ease),
+            box-shadow 190ms ease,
+            background 190ms ease,
+            border-color 190ms ease,
+            color 190ms ease,
+            filter 190ms ease;
+        }
+
+        .audit-page button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .audit-page button:active:not(:disabled) {
+          transform: translateY(0) scale(.985);
+        }
+
+        .audit-page button:disabled {
+          cursor: not-allowed;
+          opacity: .52;
+          transform: none;
+          filter: none;
+        }
+
+        .audit-primary-button,
+        .audit-secondary-button,
+        .audit-refresh-button,
+        .audit-view-button,
+        .audit-page-button,
+        .audit-icon-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        .audit-primary-button,
+        .audit-refresh-button {
+          min-height: 47px;
+          padding: 0 16px;
+          border: 1px solid rgba(76, 118, 220, .18);
+          border-radius: 15px;
+          color: #fff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow:
+            6px 7px 0 #595192,
+            0 14px 25px rgba(67, 116, 170, .16);
         }
 
         .audit-refresh-button {
-          position: relative;
-          z-index: 1;
-          flex: 0 0 auto;
-          display: inline-flex;
-          align-items: center;
-          gap: 9px;
-          min-height: 48px;
-          padding: 0 19px;
-          border: 1px solid rgba(79, 70, 239, .18);
-          border-radius: 16px;
-          background: rgba(255, 255, 255, .82);
-          color: #3432a9;
-          font-weight: 850;
-          box-shadow: 0 12px 30px rgba(56, 52, 171, .1);
+          width: 100%;
         }
 
-        .audit-refresh-button:hover,
-        .audit-primary-button:hover,
-        .audit-secondary-button:hover,
-        .audit-view-button:hover,
-        .audit-page-button:not(:disabled):hover,
-        .audit-icon-button:hover {
-          transform: translateY(-2px);
+        .audit-secondary-button {
+          min-height: 47px;
+          padding: 0 16px;
+          border: 1px solid rgba(65, 55, 161, .18);
+          border-radius: 15px;
+          color: #40348d;
+          background: rgba(255,255,255,.94);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
         }
 
         .audit-refresh-button svg.is-spinning {
-          animation: audit-spin .8s linear infinite;
+          animation: auditSpin .8s linear infinite;
         }
 
-        @keyframes audit-spin {
+        @keyframes auditSpin {
           to { transform: rotate(360deg); }
         }
 
@@ -668,111 +1045,148 @@ export default function AuditLogs() {
         }
 
         .audit-kpi {
-          position: relative;
-          overflow: hidden;
           display: flex;
           align-items: center;
           gap: 14px;
-          min-height: 112px;
-          padding: 21px;
-          border: 1px solid var(--audit-border);
-          border-radius: 23px;
-          background: rgba(255, 255, 255, .9);
-          box-shadow: 0 14px 36px rgba(39, 53, 91, .07);
+          min-width: 0;
+          min-height: 110px;
+          padding: 20px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 22px;
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            5px 6px 0 rgba(196, 204, 255, .78),
+            0 15px 30px rgba(34, 38, 110, .07);
         }
 
-        .audit-kpi-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 46px;
-          height: 46px;
-          flex: 0 0 46px;
-          border-radius: 15px;
-          background: var(--audit-primary-soft);
-          color: var(--audit-primary);
+        .audit-kpi > div {
+          min-width: 0;
         }
 
         .audit-kpi span {
           display: block;
           color: var(--audit-muted);
-          font-size: 12px;
-          font-weight: 850;
-          letter-spacing: .045em;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .055em;
           text-transform: uppercase;
         }
 
         .audit-kpi strong {
           display: block;
           margin-top: 5px;
+          color: var(--audit-ink);
           font-size: 23px;
           line-height: 1.15;
+          overflow-wrap: anywhere;
         }
 
         .audit-kpi small {
           display: block;
           margin-top: 5px;
-          color: #8590a8;
-          line-height: 1.35;
+          color: #73809a;
+          font-size: 10px;
+          line-height: 1.4;
         }
 
         .audit-panel {
           overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
         }
 
         .audit-filter-header {
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           justify-content: space-between;
           gap: 18px;
           padding: 24px 26px 18px;
+          border-bottom: 1px solid rgba(171, 181, 211, .38);
+          background: linear-gradient(180deg, rgba(245, 248, 255, .84), rgba(255,255,255,.28));
         }
 
         .audit-filter-heading {
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           gap: 11px;
+          min-width: 0;
+        }
+
+        .audit-filter-heading > svg {
+          flex: 0 0 auto;
+          margin-top: 3px;
+          color: #40348d;
+        }
+
+        .audit-filter-heading > div {
+          min-width: 0;
         }
 
         .audit-filter-heading h2 {
           margin: 0;
-          font-size: 21px;
+          color: var(--audit-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(25px, 2.3vw, 37px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+          overflow-wrap: anywhere;
         }
 
         .audit-filter-heading p {
-          margin: 3px 0 0;
+          max-width: 850px;
+          margin: 8px 0 0;
           color: var(--audit-muted);
           font-size: 13px;
+          line-height: 1.58;
         }
 
         .audit-filter-form {
           display: grid;
-          grid-template-columns: minmax(240px, 1.7fr) minmax(150px, .85fr) auto auto;
+          grid-template-columns:
+            minmax(220px, 1.2fr)
+            minmax(210px, 1fr)
+            auto
+            auto;
           gap: 12px;
-          padding: 0 26px 15px;
+          align-items: end;
+          padding: 20px 26px 22px;
+          border-bottom: 1px solid rgba(171, 181, 211, .38);
+          background: rgba(255,255,255,.68);
         }
 
         .audit-advanced-filters {
           display: grid;
           grid-template-columns: repeat(4, minmax(150px, 1fr));
           gap: 12px;
-          padding: 0 26px 24px;
+          padding: 18px 26px 22px;
+          border-bottom: 1px solid rgba(171, 181, 211, .30);
+          background: linear-gradient(180deg, rgba(248,250,255,.72), rgba(255,255,255,.78));
         }
 
         .audit-field {
-          position: relative;
           display: grid;
-          gap: 7px;
+          gap: 8px;
+          min-width: 0;
+          margin: 0;
+          color: #303b5b;
+          font-size: 11px;
+          font-weight: 900;
         }
 
         .audit-field label {
-          color: #46536b;
-          font-size: 12px;
-          font-weight: 850;
+          margin: 0;
+          color: inherit;
+          font: inherit;
         }
 
         .audit-input-wrap {
           position: relative;
+          min-width: 0;
         }
 
         .audit-input-wrap > svg {
@@ -780,25 +1194,28 @@ export default function AuditLogs() {
           top: 50%;
           left: 14px;
           transform: translateY(-50%);
-          color: #7c86a0;
+          color: #7a83a2;
           pointer-events: none;
         }
 
         .audit-field input,
         .audit-field select {
           width: 100%;
-          min-height: 46px;
-          border: 1px solid rgba(137, 153, 190, .34);
-          border-radius: 14px;
-          outline: none;
-          background: rgba(248, 250, 255, .86);
+          min-width: 0;
+          min-height: 47px;
+          padding: 0 13px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 15px;
+          outline: 0;
           color: var(--audit-ink);
+          background: rgba(255,255,255,.96);
           font: inherit;
-          padding: 0 14px;
+          font-weight: 650;
           transition:
-            border-color .18s ease,
-            box-shadow .18s ease,
-            background .18s ease;
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease,
+            background 170ms ease;
         }
 
         .audit-input-wrap input {
@@ -807,69 +1224,251 @@ export default function AuditLogs() {
 
         .audit-field input:focus,
         .audit-field select:focus {
-          border-color: rgba(79, 70, 239, .58);
-          background: #fff;
-          box-shadow: 0 0 0 4px rgba(79, 70, 239, .09);
+          border-color: rgba(102,88,220,.65);
+          box-shadow:
+            4px 5px 0 rgba(102,88,220,.14),
+            0 0 0 4px rgba(102,88,220,.08);
+          transform: translateY(-1px);
         }
 
-        .audit-primary-button,
-        .audit-secondary-button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          min-height: 46px;
-          padding: 0 18px;
-          border-radius: 14px;
-          font-weight: 850;
-        }
-
-        .audit-primary-button {
+        .audit-filter-form > .audit-primary-button,
+        .audit-filter-form > .audit-secondary-button {
           align-self: end;
-          background: linear-gradient(135deg, #5147f4, #6d5dfc);
-          color: #fff;
-          box-shadow: 0 12px 25px rgba(79, 70, 239, .22);
+          min-width: 122px;
         }
 
-        .audit-secondary-button {
-          align-self: end;
-          border: 1px solid rgba(137, 153, 190, .32);
-          background: #fff;
-          color: #344054;
-        }
-
-        .audit-error,
-        .audit-empty-state {
-          margin: 0 26px 24px;
-          border-radius: 18px;
-          text-align: center;
+        .audit-search-inline-feedback {
+          grid-column: 3 / -1;
         }
 
         .audit-error {
-          padding: 16px 18px;
-          border: 1px solid rgba(220, 38, 38, .18);
-          background: rgba(254, 226, 226, .65);
-          color: #a71d2a;
+          margin: 16px 24px 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(162,52,77,.18);
+          border-radius: 12px;
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1.45;
+        }
+
+        .audit-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .audit-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .audit-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .audit-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .audit-inline-feedback-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          flex: 0 0 22px;
+        }
+
+        .audit-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .audit-inline-feedback-copy strong,
+        .audit-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .audit-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-size: 10px;
+          font-weight: 950;
+        }
+
+        .audit-inline-feedback-copy span {
           font-weight: 750;
+        }
+
+        .audit-inline-feedback-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255,255,255,.52);
+          box-shadow: none;
+          opacity: .72;
+        }
+
+        .audit-inline-feedback-close:hover {
+          transform: none !important;
+          filter: none !important;
+          opacity: 1;
+          background: rgba(255,255,255,.92);
+        }
+
+        .audit-inline-spin {
+          animation: auditInlineSpin .8s linear infinite;
+        }
+
+        @keyframes auditInlineSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        .audit-table-topbar,
+        .audit-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 17px 24px 18px;
+          background: rgba(248,250,255,.86);
+        }
+
+        .audit-table-topbar {
+          border-bottom: 1px solid rgba(171,181,211,.38);
+        }
+
+        .audit-pagination {
+          border-top: 1px solid rgba(171,181,211,.38);
+          padding-bottom: 21px;
+        }
+
+        .audit-table-topbar p,
+        .audit-pagination p {
+          margin: 0;
+          color: var(--audit-muted);
+          font-size: 10px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .audit-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .audit-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 9px;
+          min-width: 0;
+          color: var(--audit-muted);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .audit-page-size-control > span {
+          color: var(--audit-muted);
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .audit-page-size-control select {
+          min-width: 118px;
+          height: 40px;
+          padding: 0 34px 0 12px;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 12px;
+          outline: 0;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font: inherit;
+          font-size: 11px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .audit-page-size-control select:focus {
+          border-color: rgba(102,88,220,.56);
+          box-shadow:
+            2px 3px 0 #c9c0ff,
+            0 0 0 4px rgba(102,88,220,.08);
+        }
+
+        .audit-page-button {
+          width: 40px;
+          min-width: 40px;
+          height: 40px;
+          padding: 0;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+        }
+
+        .audit-page-indicator {
+          min-width: 78px;
+          text-align: center;
+          color: var(--audit-muted);
+          font-size: 10px;
+          font-weight: 900;
         }
 
         .audit-table-wrap {
           overflow-x: auto;
-          border-top: 1px solid rgba(137, 153, 190, .2);
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: thin;
+          background: #fff;
         }
 
         .audit-table {
           width: 100%;
-          min-width: 960px;
+          min-width: 980px;
           border-collapse: collapse;
         }
 
         .audit-table th {
-          padding: 14px 18px;
-          background: rgba(246, 248, 253, .96);
-          color: #526078;
-          font-size: 11px;
-          font-weight: 900;
+          padding: 13px 17px;
+          background: #f5f7ff;
+          color: #596681;
+          font-size: 9px;
+          font-weight: 950;
           letter-spacing: .065em;
           text-align: left;
           text-transform: uppercase;
@@ -877,17 +1476,19 @@ export default function AuditLogs() {
         }
 
         .audit-table td {
-          padding: 17px 18px;
-          border-top: 1px solid rgba(137, 153, 190, .15);
+          padding: 16px 17px;
+          border-top: 1px solid rgba(171, 181, 211, .25);
           vertical-align: middle;
+          color: #263553;
+          font-size: 12px;
         }
 
         .audit-table tbody tr {
-          transition: background .18s ease;
+          transition: background 170ms ease;
         }
 
         .audit-table tbody tr:hover {
-          background: rgba(79, 70, 239, .035);
+          background: rgba(241,239,255,.48);
         }
 
         .audit-actor {
@@ -896,13 +1497,19 @@ export default function AuditLogs() {
           min-width: 185px;
         }
 
-        .audit-actor strong {
-          font-size: 14px;
+        .audit-actor strong,
+        .audit-date strong {
+          color: #1d2947;
+          font-size: 12px;
+          font-weight: 900;
+          overflow-wrap: anywhere;
         }
 
         .audit-actor small,
         .audit-date small {
           color: var(--audit-muted);
+          font-size: 10px;
+          overflow-wrap: anywhere;
         }
 
         .audit-action-badge,
@@ -911,48 +1518,73 @@ export default function AuditLogs() {
           display: inline-flex;
           align-items: center;
           width: fit-content;
-          border-radius: 999px;
-          font-size: 12px;
-          font-weight: 850;
+          max-width: 100%;
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
         }
 
+       .audit-action-badge,
+.audit-entity-badge {
+  width: 160px;
+  height: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.2;
+  border-radius: 0;
+}
+
         .audit-action-badge {
-          padding: 7px 11px;
+          padding: 7px 10px;
         }
 
         .audit-action-badge.info {
-          background: rgba(59, 130, 246, .1);
-          color: #245faa;
+          color: #2f5f9f;
+          background: #edf6ff;
+          box-shadow: 2px 3px 0 #c6def6;
         }
 
         .audit-action-badge.success {
-          background: rgba(16, 185, 129, .11);
-          color: #08775c;
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 2px 3px 0 #aee6d9;
         }
 
         .audit-action-badge.warning {
-          background: rgba(245, 158, 11, .13);
-          color: #9a5a00;
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 2px 3px 0 #ffe0a5;
         }
 
         .audit-action-badge.danger {
-          background: rgba(239, 68, 68, .1);
-          color: #b4232c;
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 2px 3px 0 #f2c2cc;
         }
 
         .audit-entity-badge {
           gap: 7px;
-          padding: 7px 11px;
-          background: rgba(91, 86, 201, .08);
-          color: #454199;
+          padding: 7px 10px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
         }
 
         .audit-tenant {
           display: inline-flex;
           align-items: center;
           gap: 7px;
+          max-width: 100%;
           color: #3d4b63;
-          font-weight: 750;
+          font-size: 11px;
+          font-weight: 800;
+          overflow-wrap: anywhere;
         }
 
         .audit-date {
@@ -962,17 +1594,14 @@ export default function AuditLogs() {
         }
 
         .audit-view-button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          min-height: 38px;
-          padding: 0 13px;
-          border: 1px solid rgba(79, 70, 239, .22);
+          min-height: 36px;
+          padding: 0 11px;
+          border: 1px solid rgba(65, 55, 161, .18);
           border-radius: 12px;
-          background: rgba(79, 70, 239, .06);
-          color: #423ac4;
-          font-weight: 850;
+          color: #40348d;
+          background: rgba(255,255,255,.94);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+          font-size: 10px;
         }
 
         .audit-loading {
@@ -988,10 +1617,10 @@ export default function AuditLogs() {
           background:
             linear-gradient(90deg, rgba(231, 235, 245, .7), rgba(250, 251, 255, .95), rgba(231, 235, 245, .7));
           background-size: 220% 100%;
-          animation: audit-skeleton 1.25s linear infinite;
+          animation: auditSkeleton 1.25s linear infinite;
         }
 
-        @keyframes audit-skeleton {
+        @keyframes auditSkeleton {
           to { background-position: -220% 0; }
         }
 
@@ -1001,184 +1630,220 @@ export default function AuditLogs() {
           gap: 10px;
           padding: 48px 20px;
           color: var(--audit-muted);
+          text-align: center;
         }
 
         .audit-empty-state svg {
-          color: #7167de;
+          color: #6658dc;
         }
 
         .audit-empty-state h3 {
           margin: 0;
           color: var(--audit-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 24px;
         }
 
         .audit-empty-state p {
           max-width: 520px;
           margin: 0;
+          font-size: 12px;
           line-height: 1.6;
         }
 
-        .audit-pagination {
+        .audit-mobile-list {
+          display: none;
+          gap: 12px;
+          padding: 18px 20px 24px;
+          background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(247,250,255,.86));
+        }
+
+        .audit-mobile-card {
+          display: grid;
+          gap: 13px;
+          min-width: 0;
+          padding: 16px;
+          border: 1px solid rgba(171,181,211,.58);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow:
+            4px 5px 0 rgba(196,204,255,.72),
+            0 12px 24px rgba(34,38,110,.06);
+        }
+
+        .audit-mobile-top,
+        .audit-mobile-bottom {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 16px;
-          padding: 18px 24px;
-          border-top: 1px solid rgba(137, 153, 190, .18);
+          gap: 12px;
+          min-width: 0;
         }
 
-        .audit-pagination p {
+        .audit-mobile-card h3 {
           margin: 0;
+          color: var(--audit-ink);
+          font-size: 15px;
+          overflow-wrap: anywhere;
+        }
+
+        .audit-mobile-card p {
+          margin: 4px 0 0;
           color: var(--audit-muted);
-          font-size: 13px;
-        }
-
-        .audit-pagination-controls {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .audit-page-button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 40px;
-          height: 40px;
-          border: 1px solid rgba(137, 153, 190, .3);
-          border-radius: 12px;
-          background: #fff;
-          color: #3d4960;
-        }
-
-        .audit-page-button:disabled {
-          cursor: not-allowed;
-          opacity: .45;
-        }
-
-        .audit-page-indicator {
-          min-width: 88px;
-          text-align: center;
-          color: #3d4960;
-          font-size: 13px;
-          font-weight: 800;
+          font-size: 11px;
+          overflow-wrap: anywhere;
         }
 
         .audit-modal-backdrop {
           position: fixed;
-          z-index: 2500;
           inset: 0;
+          z-index: 12000;
           display: grid;
           place-items: center;
-          padding: 22px;
-          background: rgba(14, 22, 42, .55);
-          backdrop-filter: blur(8px);
+          width: 100vw;
+          height: 100dvh;
+          overflow: hidden;
+          padding:
+            max(18px, env(safe-area-inset-top))
+            max(18px, env(safe-area-inset-right))
+            max(18px, env(safe-area-inset-bottom))
+            max(18px, env(safe-area-inset-left));
+          background: rgba(15, 23, 42, .58);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          overscroll-behavior: none;
         }
 
         .audit-modal {
-          width: min(790px, 100%);
-          max-height: min(88vh, 820px);
+          width: min(780px, calc(100vw - 36px));
+          max-height: min(88dvh, 820px);
           overflow-y: auto;
-          border: 1px solid rgba(255, 255, 255, .45);
-          border-radius: 28px;
-          background: #fff;
-          box-shadow: 0 34px 90px rgba(9, 16, 35, .3);
-          animation: audit-modal-enter .2s ease-out;
-        }
-
-        @keyframes audit-modal-enter {
-          from {
-            opacity: 0;
-            transform: translateY(12px) scale(.985);
-          }
-
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
+          overscroll-behavior: contain;
+          border: 1px solid rgba(171, 181, 211, .74);
+          border-radius: 26px;
+          background: linear-gradient(145deg, #ffffff 0%, #f7fbff 55%, #f8f4ff 100%);
+          box-shadow:
+            0 32px 86px rgba(22, 29, 73, .32),
+            9px 11px 0 rgba(185, 215, 255, .46);
         }
 
         .audit-modal-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 20px;
-          padding: 27px 28px 22px;
-          border-bottom: 1px solid rgba(137, 153, 190, .18);
-          background:
-            radial-gradient(circle at 90% 0%, rgba(69, 211, 179, .15), transparent 35%),
-            radial-gradient(circle at 5% 0%, rgba(99, 88, 245, .14), transparent 38%),
-            #fff;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 13px;
+          align-items: center;
+          padding: 19px 20px 16px;
+          border-bottom: 1px solid rgba(171, 181, 211, .42);
+          background: linear-gradient(135deg, rgba(237,246,255,.97), rgba(248,247,255,.98));
         }
 
-        .audit-modal-header h2 {
-          margin: 8px 0 5px;
-          font-size: 27px;
+        .audit-modal-icon {
+          display: grid;
+          place-items: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
-        .audit-modal-header p {
-          margin: 0;
-          color: var(--audit-muted);
+        .audit-modal-title {
+          min-width: 0;
+        }
+
+        .audit-modal-title > span {
+          display: block;
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .audit-modal-title h3 {
+          margin: 4px 0 0;
+          color: #101a3a;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 22px;
+          font-weight: 760;
+          line-height: 1.08;
+          letter-spacing: -.025em;
+          overflow-wrap: anywhere;
+        }
+
+        .audit-modal-title p {
+          margin: 5px 0 0;
+          color: #5d6d8d;
+          font-size: 10px;
+          font-weight: 700;
         }
 
         .audit-icon-button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
-          border-radius: 13px;
-          background: rgba(255, 255, 255, .8);
-          color: #36435a;
-          box-shadow: 0 8px 24px rgba(40, 52, 84, .1);
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          padding: 0;
+          border: 1px solid rgba(65, 55, 161, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
         }
 
         .audit-detail-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 13px;
-          padding: 22px 28px 4px;
+          gap: 12px;
+          padding: 19px 20px 4px;
         }
 
         .audit-detail-card {
           display: flex;
-          gap: 12px;
-          padding: 17px;
-          border: 1px solid rgba(137, 153, 190, .2);
-          border-radius: 17px;
-          background: rgba(249, 250, 254, .78);
+          gap: 11px;
+          min-width: 0;
+          padding: 15px;
+          border: 1px solid rgba(171,181,211,.48);
+          border-radius: 15px;
+          background: rgba(255,255,255,.94);
+          box-shadow: 3px 4px 0 rgba(196,204,255,.42);
         }
 
         .audit-detail-card > svg {
           flex: 0 0 auto;
-          color: #574ee1;
+          color: #40348d;
         }
 
-        .audit-detail-card div {
+        .audit-detail-card > div {
           min-width: 0;
         }
 
         .audit-detail-card span,
         .audit-detail-card small {
           display: block;
-          color: var(--audit-muted);
-          font-size: 12px;
+          color: #6b7692;
+          font-size: 10px;
         }
 
         .audit-detail-card strong {
           display: block;
           margin: 4px 0;
+          color: #1f2c4c;
+          font-size: 12px;
+          font-weight: 900;
           overflow-wrap: anywhere;
         }
 
         .audit-modal-section {
-          padding: 20px 28px 0;
+          padding: 19px 20px 0;
         }
 
         .audit-modal-section h3 {
-          margin: 0 0 13px;
-          font-size: 16px;
+          margin: 0 0 12px;
+          color: #101a3a;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 18px;
+          font-weight: 760;
         }
 
         .audit-role-list {
@@ -1188,9 +1853,11 @@ export default function AuditLogs() {
         }
 
         .audit-role-list span {
-          padding: 7px 10px;
-          background: rgba(79, 70, 239, .08);
-          color: #433bb1;
+          padding: 7px 9px;
+          border-radius: 0;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
         }
 
         .audit-metadata-list {
@@ -1198,36 +1865,39 @@ export default function AuditLogs() {
           gap: 1px;
           overflow: hidden;
           margin: 0;
-          border: 1px solid rgba(137, 153, 190, .2);
-          border-radius: 16px;
-          background: rgba(137, 153, 190, .18);
+          border: 1px solid rgba(171,181,211,.46);
+          border-radius: 14px;
+          background: rgba(171,181,211,.34);
         }
 
         .audit-metadata-list > div {
           display: grid;
           grid-template-columns: minmax(150px, .55fr) minmax(0, 1fr);
           gap: 18px;
-          padding: 14px 16px;
+          padding: 13px 15px;
           background: #fff;
         }
 
         .audit-metadata-list dt {
           color: #4e5a70;
-          font-weight: 850;
+          font-size: 11px;
+          font-weight: 900;
         }
 
         .audit-metadata-list dd {
           margin: 0;
           color: #27344c;
+          font-size: 11px;
           white-space: pre-wrap;
           overflow-wrap: anywhere;
         }
 
         .audit-empty-details {
-          padding: 20px;
-          border: 1px dashed rgba(137, 153, 190, .4);
-          border-radius: 15px;
-          color: var(--audit-muted);
+          padding: 19px;
+          border: 1px dashed rgba(137,153,190,.44);
+          border-radius: 13px;
+          color: #5d6d8d;
+          font-size: 11px;
           text-align: center;
         }
 
@@ -1236,22 +1906,32 @@ export default function AuditLogs() {
           align-items: center;
           justify-content: space-between;
           gap: 18px;
-          padding: 22px 28px 27px;
+          padding: 20px 20px 22px;
         }
 
         .audit-modal-footer p {
           margin: 0;
-          color: var(--audit-muted);
-          font-size: 12px;
+          color: #6b7692;
+          font-size: 10px;
+          line-height: 1.45;
         }
 
-        @media (max-width: 1100px) {
-          .audit-kpi-grid {
+        .audit-modal-footer .audit-secondary-button {
+          flex: 0 0 auto;
+        }
+
+        @media (max-width: 1280px) {
+          .audit-filter-form {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .audit-filter-form {
-            grid-template-columns: 1fr 1fr;
+          .audit-filter-form > .audit-primary-button,
+          .audit-filter-form > .audit-secondary-button {
+            width: 100%;
+          }
+
+          .audit-search-inline-feedback {
+            grid-column: 1 / -1;
           }
 
           .audit-advanced-filters {
@@ -1259,51 +1939,31 @@ export default function AuditLogs() {
           }
         }
 
-        @media (max-width: 720px) {
-          .audit-page {
-            gap: 16px;
-          }
-
+        @media (max-width: 1050px) {
           .audit-hero {
             align-items: flex-start;
             flex-direction: column;
-            padding: 25px 21px;
-            border-radius: 24px;
+            min-height: 0;
           }
 
-          .audit-refresh-button {
-            width: 100%;
-            justify-content: center;
-          }
-
-          .audit-kpi-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .audit-kpi {
-            min-height: 94px;
+          .audit-hero-action-stack {
+            width: min(420px, 100%);
+            flex-basis: auto;
           }
 
           .audit-filter-header {
-            align-items: flex-start;
+            align-items: stretch;
             flex-direction: column;
-            padding: 21px 18px 16px;
           }
 
-          .audit-filter-form,
-          .audit-advanced-filters {
-            grid-template-columns: 1fr;
-            padding-left: 18px;
-            padding-right: 18px;
+          .audit-clear-action-stack {
+            width: min(420px, 100%);
           }
+        }
 
-          .audit-advanced-filters {
-            padding-bottom: 20px;
-          }
-
-          .audit-primary-button,
-          .audit-secondary-button {
-            width: 100%;
+        @media (max-width: 900px) {
+          .audit-kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
           .audit-table-wrap {
@@ -1311,12 +1971,111 @@ export default function AuditLogs() {
           }
 
           .audit-mobile-list {
-            display: grid !important;
+            display: grid;
           }
 
+          .audit-detail-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 820px) {
+          .audit-page {
+            gap: 18px;
+          }
+
+          .audit-hero {
+            padding: 26px;
+          }
+
+          .audit-hero h1 {
+            font-size: clamp(38px, 8vw, 58px);
+          }
+
+          .audit-filter-header,
+          .audit-filter-form,
+          .audit-advanced-filters {
+            padding-left: 20px;
+            padding-right: 20px;
+          }
+
+          .audit-table-topbar,
           .audit-pagination {
-            align-items: flex-start;
+            align-items: stretch;
             flex-direction: column;
+            padding-left: 20px;
+            padding-right: 20px;
+          }
+
+          .audit-pagination-controls {
+            justify-content: flex-start;
+          }
+
+          .audit-page-size-control {
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 680px) {
+          .audit-page {
+            gap: 15px;
+          }
+
+          .audit-hero {
+            padding: 22px 18px;
+            border-radius: 26px;
+            box-shadow:
+              7px 9px 0 #c6d8f7,
+              0 20px 34px rgba(34,38,110,.11);
+          }
+
+          .audit-hero h1 {
+            font-size: clamp(34px, 12vw, 50px);
+          }
+
+          .audit-hero p {
+            font-size: 12px;
+          }
+
+          .audit-panel {
+            border-radius: 22px;
+            box-shadow:
+              5px 7px 0 #c4ccff,
+              0 18px 30px rgba(34,38,110,.09);
+          }
+
+          .audit-kpi-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .audit-filter-header {
+            padding: 18px 17px 15px;
+          }
+
+          .audit-filter-form {
+            grid-template-columns: 1fr;
+            padding: 16px 17px 18px;
+          }
+
+          .audit-advanced-filters {
+            grid-template-columns: 1fr;
+            padding: 16px 17px 18px;
+          }
+
+          .audit-filter-form > .audit-primary-button,
+          .audit-filter-form > .audit-secondary-button,
+          .audit-clear-action-stack > .audit-secondary-button {
+            width: 100%;
+          }
+
+          .audit-error {
+            margin-left: 17px;
+            margin-right: 17px;
+          }
+
+          .audit-table-topbar,
+          .audit-pagination {
+            padding: 15px 17px 19px;
           }
 
           .audit-pagination-controls {
@@ -1324,27 +2083,62 @@ export default function AuditLogs() {
             justify-content: space-between;
           }
 
-          .audit-detail-grid {
-            grid-template-columns: 1fr;
-            padding: 18px 18px 2px;
+          .audit-page-size-control {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .audit-page-size-control select {
+            width: min(180px, 58vw);
+          }
+
+          .audit-mobile-list {
+            padding: 15px 17px 22px;
+          }
+
+          .audit-mobile-top,
+          .audit-mobile-bottom {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .audit-view-button {
+            width: 100%;
           }
 
           .audit-modal-backdrop {
-            align-items: end;
-            padding: 0;
+            place-items: center;
+            padding:
+              max(10px, env(safe-area-inset-top))
+              max(10px, env(safe-area-inset-right))
+              max(10px, env(safe-area-inset-bottom))
+              max(10px, env(safe-area-inset-left));
           }
 
           .audit-modal {
-            width: 100%;
-            max-height: 92vh;
-            border-radius: 25px 25px 0 0;
+            width: min(100%, calc(100vw - 20px));
+            max-height: min(90dvh, 820px);
+            border-radius: 22px;
           }
 
-          .audit-modal-header,
+          .audit-modal-header {
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            padding: 16px 15px 14px;
+          }
+
+          .audit-modal-icon {
+            width: 40px;
+            height: 40px;
+          }
+
+          .audit-detail-grid {
+            padding: 16px 15px 4px;
+          }
+
           .audit-modal-section,
           .audit-modal-footer {
-            padding-left: 19px;
-            padding-right: 19px;
+            padding-left: 15px;
+            padding-right: 15px;
           }
 
           .audit-metadata-list > div {
@@ -1356,53 +2150,80 @@ export default function AuditLogs() {
             align-items: stretch;
             flex-direction: column;
           }
+
+          .audit-modal-footer .audit-secondary-button {
+            width: 100%;
+          }
         }
 
-        .audit-mobile-list {
-          display: none;
-          gap: 12px;
-          padding: 0 16px 18px;
-          border-top: 1px solid rgba(137, 153, 190, .18);
+        @media (max-width: 520px) {
+          .audit-hero {
+            padding: 20px 15px;
+          }
+
+          .audit-hero h1 {
+            font-size: clamp(31px, 11vw, 43px);
+          }
+
+          .audit-eyebrow {
+            max-width: 100%;
+            white-space: normal;
+          }
+
+          .audit-filter-heading h2 {
+            font-size: 25px;
+          }
+
+          .audit-page-button {
+            width: 38px;
+            min-width: 38px;
+            height: 38px;
+          }
+
+          .audit-page-size-control select {
+            min-width: 110px;
+          }
+
+          .audit-kpi {
+            padding: 16px;
+          }
+
+          .audit-mobile-card {
+            padding: 14px;
+          }
         }
 
-        .audit-mobile-card {
-          display: grid;
-          gap: 13px;
-          padding: 17px;
-          border: 1px solid rgba(137, 153, 190, .22);
-          border-radius: 18px;
-          background: rgba(255, 255, 255, .96);
-          box-shadow: 0 10px 25px rgba(39, 53, 91, .06);
-        }
+        @media (max-width: 390px) {
+          .audit-modal-header {
+            grid-template-columns: auto minmax(0, 1fr);
+          }
 
-        .audit-mobile-card:first-child {
-          margin-top: 16px;
-        }
+          .audit-modal-header .audit-icon-button {
+            grid-column: 1 / -1;
+            width: 100%;
+          }
 
-        .audit-mobile-top,
-        .audit-mobile-bottom {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-        }
+          .audit-pagination-controls {
+            gap: 5px;
+          }
 
-        .audit-mobile-card h3 {
-          margin: 0;
-          font-size: 16px;
-        }
+          .audit-page-size-control {
+            align-items: stretch;
+            flex-direction: column;
+          }
 
-        .audit-mobile-card p {
-          margin: 3px 0 0;
-          color: var(--audit-muted);
-          font-size: 13px;
-          overflow-wrap: anywhere;
+          .audit-page-size-control select {
+            width: 100%;
+          }
         }
 
         @media (prefers-reduced-motion: reduce) {
           .audit-page *,
           .audit-page *::before,
-          .audit-page *::after {
+          .audit-page *::after,
+          .audit-modal-backdrop *,
+          .audit-modal-backdrop *::before,
+          .audit-modal-backdrop *::after {
             scroll-behavior: auto !important;
             animation-duration: .01ms !important;
             animation-iteration-count: 1 !important;
@@ -1427,22 +2248,26 @@ export default function AuditLogs() {
           </p>
         </div>
 
-        <button
-          type="button"
-          className="audit-refresh-button"
-          onClick={() => loadAuditLogs({ silent: true })}
-          disabled={refreshing}
-        >
-          <RefreshCw size={18} className={refreshing ? 'is-spinning' : ''} />
-          {refreshing ? 'Refreshing…' : 'Refresh logs'}
-        </button>
+        <div className="audit-hero-action-stack">
+          <button
+            type="button"
+            className="audit-refresh-button"
+            onClick={() => refreshAuditLogs('refresh')}
+            disabled={refreshing}
+          >
+            <RefreshCw size={18} className={refreshing ? 'is-spinning' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh logs'}
+          </button>
+
+          <InlineActionMessage
+            feedback={inlineFeedback.refresh}
+            onClose={() => clearInlineFeedback('refresh')}
+          />
+        </div>
       </header>
 
       <div className="audit-kpi-grid">
         <article className="audit-kpi">
-          <span className="audit-kpi-icon">
-            <Activity size={22} />
-          </span>
 
           <div>
             <span>Total records</span>
@@ -1452,9 +2277,7 @@ export default function AuditLogs() {
         </article>
 
         <article className="audit-kpi">
-          <span className="audit-kpi-icon">
-            <Filter size={22} />
-          </span>
+         
 
           <div>
             <span>Visible events</span>
@@ -1464,9 +2287,7 @@ export default function AuditLogs() {
         </article>
 
         <article className="audit-kpi">
-          <span className="audit-kpi-icon">
-            <UserRound size={22} />
-          </span>
+          
 
           <div>
             <span>Active actors</span>
@@ -1476,9 +2297,7 @@ export default function AuditLogs() {
         </article>
 
         <article className="audit-kpi">
-          <span className="audit-kpi-icon">
-            <Clock3 size={22} />
-          </span>
+         
 
           <div>
             <span>Latest activity</span>
@@ -1499,15 +2318,24 @@ export default function AuditLogs() {
             </div>
           </div>
 
-          {hasFilters ? (
-            <button
-              type="button"
-              className="audit-secondary-button"
-              onClick={clearFilters}
-            >
-              <X size={17} />
-              Clear filters
-            </button>
+          {hasFilters || inlineFeedback.clear ? (
+            <div className="audit-clear-action-stack">
+              {hasFilters ? (
+                <button
+                  type="button"
+                  className="audit-secondary-button"
+                  onClick={clearFilters}
+                >
+                  <X size={17} />
+                  Clear filters
+                </button>
+              ) : null}
+
+              <InlineActionMessage
+                feedback={inlineFeedback.clear}
+                onClose={() => clearInlineFeedback('clear')}
+              />
+            </div>
           ) : null}
         </div>
 
@@ -1551,11 +2379,20 @@ export default function AuditLogs() {
           <button
             type="button"
             className="audit-secondary-button"
-            onClick={() => loadAuditLogs({ silent: true })}
+            onClick={() => refreshAuditLogs('reload')}
           >
             <RefreshCw size={17} />
             Reload
           </button>
+
+          <InlineActionMessage
+            feedback={inlineFeedback.search || inlineFeedback.reload}
+            onClose={() => {
+              clearInlineFeedback('search');
+              clearInlineFeedback('reload');
+            }}
+            className="audit-search-inline-feedback"
+          />
         </form>
 
         <div className="audit-advanced-filters">
@@ -1614,6 +2451,32 @@ export default function AuditLogs() {
         </div>
 
         {error ? <div className="audit-error">{error}</div> : null}
+
+        {!loading && total > 0 ? (
+          <div className="audit-table-topbar">
+            <p>
+              Page {page} of {pageCount} • {total.toLocaleString('en-IN')} total record
+              {total === 1 ? '' : 's'}
+            </p>
+
+            <label className="audit-page-size-control" htmlFor="audit-page-size">
+              <span>View</span>
+              <select
+                id="audit-page-size"
+                value={pageSize}
+                onChange={handlePageSizeChange}
+                aria-label="Audit records per page"
+              >
+                <option value="all">View All</option>
+                {AUDIT_PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="audit-loading" aria-label="Loading audit logs">
