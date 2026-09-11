@@ -787,16 +787,9 @@ async function submitAttendance(type) {
         ),
       });
 
-      const data = await submitCheckIn(payload);
+      await submitCheckIn(payload);
 
-      if (lateNow && !holiday?.is_holiday) {
-        alerts.warning(
-          data.message || 'Late check-in recorded successfully.',
-          'Late Check-in Recorded',
-        );
-      } else {
-        alerts.success(data.message || 'Check-in successful.', 'Check-in Successful');
-      }
+      alerts.success('Checked in successfully.', 'Checked In');
 
       setFieldLocation('');
       setFieldPhotoFile(null);
@@ -814,19 +807,47 @@ async function submitAttendance(type) {
         ),
       });
 
-      const data = await submitCheckOut(payload);
+      await submitCheckOut(payload);
 
-      alerts.success(data.message || 'Check-out successful.', 'Check-out Successful');
+      alerts.success('Checked out successfully.', 'Checked Out');
       setEarlyCheckoutReasonCode('');
       setEarlyCheckoutOtherReason('');
     }
 
-    await refreshAfterSuccess();
+    try {
+      await refreshAfterSuccess();
+    } catch (refreshError) {
+      console.error('Attendance refresh failed after successful attendance action:', refreshError);
+    }
   } catch (error) {
-    alerts.error(
-      attendanceErrorMessage(error),
-      type === 'check-in' ? 'Check-in Failed' : 'Check-out Failed',
-    );
+    let latestStatus = null;
+
+    try {
+      latestStatus = await getAttendanceStatus();
+      setStatusData(latestStatus);
+    } catch (statusError) {
+      console.error('Unable to verify attendance status after attendance error:', statusError);
+    }
+
+    const latestAttendance = latestStatus?.attendance || null;
+    const actionWasRecorded =
+      type === 'check-in'
+        ? Boolean(latestAttendance?.check_in)
+        : Boolean(latestAttendance?.check_out);
+
+    if (actionWasRecorded) {
+      alerts.success(
+        type === 'check-in'
+          ? 'Checked in successfully.'
+          : 'Checked out successfully.',
+        type === 'check-in' ? 'Checked In' : 'Checked Out',
+      );
+    } else {
+      alerts.error(
+        attendanceErrorMessage(error),
+        type === 'check-in' ? 'Check-in Failed' : 'Check-out Failed',
+      );
+    }
   } finally {
     setLoadingType('');
   }
