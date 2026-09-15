@@ -1957,8 +1957,8 @@ export default function Settings({ user, setPage }) {
           border: 0;
           border-radius: 999px;
           color: #ffffff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow: 4px 5px 0 #595192;
           font-size: 9px;
           line-height: 1;
           font-weight: 950;
@@ -2116,21 +2116,22 @@ export default function Settings({ user, setPage }) {
         }
 
 
-        .platform-logo-preview {
-          width: 84px;
-          height: 84px;
-          display: grid;
-          place-items: center;
-          overflow: hidden;
-          border-radius: 24px;
-          background:
-            linear-gradient(145deg, var(--st-purple-deep), var(--st-purple));
-          color: #fff;
-          font-size: 26px;
-          font-weight: 950;
-          letter-spacing: -.04em;
-          box-shadow: 0 14px 28px rgba(48, 39, 95, .24);
-        }
+       .platform-logo-preview {
+  width: 84px;
+  height: 84px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+  color: #fff;
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: -.04em;
+  box-shadow:
+    5px 6px 0 #595192,
+    0 14px 28px rgba(67, 116, 170, .16);
+}
 
         .platform-logo-preview img,
         .payroll-logo-preview img,
@@ -2696,20 +2697,22 @@ export default function Settings({ user, setPage }) {
         }
 
         .payroll-logo-preview {
-          width: 92px;
-          height: 92px;
-          display: grid;
-          place-items: center;
-          margin: 0 auto 14px;
-          overflow: hidden;
-          border-radius: 24px;
-          background: linear-gradient(145deg, var(--st-cobalt), var(--st-purple));
-          color: #ffffff;
-          box-shadow: 0 14px 28px rgba(49, 86, 216, .18);
-          font-size: 24px;
-          font-weight: 950;
-          letter-spacing: -.04em;
-        }
+  width: 92px;
+  height: 92px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 14px;
+  overflow: hidden;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+  color: #ffffff;
+  box-shadow:
+    5px 6px 0 #595192,
+    0 14px 28px rgba(67, 116, 170, .16);
+  font-size: 24px;
+  font-weight: 950;
+  letter-spacing: -.04em;
+}
 
         .payroll-brand-preview-card h2 {
           margin: 0;
@@ -3118,21 +3121,23 @@ export default function Settings({ user, setPage }) {
           text-align: center;
         }
 
-        .tenant-logo-preview {
-          width: 126px;
-          height: 126px;
-          display: grid;
-          place-items: center;
-          overflow: hidden;
-          border-radius: 32px;
-          background: linear-gradient(145deg, var(--st-purple-deep), var(--st-purple));
-          color: #ffffff;
-          box-shadow: 0 20px 42px rgba(48, 39, 95, .20);
-          font-size: 31px;
-          line-height: 1;
-          font-weight: 950;
-          letter-spacing: -.05em;
-        }
+       .tenant-logo-preview {
+  width: 126px;
+  height: 126px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 32px;
+  background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+  color: #ffffff;
+  box-shadow:
+    6px 7px 0 #595192,
+    0 20px 42px rgba(67, 116, 170, .16);
+  font-size: 31px;
+  line-height: 1;
+  font-weight: 950;
+  letter-spacing: -.05em;
+}
 
         .tenant-company-script {
           max-width: 100%;

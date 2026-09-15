@@ -1633,20 +1633,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
             inset 0 1px 0 rgba(255, 255, 255, .98);
         }
 
-        .layout-photo-aware .side-brand.platform-side-brand::after {
-          content: '';
-          position: absolute;
-          z-index: -1;
-          width: 100px;
-          height: 100px;
-          right: -54px;
-          bottom: -62px;
-          border-radius: 999px;
-          background: rgba(79, 70, 229, .08);
-          pointer-events: none;
-          animation: platformAccentDrift 7s ease-in-out infinite;
-        }
-
         .layout-photo-aware .platform-side-logo {
           position: relative;
           width: 76px;

@@ -127,17 +127,40 @@
 }
 
 .yc-login-access-facts {
+  width: 100%;
   max-width: 760px;
   margin-top: clamp(14px, 2vh, 22px);
+  margin-inline: auto;
 }
 
 .yc-login-access-facts > span {
+  min-width: 0;
   min-height: 82px;
   padding: 11px;
+
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  align-content: center;
+  gap: 5px;
+
+  text-align: center;
+
   background: rgba(255, 255, 255, 0.76);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.98),
     0 10px 24px rgba(23, 33, 63, 0.06);
+}
+
+.yc-login-access-facts > span > svg {
+  margin-inline: auto;
+}
+
+.yc-login-access-facts > span > b,
+.yc-login-access-facts > span > small {
+  width: 100%;
+  min-width: 0;
+  text-align: center;
 }
 
 .yc-login-access-canvas {
@@ -1902,22 +1925,22 @@
   }
 
   .yc-employee-login-page
-    .yc-login-access-facts
-    > span {
-    min-height:
-      clamp(62px, 10.5svh, 78px);
+  .yc-login-access-facts
+  > span {
+  min-height:
+    clamp(62px, 10.5svh, 78px);
 
-    padding:
-      clamp(7px, 2.4vw, 10px);
+  padding:
+    clamp(7px, 2.4vw, 10px);
 
-    grid-template-columns:
-      clamp(25px, 7.5vw, 30px)
-      minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  align-content: center;
 
-    gap:
-      2px
-      clamp(5px, 1.8vw, 8px);
-  }
+  gap: clamp(4px, 1.2vw, 7px);
+
+  text-align: center;
+}
 
   .yc-employee-login-page
     .yc-login-access-facts

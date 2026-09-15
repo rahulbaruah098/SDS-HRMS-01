@@ -1534,7 +1534,7 @@ export default function Employees({ user = {}, setPage } = {}) {
           font-family: var(--yc-ui, var(--body), inherit);
         }
 
-       .hrms-hero {
+ .hrms-hero {
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -1544,10 +1544,12 @@ export default function Employees({ user = {}, setPage } = {}) {
   color: var(--emp-ink);
 
   background: linear-gradient(
-    135deg,
-    #f1fbff 0%,
-    #fffdf8 48%,
-    #f8f2ff 100%
+    90deg,
+    #d3f4fb 0%,
+    #f7fcfb 34%,
+    #fffdf8 52%,
+    #fbf8fa 68%,
+    #f0edfb 100%
   );
 
   box-shadow: 12px 14px 0 var(--emp-flat-blue), 0 28px 48px rgba(34,38,110,.13);

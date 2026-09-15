@@ -1116,11 +1116,11 @@ export default function AuditLogs() {
           min-width: 0;
         }
 
-        .audit-filter-heading > svg {
-          flex: 0 0 auto;
-          margin-top: 3px;
-          color: #40348d;
-        }
+      .audit-filter-heading > svg {
+  flex: 0 0 auto;
+  margin-top: calc((clamp(25px, 2.3vw, 37px) - 21px) / 2);
+  color: #40348d;
+}
 
         .audit-filter-heading > div {
           min-width: 0;
