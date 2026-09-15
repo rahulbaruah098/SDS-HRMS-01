@@ -1729,8 +1729,70 @@ export default function App() {
       try {
         const data = await getTodayCelebrations();
 
-        if (!cancelled) {
-          setCelebrations(data.released ? data.items || [] : []);
+        if (cancelled) {
+          return;
+        }
+
+        const todayCelebrations = data.released ? data.items || [] : [];
+
+        if (!todayCelebrations.length) {
+          setCelebrations([]);
+          return;
+        }
+
+        const celebrationDateKey = String(
+          data.date_key || todayCelebrations[0]?.date_key || '',
+        ).trim();
+        const tenantIdentity = String(
+          normalizedUser.tenant_id ||
+            normalizedUser.tenant?.tenant_id ||
+            normalizedUser.company_id ||
+            normalizedUser.company_name ||
+            'tenant',
+        ).trim();
+        const viewerIdentity = String(
+          normalizedUser.id ||
+            normalizedUser._id ||
+            normalizedUser.user_id ||
+            normalizedUser.employee_id ||
+            normalizedUser.email ||
+            '',
+        ).trim();
+
+        let seenStorageKey = '';
+
+        if (celebrationDateKey && viewerIdentity) {
+          seenStorageKey = [
+            'sds_hrms_celebration_popup_seen',
+            encodeURIComponent(tenantIdentity),
+            encodeURIComponent(viewerIdentity),
+            encodeURIComponent(celebrationDateKey),
+          ].join(':');
+        }
+
+        if (seenStorageKey) {
+          try {
+            if (localStorage.getItem(seenStorageKey) === '1') {
+              setCelebrations([]);
+              return;
+            }
+          } catch {
+            // If localStorage is unavailable, continue showing today's popup.
+          }
+        }
+
+        setCelebrations(todayCelebrations);
+
+        // Mark today's celebration popup as shown for this tenant/user as soon
+        // as it is released. Logout removes the auth session but intentionally
+        // does not remove this separate daily marker, so logging in again on
+        // the same date will not reopen the popup.
+        if (seenStorageKey) {
+          try {
+            localStorage.setItem(seenStorageKey, '1');
+          } catch {
+            // Ignore storage errors; the celebration can still be displayed.
+          }
         }
       } catch {
         if (!cancelled) {
