@@ -540,6 +540,255 @@ function PayrollResultsPortal({ active, children }) {
   );
 }
 
+
+function PayrollContainedScrollbar({
+  scrollRef,
+  refreshKey = '',
+  ariaLabel = 'Horizontal table scrollbar',
+}) {
+  const [scrollbar, setScrollbar] = useState({
+    scrollable: false,
+    visible: false,
+    thumbWidth: 100,
+    thumbLeft: 0,
+  });
+  const hideTimerRef = useRef(null);
+  const thumbDragRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startScrollLeft: 0,
+    scrollPerPixel: 1,
+  });
+
+  function clearHideTimer() {
+    if (hideTimerRef.current) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }
+
+  function scheduleHide(delay = 900) {
+    clearHideTimer();
+    hideTimerRef.current = window.setTimeout(() => {
+      setScrollbar((current) => ({
+        ...current,
+        visible: false,
+      }));
+      hideTimerRef.current = null;
+    }, delay);
+  }
+
+  function syncScrollbar({ reveal = false } = {}) {
+    const scroller = scrollRef.current;
+    if (!scroller) {
+      return;
+    }
+
+    const clientWidth = Math.max(0, scroller.clientWidth);
+    const scrollWidth = Math.max(clientWidth, scroller.scrollWidth);
+    const scrollRange = Math.max(0, scrollWidth - clientWidth);
+    const scrollable = scrollRange > 2;
+
+    const naturalThumbWidth =
+      scrollWidth > 0 ? (clientWidth / scrollWidth) * 100 : 100;
+    const thumbWidth = scrollable
+      ? Math.min(100, Math.max(12, naturalThumbWidth))
+      : 100;
+    const maxThumbLeft = Math.max(0, 100 - thumbWidth);
+    const thumbLeft =
+      scrollable && scrollRange > 0
+        ? Math.min(
+            maxThumbLeft,
+            Math.max(0, (scroller.scrollLeft / scrollRange) * maxThumbLeft),
+          )
+        : 0;
+
+    setScrollbar((current) => ({
+      scrollable,
+      visible: scrollable && (reveal || current.visible),
+      thumbWidth,
+      thumbLeft,
+    }));
+
+    if (reveal && scrollable) {
+      scheduleHide();
+    }
+  }
+
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) {
+      return undefined;
+    }
+
+    const revealFromScroll = () => syncScrollbar({ reveal: true });
+    const revealFromPointer = (event) => {
+      if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
+        syncScrollbar({ reveal: true });
+      }
+    };
+    const revealFromTouch = () => syncScrollbar({ reveal: true });
+    const refresh = () => syncScrollbar();
+
+    scroller.addEventListener('scroll', revealFromScroll, { passive: true });
+    scroller.addEventListener('pointermove', revealFromPointer, { passive: true });
+    scroller.addEventListener('touchstart', revealFromTouch, { passive: true });
+    window.addEventListener('resize', refresh);
+
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(refresh);
+      resizeObserver.observe(scroller);
+
+      const table = scroller.querySelector('table');
+      if (table) {
+        resizeObserver.observe(table);
+      }
+    }
+
+    const frame = window.requestAnimationFrame(refresh);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scroller.removeEventListener('scroll', revealFromScroll);
+      scroller.removeEventListener('pointermove', revealFromPointer);
+      scroller.removeEventListener('touchstart', revealFromTouch);
+      window.removeEventListener('resize', refresh);
+      resizeObserver?.disconnect();
+      clearHideTimer();
+    };
+    // refreshKey intentionally retriggers measurement after page/search/view changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey, scrollRef]);
+
+  function handleTrackPointerDown(event) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    const scroller = scrollRef.current;
+    if (!scroller || !scrollbar.scrollable) {
+      return;
+    }
+
+    const trackRect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(
+      1,
+      Math.max(0, (event.clientX - trackRect.left) / Math.max(trackRect.width, 1)),
+    );
+    const scrollRange = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+
+    scroller.scrollLeft = ratio * scrollRange;
+    syncScrollbar({ reveal: true });
+    event.preventDefault();
+  }
+
+  function handleThumbPointerDown(event) {
+    const scroller = scrollRef.current;
+    const thumb = event.currentTarget;
+    const track = thumb.parentElement;
+
+    if (!scroller || !track || !scrollbar.scrollable) {
+      return;
+    }
+
+    const trackWidth = Math.max(1, track.getBoundingClientRect().width);
+    const thumbWidth = Math.max(1, thumb.getBoundingClientRect().width);
+    const thumbTravel = Math.max(1, trackWidth - thumbWidth);
+    const scrollRange = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+
+    clearHideTimer();
+    setScrollbar((current) => ({ ...current, visible: true }));
+
+    thumbDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startScrollLeft: scroller.scrollLeft,
+      scrollPerPixel: scrollRange / thumbTravel,
+    };
+
+    thumb.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleThumbPointerMove(event) {
+    const drag = thumbDragRef.current;
+    const scroller = scrollRef.current;
+
+    if (!drag.active || drag.pointerId !== event.pointerId || !scroller) {
+      return;
+    }
+
+    scroller.scrollLeft =
+      drag.startScrollLeft +
+      ((event.clientX - drag.startX) * drag.scrollPerPixel);
+
+    syncScrollbar({ reveal: true });
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function endThumbDrag(event) {
+    const drag = thumbDragRef.current;
+    if (!drag.active || drag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+
+    thumbDragRef.current = {
+      active: false,
+      pointerId: null,
+      startX: 0,
+      startScrollLeft: 0,
+      scrollPerPixel: 1,
+    };
+
+    syncScrollbar({ reveal: true });
+    scheduleHide(700);
+    event.stopPropagation();
+  }
+
+  if (!scrollbar.scrollable) {
+    return null;
+  }
+
+  return (
+    <div
+      className={
+        scrollbar.visible
+          ? 'payroll-contained-scrollbar is-visible'
+          : 'payroll-contained-scrollbar'
+      }
+      aria-hidden="true"
+    >
+      <div
+        className="payroll-contained-scrollbar-track"
+        onPointerDown={handleTrackPointerDown}
+      >
+        <div
+          className="payroll-contained-scrollbar-thumb"
+          style={{
+            width: `${scrollbar.thumbWidth}%`,
+            left: `${scrollbar.thumbLeft}%`,
+          }}
+          role="presentation"
+          aria-label={ariaLabel}
+          onPointerDown={handleThumbPointerDown}
+          onPointerMove={handleThumbPointerMove}
+          onPointerUp={endThumbDrag}
+          onPointerCancel={endThumbDrag}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PayrollInlineMessage({ feedback, onClose, className = '' }) {
   if (!feedback?.message) {
     return null;
@@ -628,11 +877,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
   const [inlineFeedback, setInlineFeedback] = useState({});
   const feedbackTimersRef = useRef({});
+  const runTableScrollRef = useRef(null);
+  const resultTableScrollRef = useRef(null);
   const resultTableDragRef = useRef({
     active: false,
     pointerId: null,
+    pointerType: '',
     startX: 0,
+    startY: 0,
     startScrollLeft: 0,
+    horizontalDrag: false,
   });
 
   function clearInlineFeedback(scopeKey) {
@@ -1122,8 +1376,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
   function startResultTableDrag(event) {
     if (
       resultTableFullWindow ||
-      event.pointerType === 'touch' ||
-      event.button !== 0 ||
+      (event.pointerType !== 'touch' && event.button !== 0) ||
       event.ctrlKey ||
       event.metaKey ||
       event.target?.closest?.('button, a, input, select, textarea, label')
@@ -1136,13 +1389,19 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     resultTableDragRef.current = {
       active: true,
       pointerId: event.pointerId,
+      pointerType: event.pointerType || 'mouse',
       startX: event.clientX,
+      startY: event.clientY,
       startScrollLeft: scroller.scrollLeft,
+      horizontalDrag: event.pointerType !== 'touch',
     };
 
-    scroller.classList.add('is-dragging');
     scroller.setPointerCapture?.(event.pointerId);
-    event.preventDefault();
+
+    if (event.pointerType !== 'touch') {
+      scroller.classList.add('is-dragging');
+      event.preventDefault();
+    }
   }
 
   function moveResultTableDrag(event) {
@@ -1153,8 +1412,30 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     }
 
     const scroller = event.currentTarget;
-    const distance = event.clientX - drag.startX;
-    scroller.scrollLeft = drag.startScrollLeft - distance;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+
+    if (drag.pointerType === 'touch' && !drag.horizontalDrag) {
+      const horizontalDistance = Math.abs(deltaX);
+      const verticalDistance = Math.abs(deltaY);
+
+      if (horizontalDistance < 6 && verticalDistance < 6) {
+        return;
+      }
+
+      if (verticalDistance > horizontalDistance) {
+        return;
+      }
+
+      resultTableDragRef.current.horizontalDrag = true;
+      scroller.classList.add('is-dragging');
+    }
+
+    if (!resultTableDragRef.current.horizontalDrag) {
+      return;
+    }
+
+    scroller.scrollLeft = drag.startScrollLeft - deltaX;
     event.preventDefault();
   }
 
@@ -1170,14 +1451,40 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     resultTableDragRef.current = {
       active: false,
       pointerId: null,
+      pointerType: '',
       startX: 0,
+      startY: 0,
       startScrollLeft: scroller.scrollLeft,
+      horizontalDrag: false,
     };
 
     scroller.classList.remove('is-dragging');
 
     if (scroller.hasPointerCapture?.(event.pointerId)) {
       scroller.releasePointerCapture?.(event.pointerId);
+    }
+  }
+
+  function handleResultTableKeyDown(event) {
+    if (resultTableFullWindow) {
+      return;
+    }
+
+    const scroller = event.currentTarget;
+    const step = Math.max(220, Math.round(scroller.clientWidth * 0.72));
+
+    if (event.key === 'ArrowRight') {
+      scroller.scrollBy({ left: step, behavior: 'smooth' });
+      event.preventDefault();
+    } else if (event.key === 'ArrowLeft') {
+      scroller.scrollBy({ left: -step, behavior: 'smooth' });
+      event.preventDefault();
+    } else if (event.key === 'Home') {
+      scroller.scrollTo({ left: 0, behavior: 'smooth' });
+      event.preventDefault();
+    } else if (event.key === 'End') {
+      scroller.scrollTo({ left: scroller.scrollWidth, behavior: 'smooth' });
+      event.preventDefault();
     }
   }
 
@@ -1204,6 +1511,10 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
     setResultTableSearch('');
     setResultTablePage(1);
     setResultRowsPerPage('50');
+    setActiveRun(null);
+    setPayslips([]);
+    setAllPayslips([]);
+    clearInlineFeedback('results');
   }
 
   function ensureManualInputRows(items, nextPeriod = period) {
@@ -3084,6 +3395,12 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           border-radius: 18px;
           background: #fff;
           box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+        }
+
+        .payroll-page .table-scroll,
+        .payroll-selector-table,
+        .payroll-input-table,
+        .payroll-sync-table {
           scrollbar-width: thin;
           scrollbar-color: rgba(102,88,220,.36) transparent;
         }
@@ -3091,8 +3408,6 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         .payroll-page .table-scroll::-webkit-scrollbar,
         .payroll-selector-table::-webkit-scrollbar,
         .payroll-input-table::-webkit-scrollbar,
-        .payroll-result-table::-webkit-scrollbar,
-        .payroll-run-table::-webkit-scrollbar,
         .payroll-sync-table::-webkit-scrollbar {
           height: 8px;
         }
@@ -3100,11 +3415,75 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         .payroll-page .table-scroll::-webkit-scrollbar-thumb,
         .payroll-selector-table::-webkit-scrollbar-thumb,
         .payroll-input-table::-webkit-scrollbar-thumb,
-        .payroll-result-table::-webkit-scrollbar-thumb,
-        .payroll-run-table::-webkit-scrollbar-thumb,
         .payroll-sync-table::-webkit-scrollbar-thumb {
           border-radius: 999px;
           background: rgba(102,88,220,.32);
+        }
+
+        .payroll-run-table,
+        .payroll-result-table {
+          scrollbar-width: none !important;
+          -ms-overflow-style: none;
+        }
+
+        .payroll-run-table::-webkit-scrollbar,
+        .payroll-result-table::-webkit-scrollbar {
+          width: 0 !important;
+          height: 0 !important;
+          display: none;
+        }
+
+        .payroll-horizontal-scroll-shell {
+          position: relative;
+          width: 100%;
+          min-width: 0;
+        }
+
+        .payroll-contained-scrollbar {
+          position: absolute;
+          z-index: 12;
+          right: 24px;
+          bottom: 8px;
+          left: 24px;
+          height: 8px;
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transition:
+            opacity .18s ease,
+            visibility .18s ease;
+        }
+
+        .payroll-contained-scrollbar.is-visible {
+          opacity: 1;
+          visibility: visible;
+          pointer-events: auto;
+        }
+
+        .payroll-contained-scrollbar-track {
+          position: relative;
+          width: 100%;
+          height: 6px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: rgba(188,198,216,.28);
+        }
+
+        .payroll-contained-scrollbar-thumb {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          min-width: 40px;
+          border-radius: 999px;
+          background: rgba(112,124,157,.56);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.42);
+          cursor: grab;
+          touch-action: none;
+        }
+
+        .payroll-contained-scrollbar-thumb:active {
+          cursor: grabbing;
+          background: rgba(88,101,143,.72);
         }
 
         .payroll-page table {
@@ -4943,6 +5322,16 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         }
 
         @media (max-width: 680px) {
+          .payroll-contained-scrollbar {
+            right: 18px;
+            bottom: 7px;
+            left: 18px;
+          }
+
+          .payroll-contained-scrollbar-track {
+            height: 5px;
+          }
+
           .payroll-section-table-tools {
             grid-template-columns: 1fr !important;
           }
@@ -5137,13 +5526,13 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-page tbody td {
           padding: 17px 14px !important;
-          border-top: 1px solid rgba(171,181,211,.52) !important;
-          border-bottom: 1px solid rgba(171,181,211,.52) !important;
+          border: 0 !important;
           color: #263653 !important;
           background: #f8fbff !important;
           vertical-align: middle !important;
           font-size: 11px !important;
           line-height: 1.45;
+          box-shadow: none !important;
         }
 
         .payroll-page tbody tr:nth-child(even) td {
@@ -5151,32 +5540,32 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         }
 
         .payroll-page tbody td:first-child {
-          border-left: 1px solid rgba(171,181,211,.52) !important;
+          border: 0 !important;
           border-radius: 21px 0 0 21px !important;
         }
 
         .payroll-page tbody td:last-child {
-          border-right: 1px solid rgba(171,181,211,.52) !important;
+          border: 0 !important;
           border-radius: 0 21px 21px 0 !important;
         }
 
         .payroll-page .payroll-active-row td,
         .payroll-page .payroll-active-row td:first-child {
-          border-color: rgba(101,88,220,.34) !important;
+          border: 0 !important;
           background:
             linear-gradient(135deg, #eef5ff 0%, #f2f1ff 100%) !important;
         }
 
         @media (hover: hover) and (pointer: fine) {
           .payroll-page tbody tr:hover td {
-            border-color: rgba(101,88,220,.30) !important;
+            border: 0 !important;
             background: #f5f8ff !important;
           }
         }
 
-        /* Keep compact payroll values readable on one line.
-           Recent runs fit the normal view; results can be dragged horizontally,
-           while full-window mode fits every result column on one screen. */
+        /* Keep payroll values readable on one line.
+           Recent runs and payroll results preserve natural column widths and
+           scroll horizontally only when the available screen width is smaller. */
         .payroll-run-table td,
         .payroll-result-table td,
         .payroll-sync-table td {
@@ -5184,82 +5573,102 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         }
 
         .payroll-result-table {
+          position: relative;
+          display: block;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          overflow-x: auto !important;
+          overflow-y: hidden !important;
           cursor: grab;
           user-select: text;
           -webkit-user-select: text;
-          touch-action: auto;
+          touch-action: pan-y pinch-zoom;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior-x: contain;
         }
 
+        .payroll-result-table:focus-visible {
+          outline: 3px solid rgba(77,119,221,.22);
+          outline-offset: 4px;
+        }
+
         .payroll-result-table.is-dragging {
           cursor: grabbing;
+          scroll-behavior: auto;
         }
 
         .payroll-result-table table {
+          width: max-content !important;
           min-width: 1810px !important;
+          max-width: none !important;
+          table-layout: auto !important;
         }
 
         .payroll-run-table {
-          overflow-x: hidden !important;
+          width: 100%;
+          min-width: 0;
+          overflow-x: auto !important;
+          overflow-y: hidden !important;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior-x: contain;
         }
 
         .payroll-run-table table {
           width: 100% !important;
-          min-width: 0 !important;
-          table-layout: fixed;
+          min-width: 1120px !important;
+          table-layout: auto !important;
         }
 
         .payroll-run-table th,
         .payroll-run-table td {
-          min-width: 0 !important;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          overflow: visible;
+          text-overflow: clip;
           white-space: nowrap !important;
         }
 
         .payroll-run-table th {
-          padding: 8px 7px 10px !important;
-          font-size: 8.5px !important;
-          letter-spacing: .035em !important;
+          padding: 9px 12px 11px !important;
+          font-size: 9px !important;
+          letter-spacing: .045em !important;
         }
 
         .payroll-run-table td {
-          padding: 12px 7px !important;
-          font-size: 9.5px !important;
+          padding: 15px 12px !important;
+          font-size: 10px !important;
         }
 
         .payroll-run-table .payroll-employee-name {
           display: block;
-          overflow: hidden;
-          text-overflow: ellipsis;
+          overflow: visible;
+          text-overflow: clip;
           white-space: nowrap;
           font-size: 10px !important;
         }
 
         .payroll-run-table th:nth-child(1),
-        .payroll-run-table td:nth-child(1) { width: 17%; }
+        .payroll-run-table td:nth-child(1) { min-width: 220px !important; }
 
         .payroll-run-table th:nth-child(2),
-        .payroll-run-table td:nth-child(2) { width: 8%; }
+        .payroll-run-table td:nth-child(2) { min-width: 105px !important; }
 
         .payroll-run-table th:nth-child(3),
-        .payroll-run-table td:nth-child(3) { width: 11%; }
+        .payroll-run-table td:nth-child(3) { min-width: 135px !important; }
 
         .payroll-run-table th:nth-child(4),
-        .payroll-run-table td:nth-child(4) { width: 7%; }
+        .payroll-run-table td:nth-child(4) { min-width: 95px !important; }
 
         .payroll-run-table th:nth-child(5),
-        .payroll-run-table td:nth-child(5) { width: 10%; }
+        .payroll-run-table td:nth-child(5) { min-width: 125px !important; }
 
         .payroll-run-table th:nth-child(6),
-        .payroll-run-table td:nth-child(6) { width: 10%; }
+        .payroll-run-table td:nth-child(6) { min-width: 135px !important; }
 
         .payroll-run-table th:nth-child(7),
-        .payroll-run-table td:nth-child(7) { width: 18%; }
+        .payroll-run-table td:nth-child(7) { min-width: 190px !important; }
 
         .payroll-run-table th:nth-child(8),
-        .payroll-run-table td:nth-child(8) { width: 19%; }
+        .payroll-run-table td:nth-child(8) { min-width: 160px !important; }
 
         .payroll-run-table .payroll-run-actions {
           flex-wrap: nowrap !important;
@@ -5294,8 +5703,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-result-table th:nth-child(8),
         .payroll-result-table td:nth-child(8) {
-          min-width: 200px;
-          white-space: normal;
+          min-width: 220px;
+          white-space: nowrap !important;
         }
 
         .payroll-result-table th:nth-child(9),
@@ -5315,8 +5724,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-result-table th:nth-child(14),
         .payroll-result-table td:nth-child(14) {
-          min-width: 175px;
-          white-space: normal;
+          min-width: 190px;
+          white-space: nowrap !important;
         }
 
         .payroll-tax-source {
@@ -5324,7 +5733,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         }
 
         .payroll-tax-source small {
-          white-space: normal;
+          white-space: nowrap;
         }
 
         .payroll-results-full-window-layer {
@@ -5546,7 +5955,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
             overscroll-behavior-y: contain;
           }
 
-          .payroll-results-full-window .payroll-result-table {
+          .payroll-results-full-window .payroll-result-scroll-shell {
             display: none !important;
           }
 
@@ -5765,10 +6174,12 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
         @media (max-width: 980px) {
           .payroll-run-table {
             overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior-x: contain;
           }
 
           .payroll-run-table table {
-            min-width: 820px !important;
+            min-width: 1120px !important;
           }
         }
 
@@ -7038,8 +7449,12 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           </span>
         </div>
 
-        <div className="table-wrap payroll-run-table">
-          <table>
+        <div className="payroll-horizontal-scroll-shell payroll-run-scroll-shell">
+          <div
+            ref={runTableScrollRef}
+            className="table-wrap payroll-run-table"
+          >
+            <table>
             <thead>
               <tr>
                 <th>Run</th>
@@ -7102,7 +7517,14 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </div>
+
+          <PayrollContainedScrollbar
+            scrollRef={runTableScrollRef}
+            refreshKey={`${runTableRows.length}:${runTablePage}:${runRowsPerPage}:${runTableSearch}`}
+            ariaLabel="Recent payroll runs horizontal scrollbar"
+          />
         </div>
 
         {renderPayrollSectionPagination(
@@ -7441,12 +7863,26 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
             })}
           </div>        ) : null}
 
+        <div className="payroll-horizontal-scroll-shell payroll-result-scroll-shell">
         <div
+          ref={resultTableScrollRef}
           className="table-wrap payroll-result-table"
+          role="region"
+          aria-label="Payroll results table. Scroll horizontally to view all columns."
+          tabIndex={0}
+          onKeyDown={handleResultTableKeyDown}
           onPointerDown={startResultTableDrag}
           onPointerMove={moveResultTableDrag}
           onPointerUp={endResultTableDrag}
           onPointerCancel={endResultTableDrag}
+          onPointerLeave={(event) => {
+            if (
+              resultTableDragRef.current.active &&
+              resultTableDragRef.current.pointerType !== 'touch'
+            ) {
+              endResultTableDrag(event);
+            }
+          }}
         >
           <table>
             <thead>
@@ -7600,6 +8036,13 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
               })}
             </tbody>
           </table>
+        </div>
+
+        <PayrollContainedScrollbar
+          scrollRef={resultTableScrollRef}
+          refreshKey={`${resultTableRows.length}:${resultTablePage}:${resultRowsPerPage}:${resultTableSearch}:${resultTableFullWindow}`}
+          ariaLabel="Payroll results horizontal scrollbar"
+        />
         </div>
 
         {renderPayrollSectionPagination(
