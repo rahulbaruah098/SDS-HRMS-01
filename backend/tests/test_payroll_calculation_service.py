@@ -593,6 +593,34 @@ class PayrollCalculationServiceTests(unittest.TestCase):
 
         self.assertIn('"net_amount": 19020', encoded)
 
+    def test_historical_mid_month_salary_revision_has_explicit_proration(self) -> None:
+        result = self.calculate(
+            attendance={
+                "total_days": 31,
+                "working_days": 31,
+                "paid_leave_days": 0,
+                "lwp_days": 0,
+            },
+            inputs={
+                "salary_proration_days": 14,
+                "salary_proration_total_days": 31,
+                "tds_amount": 0,
+            },
+        )
+
+        self.assertEqual(result["attendance"]["salary_proration_days"], 14)
+        self.assertAlmostEqual(
+            result["attendance"]["salary_proration_factor"],
+            17 / 31,
+            places=6,
+        )
+        self.assertTrue(
+            any(
+                line["code"] == "salary_proration_deduction"
+                for line in result["deductions"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

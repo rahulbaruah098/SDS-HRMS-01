@@ -584,7 +584,9 @@ def activate_salary_structure(salary_structure_id: str):
     )
 
     return _success(
-        "Salary structure activated successfully.",
+        ("Historical salary structure approved successfully."
+         if structure.get("activation_type") == "historical"
+         else "Salary structure activated successfully."),
         salary_structure=structure,
     )
 
@@ -1442,6 +1444,7 @@ def _assert_no_mid_month_revision(
     if (
         effective_from
         and period_start < effective_from <= period_end
+        and safe_str(document.get("activation_type")) != "historical"
     ):
         raise PayrollConfigError(
             f"{label} becomes effective on {effective_from.isoformat()}, which is "
@@ -6623,6 +6626,23 @@ def calculate_monthly_payroll():
                 raw_employee_inputs,
                 employee,
             )
+
+            # Historical revisions may begin during the selected month. Pass
+            # the uncovered days to the pure calculator so the payslip gets an
+            # explicit salary-proration deduction instead of being rejected as
+            # an unsupported mid-month revision.
+            salary_effective_from = _date_only(salary_structure.get("effective_from"))
+            if (
+                salary_effective_from
+                and period_start < salary_effective_from <= period_end
+                and safe_str(salary_structure.get("activation_type")) == "historical"
+            ):
+                calculation_inputs["salary_proration_days"] = (
+                    salary_effective_from - period_start
+                ).days
+                calculation_inputs["salary_proration_total_days"] = (
+                    period_end - period_start
+                ).days + 1
 
             # Payroll tax is never estimated here. The calculation receives
             # only the effective disabled/manual/external instruction resolved

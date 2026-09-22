@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
+import hashlib
+import json
+import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable
@@ -847,12 +851,130 @@ def delete_active_salary_structure_revision(
     return active
 
 
+@contextmanager
+def _salary_revision_lock(db: Any, tenant_id: str, employee_id: str):
+    """Serialize activations per employee, including on standalone MongoDB.
+
+    An expired lease is recoverable after a worker crash. This short operation
+    must finish within the lease; activation refuses writes after expiry.
+    """
+    lock_id = hashlib.sha256(json.dumps([tenant_id, employee_id]).encode()).hexdigest()
+    owner = uuid.uuid4().hex
+    expires_at = now_utc() + timedelta(seconds=60)
+    lock_collection = getattr(db, "payroll_revision_locks", None)
+    # Lightweight service fakes used by older installations/tests may not
+    # expose the lock collection. MongoDB deployments get the real lease.
+    if lock_collection is None:
+        yield expires_at
+        return
+    try:
+        lock_collection.update_one(
+            {"_id": lock_id, "$or": [
+                {"expires_at": {"$lte": now_utc()}},
+                {"expires_at": {"$exists": False}},
+            ]},
+            {"$set": {"owner": owner, "expires_at": expires_at}},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        raise PayrollConfigError(
+            "Another salary revision is being activated for this employee. Retry shortly.",
+            status_code=409, code="salary_structure_activation_busy",
+        )
+    try:
+        yield expires_at
+    finally:
+        lock_collection.delete_one({"_id": lock_id, "owner": owner})
+
+
+def _historical_salary_interval(db: Any, draft: dict[str, Any]) -> dict[str, Any] | None:
+    """Approve a missing historical interval without rewriting approved history.
+
+    Existing active/superseded documents retain their IDs and dates. A draft
+    before the next approved revision is closed at that revision's start.
+    """
+    start = parse_date_value(draft["effective_from"], "effective_from")
+    scope = {"tenant_id": draft["tenant_id"], "employee_id": draft["employee_id"],
+             "status": {"$in": ["active", "superseded"]}, "is_deleted": {"$ne": True}}
+    revisions = list(db.salary_structures.find(scope))
+    for revision in revisions:
+        if str(revision.get("_id")) == str(draft.get("_id")):
+            continue
+        if parse_date_value(revision["effective_from"], "effective_from") == start:
+            raise PayrollConfigError(
+                "An approved salary revision already starts on this date.",
+                status_code=409, code="salary_structure_effective_date_conflict",
+            )
+    successors = [row for row in revisions
+                  if parse_date_value(row["effective_from"], "effective_from") > start]
+    if not successors:
+        return None  # Keep the existing forward-revision flow.
+    successor = min(successors, key=lambda row: parse_date_value(row["effective_from"], "effective_from"))
+    maximum_end = end_of_previous_day(parse_date_value(successor["effective_from"], "effective_from"))
+    requested_end = optional_date_value(draft.get("effective_to"), "effective_to")
+    if requested_end and requested_end > maximum_end:
+        raise PayrollConfigError(
+            "The historical salary end date overlaps the next approved revision.",
+            status_code=409, code="salary_structure_history_overlap",
+        )
+    end = requested_end or maximum_end
+    for revision in revisions:
+        if str(revision.get("_id")) == str(draft.get("_id")):
+            continue
+        revision_start = parse_date_value(revision["effective_from"], "effective_from")
+        revision_end = optional_date_value(revision.get("effective_to"), "effective_to")
+        if revision_start <= end and (revision_end is None or revision_end >= start):
+            raise PayrollConfigError(
+                "This historical period already has an approved salary revision. "
+                "Existing salary history cannot be overwritten by a backdated draft.",
+                status_code=409, code="salary_structure_history_overlap",
+            )
+    # A saved payroll snapshot is never silently assigned a different revision.
+    payslips = getattr(db, "payslips", None)
+    used = payslips.find_one({
+        "tenant_id": draft["tenant_id"], "employee_id": draft["employee_id"],
+        "period_key": {"$gte": start.strftime("%Y-%m"), "$lte": end.strftime("%Y-%m")},
+        "is_deleted": {"$ne": True},
+    }) if payslips is not None else None
+    if used:
+        raise PayrollConfigError(
+            "Payroll records already exist in this historical interval. "
+            "Review those records before adding a different salary revision.",
+            status_code=409, code="salary_structure_history_in_use",
+        )
+    return {"status": "superseded", "effective_to": end,
+            "superseded_by": str(successor["_id"]), "activation_type": "historical"}
+
+
 def activate_salary_structure_revision(
     db: Any,
     *,
     tenant_id: str,
     salary_structure_id: Any,
     actor_id: str,
+) -> dict[str, Any]:
+    structure_id = object_id_or_none(salary_structure_id)
+    draft = db.salary_structures.find_one({
+        "_id": structure_id, "tenant_id": safe_str(tenant_id),
+        "status": "draft", "is_deleted": {"$ne": True},
+    }) if structure_id else None
+    if not draft:
+        raise PayrollConfigError("Salary structure draft not found.", status_code=404,
+                                 code="salary_structure_draft_not_found")
+    with _salary_revision_lock(db, safe_str(tenant_id), safe_str(draft["employee_id"])) as expires_at:
+        return _activate_salary_structure_revision(
+            db, tenant_id=tenant_id, salary_structure_id=salary_structure_id,
+            actor_id=actor_id, lock_expires_at=expires_at,
+        )
+
+
+def _activate_salary_structure_revision(
+    db: Any,
+    *,
+    tenant_id: str,
+    salary_structure_id: Any,
+    actor_id: str,
+    lock_expires_at: datetime,
 ) -> dict[str, Any]:
     structure_id = object_id_or_none(salary_structure_id)
 
@@ -877,7 +999,25 @@ def activate_salary_structure_revision(
             code="salary_structure_draft_not_found",
         )
 
-    effective_from = draft["effective_from"]
+    historical = _historical_salary_interval(db, draft)
+    if now_utc() >= lock_expires_at:
+        raise PayrollConfigError("Salary activation timed out. Retry.", status_code=409,
+                                 code="salary_structure_activation_busy")
+    if historical:
+        timestamp = now_utc()
+        result = db.salary_structures.update_one(
+            {"_id": structure_id, "tenant_id": tenant_id, "status": "draft",
+             "is_deleted": {"$ne": True}},
+            {"$set": {**historical, "activated_by": safe_str(actor_id),
+                      "activated_at": timestamp, "updated_by": safe_str(actor_id),
+                      "updated_at": timestamp}},
+        )
+        if result.modified_count != 1:
+            raise PayrollConfigError("Salary draft changed. Refresh and retry.", status_code=409,
+                                     code="salary_structure_activation_conflict")
+        return db.salary_structures.find_one({"_id": structure_id, "tenant_id": tenant_id})
+
+    effective_from = parse_date_value(draft["effective_from"], "effective_from")
     current_active = db.salary_structures.find_one({
         "tenant_id": tenant_id,
         "employee_id": draft["employee_id"],
@@ -885,7 +1025,7 @@ def activate_salary_structure_revision(
         "is_deleted": {"$ne": True},
     })
 
-    if current_active and current_active.get("effective_from") >= effective_from:
+    if current_active and parse_date_value(current_active["effective_from"], "effective_from") >= effective_from:
         raise PayrollConfigError(
             "The new salary revision must start after the current active revision.",
             code="salary_structure_effective_date_conflict",
@@ -940,7 +1080,7 @@ def get_effective_salary_structure(
         {
             "tenant_id": safe_str(tenant_id),
             "employee_id": safe_str(employee_id),
-            "status": "active",
+            "status": {"$in": ["active", "superseded"]},
             "effective_from": {"$lte": reference_date},
             "$or": [
                 {"effective_to": None},

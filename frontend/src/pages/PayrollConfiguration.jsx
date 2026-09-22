@@ -1368,7 +1368,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     }
 
     const confirmed = await alerts.confirm(
-      'Activate this salary revision? The current active revision will be superseded from the new effective date.',
+      'Approve this salary revision? A backdated revision fills an uncovered historical period and ends before the next approved revision. A later revision replaces the current one from its start date. Existing payslips are preserved.',
       {
         title: 'Activate Salary Revision',
         confirmText: 'Activate Revision',
@@ -1389,16 +1389,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
 
     try {
       setSavingSalary(true);
-      await api(`/payroll/salary-structure/${encodeURIComponent(id)}/activate`, {
+      const activation = await api(`/payroll/salary-structure/${encodeURIComponent(id)}/activate`, {
         method: 'POST',
         body: JSON.stringify(tenantParams()),
       });
       await loadSalaryHistory(selectedEmployeeId);
+      HEAD
       showInlineFeedback(
         'salary-actions',
         'success',
-        'Salary structure revision activated.',
-        'Revision Activated',
+        activation.salary_structure?.activation_type === 'historical'
+          ? 'Historical salary revision approved. The current salary revision is unchanged.'
+          : 'Salary structure revision activated.',
+        'Revision Approved',
       );
     } catch (error) {
       showInlineFeedback(
@@ -2723,6 +2726,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                     <div>
                       <span className="payroll-config-kicker">Audit history</span>
                       <h2>Salary revision history</h2>
+                      <p>For an earlier payroll month, save and approve a revision for the missing historical period. Approved dates must not overlap.</p>
                     </div>
                     <FileClock size={22} />
                   </div>
@@ -2738,7 +2742,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                         <div>
                           <strong>Version {item.version || '—'}</strong>
                           <span className={`payroll-config-status status-${normalizeKey(item.status)}`}>
-                            {statusLabel(item.status)}
+                            {item.activation_type === 'historical' ? 'Historical' : statusLabel(item.status)}
                           </span>
                         </div>
                         <p>
