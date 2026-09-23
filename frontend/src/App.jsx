@@ -756,6 +756,57 @@ function normalizePageKey(page) {
   return PAGE_ALIASES[key] || PAGE_ALIASES[key.toLowerCase()] || key;
 }
 
+function getHrmsPathForPage(page = 'dashboard') {
+  const normalizedPage = normalizePageKey(page);
+
+  if (normalizedPage === 'dashboard') {
+    return HRMS_HOME_PATH;
+  }
+
+  return `${HRMS_HOME_PATH}/${normalizedPage.replaceAll('_', '-')}`;
+}
+
+function getPageFromHrmsPath(pathname) {
+  const path = normalizePublicPath(pathname);
+
+  if (isBillingPath(path)) {
+    return 'billing';
+  }
+
+  if (isPremiumRequestsPath(path)) {
+    return 'premium_requests';
+  }
+
+  if (isSubscriptionExpiredPath(path)) {
+    return 'subscription_expired';
+  }
+
+  if (path === HRMS_HOME_PATH || path === `${HRMS_HOME_PATH}/dashboard`) {
+    return 'dashboard';
+  }
+
+  if (!path.startsWith(`${HRMS_HOME_PATH}/`)) {
+    return '';
+  }
+
+  const routeSegment = path
+    .slice(`${HRMS_HOME_PATH}/`.length)
+    .split('/')[0]
+    .trim();
+
+  if (!routeSegment) {
+    return 'dashboard';
+  }
+
+  try {
+    return normalizePageKey(
+      decodeURIComponent(routeSegment).replaceAll('-', '_'),
+    );
+  } catch {
+    return normalizePageKey(routeSegment.replaceAll('-', '_'));
+  }
+}
+
 function moduleAccessKey(page) {
   const normalizedPage = normalizePageKey(page);
 
@@ -1343,17 +1394,15 @@ export default function App() {
   const [user, setUser] = useState(initialUser);
   const [page, setPage] = useState(() => {
     const pathname = getBrowserPathname();
+    const routePage = getPageFromHrmsPath(pathname);
 
-    if (isBillingPath(pathname)) {
-      return 'billing';
-    }
-
-    if (isPremiumRequestsPath(pathname)) {
-      return 'premium_requests';
-    }
-
-    if (isSubscriptionExpiredPath(pathname)) {
-      return 'subscription_expired';
+    /*
+      A concrete /hrms/<page> URL is the strongest source of truth after a
+      reload. Keep the existing hidden-page handoff for /hrms and public-entry
+      flows where no specific HRMS module is encoded in the URL.
+    */
+    if (routePage && routePage !== 'dashboard') {
+      return routePage;
     }
 
     try {
@@ -1364,10 +1413,10 @@ export default function App() {
         return normalizePageKey(hiddenPage);
       }
     } catch {
-      // Ignore localStorage errors and use dashboard.
+      // Ignore localStorage errors and use the browser route/dashboard.
     }
 
-    return 'dashboard';
+    return routePage || 'dashboard';
   });
   const [celebrations, setCelebrations] = useState([]);
   const [currentPath, setCurrentPath] = useState(() => getBrowserPathname());
@@ -1381,6 +1430,23 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
+
+  const effectivePage = useMemo(() => {
+    if (!normalizedUser || !isExpiredOrSuspendedTenant(normalizedUser)) {
+      return normalizedPage;
+    }
+
+    const recoveryPages = new Set([
+      'billing',
+      'subscription_expired',
+      'profile',
+    ]);
+
+    return recoveryPages.has(normalizedPage)
+      ? normalizedPage
+      : 'subscription_expired';
+  }, [normalizedPage, normalizedUser]);
+
   const isTrialRegistrationRoute = useMemo(
     () => isApplyDemoRegistrationPath(currentPath),
     [currentPath],
@@ -1401,13 +1467,22 @@ export default function App() {
 
   useEffect(() => {
     function syncPath() {
-      setCurrentPath(getBrowserPathname());
+      const pathname = getBrowserPathname();
+      const routePage = getPageFromHrmsPath(pathname);
+
+      setCurrentPath(pathname);
+
+      if (routePage) {
+        setPage(routePage);
+      }
     }
 
     window.addEventListener('popstate', syncPath);
+    window.addEventListener('app:navigation', syncPath);
 
     return () => {
       window.removeEventListener('popstate', syncPath);
+      window.removeEventListener('app:navigation', syncPath);
     };
   }, []);
 
@@ -1492,7 +1567,8 @@ export default function App() {
 
     if (
       normalizedPage === 'billing' ||
-      normalizedPage === 'subscription_expired'
+      normalizedPage === 'subscription_expired' ||
+      normalizedPage === 'profile'
     ) {
       return;
     }
@@ -1535,7 +1611,21 @@ export default function App() {
     }
   }, [normalizedUser, normalizedPage]);
 
-  function handleSetUser(nextUser) {
+  function normalizeNextUser(nextUser) {
+    const nextEmployee =
+      nextUser.employee ||
+      nextUser.employee_summary ||
+      nextUser.employee_profile ||
+      readStoredEmployee();
+
+    return mergeUserWithEmployeeProfile({
+      ...nextUser,
+      employee: nextEmployee,
+      employee_summary: nextEmployee,
+    });
+  }
+
+  function handleLoginUser(nextUser) {
     if (!nextUser) {
       setUser(null);
       setPage('dashboard');
@@ -1543,19 +1633,7 @@ export default function App() {
       return;
     }
 
-    const nextEmployee =
-      nextUser.employee ||
-      nextUser.employee_summary ||
-      nextUser.employee_profile ||
-      readStoredEmployee();
-
-    setUser(
-      mergeUserWithEmployeeProfile({
-        ...nextUser,
-        employee: nextEmployee,
-        employee_summary: nextEmployee,
-      }),
-    );
+    setUser(normalizeNextUser(nextUser));
 
     try {
       window.history.replaceState({}, '', HRMS_HOME_PATH);
@@ -1567,8 +1645,57 @@ export default function App() {
     setPage('dashboard');
   }
 
-  function handleSetPage(nextPage) {
-    setPage(normalizePageKey(nextPage));
+  function handleSessionUserUpdate(nextUser) {
+    if (!nextUser) {
+      setUser(null);
+      setPage('dashboard');
+      setCelebrations([]);
+      return;
+    }
+
+    /*
+      AppLayout refreshes the current session/profile after mount and after
+      profile updates. Those refreshes must update user data only; they must not
+      reset page state or browser history back to Dashboard.
+    */
+    setUser(normalizeNextUser(nextUser));
+  }
+
+  function handleSetPage(nextPage, options = {}) {
+    const normalizedNextPage = normalizePageKey(nextPage);
+    const shouldSyncUrl = options?.syncUrl !== false;
+    const shouldReplace = options?.replace === true;
+
+    setPage(normalizedNextPage);
+
+    if (!shouldSyncUrl || typeof window === 'undefined') {
+      return;
+    }
+
+    const targetPath = getHrmsPathForPage(normalizedNextPage);
+    const currentBrowserPath = normalizePublicPath(getBrowserPathname());
+    const normalizedTargetPath = normalizePublicPath(targetPath);
+
+    /*
+      Clicking the already-active module must not create duplicate browser
+      history entries. This also keeps Back/Forward predictable.
+    */
+    if (currentBrowserPath === normalizedTargetPath) {
+      setCurrentPath(getBrowserPathname());
+      return;
+    }
+
+    try {
+      if (shouldReplace) {
+        window.history.replaceState({}, '', targetPath);
+      } else {
+        window.history.pushState({}, '', targetPath);
+      }
+
+      setCurrentPath(targetPath);
+    } catch {
+      // Page state still changes normally if browser history is unavailable.
+    }
   }
 
   useEffect(() => {
@@ -1840,7 +1967,7 @@ if (isAccountAccessTrackingRoute) {
 if (!normalizedUser) {
   return (
     <CustomAlertProvider>
-      <Login onLogin={handleSetUser} />
+      <Login onLogin={handleLoginUser} />
     </CustomAlertProvider>
   );
 }
@@ -1849,12 +1976,12 @@ return (
   <CustomAlertProvider>
     <AppLayout
       user={normalizedUser}
-      setUser={handleSetUser}
-      page={normalizedPage}
+      setUser={handleSessionUserUpdate}
+      page={effectivePage}
       setPage={handleSetPage}
     >
       <PageRouter
-        page={normalizedPage}
+        page={effectivePage}
         user={normalizedUser}
         setPage={handleSetPage}
       />

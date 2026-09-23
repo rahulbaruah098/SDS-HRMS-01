@@ -174,10 +174,9 @@ export default function SiteFooter() {
               </p>
 
               <AppStoreBadges
-                compact
-                disabled
-                className="yc-footer-store-badges"
-              />
+  compact
+  className="yc-footer-store-badges"
+/>
             </div>
           </section>
 

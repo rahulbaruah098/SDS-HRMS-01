@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AppStoreBadges, { AppleIcon } from "../components/AppStoreBadges";
 import Icon from "../components/Icon";
@@ -67,6 +67,19 @@ const dayMoments = [
 ];
 
 export default function HomePage() {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+
+    root.classList.add("yc-homepage-active");
+    body.classList.add("yc-homepage-active");
+
+    return () => {
+      root.classList.remove("yc-homepage-active");
+      body.classList.remove("yc-homepage-active");
+    };
+  }, []);
+
   const [roleKey, setRoleKey] = useState("employee");
   const role = roleViews[roleKey];
 
@@ -167,7 +180,7 @@ export default function HomePage() {
               <span><Icon name="shield" /> Secure access</span>
               <span><Icon name="sparkle" /> Saya guidance</span>
             </div>
-            <AppStoreBadges disabled />
+           <AppStoreBadges />
           </header>
 
           <div className="yc-app-device-gallery" aria-label="YourComate app shown on iPhone and Android devices">

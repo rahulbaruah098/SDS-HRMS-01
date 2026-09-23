@@ -260,6 +260,31 @@ function formatDate(value) {
   });
 }
 
+function formatDateTimeParts(value) {
+  if (!value) {
+    return { date: '—', time: '' };
+  }
+
+  const rawValue = typeof value === 'object' && value.$date ? value.$date : value;
+  const parsed = new Date(rawValue);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return { date: safeText(rawValue), time: '' };
+  }
+
+  return {
+    date: parsed.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }),
+    time: parsed.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  };
+}
+
 function statusLabel(value) {
   const status = canonicalPayrollStatus(value);
   const labels = {
@@ -5473,15 +5498,15 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-metric strong {
           width: max-content;
-          max-width: none;
+          max-width: 100%;
           margin-top: 7px !important;
           white-space: nowrap !important;
           overflow: visible !important;
           overflow-wrap: normal !important;
           word-break: normal !important;
-          font-size: clamp(15px, 7.2cqi, 30px) !important;
+          font-size: clamp(18px, 7.4cqi, 32px) !important;
           line-height: 1 !important;
-          letter-spacing: -.035em !important;
+          letter-spacing: -.045em !important;
           font-variant-numeric: tabular-nums;
         }
 
@@ -5546,6 +5571,27 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-page tbody td:last-child {
           border: 0 !important;
+          border-radius: 0 21px 21px 0 !important;
+        }
+
+        .payroll-selector-table tbody tr {
+          display: table-row !important;
+        }
+
+        .payroll-selector-table tbody td,
+        .payroll-selector-table tbody td.payroll-employee-name {
+          display: table-cell !important;
+          height: 72px;
+          min-height: 72px;
+          vertical-align: middle !important;
+          background-clip: padding-box !important;
+        }
+
+        .payroll-selector-table tbody td:first-child {
+          border-radius: 21px 0 0 21px !important;
+        }
+
+        .payroll-selector-table tbody td:last-child {
           border-radius: 0 21px 21px 0 !important;
         }
 
@@ -5616,69 +5662,102 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         .payroll-run-table table {
           width: 100% !important;
-          min-width: 1120px !important;
-          table-layout: auto !important;
+          min-width: 0 !important;
+          table-layout: fixed !important;
         }
 
         .payroll-run-table th,
         .payroll-run-table td {
-          overflow: visible;
+          min-width: 0 !important;
+          overflow: hidden;
           text-overflow: clip;
           white-space: nowrap !important;
         }
 
         .payroll-run-table th {
-          padding: 9px 12px 11px !important;
-          font-size: 9px !important;
-          letter-spacing: .045em !important;
+          padding: 9px 8px 11px !important;
+          font-size: 8.5px !important;
+          letter-spacing: .035em !important;
         }
 
         .payroll-run-table td {
-          padding: 15px 12px !important;
-          font-size: 10px !important;
+          padding: 14px 8px !important;
+          font-size: 9.5px !important;
         }
 
         .payroll-run-table .payroll-employee-name {
           display: block;
-          overflow: visible;
+          overflow: hidden;
           text-overflow: clip;
           white-space: nowrap;
-          font-size: 10px !important;
+          font-size: 9.5px !important;
         }
 
         .payroll-run-table th:nth-child(1),
-        .payroll-run-table td:nth-child(1) { min-width: 220px !important; }
+        .payroll-run-table td:nth-child(1) { width: 14.5% !important; }
 
         .payroll-run-table th:nth-child(2),
-        .payroll-run-table td:nth-child(2) { min-width: 105px !important; }
+        .payroll-run-table td:nth-child(2) {
+          width: 7.5% !important;
+          padding-left: 5px !important;
+          padding-right: 5px !important;
+        }
 
         .payroll-run-table th:nth-child(3),
-        .payroll-run-table td:nth-child(3) { min-width: 135px !important; }
+        .payroll-run-table td:nth-child(3) { width: 11% !important; }
 
         .payroll-run-table th:nth-child(4),
-        .payroll-run-table td:nth-child(4) { min-width: 95px !important; }
+        .payroll-run-table td:nth-child(4) {
+          width: 6.5% !important;
+          max-width: 6.5% !important;
+          text-align: center;
+          font-variant-numeric: tabular-nums;
+        }
 
         .payroll-run-table th:nth-child(5),
-        .payroll-run-table td:nth-child(5) { min-width: 125px !important; }
+        .payroll-run-table td:nth-child(5) { width: 12% !important; }
 
         .payroll-run-table th:nth-child(6),
-        .payroll-run-table td:nth-child(6) { min-width: 135px !important; }
+        .payroll-run-table td:nth-child(6) { width: 12% !important; }
 
         .payroll-run-table th:nth-child(7),
-        .payroll-run-table td:nth-child(7) { min-width: 190px !important; }
+        .payroll-run-table td:nth-child(7) { width: 18% !important; }
 
         .payroll-run-table th:nth-child(8),
-        .payroll-run-table td:nth-child(8) { min-width: 160px !important; }
+        .payroll-run-table td:nth-child(8) { width: 18.5% !important; }
+
+        .payroll-run-updated {
+          white-space: normal !important;
+        }
+
+        .payroll-run-updated > span,
+        .payroll-run-updated > small {
+          display: block;
+          white-space: nowrap;
+        }
+
+        .payroll-run-updated > small {
+          margin-top: 3px;
+          color: #68738f;
+          font-size: 8.5px;
+          font-weight: 750;
+          line-height: 1.2;
+        }
 
         .payroll-run-table .payroll-run-actions {
-          flex-wrap: nowrap !important;
-          gap: 6px !important;
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) !important;
+          align-items: stretch !important;
+          gap: 7px !important;
+          width: 100%;
         }
 
         .payroll-run-table .payroll-run-actions button {
+          width: 100%;
+          min-width: 0;
           min-height: 38px !important;
-          padding: 8px 9px !important;
-          font-size: 9px !important;
+          padding: 8px 8px !important;
+          font-size: 8.5px !important;
         }
 
         .payroll-result-table th:nth-child(1),
@@ -6171,7 +6250,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           }
         }
 
-        @media (max-width: 980px) {
+        @media (max-width: 680px) {
           .payroll-run-table {
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch;
@@ -6179,7 +6258,8 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
           }
 
           .payroll-run-table table {
-            min-width: 1120px !important;
+            min-width: 820px !important;
+            table-layout: fixed !important;
           }
         }
 
@@ -6398,7 +6478,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         @media (max-width: 680px) {
           .payroll-metric strong {
-            font-size: clamp(15px, 6.6cqi, 26px) !important;
+            font-size: clamp(18px, 7.2cqi, 29px) !important;
           }
 
           .payroll-page .table-wrap,
@@ -6465,7 +6545,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
 
         @media (max-width: 430px) {
           .payroll-metric strong {
-            font-size: clamp(14px, 6.2cqi, 23px) !important;
+            font-size: clamp(17px, 6.8cqi, 26px) !important;
           }
 
           .payroll-run-actions button,
@@ -7472,6 +7552,9 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                 const runId = resolveRunId(run);
                 const totals = resolveRunTotals(run);
                 const isActive = resolveRunId(activeRun) === runId;
+                const updatedDisplay = formatDateTimeParts(
+                  run.updated_at || run.calculated_at || run.created_at,
+                );
 
                 return (
                   <tr
@@ -7496,7 +7579,10 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                     <td>{toNumber(run.employee_count, 0)}</td>
                     <td>{formatCurrency(totals.cost_to_company)}</td>
                     <td>{formatCurrency(totals.net_amount)}</td>
-                    <td>{formatDate(run.updated_at || run.calculated_at || run.created_at)}</td>
+                    <td className="payroll-run-updated">
+                      <span>{updatedDisplay.date}</span>
+                      {updatedDisplay.time ? <small>{updatedDisplay.time}</small> : null}
+                    </td>
                     <td>
                       <div className="payroll-run-actions">
                         <button

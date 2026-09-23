@@ -1992,19 +1992,6 @@ async function handleAssign(projectId, payload) {
             0 28px 48px rgba(34, 38, 110, .13);
         }
 
-        .projects-hero::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 180px;
-          height: 180px;
-          right: 8%;
-          bottom: -100px;
-          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-          background: linear-gradient(145deg, rgba(105,217,208,.30), rgba(132,181,241,.28));
-          transform: rotate(-18deg);
-        }
-
         .projects-hero h1 {
           max-width: 900px;
           margin: 0;

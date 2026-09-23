@@ -473,20 +473,6 @@ function handleCsvExport() {
           pointer-events:none;
         }
 
-        .leave-management-page .leave-hero::after{
-          content:"";
-          position:absolute;
-          z-index:-1;
-          width:clamp(165px,20vw,290px);
-          aspect-ratio:1;
-          right:clamp(-110px,-7vw,-55px);
-          top:clamp(-118px,-8vw,-60px);
-          border:1px solid rgba(65,55,161,.12);
-          border-radius:34% 66% 58% 42% / 44% 38% 62% 56%;
-          background:linear-gradient(145deg,rgba(105,217,208,.72),rgba(121,189,242,.72));
-          transform:rotate(18deg);
-        }
-
         .leave-management-page .leave-hero>div{min-width:0;max-width:860px}
         .leave-management-page .kicker{
           display:inline-flex;

@@ -616,19 +616,6 @@ async function handleSubmit(event) {
               0 28px 48px rgba(34, 38, 110, 0.13);
           }
 
-          .apply-leave-hero::before {
-            content: "";
-            position: absolute;
-            z-index: -1;
-            width: 150px;
-            height: 150px;
-            right: 9%;
-            bottom: -84px;
-            border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-            background: linear-gradient(145deg, rgba(105, 217, 208, .30), rgba(132, 181, 241, .28));
-            transform: rotate(-18deg);
-          }
-
           .apply-leave-kicker,
           .apply-leave-section-kicker {
             display: inline-flex;

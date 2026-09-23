@@ -253,33 +253,6 @@ const employeeOrganisation = String(
             0 28px 48px rgba(34, 38, 110, 0.13);
         }
 
-        .employee-directory-hero::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: -2;
-          pointer-events: none;
-          opacity: 0.42;
-          background-image:
-            linear-gradient(rgba(65, 55, 161, 0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(65, 55, 161, 0.035) 1px, transparent 1px);
-          background-size: 42px 42px;
-        }
-
-        .employee-directory-hero::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: clamp(165px, 20vw, 290px);
-          aspect-ratio: 1;
-          right: clamp(-110px, -7vw, -55px);
-          top: clamp(-118px, -8vw, -60px);
-          border: 1px solid rgba(65, 55, 161, 0.12);
-          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
-          background: linear-gradient(145deg, rgba(105, 217, 208, 0.72), rgba(121, 189, 242, 0.72));
-          transform: rotate(18deg);
-        }
-
         .employee-directory-hero-content {
           position: relative;
           z-index: 2;
@@ -583,18 +556,6 @@ const employeeOrganisation = String(
             0 18px 30px rgba(15, 20, 75, 0.09);
         }
 
-        .employee-directory-card::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 120px;
-          aspect-ratio: 1;
-          top: -54px;
-          right: -45px;
-          border-radius: 46% 54% 58% 42% / 53% 44% 56% 47%;
-          background: linear-gradient(145deg, rgba(105, 217, 208, 0.24), rgba(121, 189, 242, 0.24));
-          transform: rotate(18deg);
-        }
 
         .employee-directory-card:hover {
           transform: translateY(-3px);

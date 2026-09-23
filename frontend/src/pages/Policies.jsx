@@ -285,33 +285,6 @@ export default function Policies({ user }) {
             0 28px 48px rgba(34, 38, 110, 0.13);
         }
 
-        .policy-hero::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: -2;
-          pointer-events: none;
-          opacity: 0.42;
-          background-image:
-            linear-gradient(rgba(65, 55, 161, 0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(65, 55, 161, 0.035) 1px, transparent 1px);
-          background-size: 42px 42px;
-        }
-
-        .policy-hero::after {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: clamp(160px, 19vw, 285px);
-          aspect-ratio: 1;
-          right: clamp(-105px, -7vw, -55px);
-          top: clamp(-115px, -8vw, -60px);
-          border: 1px solid rgba(65, 55, 161, 0.12);
-          border-radius: 34% 66% 58% 42% / 44% 38% 62% 56%;
-          background: linear-gradient(145deg, rgba(105, 217, 208, 0.72), rgba(121, 189, 242, 0.72));
-          transform: rotate(18deg);
-        }
-
         .policy-hero-inner {
           position: relative;
           z-index: 2;

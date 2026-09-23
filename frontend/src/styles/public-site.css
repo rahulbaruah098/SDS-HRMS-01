@@ -4113,16 +4113,19 @@ body.yc-about-sayanant-active .public-desktop-nav {
   padding: clamp(26px, 3.2vw, 42px);
   align-self: center;
   justify-self: stretch;
+
+  align-items: center;
+  text-align: center;
 }
 
 .yc-profile-page-sayanant .yc-sayanant-hero-logo {
   width: clamp(170px, 15vw, 240px);
   min-height: clamp(72px, 7vw, 108px);
-  margin: 0 0 auto;
+  margin: 0 auto auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  align-self: stretch;
+  justify-content: center;
+  align-self: center;
 }
 
 .yc-profile-page-sayanant .yc-sayanant-hero-logo img {
@@ -4131,7 +4134,7 @@ body.yc-about-sayanant-active .public-desktop-nav {
   max-width: 240px;
   height: clamp(72px, 7vw, 108px);
   object-fit: contain;
-  object-position: right center;
+  object-position: center;
 }
 
 .yc-profile-page-sayanant .yc-sayanant-website-button {
@@ -4980,6 +4983,313 @@ body.yc-about-sayanant-active .public-desktop-nav {
   box-shadow: 6px 7px 0 var(--yc-sg-mint-shadow);
 }
 
+
+/* =====================================================================
+   YOURCOMATE / MEET OUR DEVELOPING TEAM
+   Text-only editorial team layout.
+   Uses the same soft card language as the rest of the YourComate profile.
+===================================================================== */
+
+.yc-profile-page-yourcomate .yc-ycprofile-team {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.99),
+      rgba(249, 250, 255, 0.98)
+    );
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team > .page-width {
+  position: relative;
+  z-index: 1;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-editorial {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.95fr) minmax(300px, 0.72fr);
+  gap: clamp(34px, 4.5vw, 72px);
+  align-items: stretch;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-roster {
+  min-width: 0;
+  display: grid;
+  gap: clamp(18px, 2vw, 24px);
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member {
+  --yc-team-card-bg: #edf6ff;
+  --yc-team-card-shadow: #b9d7ff;
+  --yc-team-role: #2f6dce;
+
+  min-width: 0;
+  min-height: 188px;
+  padding: clamp(22px, 2.2vw, 28px);
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: clamp(18px, 2vw, 26px);
+  align-items: stretch;
+  border: 1px solid var(--yc-yc-line);
+  border-radius: 22px;
+  color: var(--yc-yc-ink);
+  background: var(--yc-team-card-bg);
+  box-shadow: 5px 6px 0 var(--yc-team-card-shadow);
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member:nth-child(2) {
+  --yc-team-card-bg: #eaf8fa;
+  --yc-team-card-shadow: #aee6e8;
+  --yc-team-role: #1b8d99;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member:nth-child(3) {
+  --yc-team-card-bg: #f1efff;
+  --yc-team-card-shadow: #c9c0ff;
+  --yc-team-role: #7254da;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-marker {
+  min-width: 0;
+  padding-right: clamp(16px, 1.7vw, 24px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border-right: 1px solid rgba(159, 169, 205, 0.34);
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-marker > span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--yc-team-role);
+  font-family: var(--yc-ui);
+  font-size: 10px;
+  font-weight: 780;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-marker > small {
+  display: block;
+  max-width: 78px;
+  color: rgba(21, 21, 47, 0.54);
+  font-family: var(--yc-ui);
+  font-size: 7.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-copy {
+  min-width: 0;
+  padding: 2px 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-copy h3 {
+  margin: 0;
+  color: var(--yc-yc-ink);
+  font-family: var(--yc-display);
+  font-size: clamp(27px, 2.2vw, 36px);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-copy > strong {
+  margin-top: 8px;
+  color: var(--yc-team-role);
+  font-family: var(--yc-ui);
+  font-size: clamp(11px, 0.9vw, 13px);
+  font-weight: 720;
+  line-height: 1.4;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-copy > p {
+  max-width: 650px;
+  margin: 14px 0 0;
+  color: var(--yc-yc-muted);
+  font-size: clamp(11px, 0.82vw, 12.5px);
+  font-weight: 400;
+  line-height: 1.62;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-areas {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(159, 169, 205, 0.28);
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-areas > span {
+  display: block;
+  color: rgba(21, 21, 47, 0.46);
+  font-size: 7.5px;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-member-areas > p {
+  margin: 6px 0 0;
+  color: rgba(21, 21, 47, 0.68);
+  font-size: 9.5px;
+  font-weight: 560;
+  line-height: 1.5;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-wordmark {
+  min-width: 0;
+  padding:
+    clamp(20px, 2vw, 34px)
+    0
+    clamp(20px, 2vw, 34px)
+    clamp(34px, 4vw, 66px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-left: 1px solid rgba(21, 21, 47, 0.12);
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-wordmark > small {
+  display: block;
+  color: #6558d9;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.17em;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+  margin: 24px 0 0;
+  display: grid;
+  color: var(--yc-yc-ink);
+  font-family: var(--yc-display);
+  font-size: clamp(32px, 3.45vw, 52px);
+  font-weight: 550;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 span {
+  display: block;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-wordmark > p {
+  max-width: 330px;
+  margin: 32px 0 0;
+  color: var(--yc-yc-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.yc-profile-page-yourcomate .yc-ycprofile-team-note {
+  max-width: 760px;
+  margin: 26px 0 0;
+  color: #7a8092;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1120px) {
+  .yc-profile-page-yourcomate .yc-ycprofile-team-editorial {
+    grid-template-columns: minmax(0, 1.7fr) minmax(250px, 0.72fr);
+    gap: 30px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member {
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member-marker {
+    padding-right: 16px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark {
+    padding-left: 30px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+    font-size: clamp(32px, 3.45vw, 52px);
+  }
+}
+
+@media (max-width: 860px) {
+  .yc-profile-page-yourcomate .yc-ycprofile-team-editorial {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark {
+    order: -1;
+    padding: 0 0 30px;
+    border-left: 0;
+    border-bottom: 1px solid rgba(21, 21, 47, 0.12);
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+    font-size: clamp(36px, 11vw, 50px);
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark > p {
+    max-width: 560px;
+    margin-top: 24px;
+  }
+}
+
+@media (max-width: 620px) {
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member {
+    min-height: 0;
+    padding: 20px;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    border-radius: 18px;
+    box-shadow: 3px 4px 0 var(--yc-team-card-shadow);
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member-marker {
+    padding: 0 0 14px;
+    flex-direction: row;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid rgba(159, 169, 205, 0.28);
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member-marker > span {
+    width: 34px;
+    height: 34px;
+    font-size: 9px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member-marker > small {
+    max-width: 180px;
+    text-align: right;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-member-copy h3 {
+    font-size: 28px;
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+   font-size: clamp(36px, 11vw, 50px);
+  }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-note {
+    margin-top: 20px;
+  }
+}
+
 @media (max-width: 1180px) {
   .yc-sg-values-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5586,6 +5896,12 @@ body.yc-about-yourcomate-active .public-desktop-nav {
   padding: clamp(26px, 3.2vw, 42px);
   align-self: center;
   justify-self: stretch;
+  align-items: center;
+  text-align: center;
+}
+
+.yc-profile-page-yourcomate .yc-profile-hero-board > span {
+  align-self: center;
 }
 
 .yc-profile-page-yourcomate .yc-profile-hero-board > span svg {
@@ -5601,6 +5917,11 @@ body.yc-about-yourcomate-active .public-desktop-nav {
   font-size: clamp(38px, min(4.2vw, 5.8vh), 62px);
 }
 
+.yc-profile-page-yourcomate .yc-profile-hero-board > div {
+  width: 100%;
+  justify-content: center;
+}
+
 .yc-profile-page-yourcomate .yc-profile-hero-board > div p {
   font-size: 11px;
 }
@@ -5610,6 +5931,8 @@ body.yc-about-yourcomate-active .public-desktop-nav {
   min-width: 0;
   padding: clamp(66px, 7vw, 106px) 0;
   contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
 }
 
 .yc-profile-page-yourcomate .yc-ycprofile-section + .yc-ycprofile-section {
@@ -13876,19 +14199,6 @@ body.yc-resource-page-active .public-desktop-nav {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 .yc-company-values-grid article header > span,
 .yc-support-options-grid > a > span,
 .yc-contact-intro-card > span {
@@ -13899,131 +14209,6 @@ body.yc-resource-page-active .public-desktop-nav {
   background: rgba(255, 255, 255, 0.8);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 /* Company values and security */

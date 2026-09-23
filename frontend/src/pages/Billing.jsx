@@ -2209,20 +2209,6 @@ export default function Billing({ user = {}, setPage }) {
           background-size:42px 42px;
         }
 
-        .billing-page>div:first-of-type::after{
-          content:"";
-          position:absolute;
-          z-index:-1;
-          width:clamp(170px,21vw,300px);
-          aspect-ratio:1;
-          right:clamp(-120px,-8vw,-65px);
-          top:clamp(-125px,-8vw,-70px);
-          border:1px solid rgba(65,55,161,.12);
-          border-radius:34% 66% 58% 42% / 44% 38% 62% 56%;
-          background:linear-gradient(145deg,rgba(105,217,208,.70),rgba(121,189,242,.70));
-          transform:rotate(18deg);
-        }
-
         .billing-page h1,
         .billing-page h2,
         .billing-page h3{

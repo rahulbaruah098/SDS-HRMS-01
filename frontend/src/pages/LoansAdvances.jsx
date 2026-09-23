@@ -1224,16 +1224,6 @@ export default function LoansAdvances({ user = {} }) {
             linear-gradient(135deg, rgba(247, 249, 255, 0.98), rgba(255, 255, 255, 0.98));
         }
 
-        .la-hero::after {
-          position: absolute;
-          right: -40px;
-          bottom: -65px;
-          width: 190px;
-          height: 190px;
-          border-radius: 50%;
-          background: rgba(67, 97, 238, 0.07);
-          content: '';
-        }
 
         .la-hero-content,
         .la-hero-actions {

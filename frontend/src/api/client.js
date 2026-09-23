@@ -1471,6 +1471,15 @@ const SAAS_BILLING_ERROR_CODES = new Set([
   'tenant_suspended',
 ]);
 
+const SAAS_RECOVERY_BROWSER_PATHS = new Set([
+  '/hrms/billing',
+  '/hrms/subscription-expired',
+  '/hrms/trial-expired',
+  '/hrms/demo-expired',
+]);
+
+let pendingSaasRedirectPath = '';
+
 function normalizeErrorCode(value = '') {
   return String(value || '')
     .trim()
@@ -1555,36 +1564,42 @@ function redirectForSaasRestriction(path = '', data = {}, status = 0) {
   const code = normalizeErrorCode(data.code || data.error_code || data.reason);
   const currentPath = String(window.location.pathname || '').toLowerCase();
 
-  const expiredPaths = new Set([
-    '/hrms/subscription-expired',
-    '/hrms/trial-expired',
-    '/hrms/demo-expired',
-  ]);
-
-  if (SAAS_EXPIRED_ERROR_CODES.has(code) || status === 402) {
-    if (!expiredPaths.has(currentPath)) {
-      window.location.assign('/hrms/subscription-expired');
-    }
-
+  /*
+    Billing and the expired-subscription screens are recovery destinations.
+    Background layout requests such as notifications/branding can still receive
+    402/403 while those screens are open. They must never redirect one recovery
+    screen to the other, otherwise the app enters a Billing <-> Expired loop.
+  */
+  if (SAAS_RECOVERY_BROWSER_PATHS.has(currentPath)) {
     return;
   }
 
-  if (SAAS_BILLING_ERROR_CODES.has(code)) {
+  let targetPath = '';
+
+  if (SAAS_EXPIRED_ERROR_CODES.has(code) || status === 402) {
+    targetPath = '/hrms/subscription-expired';
+  } else if (SAAS_BILLING_ERROR_CODES.has(code)) {
     if (canCurrentUserOpenClientBilling()) {
-      if (currentPath !== '/hrms/billing') {
-        window.location.assign('/hrms/billing');
-      }
-
-      return;
-    }
-
-    if (
-      code === 'tenant_suspended' &&
-      !expiredPaths.has(currentPath)
-    ) {
-      window.location.assign('/hrms/subscription-expired');
+      targetPath = '/hrms/billing';
+    } else if (code === 'tenant_suspended') {
+      targetPath = '/hrms/subscription-expired';
     }
   }
+
+  if (!targetPath || targetPath === currentPath) {
+    return;
+  }
+
+  /*
+    Multiple page-level requests can fail almost simultaneously. Only the first
+    restriction navigation is allowed to win, preventing repeated hard reloads.
+  */
+  if (pendingSaasRedirectPath) {
+    return;
+  }
+
+  pendingSaasRedirectPath = targetPath;
+  window.location.replace(targetPath);
 }
 
 function buildApiError(data = {}, status = 0, fallbackMessage = 'Request failed.') {

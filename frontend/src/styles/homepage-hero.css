@@ -4,6 +4,26 @@
    design while using the real YourComate logo and the site's icon system.
 ===================================================================== */
 
+/* Keep the homepage viewport width stable before, during and after the
+   splash screen releases its scroll lock. The native scrollbar track is
+   hidden only while the homepage is mounted; wheel, touch and keyboard
+   scrolling continue to work normally. */
+html.yc-homepage-active {
+  scrollbar-width: none;
+}
+
+html.yc-homepage-active::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+html.yc-homepage-active,
+body.yc-homepage-active {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 .yc-restored-home {
   --yc-home-ink: #0b2a5b;
   --yc-home-ink-soft: #5b6f92;
@@ -22,6 +42,8 @@
    Restored reference-led hero
 --------------------------------------------------------------------- */
 .yc-minoru-hero {
+  --yc-panel-background: var(--yc-home-blue-deep);
+
   position: relative;
   isolation: isolate;
   width: 100%;
@@ -718,6 +740,23 @@ border: 0;
   .yc-horizontal-mode .yc-minoru-shell {
     height: 100%;
     min-height: 0;
+  }
+
+  .yc-horizontal-mode .yc-minoru-hero::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 40;
+    width: clamp(72px, 9vw, 150px);
+    pointer-events: none;
+    background:
+      linear-gradient(
+        90deg,
+        rgba(231, 232, 255, 0) 0%,
+        rgba(231, 232, 255, 0.18) 28%,
+        rgba(231, 232, 255, 0.62) 70%,
+        #e7e8ff 100%
+      );
   }
 }
 

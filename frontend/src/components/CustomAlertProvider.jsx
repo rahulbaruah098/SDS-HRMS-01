@@ -85,7 +85,20 @@ export default function CustomAlertProvider({ children }) {
         message: toMessageText(message),
       };
 
-      setToasts((current) => [toast, ...current].slice(0, 5));
+      setToasts((current) => {
+        const duplicateExists = current.some(
+          (currentToast) =>
+            currentToast.type === toast.type &&
+            currentToast.title === toast.title &&
+            currentToast.message === toast.message,
+        );
+
+        if (duplicateExists) {
+          return current;
+        }
+
+        return [toast, ...current].slice(0, 5);
+      });
 
       if (!sticky) {
         timersRef.current[id] = setTimeout(() => {

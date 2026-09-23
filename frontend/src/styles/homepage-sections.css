@@ -141,8 +141,16 @@
   );
   overflow: hidden;
   color: var(--yc-ink);
-  background:
-    linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%) !important;
+  --yc-panel-background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(241, 251, 255, 0.58) 18%,
+      rgba(255, 253, 248, 0.46) 50%,
+      rgba(248, 242, 255, 0.56) 82%,
+      transparent 100%
+    );
+  background: var(--yc-panel-background) !important;
 }
 
 .yc-shift-official-panel::before {
@@ -156,6 +164,8 @@
     linear-gradient(rgba(65, 55, 161, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(65, 55, 161, 0.035) 1px, transparent 1px);
   background-size: 42px 42px;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
 }
 
 .yc-shift-official-shell {
@@ -1183,6 +1193,8 @@
     linear-gradient(rgba(65, 55, 161, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(65, 55, 161, 0.035) 1px, transparent 1px);
   background-size: 42px 42px;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
 }
 
 .yc-soft-modules-header h2,
@@ -1225,8 +1237,16 @@
    Panel 03 — Soft connected module ribbon
 --------------------------------------------------------------------- */
 .yc-soft-modules-panel {
-  background:
-    linear-gradient(135deg, #f1fbff 0%, #fffdf8 48%, #f8f2ff 100%) !important;
+  --yc-panel-background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(241, 251, 255, 0.50) 18%,
+      rgba(255, 253, 248, 0.40) 50%,
+      rgba(248, 242, 255, 0.48) 82%,
+      transparent 100%
+    );
+  background: var(--yc-panel-background) !important;
 }
 
 .yc-soft-modules-panel::after {
@@ -1529,8 +1549,16 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
    Panel 04 — Soft role workbench
 --------------------------------------------------------------------- */
 .yc-soft-roles-panel {
-  background:
-    linear-gradient(125deg, #fff9ec 0%, #f1f8ff 52%, #f7f1ff 100%) !important;
+  --yc-panel-background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 249, 236, 0.52) 18%,
+      rgba(241, 248, 255, 0.42) 52%,
+      rgba(247, 241, 255, 0.50) 82%,
+      transparent 100%
+    );
+  background: var(--yc-panel-background) !important;
 }
 
 .yc-soft-roles-panel::after {
@@ -1847,8 +1875,16 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
    Panel 05 — Soft SAYA AI workday note
 --------------------------------------------------------------------- */
 .yc-soft-saya-panel {
-  background:
-    linear-gradient(135deg, #effbff 0%, #fffdf8 48%, #f5efff 100%) !important;
+  --yc-panel-background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(239, 251, 255, 0.48) 18%,
+      rgba(255, 253, 248, 0.38) 50%,
+      rgba(245, 239, 255, 0.52) 82%,
+      transparent 100%
+    );
+  background: var(--yc-panel-background) !important;
 }
 
 .yc-soft-saya-background-line {
@@ -1863,6 +1899,8 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
 
   transform: rotate(-4deg);
 
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 13%, #000 87%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 13%, #000 87%, transparent 100%);
   pointer-events: none;
 }
 
@@ -2850,13 +2888,16 @@ grid-template-columns: 48px minmax(0, 1fr) 16px;
   .yc-editorial-home .yc-shift-official-panel,
   .yc-editorial-home .yc-soft-modules-panel,
   .yc-editorial-home .yc-soft-roles-panel,
+  .yc-editorial-home .yc-app-showcase-panel,
   .yc-editorial-home .yc-soft-saya-panel {
+    --yc-panel-background: transparent;
     background: transparent !important;
   }
 
   .yc-shift-official-panel::before,
   .yc-soft-modules-panel::before,
   .yc-soft-roles-panel::before,
+  .yc-app-showcase-panel::before,
   .yc-soft-saya-panel::before {
     content: none;
     display: none;
@@ -3351,8 +3392,16 @@ max-height: 680px;
   min-height: var(--yc-deck-height, calc(100svh - var(--yc-header-height, 96px)));
   overflow: hidden;
   color: var(--yc-ink);
-  background:
-    linear-gradient(132deg, #eefaff 0%, #fffdf9 48%, #f5efff 100%) !important;
+  --yc-panel-background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(238, 250, 255, 0.54) 18%,
+      rgba(255, 253, 249, 0.40) 50%,
+      rgba(245, 239, 255, 0.50) 82%,
+      transparent 100%
+    );
+  background: var(--yc-panel-background) !important;
 }
 
 .yc-app-showcase-panel::before {
@@ -3366,6 +3415,8 @@ max-height: 680px;
     linear-gradient(rgba(65, 55, 161, 0.032) 1px, transparent 1px),
     linear-gradient(90deg, rgba(65, 55, 161, 0.032) 1px, transparent 1px);
   background-size: 42px 42px;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
 }
 
 .yc-app-showcase-panel::after {
@@ -3990,6 +4041,15 @@ max-height: 680px;
   .yc-app-showcase-panel {
     min-height: 0;
     overflow: visible;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(238, 250, 255, 0) 0%,
+        #eefaff 10%,
+        #fffdf9 50%,
+        #f5efff 90%,
+        rgba(245, 239, 255, 0) 100%
+      ) !important;
   }
   .yc-app-editorial-heading {
   max-width: 760px;
@@ -4031,7 +4091,14 @@ max-height: 680px;
 @media (max-width: 680px) {
   .yc-app-showcase-panel {
     background:
-      linear-gradient(155deg, #eefaff 0%, #fffdf9 52%, #f5efff 100%) !important;
+      linear-gradient(
+        180deg,
+        rgba(238, 250, 255, 0) 0%,
+        #eefaff 10%,
+        #fffdf9 52%,
+        #f5efff 90%,
+        rgba(245, 239, 255, 0) 100%
+      ) !important;
   }
 .yc-app-editorial-heading {
   width: 100%;

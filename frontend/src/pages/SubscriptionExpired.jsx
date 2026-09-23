@@ -598,7 +598,7 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
 
     const timer = window.setTimeout(() => {
       try {
-        window.history.replaceState({}, '', '/dashboard');
+        window.history.replaceState({}, '', '/hrms');
       } catch {
         // Page state below still redirects correctly when history is unavailable.
       }
@@ -618,7 +618,7 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
       setPage('billing');
     }
 
-    goToPath('/billing', 'billing');
+    goToPath('/hrms/billing', 'billing');
   }
 
   function goBack() {
@@ -627,7 +627,7 @@ export default function SubscriptionExpired({ user = {}, setPage }) {
       return;
     }
 
-    goToPath('/dashboard', 'dashboard');
+    goToPath('/hrms', 'dashboard');
   }
 
   const employeeText = summary.isUnlimitedEmployees

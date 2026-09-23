@@ -547,18 +547,6 @@ export default function Departments() {
             linear-gradient(125deg, rgba(255, 255, 255, .97), rgba(247, 250, 255, .94));
         }
 
-        .department-hero::after {
-          content: '';
-          position: absolute;
-          right: -66px;
-          bottom: -96px;
-          width: 250px;
-          height: 250px;
-          border: 38px solid rgba(79, 70, 239, .05);
-          border-radius: 50%;
-          pointer-events: none;
-        }
-
         .department-hero-copy {
           position: relative;
           z-index: 1;

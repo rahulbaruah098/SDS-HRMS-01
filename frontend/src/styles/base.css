@@ -785,6 +785,7 @@ input[readonly],
 textarea:disabled,
 textarea[readonly],
 button:disabled,
-[aria-disabled="true"] {
+[aria-disabled="true"],
+[aria-disabled="true"] * {
   cursor: not-allowed;
 }
