@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BarChart3,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   RefreshCcw,
+  Search,
   Send,
   Sparkles,
-  Star,
-  TrendingUp,
-  UsersRound,
+  XCircle,
 } from 'lucide-react';
 import {
   currentEmployee,
@@ -25,6 +26,9 @@ const EMPTY_FORM = {
   strengths: '',
   improvement_areas: '',
 };
+
+const PERFORMANCE_NOTICE_HIDE_MS = 3600;
+const PERFORMANCE_HISTORY_PAGE_SIZES = [10, 25, 50];
 
 function normalizeRole(role = '') {
   return String(role || '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
@@ -269,10 +273,9 @@ function mergeDashboardEmployees(...lists) {
   return [...map.values()];
 }
 
-function StatCard({ label, value, meta, icon = null }) {
+function StatCard({ label, value, meta }) {
   return (
     <div className="performance-stat-card">
-      {icon ? <div className="performance-stat-icon">{icon}</div> : null}
       <span>{label}</span>
       <strong>{value}</strong>
       {meta ? <small>{meta}</small> : null}
@@ -383,7 +386,7 @@ function PerformanceGraph({ title, subtitle, chart }) {
     <section className="performance-panel performance-graph-panel">
       <div className="performance-section-head">
         <div>
-          <span className="performance-kicker">3D Performance Graph</span>
+          <span className="performance-kicker">Performance Trend</span>
           <h2>{title}</h2>
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
@@ -391,11 +394,11 @@ function PerformanceGraph({ title, subtitle, chart }) {
 
       {!graphRows.length ? (
         <EmptyState
-          title="No graph data yet"
-          text="Submit a weekly performance rating first. The 3D graph will appear immediately after saving."
+          title="No performance data yet"
+          text="Submit a weekly performance rating first. The performance trend will appear immediately after saving."
         />
       ) : (
-        <div className="performance-3d-chart">
+        <div className="performance-trend-chart">
           {graphRows.slice(0, 12).map((item, index) => {
             const name =
               item.graph_label ||
@@ -410,21 +413,29 @@ function PerformanceGraph({ title, subtitle, chart }) {
 
             const rating = getGraphRating(item);
             const percentage = getGraphPercent(item);
+            const safePercentage = Math.max(0, Math.min(100, percentage));
 
             return (
-              <div className="performance-3d-row" key={`${name}-${index}`}>
-                <div className="performance-3d-label">
-                  <strong>{name}</strong>
-                  <span>{ratingLabel(rating)}</span>
+              <div className="performance-trend-row" key={`${name}-${index}`}>
+                <div className="performance-trend-label">
+                  <div>
+                    <strong>{name}</strong>
+                    <span>{ratingLabel(rating)}</span>
+                  </div>
+
+                  <strong className="performance-trend-value">
+                    {formatRating(rating)} / 5
+                  </strong>
                 </div>
 
-                <div className="performance-3d-track">
+                <div
+                  className="performance-trend-track"
+                  aria-label={`${name} performance ${safePercentage.toFixed(0)} percent`}
+                >
                   <div
-                    className="performance-3d-bar"
-                    style={{ width: `${Math.max(8, Math.min(100, percentage))}%` }}
-                  >
-                    <span>{formatRating(rating)}</span>
-                  </div>
+                    className="performance-trend-bar"
+                    style={{ width: `${safePercentage}%` }}
+                  />
                 </div>
               </div>
             );
@@ -435,8 +446,133 @@ function PerformanceGraph({ title, subtitle, chart }) {
   );
 }
 
+function performancePageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function PerformanceInlineMessage({
+  type = 'info',
+  title = '',
+  text = '',
+  loading = false,
+  onClose,
+}) {
+  if (!text) return null;
+
+  return (
+    <div className={`performance-inline-feedback ${type}`} role="status">
+      <span className="performance-inline-feedback-icon">
+        {loading ? (
+          <RefreshCcw size={15} className="performance-spin" />
+        ) : type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : type === 'error' || type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="performance-inline-feedback-copy">
+        {title ? <strong>{title}</strong> : null}
+        <span>{text}</span>
+      </span>
+
+      {onClose ? (
+        <button
+          type="button"
+          className="performance-inline-feedback-close"
+          onClick={onClose}
+          aria-label="Dismiss notification"
+        >
+          ×
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function ReviewHistory({ title, reviews }) {
   const rows = Array.isArray(reviews) ? reviews : [];
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredRows = useMemo(() => {
+    const term = String(search || '').trim().toLowerCase();
+
+    if (!term) return rows;
+
+    return rows.filter((item) => {
+      const rating =
+        item.rating_value ||
+        item.rating ||
+        item.score ||
+        item.performance_score ||
+        0;
+
+      const haystack = [
+        item.employee_name,
+        item.target_employee_name,
+        item.reviewer_name,
+        item.reviewer_employee_name,
+        item.review_scope_label,
+        item.review_target_type,
+        item.week_label,
+        item.month_label,
+        item.year_label,
+        item.cycle,
+        item.remarks,
+        item.comments,
+        item.note,
+        formatRating(rating),
+        ratingLabel(rating),
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .join(' ');
+
+      return haystack.includes(term);
+    });
+  }, [rows, search]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredRows.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const start = (safePage - 1) * pageSize;
+  const pagedRows = filteredRows.slice(start, start + pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
 
   return (
     <section className="performance-panel">
@@ -444,49 +580,174 @@ function ReviewHistory({ title, reviews }) {
         <div>
           <span className="performance-kicker">Review History</span>
           <h2>{title}</h2>
+          <p>
+            Search review records and move through them with numbered pagination.
+          </p>
         </div>
       </div>
 
-      {!rows.length ? (
-        <EmptyState title="No reviews yet" text="Submitted and received reviews will appear here." />
-      ) : (
-        <div className="performance-table-wrap">
-          <table className="performance-table">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Reviewer</th>
-                <th>Rating</th>
-                <th>Period</th>
-                <th>Remarks</th>
-                <th>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(0, 20).map((item, index) => {
-                const rating = item.rating_value || item.rating || item.score || item.performance_score || 0;
+      {rows.length ? (
+        <div className="performance-history-controls">
+          <div className="performance-search-wrap">
+            <Search size={17} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search employee, reviewer, period, rating or remarks..."
+              aria-label={`Search ${title}`}
+            />
+          </div>
 
-                return (
-                  <tr key={item._id || `${item.employee_id}-${index}`}>
-                    <td>
-                      <strong>{item.employee_name || item.target_employee_name || 'Employee'}</strong>
-                      <span>{item.review_scope_label || item.review_target_type || 'Performance Review'}</span>
-                    </td>
-                    <td>{item.reviewer_name || item.reviewer_employee_name || '—'}</td>
-                    <td>
-                      <span className="performance-rating-pill">
-                        {formatRating(rating)} / 5
-                      </span>
-                    </td>
-                    <td>{item.week_label || item.month_label || item.year_label || item.cycle || 'Weekly'}</td>
-                    <td>{item.remarks || item.comments || item.note || '—'}</td>
-                    <td>{formatDate(item.review_date || item.created_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <label className="performance-page-size-control">
+            <span>View</span>
+            <select
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              aria-label={`${title} rows per page`}
+            >
+              {PERFORMANCE_HISTORY_PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
+      ) : null}
+
+      {!filteredRows.length ? (
+        <EmptyState
+          title={rows.length ? 'No matching reviews' : 'No reviews yet'}
+          text={
+            rows.length
+              ? 'No review record matches the current search.'
+              : 'Submitted and received reviews will appear here.'
+          }
+        />
+      ) : (
+        <>
+          <div className="performance-table-wrap">
+            <table className="performance-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Reviewer</th>
+                  <th>Rating</th>
+                  <th>Period</th>
+                  <th>Remarks</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedRows.map((item, index) => {
+                  const rating =
+                    item.rating_value ||
+                    item.rating ||
+                    item.score ||
+                    item.performance_score ||
+                    0;
+
+                  return (
+                    <tr key={item._id || `${item.employee_id}-${start + index}`}>
+                      <td>
+                        <strong>
+                          {item.employee_name ||
+                            item.target_employee_name ||
+                            'Employee'}
+                        </strong>
+                        <span>
+                          {item.review_scope_label ||
+                            item.review_target_type ||
+                            'Performance Review'}
+                        </span>
+                      </td>
+                      <td>
+                        {item.reviewer_name ||
+                          item.reviewer_employee_name ||
+                          '—'}
+                      </td>
+                      <td>
+                        <span className="performance-rating-pill">
+                          {formatRating(rating)} / 5
+                        </span>
+                      </td>
+                      <td>
+                        {item.week_label ||
+                          item.month_label ||
+                          item.year_label ||
+                          item.cycle ||
+                          'Weekly'}
+                      </td>
+                      <td>
+                        {item.remarks ||
+                          item.comments ||
+                          item.note ||
+                          '—'}
+                      </td>
+                      <td>{formatDate(item.review_date || item.created_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="performance-pagination">
+            <div className="performance-pagination-copy">
+              <strong>{filteredRows.length.toLocaleString('en-IN')}</strong>
+              <span>reviews</span>
+            </div>
+
+            <div className="performance-pagination-controls">
+              <button
+                type="button"
+                className="performance-page-button performance-page-nav"
+                onClick={() => setPage(Math.max(1, safePage - 1))}
+                disabled={safePage <= 1}
+              >
+                <ChevronLeft size={15} />
+                <span>Previous</span>
+              </button>
+
+              <div className="performance-page-numbers" aria-label="Pagination">
+                {performancePageNumbers(pageCount, safePage).map((item) =>
+                  typeof item === 'number' ? (
+                    <button
+                      type="button"
+                      key={item}
+                      className={`performance-page-number ${
+                        item === safePage ? 'active' : ''
+                      }`}
+                      onClick={() => setPage(item)}
+                      aria-current={item === safePage ? 'page' : undefined}
+                    >
+                      {item}
+                    </button>
+                  ) : (
+                    <span key={item} className="performance-page-ellipsis">
+                      …
+                    </span>
+                  ),
+                )}
+              </div>
+
+              <span className="performance-page-indicator">
+                Page {safePage} of {pageCount}
+              </span>
+
+              <button
+                type="button"
+                className="performance-page-button performance-page-nav"
+                onClick={() => setPage(Math.min(pageCount, safePage + 1))}
+                disabled={safePage >= pageCount}
+              >
+                <span>Next</span>
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </section>
   );
@@ -499,9 +760,19 @@ export default function Performance({ setPage }) {
   const [reviewHistory, setReviewHistory] = useState([]);
   const [activeMode, setActiveMode] = useState('team_leader');
   const [graphMode, setGraphMode] = useState('weekly');
+  const [activeSection, setActiveSection] = useState('review');
   const [form, setForm] = useState(EMPTY_FORM);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [reviewFeedbackLoading, setReviewFeedbackLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [refreshFeedback, setRefreshFeedback] = useState({
+    type: '',
+    title: '',
+    text: '',
+    loading: false,
+  });
+  const refreshTimerRef = useRef(null);
 
   const user = currentUser();
   const employee = currentEmployee();
@@ -666,13 +937,56 @@ export default function Performance({ setPage }) {
     reviewable: reviewableEmployees.length,
   };
 
+  function showRefreshFeedback(
+    type,
+    text,
+    title = '',
+    loadingFeedback = false,
+  ) {
+    if (refreshTimerRef.current) {
+      window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+
+    setRefreshFeedback({
+      type,
+      title,
+      text,
+      loading: loadingFeedback,
+    });
+
+    if (!loadingFeedback) {
+      refreshTimerRef.current = window.setTimeout(() => {
+        setRefreshFeedback({
+          type: '',
+          title: '',
+          text: '',
+          loading: false,
+        });
+        refreshTimerRef.current = null;
+      }, PERFORMANCE_NOTICE_HIDE_MS);
+    }
+  }
+
   async function loadData(options = {}) {
     const keepMessage = Boolean(options.keepMessage);
+    const feedbackScope = options.feedbackScope || '';
 
     setLoading(true);
-    setError('');
+    setLoadError('');
+
     if (!keepMessage) {
       setMessage('');
+      setError('');
+    }
+
+    if (feedbackScope === 'refresh') {
+      showRefreshFeedback(
+        'info',
+        'Refreshing performance dashboard and review history...',
+        'Refreshing',
+        true,
+      );
     }
 
     try {
@@ -760,8 +1074,27 @@ export default function Performance({ setPage }) {
             : defaultReviewable[0]?.employee_id || '',
         };
       });
+
+      if (feedbackScope === 'refresh') {
+        showRefreshFeedback(
+          'success',
+          'Performance dashboard and review history are up to date.',
+          'Refresh Complete',
+        );
+      }
     } catch (err) {
-      setError(err.message || 'Unable to load performance dashboard.');
+      const errorMessage =
+        err.message || 'Unable to load performance dashboard.';
+
+      if (feedbackScope === 'refresh') {
+        showRefreshFeedback(
+          'error',
+          errorMessage,
+          'Refresh Failed',
+        );
+      } else {
+        setLoadError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -770,6 +1103,55 @@ export default function Performance({ setPage }) {
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if ((!message && !error) || reviewFeedbackLoading) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, PERFORMANCE_NOTICE_HIDE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [message, error, reviewFeedbackLoading]);
+
+  useEffect(() => {
+    function dismissInlineFeedback(event) {
+      if (event.target?.closest?.('.performance-inline-feedback')) return;
+
+      setMessage('');
+      setError('');
+
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+
+      setRefreshFeedback({
+        type: '',
+        title: '',
+        text: '',
+        loading: false,
+      });
+    }
+
+    document.addEventListener('pointerdown', dismissInlineFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissInlineFeedback);
+    };
   }, []);
 
   useEffect(() => {
@@ -800,6 +1182,7 @@ export default function Performance({ setPage }) {
 
     setError('');
     setMessage('');
+    setReviewFeedbackLoading(false);
 
     if (!selectedEmployee) {
       setError('Please select an employee to review.');
@@ -824,6 +1207,8 @@ export default function Performance({ setPage }) {
     }
 
     setSaving(true);
+    setReviewFeedbackLoading(true);
+    setMessage('Submitting weekly performance review...');
 
     try {
       const payload = {
@@ -851,6 +1236,7 @@ export default function Performance({ setPage }) {
 
       const response = await submitWeeklyPerformanceReview(payload);
 
+      setReviewFeedbackLoading(false);
       setMessage(response.message || 'Weekly performance review submitted successfully.');
       setForm((prev) => ({
         ...EMPTY_FORM,
@@ -860,6 +1246,8 @@ export default function Performance({ setPage }) {
       await loadData({ keepMessage: true });
       setGraphMode('weekly');
     } catch (err) {
+      setReviewFeedbackLoading(false);
+      setMessage('');
       setError(err.message || 'Unable to submit performance review.');
     } finally {
       setSaving(false);
@@ -874,40 +1262,84 @@ export default function Performance({ setPage }) {
         .performance-page {
           --pf-ink: #101a3a;
           --pf-copy: #5d6d8d;
-          --pf-violet: #6658dc;
-          --pf-blue: #3766db;
-          --pf-cyan: #18b5c8;
-          --pf-teal: #34c9c4;
+          --pf-violet: #4d77dd;
+          --pf-violet-deep: #575092;
+          --pf-blue: #4d77dd;
+          --pf-cyan: #2eb2b9;
+          --pf-teal: #2eb2b9;
           --pf-line: rgba(16, 26, 58, .14);
           display: grid;
-          gap: clamp(18px, 2vw, 26px);
+          gap: clamp(16px, 1.8vw, 24px);
+          width: 100%;
           min-width: 0;
+          max-width: 100%;
+          padding-right: clamp(8px, 1vw, 14px);
+          overflow-x: visible;
           color: var(--pf-ink);
+          background: transparent;
         }
 
+        .performance-page,
         .performance-page * {
           box-sizing: border-box;
         }
+
+        .performance-page > *,
+        .performance-page section,
+        .performance-page article,
+        .performance-page form,
+        .performance-page nav,
+        .performance-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .performance-page h1,
+        .performance-page h2,
+        .performance-page h3,
+        .performance-page p,
+        .performance-page strong,
+        .performance-page small,
+        .performance-page span {
+          overflow-wrap: anywhere;
+        }
+
+      .performance-page::before,
+.performance-page::after,
+.performance-page .performance-hero::before,
+.performance-page .performance-hero::after,
+.performance-page .performance-panel::before,
+.performance-page .performance-panel::after,
+.performance-page .performance-stat-card::before,
+.performance-page .performance-stat-card::after {
+  content: none;
+  display: none;
+  background: none;
+}
 
         .performance-hero {
           position: relative;
           isolation: isolate;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 300px);
           align-items: center;
-          gap: clamp(22px, 3vw, 40px);
-          min-height: 275px;
-          padding: clamp(25px, 3vw, 42px);
-          border: 1px solid rgba(154, 164, 205, .58);
+          gap: clamp(20px, 3vw, 36px);
+          min-height: 250px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154,164,205,.58);
           border-radius: clamp(28px, 2.7vw, 40px);
-          background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
           box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
+            10px 12px 0 #b9d7ff,
+            0 26px 44px rgba(70,92,140,.12);
         }
 
 
@@ -918,11 +1350,11 @@ export default function Performance({ setPage }) {
           width: max-content;
           max-width: 100%;
           margin-bottom: 13px;
-          padding: 8px 12px;
+          padding: 9px 13px;
           border-radius: 999px;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -988,17 +1420,12 @@ export default function Performance({ setPage }) {
           cursor: not-allowed;
         }
 
-        .performance-btn-primary {
-          color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow: 5px 6px 0 #a9d6f5, 0 14px 25px rgba(36,74,128,.16);
-        }
-
+        .performance-btn-primary,
         .performance-btn-light {
-          color: #40348d;
-          background: rgba(255,255,255,.92);
-          border-color: rgba(65,55,161,.18);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          border-color: rgba(77,119,221,.18);
+          box-shadow: 5px 6px 0 #575092;
         }
 
         .performance-alert {
@@ -1030,7 +1457,7 @@ export default function Performance({ setPage }) {
 
         .performance-stat-card {
           min-width: 0;
-          min-height: 135px;
+          min-height: 120px;
           padding: 18px;
           border: 1px solid rgba(171,181,211,.66);
           border-radius: 22px;
@@ -1055,21 +1482,9 @@ export default function Performance({ setPage }) {
         }
 
         .performance-stat-card:hover {
-          transform: translateY(-4px);
+          border-color: rgba(77,119,221,.30);
         }
 
-        .performance-stat-icon {
-          width: 42px;
-          height: 42px;
-          margin-bottom: 12px;
-          display: grid;
-          place-items: center;
-          border-radius: 14px;
-          color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.18);
-          animation: performance-icon-float 3.2s ease-in-out infinite;
-        }
 
         .performance-stat-card span {
           display: block;
@@ -1108,17 +1523,26 @@ export default function Performance({ setPage }) {
         .performance-panel {
           min-width: 0;
           padding: clamp(20px, 2vw, 28px);
+          overflow: hidden;
           border: 1px solid rgba(171,181,211,.70);
           border-radius: clamp(26px, 2.2vw, 36px);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow: 8px 10px 0 #c4ccff, 0 24px 42px rgba(34,38,110,.10);
-          transition: transform 210ms ease, box-shadow 210ms ease, border-color 210ms ease;
+          background: #ffffff;
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34,38,110,.10);
+          transition: border-color 180ms ease, box-shadow 180ms ease;
         }
 
         .performance-panel:hover {
-          border-color: rgba(102,88,220,.28);
-          transform: translateY(-3px);
-          box-shadow: 10px 12px 0 #c4ccff, 0 30px 50px rgba(34,38,110,.14);
+          border-color: rgba(77,119,221,.28);
+        }
+
+        .performance-graph-panel {
+          box-shadow: 0 14px 32px rgba(34,38,110,.08);
+        }
+
+        .performance-graph-panel:hover {
+          box-shadow: 0 14px 32px rgba(34,38,110,.08);
         }
 
         .performance-section-head {
@@ -1146,6 +1570,412 @@ export default function Performance({ setPage }) {
           line-height: 1.58;
         }
 
+
+        .performance-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow:
+            6px 7px 0 #c4ccff,
+            0 16px 28px rgba(34,38,110,.08);
+        }
+
+        .performance-section-tab {
+          min-width: 0;
+          min-height: 62px;
+          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87,80,146,.16);
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            border-color 190ms ease,
+            box-shadow 190ms ease;
+        }
+
+        .performance-section-tab:hover {
+          transform: translateY(-2px);
+          border-color: rgba(46,178,185,.46);
+        }
+
+        .performance-section-tab.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .performance-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .performance-section-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .performance-section-tab-copy small {
+          color: #6b7692;
+          font-size: 9px;
+          font-weight: 750;
+          line-height: 1.25;
+        }
+
+        .performance-section-tab.active .performance-section-tab-copy small {
+          color: rgba(255,255,255,.78);
+        }
+
+        .performance-section-tab-count {
+          min-width: 30px;
+          height: 30px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 10px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(52,43,120,.10);
+          font-size: 10px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .performance-section-content {
+          animation: performanceSectionReveal 220ms ease both;
+        }
+
+        @keyframes performanceSectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .performance-action-stack,
+        .performance-hero-refresh-stack {
+          display: grid;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .performance-action-stack {
+          width: 100%;
+        }
+
+        .performance-action-stack > .performance-btn {
+          width: 100%;
+        }
+
+        .performance-hero-refresh-stack {
+          width: min(320px, 100%);
+        }
+
+        .performance-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .performance-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .performance-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .performance-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .performance-inline-feedback-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          flex: 0 0 22px;
+        }
+
+        .performance-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .performance-inline-feedback-copy strong,
+        .performance-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .performance-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .performance-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .performance-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          display: inline-grid;
+          place-items: center;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255,255,255,.58);
+          box-shadow: none;
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .performance-inline-feedback-close:hover {
+          transform: none;
+          filter: none;
+          background: #fff;
+        }
+
+        .performance-spin {
+          animation: performanceSpin .8s linear infinite;
+        }
+
+        @keyframes performanceSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        .performance-history-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          margin-bottom: 16px;
+        }
+
+        .performance-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .performance-search-wrap > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--pf-violet);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .performance-search-wrap input,
+        .performance-page-size-control select {
+          width: 100%;
+          min-height: 44px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 13px;
+          outline: 0;
+          color: var(--pf-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+        }
+
+        .performance-search-wrap input {
+          padding: 0 13px 0 39px;
+        }
+
+        .performance-search-wrap input:focus,
+        .performance-page-size-control select:focus {
+          border-color: rgba(102,88,220,.65);
+          box-shadow:
+            0 0 0 4px rgba(102,88,220,.08),
+            3px 4px 0 rgba(102,88,220,.10);
+        }
+
+        .performance-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .performance-page-size-control select {
+          width: auto;
+          min-width: 78px;
+          padding: 0 28px 0 10px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .performance-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          min-width: 0;
+          margin-top: 15px;
+          padding: 12px 13px;
+          border: 1px solid rgba(171,181,211,.52);
+          border-radius: 16px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+        }
+
+        .performance-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .performance-pagination-copy strong {
+          color: var(--pf-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .performance-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+          flex-wrap: wrap;
+        }
+
+        .performance-page-button,
+        .performance-page-number {
+          border: 1px solid rgba(98,84,218,.18);
+          color: #4767b4;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(87,80,146,.12);
+          font: inherit;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease,
+            filter 190ms ease;
+        }
+
+        .performance-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+          font-size: 10px;
+        }
+
+        .performance-page-nav {
+          min-width: 78px;
+        }
+
+        .performance-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .performance-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 11px;
+          font-size: 10px;
+        }
+
+        .performance-page-number.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #575092;
+        }
+
+        .performance-page-button:hover:not(:disabled),
+        .performance-page-number:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .performance-page-button:disabled,
+        .performance-page-number:disabled {
+          opacity: .52;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .performance-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .performance-page-indicator {
+          min-width: 82px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
         .performance-tabs {
           display: flex;
           gap: 8px;
@@ -1160,21 +1990,31 @@ export default function Performance({ setPage }) {
         .performance-tabs button {
           min-height: 42px;
           padding: 9px 14px;
-          border: 1px solid rgba(171,181,211,.62);
-          border-radius: 999px;
-          color: var(--pf-copy);
-          background: #fff;
-          box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 14px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87,80,146,.12);
           font: inherit;
           font-size: 12px;
           font-weight: 900;
           cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .performance-tabs button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46,178,185,.46);
         }
 
         .performance-tabs button.active {
+          border-color: transparent;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8, 0 12px 22px rgba(52,43,120,.14);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
         }
 
         .performance-form {
@@ -1226,7 +2066,7 @@ export default function Performance({ setPage }) {
           padding: 18px;
           border: 1px solid rgba(171,181,211,.55);
           border-radius: 22px;
-          background: linear-gradient(145deg, #edf6ff, #f1efff);
+          background: #f5f5ff;
           box-shadow: 5px 6px 0 #c9c0ff;
         }
 
@@ -1237,7 +2077,7 @@ export default function Performance({ setPage }) {
           display: grid;
           place-items: center;
           color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
           box-shadow: 5px 6px 0 #b9d7ff;
           font-size: 22px;
           font-weight: 900;
@@ -1258,24 +2098,41 @@ export default function Performance({ setPage }) {
           color: var(--pf-copy);
         }
 
-        .performance-3d-chart {
+        .performance-trend-chart {
           display: grid;
-          gap: 14px;
+          gap: 12px;
         }
 
-        .performance-3d-row {
+        .performance-trend-row {
           display: grid;
-          grid-template-columns: minmax(150px, .45fr) minmax(0, 1fr);
-          gap: 14px;
+          gap: 12px;
+          padding: 15px;
+          border: 1px solid rgba(171,181,211,.50);
+          border-radius: 16px;
+          background: #ffffff;
+          transition:
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .performance-trend-row:hover {
+          border-color: rgba(77,119,221,.30);
+          background: #fbfcff;
+        }
+
+        .performance-trend-label {
+          display: flex;
           align-items: center;
-          padding: 13px;
-          border: 1px solid rgba(171,181,211,.48);
-          border-radius: 17px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+          justify-content: space-between;
+          gap: 14px;
+          min-width: 0;
         }
 
-        .performance-3d-label strong {
+        .performance-trend-label > div {
+          min-width: 0;
+        }
+
+        .performance-trend-label strong {
           display: block;
           color: var(--pf-ink);
           overflow: hidden;
@@ -1283,38 +2140,42 @@ export default function Performance({ setPage }) {
           white-space: nowrap;
         }
 
-        .performance-3d-label span {
-          display: block;
-          margin-top: 4px;
-          color: var(--pf-copy);
-          font-size: 11px;
-          font-weight: 800;
+        .performance-trend-label span {
+          display: inline-flex;
+          width: max-content;
+          max-width: 100%;
+          margin-top: 5px;
+          padding: 4px 8px;
+          border: 1px solid rgba(77,119,221,.14);
+          border-radius: 999px;
+          color: #5d6785;
+          background: #f0f5ff;
+          font-size: 10px;
+          font-weight: 850;
+          line-height: 1.2;
         }
 
-        .performance-3d-track {
-          height: 25px;
+        .performance-trend-value {
+          flex: 0 0 auto;
+          color: #4767b4 !important;
+          font-size: 12px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .performance-trend-track {
+          width: 100%;
+          height: 10px;
           overflow: hidden;
           border-radius: 999px;
-          background: #e5e8f1;
-          box-shadow: inset 0 2px 5px rgba(15,23,42,.08);
+          background: #edf1f7;
         }
 
-        .performance-3d-bar {
-          min-width: 8%;
+        .performance-trend-bar {
           height: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          padding-right: 9px;
-          border-radius: 999px;
-          color: #fff;
-          background: linear-gradient(90deg, #6658dc, #3766db 58%, #34c9c4);
-          box-shadow: inset 0 4px 7px rgba(255,255,255,.22), inset 0 -5px 8px rgba(30,41,59,.18);
-        }
-
-        .performance-3d-bar span {
-          font-size: 11px;
-          font-weight: 950;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #4d77dd 0%, #2eb2b9 100%);
+          transition: width .34s cubic-bezier(.22, 1, .36, 1);
         }
 
         .performance-table-wrap {
@@ -1322,7 +2183,9 @@ export default function Performance({ setPage }) {
           border: 1px solid rgba(171,181,211,.50);
           border-radius: 18px;
           background: #fff;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: 0 10px 24px rgba(34,38,110,.06);
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
         }
 
         .performance-table {
@@ -1341,7 +2204,7 @@ export default function Performance({ setPage }) {
 
         .performance-table th {
           color: #536381;
-          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+          background: #f8f9ff;
           font-size: 10px;
           font-weight: 950;
           text-transform: uppercase;
@@ -1362,9 +2225,9 @@ export default function Performance({ setPage }) {
           width: max-content;
           padding: 6px 9px;
           border-radius: 999px;
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 2px 3px 0 #c9c0ff;
+          color: #4767b4;
+          background: #f0f5ff;
+          box-shadow: none;
           font-weight: 900;
         }
 
@@ -1376,11 +2239,11 @@ export default function Performance({ setPage }) {
           place-items: center;
           align-content: center;
           text-align: center;
-          border: 1px dashed rgba(102,88,220,.34);
+          border: 1px dashed rgba(77,119,221,.28);
           border-radius: 20px;
           color: var(--pf-copy);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
-          box-shadow: 4px 5px 0 rgba(52,43,120,.07);
+          background: #f8f9ff;
+          box-shadow: none;
         }
 
         .performance-empty-icon {
@@ -1390,8 +2253,8 @@ export default function Performance({ setPage }) {
           place-items: center;
           border-radius: 17px;
           color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
-          box-shadow: 4px 5px 0 #b9d7ff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .performance-empty h3 {
@@ -1401,9 +2264,58 @@ export default function Performance({ setPage }) {
           font-size: 23px;
         }
 
-        @keyframes performance-icon-float {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-3px) rotate(-3deg); }
+
+        @media (max-width: 1180px) {
+          .performance-hero {
+            grid-template-columns: minmax(0, 1fr);
+            min-height: 0;
+          }
+
+          .performance-hero-actions {
+            justify-content: flex-start;
+          }
+
+          .performance-hero-refresh-stack {
+            width: min(420px, 100%);
+          }
+
+          .performance-section-tab-copy small {
+            display: none;
+          }
+        }
+
+        @media (max-width: 900px) {
+          .performance-page {
+            gap: 18px;
+          }
+
+          .performance-section-tabs {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            padding: 10px;
+          }
+
+          .performance-section-tab {
+            grid-template-columns: minmax(0, 1fr);
+            min-height: 52px;
+            padding: 9px 10px;
+            text-align: center;
+          }
+
+          .performance-section-tab > svg,
+          .performance-section-tab-count,
+          .performance-section-tab-copy small {
+            display: none;
+          }
+
+          .performance-section-tab-copy {
+            display: block;
+            text-align: center;
+          }
+
+          .performance-section-tab-copy strong {
+            font-size: 11px;
+          }
         }
 
         @media (max-width: 1100px) {
@@ -1415,11 +2327,23 @@ export default function Performance({ setPage }) {
           .performance-stats-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+
+          .performance-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .performance-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
         }
 
         @media (max-width: 760px) {
           .performance-page {
-            gap: 18px;
+            gap: 14px;
+            padding-right: 8px;
+            overflow-x: visible;
           }
 
           .performance-hero {
@@ -1427,7 +2351,7 @@ export default function Performance({ setPage }) {
             min-height: 0;
             padding: 20px;
             border-radius: 26px;
-            box-shadow: 6px 7px 0 #c6d8f7, 0 18px 30px rgba(34,38,110,.10);
+            box-shadow: 6px 7px 0 #b9d7ff, 0 18px 30px rgba(34,38,110,.10);
           }
 
           .performance-hero h1 {
@@ -1443,25 +2367,129 @@ export default function Performance({ setPage }) {
           }
 
           .performance-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+
+          .performance-section-tabs {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            padding: 8px;
+            border-radius: 16px;
+          }
+
+          .performance-section-tab {
+            min-height: 44px;
+            padding: 8px 9px;
+            border-radius: 11px;
+          }
+
+          .performance-section-tab-copy strong {
+            font-size: 10.5px;
+          }
+
+          .performance-history-controls {
             grid-template-columns: 1fr;
           }
 
+          .performance-page-size-control {
+            justify-content: space-between;
+          }
+
+          .performance-page-size-control select {
+            flex: 1 1 auto;
+          }
+
+          .performance-pagination-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .performance-page-numbers,
+          .performance-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .performance-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .performance-page-nav {
+            width: 100%;
+          }
+
           .performance-panel {
-            padding: 18px;
-            border-radius: 22px;
-            box-shadow: 5px 6px 0 #c4ccff, 0 17px 28px rgba(34,38,110,.09);
+            padding: 16px;
+            border-radius: 20px;
+            box-shadow: 4px 5px 0 #c4ccff, 0 14px 24px rgba(34,38,110,.08);
+          }
+
+          .performance-graph-panel {
+            box-shadow: 0 10px 22px rgba(34,38,110,.07);
           }
 
           .performance-section-head {
             flex-direction: column;
           }
 
-          .performance-3d-row {
-            grid-template-columns: 1fr;
+          .performance-trend-label {
+            align-items: flex-start;
+          }
+        }
+
+        @media (max-width: 560px) {
+          .performance-section-tabs {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .performance-section-tab,
+          .performance-section-tab-copy {
+            text-align: left;
+          }
+
+          .performance-hero-actions,
+          .performance-hero-refresh-stack,
+          .performance-action-stack {
+            width: 100%;
+          }
+
+          .performance-hero-actions {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .performance-hero-actions .performance-btn {
+            width: 100%;
+          }
+
+          .performance-trend-label {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 8px;
           }
         }
 
         @media (max-width: 430px) {
+          .performance-stats-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .performance-stat-card {
+            min-height: 72px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 13px;
+          }
+
+          .performance-stat-card strong {
+            margin-top: 0;
+          }
+
           .performance-hero {
             padding: 16px;
           }
@@ -1482,6 +2510,20 @@ export default function Performance({ setPage }) {
           .performance-tabs button,
           .performance-btn {
             width: 100%;
+          }
+
+          .performance-hero-actions {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .performance-hero-refresh-stack {
+            width: 100%;
+          }
+
+          .performance-page-number {
+            width: 34px;
+            height: 34px;
           }
 
           .performance-profile-card {
@@ -1536,40 +2578,84 @@ export default function Performance({ setPage }) {
         .performance-page {
           --pf-ink: #101a3a;
           --pf-copy: #5d6d8d;
-          --pf-violet: #6658dc;
-          --pf-blue: #3766db;
-          --pf-cyan: #18b5c8;
-          --pf-teal: #34c9c4;
+          --pf-violet: #4d77dd;
+          --pf-violet-deep: #575092;
+          --pf-blue: #4d77dd;
+          --pf-cyan: #2eb2b9;
+          --pf-teal: #2eb2b9;
           --pf-line: rgba(16, 26, 58, .14);
           display: grid;
-          gap: clamp(18px, 2vw, 26px);
+          gap: clamp(16px, 1.8vw, 24px);
+          width: 100%;
           min-width: 0;
+          max-width: 100%;
+          padding-right: clamp(8px, 1vw, 14px);
+          overflow-x: visible;
           color: var(--pf-ink);
+          background: transparent;
         }
 
+        .performance-page,
         .performance-page * {
           box-sizing: border-box;
         }
+
+        .performance-page > *,
+        .performance-page section,
+        .performance-page article,
+        .performance-page form,
+        .performance-page nav,
+        .performance-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .performance-page h1,
+        .performance-page h2,
+        .performance-page h3,
+        .performance-page p,
+        .performance-page strong,
+        .performance-page small,
+        .performance-page span {
+          overflow-wrap: anywhere;
+        }
+
+       .performance-page::before,
+.performance-page::after,
+.performance-page .performance-hero::before,
+.performance-page .performance-hero::after,
+.performance-page .performance-panel::before,
+.performance-page .performance-panel::after,
+.performance-page .performance-stat-card::before,
+.performance-page .performance-stat-card::after {
+  content: none;
+  display: none;
+  background: none;
+}
 
         .performance-hero {
           position: relative;
           isolation: isolate;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 300px);
           align-items: center;
-          gap: clamp(22px, 3vw, 40px);
-          min-height: 275px;
-          padding: clamp(25px, 3vw, 42px);
-          border: 1px solid rgba(154, 164, 205, .58);
+          gap: clamp(20px, 3vw, 36px);
+          min-height: 250px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154,164,205,.58);
           border-radius: clamp(28px, 2.7vw, 40px);
-          background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
           box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
+            10px 12px 0 #b9d7ff,
+            0 26px 44px rgba(70,92,140,.12);
         }
 
     
@@ -1581,11 +2667,11 @@ export default function Performance({ setPage }) {
           width: max-content;
           max-width: 100%;
           margin-bottom: 13px;
-          padding: 8px 12px;
+          padding: 9px 13px;
           border-radius: 999px;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -1651,17 +2737,12 @@ export default function Performance({ setPage }) {
           cursor: not-allowed;
         }
 
-        .performance-btn-primary {
-          color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow: 5px 6px 0 #a9d6f5, 0 14px 25px rgba(36,74,128,.16);
-        }
-
+        .performance-btn-primary,
         .performance-btn-light {
-          color: #40348d;
-          background: rgba(255,255,255,.92);
-          border-color: rgba(65,55,161,.18);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          border-color: rgba(77,119,221,.18);
+          box-shadow: 5px 6px 0 #575092;
         }
 
         .performance-alert {
@@ -1693,7 +2774,7 @@ export default function Performance({ setPage }) {
 
         .performance-stat-card {
           min-width: 0;
-          min-height: 135px;
+          min-height: 120px;
           padding: 18px;
           border: 1px solid rgba(171,181,211,.66);
           border-radius: 22px;
@@ -1718,21 +2799,9 @@ export default function Performance({ setPage }) {
         }
 
         .performance-stat-card:hover {
-          transform: translateY(-4px);
+          border-color: rgba(77,119,221,.30);
         }
 
-        .performance-stat-icon {
-          width: 42px;
-          height: 42px;
-          margin-bottom: 12px;
-          display: grid;
-          place-items: center;
-          border-radius: 14px;
-          color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.18);
-          animation: performance-icon-float 3.2s ease-in-out infinite;
-        }
 
         .performance-stat-card span {
           display: block;
@@ -1771,17 +2840,26 @@ export default function Performance({ setPage }) {
         .performance-panel {
           min-width: 0;
           padding: clamp(20px, 2vw, 28px);
+          overflow: hidden;
           border: 1px solid rgba(171,181,211,.70);
           border-radius: clamp(26px, 2.2vw, 36px);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow: 8px 10px 0 #c4ccff, 0 24px 42px rgba(34,38,110,.10);
-          transition: transform 210ms ease, box-shadow 210ms ease, border-color 210ms ease;
+          background: #ffffff;
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34,38,110,.10);
+          transition: border-color 180ms ease, box-shadow 180ms ease;
         }
 
         .performance-panel:hover {
-          border-color: rgba(102,88,220,.28);
-          transform: translateY(-3px);
-          box-shadow: 10px 12px 0 #c4ccff, 0 30px 50px rgba(34,38,110,.14);
+          border-color: rgba(77,119,221,.28);
+        }
+
+        .performance-graph-panel {
+          box-shadow: 0 14px 32px rgba(34,38,110,.08);
+        }
+
+        .performance-graph-panel:hover {
+          box-shadow: 0 14px 32px rgba(34,38,110,.08);
         }
 
         .performance-section-head {
@@ -1809,6 +2887,412 @@ export default function Performance({ setPage }) {
           line-height: 1.58;
         }
 
+
+        .performance-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow:
+            6px 7px 0 #c4ccff,
+            0 16px 28px rgba(34,38,110,.08);
+        }
+
+        .performance-section-tab {
+          min-width: 0;
+          min-height: 62px;
+          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87,80,146,.16);
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            border-color 190ms ease,
+            box-shadow 190ms ease;
+        }
+
+        .performance-section-tab:hover {
+          transform: translateY(-2px);
+          border-color: rgba(46,178,185,.46);
+        }
+
+        .performance-section-tab.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .performance-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .performance-section-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .performance-section-tab-copy small {
+          color: #6b7692;
+          font-size: 9px;
+          font-weight: 750;
+          line-height: 1.25;
+        }
+
+        .performance-section-tab.active .performance-section-tab-copy small {
+          color: rgba(255,255,255,.78);
+        }
+
+        .performance-section-tab-count {
+          min-width: 30px;
+          height: 30px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 10px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(52,43,120,.10);
+          font-size: 10px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .performance-section-content {
+          animation: performanceSectionReveal 220ms ease both;
+        }
+
+        @keyframes performanceSectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .performance-action-stack,
+        .performance-hero-refresh-stack {
+          display: grid;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .performance-action-stack {
+          width: 100%;
+        }
+
+        .performance-action-stack > .performance-btn {
+          width: 100%;
+        }
+
+        .performance-hero-refresh-stack {
+          width: min(320px, 100%);
+        }
+
+        .performance-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .performance-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .performance-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .performance-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .performance-inline-feedback-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          flex: 0 0 22px;
+        }
+
+        .performance-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .performance-inline-feedback-copy strong,
+        .performance-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .performance-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .performance-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .performance-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          display: inline-grid;
+          place-items: center;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255,255,255,.58);
+          box-shadow: none;
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .performance-inline-feedback-close:hover {
+          transform: none;
+          filter: none;
+          background: #fff;
+        }
+
+        .performance-spin {
+          animation: performanceSpin .8s linear infinite;
+        }
+
+        @keyframes performanceSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        .performance-history-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          margin-bottom: 16px;
+        }
+
+        .performance-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .performance-search-wrap > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--pf-violet);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .performance-search-wrap input,
+        .performance-page-size-control select {
+          width: 100%;
+          min-height: 44px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 13px;
+          outline: 0;
+          color: var(--pf-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+        }
+
+        .performance-search-wrap input {
+          padding: 0 13px 0 39px;
+        }
+
+        .performance-search-wrap input:focus,
+        .performance-page-size-control select:focus {
+          border-color: rgba(102,88,220,.65);
+          box-shadow:
+            0 0 0 4px rgba(102,88,220,.08),
+            3px 4px 0 rgba(102,88,220,.10);
+        }
+
+        .performance-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .performance-page-size-control select {
+          width: auto;
+          min-width: 78px;
+          padding: 0 28px 0 10px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .performance-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          min-width: 0;
+          margin-top: 15px;
+          padding: 12px 13px;
+          border: 1px solid rgba(171,181,211,.52);
+          border-radius: 16px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+        }
+
+        .performance-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .performance-pagination-copy strong {
+          color: var(--pf-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .performance-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+          flex-wrap: wrap;
+        }
+
+        .performance-page-button,
+        .performance-page-number {
+          border: 1px solid rgba(98,84,218,.18);
+          color: #4767b4;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(87,80,146,.12);
+          font: inherit;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease,
+            filter 190ms ease;
+        }
+
+        .performance-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+          font-size: 10px;
+        }
+
+        .performance-page-nav {
+          min-width: 78px;
+        }
+
+        .performance-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .performance-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 11px;
+          font-size: 10px;
+        }
+
+        .performance-page-number.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #575092;
+        }
+
+        .performance-page-button:hover:not(:disabled),
+        .performance-page-number:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .performance-page-button:disabled,
+        .performance-page-number:disabled {
+          opacity: .52;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .performance-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .performance-page-indicator {
+          min-width: 82px;
+          color: var(--pf-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
         .performance-tabs {
           display: flex;
           gap: 8px;
@@ -1823,21 +3307,31 @@ export default function Performance({ setPage }) {
         .performance-tabs button {
           min-height: 42px;
           padding: 9px 14px;
-          border: 1px solid rgba(171,181,211,.62);
-          border-radius: 999px;
-          color: var(--pf-copy);
-          background: #fff;
-          box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 14px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87,80,146,.12);
           font: inherit;
           font-size: 12px;
           font-weight: 900;
           cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .performance-tabs button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46,178,185,.46);
         }
 
         .performance-tabs button.active {
+          border-color: transparent;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8, 0 12px 22px rgba(52,43,120,.14);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
         }
 
         .performance-form {
@@ -1889,7 +3383,7 @@ export default function Performance({ setPage }) {
           padding: 18px;
           border: 1px solid rgba(171,181,211,.55);
           border-radius: 22px;
-          background: linear-gradient(145deg, #edf6ff, #f1efff);
+          background: #f5f5ff;
           box-shadow: 5px 6px 0 #c9c0ff;
         }
 
@@ -1900,7 +3394,7 @@ export default function Performance({ setPage }) {
           display: grid;
           place-items: center;
           color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
           box-shadow: 5px 6px 0 #b9d7ff;
           font-size: 22px;
           font-weight: 900;
@@ -1921,24 +3415,41 @@ export default function Performance({ setPage }) {
           color: var(--pf-copy);
         }
 
-        .performance-3d-chart {
+        .performance-trend-chart {
           display: grid;
-          gap: 14px;
+          gap: 12px;
         }
 
-        .performance-3d-row {
+        .performance-trend-row {
           display: grid;
-          grid-template-columns: minmax(150px, .45fr) minmax(0, 1fr);
-          gap: 14px;
+          gap: 12px;
+          padding: 15px;
+          border: 1px solid rgba(171,181,211,.50);
+          border-radius: 16px;
+          background: #ffffff;
+          transition:
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .performance-trend-row:hover {
+          border-color: rgba(77,119,221,.30);
+          background: #fbfcff;
+        }
+
+        .performance-trend-label {
+          display: flex;
           align-items: center;
-          padding: 13px;
-          border: 1px solid rgba(171,181,211,.48);
-          border-radius: 17px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+          justify-content: space-between;
+          gap: 14px;
+          min-width: 0;
         }
 
-        .performance-3d-label strong {
+        .performance-trend-label > div {
+          min-width: 0;
+        }
+
+        .performance-trend-label strong {
           display: block;
           color: var(--pf-ink);
           overflow: hidden;
@@ -1946,38 +3457,42 @@ export default function Performance({ setPage }) {
           white-space: nowrap;
         }
 
-        .performance-3d-label span {
-          display: block;
-          margin-top: 4px;
-          color: var(--pf-copy);
-          font-size: 11px;
-          font-weight: 800;
+        .performance-trend-label span {
+          display: inline-flex;
+          width: max-content;
+          max-width: 100%;
+          margin-top: 5px;
+          padding: 4px 8px;
+          border: 1px solid rgba(77,119,221,.14);
+          border-radius: 999px;
+          color: #5d6785;
+          background: #f0f5ff;
+          font-size: 10px;
+          font-weight: 850;
+          line-height: 1.2;
         }
 
-        .performance-3d-track {
-          height: 25px;
+        .performance-trend-value {
+          flex: 0 0 auto;
+          color: #4767b4 !important;
+          font-size: 12px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .performance-trend-track {
+          width: 100%;
+          height: 10px;
           overflow: hidden;
           border-radius: 999px;
-          background: #e5e8f1;
-          box-shadow: inset 0 2px 5px rgba(15,23,42,.08);
+          background: #edf1f7;
         }
 
-        .performance-3d-bar {
-          min-width: 8%;
+        .performance-trend-bar {
           height: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          padding-right: 9px;
-          border-radius: 999px;
-          color: #fff;
-          background: linear-gradient(90deg, #6658dc, #3766db 58%, #34c9c4);
-          box-shadow: inset 0 4px 7px rgba(255,255,255,.22), inset 0 -5px 8px rgba(30,41,59,.18);
-        }
-
-        .performance-3d-bar span {
-          font-size: 11px;
-          font-weight: 950;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #4d77dd 0%, #2eb2b9 100%);
+          transition: width .34s cubic-bezier(.22, 1, .36, 1);
         }
 
         .performance-table-wrap {
@@ -1985,7 +3500,9 @@ export default function Performance({ setPage }) {
           border: 1px solid rgba(171,181,211,.50);
           border-radius: 18px;
           background: #fff;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: 0 10px 24px rgba(34,38,110,.06);
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
         }
 
         .performance-table {
@@ -2004,7 +3521,7 @@ export default function Performance({ setPage }) {
 
         .performance-table th {
           color: #536381;
-          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+          background: #f8f9ff;
           font-size: 10px;
           font-weight: 950;
           text-transform: uppercase;
@@ -2025,9 +3542,9 @@ export default function Performance({ setPage }) {
           width: max-content;
           padding: 6px 9px;
           border-radius: 999px;
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 2px 3px 0 #c9c0ff;
+          color: #4767b4;
+          background: #f0f5ff;
+          box-shadow: none;
           font-weight: 900;
         }
 
@@ -2039,11 +3556,11 @@ export default function Performance({ setPage }) {
           place-items: center;
           align-content: center;
           text-align: center;
-          border: 1px dashed rgba(102,88,220,.34);
+          border: 1px dashed rgba(77,119,221,.28);
           border-radius: 20px;
           color: var(--pf-copy);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
-          box-shadow: 4px 5px 0 rgba(52,43,120,.07);
+          background: #f8f9ff;
+          box-shadow: none;
         }
 
         .performance-empty-icon {
@@ -2053,8 +3570,8 @@ export default function Performance({ setPage }) {
           place-items: center;
           border-radius: 17px;
           color: #fff;
-          background: linear-gradient(145deg, #6658dc, #18b5c8);
-          box-shadow: 4px 5px 0 #b9d7ff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .performance-empty h3 {
@@ -2064,9 +3581,58 @@ export default function Performance({ setPage }) {
           font-size: 23px;
         }
 
-        @keyframes performance-icon-float {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-3px) rotate(-3deg); }
+
+        @media (max-width: 1180px) {
+          .performance-hero {
+            grid-template-columns: minmax(0, 1fr);
+            min-height: 0;
+          }
+
+          .performance-hero-actions {
+            justify-content: flex-start;
+          }
+
+          .performance-hero-refresh-stack {
+            width: min(420px, 100%);
+          }
+
+          .performance-section-tab-copy small {
+            display: none;
+          }
+        }
+
+        @media (max-width: 900px) {
+          .performance-page {
+            gap: 18px;
+          }
+
+          .performance-section-tabs {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            padding: 10px;
+          }
+
+          .performance-section-tab {
+            grid-template-columns: minmax(0, 1fr);
+            min-height: 52px;
+            padding: 9px 10px;
+            text-align: center;
+          }
+
+          .performance-section-tab > svg,
+          .performance-section-tab-count,
+          .performance-section-tab-copy small {
+            display: none;
+          }
+
+          .performance-section-tab-copy {
+            display: block;
+            text-align: center;
+          }
+
+          .performance-section-tab-copy strong {
+            font-size: 11px;
+          }
         }
 
         @media (max-width: 1100px) {
@@ -2078,11 +3644,23 @@ export default function Performance({ setPage }) {
           .performance-stats-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+
+          .performance-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .performance-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
         }
 
         @media (max-width: 760px) {
           .performance-page {
-            gap: 18px;
+            gap: 14px;
+            padding-right: 8px;
+            overflow-x: visible;
           }
 
           .performance-hero {
@@ -2090,7 +3668,7 @@ export default function Performance({ setPage }) {
             min-height: 0;
             padding: 20px;
             border-radius: 26px;
-            box-shadow: 6px 7px 0 #c6d8f7, 0 18px 30px rgba(34,38,110,.10);
+            box-shadow: 6px 7px 0 #b9d7ff, 0 18px 30px rgba(34,38,110,.10);
           }
 
           .performance-hero h1 {
@@ -2106,25 +3684,129 @@ export default function Performance({ setPage }) {
           }
 
           .performance-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+
+          .performance-section-tabs {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            padding: 8px;
+            border-radius: 16px;
+          }
+
+          .performance-section-tab {
+            min-height: 44px;
+            padding: 8px 9px;
+            border-radius: 11px;
+          }
+
+          .performance-section-tab-copy strong {
+            font-size: 10.5px;
+          }
+
+          .performance-history-controls {
             grid-template-columns: 1fr;
           }
 
+          .performance-page-size-control {
+            justify-content: space-between;
+          }
+
+          .performance-page-size-control select {
+            flex: 1 1 auto;
+          }
+
+          .performance-pagination-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .performance-page-numbers,
+          .performance-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .performance-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .performance-page-nav {
+            width: 100%;
+          }
+
           .performance-panel {
-            padding: 18px;
-            border-radius: 22px;
-            box-shadow: 5px 6px 0 #c4ccff, 0 17px 28px rgba(34,38,110,.09);
+            padding: 16px;
+            border-radius: 20px;
+            box-shadow: 4px 5px 0 #c4ccff, 0 14px 24px rgba(34,38,110,.08);
+          }
+
+          .performance-graph-panel {
+            box-shadow: 0 10px 22px rgba(34,38,110,.07);
           }
 
           .performance-section-head {
             flex-direction: column;
           }
 
-          .performance-3d-row {
-            grid-template-columns: 1fr;
+          .performance-trend-label {
+            align-items: flex-start;
+          }
+        }
+
+        @media (max-width: 560px) {
+          .performance-section-tabs {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .performance-section-tab,
+          .performance-section-tab-copy {
+            text-align: left;
+          }
+
+          .performance-hero-actions,
+          .performance-hero-refresh-stack,
+          .performance-action-stack {
+            width: 100%;
+          }
+
+          .performance-hero-actions {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .performance-hero-actions .performance-btn {
+            width: 100%;
+          }
+
+          .performance-trend-label {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 8px;
           }
         }
 
         @media (max-width: 430px) {
+          .performance-stats-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .performance-stat-card {
+            min-height: 72px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 13px;
+          }
+
+          .performance-stat-card strong {
+            margin-top: 0;
+          }
+
           .performance-hero {
             padding: 16px;
           }
@@ -2145,6 +3827,20 @@ export default function Performance({ setPage }) {
           .performance-tabs button,
           .performance-btn {
             width: 100%;
+          }
+
+          .performance-hero-actions {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .performance-hero-refresh-stack {
+            width: 100%;
+          }
+
+          .performance-page-number {
+            width: 34px;
+            height: 34px;
           }
 
           .performance-profile-card {
@@ -2183,15 +3879,36 @@ export default function Performance({ setPage }) {
         </div>
 
         <div className="performance-hero-actions">
-          <button
-            type="button"
-            className="performance-btn performance-btn-light"
-            onClick={() => loadData()}
-            disabled={loading}
-          >
-            <RefreshCcw size={16} />
-            Refresh
-          </button>
+          <div className="performance-hero-refresh-stack">
+            <button
+              type="button"
+              className="performance-btn performance-btn-light"
+              onClick={() => loadData({ feedbackScope: 'refresh' })}
+              disabled={loading}
+            >
+              <RefreshCcw
+                size={16}
+                className={loading ? 'performance-spin' : ''}
+              />
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+
+            <PerformanceInlineMessage
+              type={refreshFeedback.type}
+              title={refreshFeedback.title}
+              text={refreshFeedback.text}
+              loading={refreshFeedback.loading}
+              onClose={() =>
+                setRefreshFeedback({
+                  type: '',
+                  title: '',
+                  text: '',
+                  loading: false,
+                })
+              }
+            />
+          </div>
+
           <button
             type="button"
             className="performance-btn performance-btn-primary"
@@ -2203,262 +3920,368 @@ export default function Performance({ setPage }) {
         </div>
       </section>
 
-      {error ? <div className="performance-alert performance-alert-error">{error}</div> : null}
-      {message ? <div className="performance-alert performance-alert-success">{message}</div> : null}
+      {loadError ? (
+        <PerformanceInlineMessage
+          type="error"
+          title="Performance Load Failed"
+          text={loadError}
+          onClose={() => setLoadError('')}
+        />
+      ) : null}
 
-      <section className="performance-stats-grid">
+      <section className="performance-stats-grid" aria-label="Performance summary">
         <StatCard
           label="My Average Rating"
           value={`${formatRating(stats.averageRating)} / 5`}
           meta={ratingLabel(stats.averageRating)}
-          icon={<Star size={19} />}
         />
         <StatCard
           label="Reviews Received"
           value={stats.reviewsReceived}
           meta="Performance given to me"
-          icon={<TrendingUp size={19} />}
         />
         <StatCard
           label="Reviews Given"
           value={stats.reviewsGiven}
           meta="Submitted by me"
-          icon={<CheckCircle2 size={19} />}
         />
         <StatCard
           label="Reviewable Employees"
           value={stats.reviewable}
           meta={activeMode === 'team_leader' ? 'Team members' : 'Reporting scope'}
-          icon={<UsersRound size={19} />}
         />
       </section>
 
-      <section className="performance-layout-grid">
-        <section className="performance-panel">
-          <div className="performance-section-head">
-            <div>
-              <span className="performance-kicker">Submit Review</span>
-              <h2>Weekly Rating Form</h2>
-              <p>
-                Submit one weekly score. If the same employee is reviewed again in the same
-                week, backend will update that weekly review record.
-              </p>
-            </div>
-          </div>
+      <nav
+        className="performance-section-tabs"
+        aria-label="Performance sections"
+      >
+        <button
+          type="button"
+          className={`performance-section-tab ${
+            activeSection === 'review' ? 'active' : ''
+          }`}
+          onClick={() => setActiveSection('review')}
+          aria-pressed={activeSection === 'review'}
+        >
+          <Send size={18} />
+          <span className="performance-section-tab-copy">
+            <strong>Review Workspace</strong>
+            <small>Submit weekly ratings and inspect the selected employee</small>
+          </span>
+          <span className="performance-section-tab-count">
+            {reviewableEmployees.length}
+          </span>
+        </button>
 
-          <div className="performance-tabs">
-            {isTeamLeader ? (
-              <button
-                type="button"
-                className={activeMode === 'team_leader' ? 'active' : ''}
-                onClick={() => setActiveMode('team_leader')}
-              >
-                Team Members
-              </button>
-            ) : null}
+        <button
+          type="button"
+          className={`performance-section-tab ${
+            activeSection === 'analytics' ? 'active' : ''
+          }`}
+          onClick={() => setActiveSection('analytics')}
+          aria-pressed={activeSection === 'analytics'}
+        >
+          <BarChart3 size={18} />
+          <span className="performance-section-tab-copy">
+            <strong>Performance Analytics</strong>
+            <small>Weekly, monthly and yearly performance graphs</small>
+          </span>
+        </button>
 
-            {isReportingOfficer ? (
-              <button
-                type="button"
-                className={activeMode === 'reporting_officer' ? 'active' : ''}
-                onClick={() => setActiveMode('reporting_officer')}
-              >
-                Reporting Scope
-              </button>
-            ) : null}
-          </div>
+        <button
+          type="button"
+          className={`performance-section-tab ${
+            activeSection === 'history' ? 'active' : ''
+          }`}
+          onClick={() => setActiveSection('history')}
+          aria-pressed={activeSection === 'history'}
+        >
+          <CheckCircle2 size={18} />
+          <span className="performance-section-tab-copy">
+            <strong>Review History</strong>
+            <small>Search and browse received and submitted reviews</small>
+          </span>
+          <span className="performance-section-tab-count">
+            {myReviews.length +
+              (reviewsGiven.length ? reviewsGiven.length : reviewHistory.length)}
+          </span>
+        </button>
+      </nav>
 
-          {loading ? (
-            <div className="performance-loading">Loading performance module...</div>
-          ) : !reviewableEmployees.length ? (
-            <EmptyState
-              title="No mapped employees found"
-              text="No employee is currently mapped under your performance review scope."
-            />
-          ) : (
-            <form className="performance-form" onSubmit={handleSubmit}>
-              <label>
-                Select Employee
-                <select
-                  value={form.employee_id}
-                  onChange={(event) => updateForm('employee_id', event.target.value)}
-                >
-                  {reviewableEmployees.map((item) => (
-                    <option key={item.employee_id} value={item.employee_id}>
-                      {item.employee_name} — {item.review_scope_label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Weekly Rating
-                <select
-                  value={form.rating}
-                  onChange={(event) => updateForm('rating', event.target.value)}
-                >
-                  <option value="5">5 - Excellent</option>
-                  <option value="4">4 - Good</option>
-                  <option value="3">3 - Average</option>
-                  <option value="2">2 - Needs Improvement</option>
-                  <option value="1">1 - Poor</option>
-                </select>
-              </label>
-
-              <label>
-                Remarks
-                <textarea
-                  value={form.remarks}
-                  onChange={(event) => updateForm('remarks', event.target.value)}
-                  placeholder="Write a short weekly performance note..."
-                  rows="4"
-                />
-              </label>
-
-              <label>
-                Strengths
-                <textarea
-                  value={form.strengths}
-                  onChange={(event) => updateForm('strengths', event.target.value)}
-                  placeholder="Mention strong points, delivery quality, teamwork, ownership..."
-                  rows="3"
-                />
-              </label>
-
-              <label>
-                Improvement Areas
-                <textarea
-                  value={form.improvement_areas}
-                  onChange={(event) => updateForm('improvement_areas', event.target.value)}
-                  placeholder="Mention areas to improve for the upcoming week..."
-                  rows="3"
-                />
-              </label>
-
-              <button
-                type="submit"
-                className="performance-btn performance-btn-primary"
-                disabled={saving}
-              >
-                <Send size={16} />
-                {saving ? 'Submitting...' : 'Submit Weekly Rating'}
-              </button>
-            </form>
-          )}
-        </section>
-
-        <section className="performance-panel">
-          <div className="performance-section-head">
-            <div>
-              <span className="performance-kicker">Selected Employee</span>
-              <h2>{selectedEmployee ? selectedEmployee.employee_name : 'No Employee Selected'}</h2>
-              <p>
-                {selectedEmployee
-                  ? `${selectedEmployee.review_scope_label} • ${
-                      selectedEmployee.department || 'Department not set'
-                    } • ${selectedEmployee.designation || 'Designation not set'}`
-                  : 'Choose an employee from the form to view details.'}
-              </p>
-            </div>
-          </div>
-
-          {selectedEmployee ? (
-            <div className="performance-profile-card">
-              <div className="performance-avatar">
-                {String(selectedEmployee.employee_name || 'E').slice(0, 2).toUpperCase()}
-              </div>
+      {activeSection === 'review' ? (
+        <section className="performance-section-content performance-layout-grid">
+          <section className="performance-panel">
+            <div className="performance-section-head">
               <div>
-                <h3>{selectedEmployee.employee_name}</h3>
-                <p>{selectedEmployee.email || 'Email not available'}</p>
-                <span>
-                  {selectedEmployee.employee_code ||
-                    selectedEmployee.raw_employee_id ||
-                    selectedEmployee.emp_code ||
-                    'No employee code'}
-                </span>
+                <span className="performance-kicker">Submit Review</span>
+                <h2>Weekly Rating Form</h2>
+                <p>
+                  Submit one weekly score. If the same employee is reviewed again in the same
+                  week, backend will update that weekly review record.
+                </p>
               </div>
             </div>
-          ) : (
-            <EmptyState />
-          )}
+
+            <div className="performance-tabs">
+              {isTeamLeader ? (
+                <button
+                  type="button"
+                  className={activeMode === 'team_leader' ? 'active' : ''}
+                  onClick={() => setActiveMode('team_leader')}
+                >
+                  Team Members
+                </button>
+              ) : null}
+
+              {isReportingOfficer ? (
+                <button
+                  type="button"
+                  className={activeMode === 'reporting_officer' ? 'active' : ''}
+                  onClick={() => setActiveMode('reporting_officer')}
+                >
+                  Reporting Scope
+                </button>
+              ) : null}
+            </div>
+
+            {loading ? (
+              <div className="performance-loading">Loading performance module...</div>
+            ) : !reviewableEmployees.length ? (
+              <EmptyState
+                title="No mapped employees found"
+                text="No employee is currently mapped under your performance review scope."
+              />
+            ) : (
+              <form className="performance-form" onSubmit={handleSubmit}>
+                <label>
+                  Select Employee
+                  <select
+                    value={form.employee_id}
+                    onChange={(event) => updateForm('employee_id', event.target.value)}
+                  >
+                    {reviewableEmployees.map((item) => (
+                      <option key={item.employee_id} value={item.employee_id}>
+                        {item.employee_name} — {item.review_scope_label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Weekly Rating
+                  <select
+                    value={form.rating}
+                    onChange={(event) => updateForm('rating', event.target.value)}
+                  >
+                    <option value="5">5 - Excellent</option>
+                    <option value="4">4 - Good</option>
+                    <option value="3">3 - Average</option>
+                    <option value="2">2 - Needs Improvement</option>
+                    <option value="1">1 - Poor</option>
+                  </select>
+                </label>
+
+                <label>
+                  Remarks
+                  <textarea
+                    value={form.remarks}
+                    onChange={(event) => updateForm('remarks', event.target.value)}
+                    placeholder="Write a short weekly performance note..."
+                    rows="4"
+                  />
+                </label>
+
+                <label>
+                  Strengths
+                  <textarea
+                    value={form.strengths}
+                    onChange={(event) => updateForm('strengths', event.target.value)}
+                    placeholder="Mention strong points, delivery quality, teamwork, ownership..."
+                    rows="3"
+                  />
+                </label>
+
+                <label>
+                  Improvement Areas
+                  <textarea
+                    value={form.improvement_areas}
+                    onChange={(event) => updateForm('improvement_areas', event.target.value)}
+                    placeholder="Mention areas to improve for the upcoming week..."
+                    rows="3"
+                  />
+                </label>
+
+                <div className="performance-action-stack">
+                  <button
+                    type="submit"
+                    className="performance-btn performance-btn-primary"
+                    disabled={saving}
+                  >
+                    <Send size={16} />
+                    {saving ? 'Submitting...' : 'Submit Weekly Rating'}
+                  </button>
+
+                  {error ? (
+                    <PerformanceInlineMessage
+                      type="error"
+                      title="Review Submission Failed"
+                      text={error}
+                      onClose={() => {
+                        setError('');
+                        setMessage('');
+                      }}
+                    />
+                  ) : message ? (
+                    <PerformanceInlineMessage
+                      type={reviewFeedbackLoading ? 'info' : 'success'}
+                      title={
+                        reviewFeedbackLoading
+                          ? 'Submitting Review'
+                          : 'Review Submitted'
+                      }
+                      text={message}
+                      loading={reviewFeedbackLoading}
+                      onClose={() => {
+                        setMessage('');
+                        setError('');
+                        setReviewFeedbackLoading(false);
+                      }}
+                    />
+                  ) : null}
+                </div>
+              </form>
+            )}
+          </section>
+
+          <section className="performance-panel">
+            <div className="performance-section-head">
+              <div>
+                <span className="performance-kicker">Selected Employee</span>
+                <h2>
+                  {selectedEmployee
+                    ? selectedEmployee.employee_name
+                    : 'No Employee Selected'}
+                </h2>
+                <p>
+                  {selectedEmployee
+                    ? `${selectedEmployee.review_scope_label} • ${
+                        selectedEmployee.department || 'Department not set'
+                      } • ${
+                        selectedEmployee.designation || 'Designation not set'
+                      }`
+                    : 'Choose an employee from the form to view details.'}
+                </p>
+              </div>
+            </div>
+
+            {selectedEmployee ? (
+              <div className="performance-profile-card">
+                <div className="performance-avatar">
+                  {String(selectedEmployee.employee_name || 'E')
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </div>
+                <div>
+                  <h3>{selectedEmployee.employee_name}</h3>
+                  <p>{selectedEmployee.email || 'Email not available'}</p>
+                  <span>
+                    {selectedEmployee.employee_code ||
+                      selectedEmployee.raw_employee_id ||
+                      selectedEmployee.emp_code ||
+                      'No employee code'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <EmptyState />
+            )}
+          </section>
         </section>
-      </section>
+      ) : null}
 
-      <section className="performance-panel">
-        <div className="performance-section-head">
-          <div>
-            <span className="performance-kicker">Auto Analytics</span>
-            <h2>Weekly, Monthly and Yearly Performance</h2>
-            <p>
-              Weekly reviews are used to generate monthly and yearly analytics automatically.
-            </p>
-          </div>
+      {activeSection === 'analytics' ? (
+        <div className="performance-section-content">
+          <section className="performance-panel">
+            <div className="performance-section-head">
+              <div>
+                <span className="performance-kicker">Auto Analytics</span>
+                <h2>Weekly, Monthly and Yearly Performance</h2>
+                <p>
+                  Weekly reviews are used to generate monthly and yearly analytics automatically.
+                </p>
+              </div>
 
-          <div className="performance-tabs compact">
-            <button
-              type="button"
-              className={graphMode === 'weekly' ? 'active' : ''}
-              onClick={() => setGraphMode('weekly')}
-            >
-              Weekly
-            </button>
-            <button
-              type="button"
-              className={graphMode === 'monthly' ? 'active' : ''}
-              onClick={() => setGraphMode('monthly')}
-            >
-              Monthly
-            </button>
-            <button
-              type="button"
-              className={graphMode === 'yearly' ? 'active' : ''}
-              onClick={() => setGraphMode('yearly')}
-            >
-              Yearly
-            </button>
-          </div>
+              <div className="performance-tabs compact">
+                <button
+                  type="button"
+                  className={graphMode === 'weekly' ? 'active' : ''}
+                  onClick={() => setGraphMode('weekly')}
+                >
+                  Weekly
+                </button>
+                <button
+                  type="button"
+                  className={graphMode === 'monthly' ? 'active' : ''}
+                  onClick={() => setGraphMode('monthly')}
+                >
+                  Monthly
+                </button>
+                <button
+                  type="button"
+                  className={graphMode === 'yearly' ? 'active' : ''}
+                  onClick={() => setGraphMode('yearly')}
+                >
+                  Yearly
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <PerformanceGraph
+            title={`${graphMode.charAt(0).toUpperCase()}${graphMode.slice(1)} Performance Overview`}
+            subtitle="Performance trend for weekly, monthly and yearly review analytics."
+            chart={selectedGraph}
+          />
+
+          {isTeamLeader ? (
+            <PerformanceGraph
+              title="Team Member Weekly Graph"
+              subtitle="Employee-wise weekly performance under Team Leader."
+              chart={pickGraphSource(
+                dashboard.team_member_weekly_graph,
+                dashboard.team_performance_chart,
+                dashboard.weekly_performance_chart,
+                reviewHistory,
+              )}
+            />
+          ) : null}
+
+          {isReportingOfficer ? (
+            <PerformanceGraph
+              title="Reporting Officer Team Leader Graph"
+              subtitle="Team Leader and reporting member performance visible employee-wise."
+              chart={pickGraphSource(
+                dashboard.reporting_team_leader_weekly_graph,
+                dashboard.reporting_performance_chart,
+                dashboard.weekly_performance_chart,
+                reviewHistory,
+              )}
+            />
+          ) : null}
         </div>
-      </section>
-
-      <PerformanceGraph
-        title={`${graphMode.charAt(0).toUpperCase()}${graphMode.slice(1)} Performance Overview`}
-        subtitle="3D performance graph for weekly, monthly and yearly review analytics."
-        chart={selectedGraph}
-      />
-
-      {isTeamLeader ? (
-        <PerformanceGraph
-          title="Team Member Weekly Graph"
-          subtitle="Employee-wise weekly performance under Team Leader."
-          chart={pickGraphSource(
-            dashboard.team_member_weekly_graph,
-            dashboard.team_performance_chart,
-            dashboard.weekly_performance_chart,
-            reviewHistory,
-          )}
-        />
       ) : null}
 
-      {isReportingOfficer ? (
-        <PerformanceGraph
-          title="Reporting Officer Team Leader Graph"
-          subtitle="Team Leader and reporting member performance visible employee-wise."
-          chart={pickGraphSource(
-            dashboard.reporting_team_leader_weekly_graph,
-            dashboard.reporting_performance_chart,
-            dashboard.weekly_performance_chart,
-            reviewHistory,
-          )}
-        />
+      {activeSection === 'history' ? (
+        <div className="performance-section-content performance-history-grid">
+          <ReviewHistory title="Reviews Received By Me" reviews={myReviews} />
+          <ReviewHistory
+            title="Reviews Submitted By Me"
+            reviews={reviewsGiven.length ? reviewsGiven : reviewHistory}
+          />
+        </div>
       ) : null}
 
-      <div className="performance-history-grid">
-        <ReviewHistory title="Reviews Received By Me" reviews={myReviews} />
-        <ReviewHistory
-          title="Reviews Submitted By Me"
-          reviews={reviewsGiven.length ? reviewsGiven : reviewHistory}
-        />
-      </div>
     </main>
   );
 }

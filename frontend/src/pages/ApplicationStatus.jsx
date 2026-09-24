@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   FileText,
+  Loader2,
   RefreshCcw,
+  Search,
   ShieldCheck,
   Sparkles,
   XCircle,
@@ -16,9 +19,7 @@ import {
   normalizeLeaveApprovalList,
   getMyHolidayWorkRequests,
 } from '../api/client';
-import Stat from '../components/Stat';
 import Table from '../components/Table';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -548,42 +549,540 @@ function LeaveStatusCard({ row }) {
   );
 }
 
-export default function ApplicationStatus() {
-  const alerts = useCustomAlert();
 
+const APPLICATION_NOTICE_HIDE_MS = 3600;
+const APPLICATION_PAGE_SIZES = [10, 25, 50, 100];
+
+function applicationPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function rowSearchText(row = {}) {
+  return Object.values(row)
+    .flatMap((value) => {
+      if (value === null || value === undefined) return [];
+
+      if (typeof value === 'object') {
+        try {
+          return [JSON.stringify(value)];
+        } catch {
+          return [];
+        }
+      }
+
+      return [String(value)];
+    })
+    .join(' ')
+    .toLowerCase();
+}
+
+function leaveTrackerSearchText(row = {}) {
+  return [
+    employeeName(row),
+    row.employee_code,
+    row.emp_code,
+    row.employee_id,
+    row.department,
+    row.designation,
+    leaveRequestTypeLabel(row),
+    row.reason,
+    liveStatus(row),
+    statusLabel(row.status),
+    row.team_leader_name,
+    row.reporting_officer_name,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function ApplicationInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`as-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="as-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="as-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="as-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="as-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function ApplicationPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="as-pagination">
+      <div className="as-pagination-controls">
+        <button
+          type="button"
+          className="as-page-button as-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="as-page-numbers" aria-label="Pagination">
+          {applicationPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`as-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span className="as-page-ellipsis" key={item}>
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="as-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="as-page-button as-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PaginatedStatusTable({
+  rows = [],
+  maxColumns = 8,
+  searchPlaceholder = 'Search records...',
+  emptyText = 'No records found.',
+}) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredRows = useMemo(() => {
+    const term = query.trim().toLowerCase();
+
+    if (!term) return rows;
+
+    return rows.filter((row) => rowSearchText(row).includes(term));
+  }, [query, rows]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredRows.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  return (
+    <div className="as-data-browser">
+      <div className="as-data-controls">
+        <label className="as-search-box">
+          <Search size={17} />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
+          />
+        </label>
+
+        <div className="as-view-control">
+          <span>
+            {filteredRows.length.toLocaleString('en-IN')} record
+            {filteredRows.length === 1 ? '' : 's'}
+          </span>
+
+          <label className="as-page-size">
+            <span>View</span>
+            <select
+              value={pageSize}
+              onChange={(event) =>
+                setPageSize(Number(event.target.value))
+              }
+              aria-label="Records per page"
+            >
+              {APPLICATION_PAGE_SIZES.map((size) => (
+                <option value={size} key={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {filteredRows.length ? (
+        <>
+          <Table rows={pagedRows} maxColumns={maxColumns} />
+
+          <ApplicationPagination
+            total={filteredRows.length}
+            page={safePage}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
+        </>
+      ) : (
+        <div className="as-empty">
+          <Search size={26} />
+          <p>{query ? 'No matching records found.' : emptyText}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeaveTrackerBrowser({ rows = [] }) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredRows = useMemo(() => {
+    const term = query.trim().toLowerCase();
+
+    if (!term) return rows;
+
+    return rows.filter((row) =>
+      leaveTrackerSearchText(row).includes(term),
+    );
+  }, [query, rows]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredRows.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedRows = filteredRows.slice(pageStart, pageStart + pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  return (
+    <div className="as-data-browser as-tracker-browser">
+      <div className="as-data-controls">
+        <label className="as-search-box">
+          <Search size={17} />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search employee, leave type, stage or status..."
+            aria-label="Search leave approval tracker"
+          />
+        </label>
+
+        <div className="as-view-control">
+          <span>
+            {filteredRows.length.toLocaleString('en-IN')} request
+            {filteredRows.length === 1 ? '' : 's'}
+          </span>
+
+          <label className="as-page-size">
+            <span>View</span>
+            <select
+              value={pageSize}
+              onChange={(event) =>
+                setPageSize(Number(event.target.value))
+              }
+              aria-label="Leave tracker requests per page"
+            >
+              {APPLICATION_PAGE_SIZES.map((size) => (
+                <option value={size} key={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {filteredRows.length ? (
+        <>
+          <div className="as-live-grid">
+            {pagedRows.map((row, index) => (
+              <LeaveStatusCard
+                key={
+                  row._id ||
+                  row.id ||
+                  row.request_id ||
+                  `${employeeName(row)}-${pageStart + index}`
+                }
+                row={row}
+              />
+            ))}
+          </div>
+
+          <ApplicationPagination
+            total={filteredRows.length}
+            page={safePage}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
+        </>
+      ) : (
+        <div className="as-empty">
+          <Clock3 size={28} />
+          <p>
+            {query
+              ? 'No leave request matches the current search.'
+              : 'No leave request status found.'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ApplicationStatus() {
   const [data, setData] = useState(null);
   const [holidayWorkRequests, setHolidayWorkRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingHolidayWork, setLoadingHolidayWork] = useState(false);
+  const [activeSection, setActiveSection] = useState('leave');
+  const [activeActivitySection, setActiveActivitySection] = useState('tickets');
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
 
-  async function loadStatus() {
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, APPLICATION_NOTICE_HIDE_MS);
+    }
+  }
+
+  async function loadStatus({ feedbackScope = '' } = {}) {
     try {
       setLoading(true);
 
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'info',
+          'Refreshing application status...',
+          'Refreshing',
+          { loading: true },
+        );
+      }
+
       const res = await api('/application_status');
       setData(res);
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Application status is up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
     } catch (error) {
-      alerts.error(
-        error.message || 'Unable to load application status.',
+      const errorMessage =
+        error.message || 'Unable to load application status.';
+
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
+        errorMessage,
         'Status Load Failed',
       );
+
+      return false;
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadHolidayWorkRequests() {
+  async function loadHolidayWorkRequests({
+    feedbackScope = '',
+  } = {}) {
     try {
       setLoadingHolidayWork(true);
 
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'info',
+          'Refreshing holiday work request status...',
+          'Refreshing',
+          { loading: true },
+        );
+      }
+
       const res = await getMyHolidayWorkRequests();
       setHolidayWorkRequests(res.items || res.requests || []);
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Holiday work request status is up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
     } catch (error) {
       setHolidayWorkRequests([]);
-      alerts.error(
-        error.message || 'Unable to load holiday work request status.',
+
+      const errorMessage =
+        error.message || 'Unable to load holiday work request status.';
+
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
+        errorMessage,
         'Holiday Work Status Failed',
       );
+
+      return false;
     } finally {
       setLoadingHolidayWork(false);
     }
@@ -592,15 +1091,65 @@ export default function ApplicationStatus() {
   useEffect(() => {
     loadStatus();
     loadHolidayWorkRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.as-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
   }, []);
 
   async function refreshAllStatus() {
-    await Promise.all([
+    showFeedback(
+      'refresh-all',
+      'info',
+      'Refreshing all application status records...',
+      'Refreshing',
+      { loading: true },
+    );
+
+    const [statusLoaded, holidayLoaded] = await Promise.all([
       loadStatus(),
       loadHolidayWorkRequests(),
     ]);
-  }
 
+    if (statusLoaded && holidayLoaded) {
+      showFeedback(
+        'refresh-all',
+        'success',
+        'All application status records are up to date.',
+        'Refresh Complete',
+      );
+      return;
+    }
+
+    showFeedback(
+      'refresh-all',
+      'error',
+      'Some application status records could not be refreshed. Please try again.',
+      'Refresh Incomplete',
+    );
+  }
 
   const summary = data?.summary || {};
 
@@ -639,8 +1188,10 @@ export default function ApplicationStatus() {
     [data],
   );
 
-  const pendingLeaves = rawLeaveRows.filter(
-    (row) => ['pending', 'in_review'].includes(String(row.status || '').toLowerCase()),
+  const pendingLeaves = rawLeaveRows.filter((row) =>
+    ['pending', 'in_review'].includes(
+      String(row.status || '').toLowerCase(),
+    ),
   ).length;
 
   const approvedLeaves = rawLeaveRows.filter(
@@ -656,23 +1207,50 @@ export default function ApplicationStatus() {
 
   const hrNotifiedLeaves = rawLeaveRows.filter(isHrNotified).length;
 
+  const otherActivityCount =
+    ticketRows.length + compOffRows.length + notificationRows.length;
+
   return (
     <div className="page-grid application-status-page">
       <style>{`
         .application-status-page {
           --as-ink: #101a3a;
           --as-copy: #5d6d8d;
-          --as-violet: #6658dc;
-          --as-violet-deep: #40348d;
-          --as-blue: #3766db;
-          --as-cyan: #18b5c8;
-          --as-teal: #34c9c4;
-          --as-yellow: #d8ff43;
-          --as-danger: #d84d68;
+          --as-blue: #4d77dd;
+          --as-cyan: #2eb2b9;
+          --as-violet: #575092;
+          --as-danger: #a2344d;
           --as-line: rgba(16, 26, 58, .14);
+          width: 100%;
+          min-width: 0;
           display: grid;
-          gap: clamp(18px, 2vw, 26px);
+          gap: clamp(16px, 1.8vw, 24px);
           color: var(--as-ink);
+        }
+
+        .application-status-page,
+        .application-status-page * {
+          box-sizing: border-box;
+        }
+
+        .application-status-page > *,
+        .application-status-page section,
+        .application-status-page article,
+        .application-status-page nav,
+        .application-status-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .application-status-page::before,
+        .application-status-page::after,
+        .application-status-page .as-page-hero::before,
+        .application-status-page .as-page-hero::after,
+        .application-status-page .as-kpi-card::before,
+        .application-status-page .as-kpi-card::after {
+          content: none;
+          display: none;
+          background: none;
         }
 
         .application-status-page .as-page-hero {
@@ -680,20 +1258,28 @@ export default function ApplicationStatus() {
           isolation: isolate;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: clamp(22px, 3vw, 40px);
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 330px);
+          gap: clamp(20px, 3vw, 38px);
           align-items: center;
-          min-height: 260px;
-          padding: clamp(25px, 3vw, 42px);
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
           border: 1px solid rgba(154, 164, 205, .58);
           border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
-          box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
+        }
+
+        .as-hero-copy {
+          min-width: 0;
+          max-width: 900px;
         }
 
         .as-page-kicker,
@@ -705,7 +1291,7 @@ export default function ApplicationStatus() {
           max-width: 100%;
           border-radius: 999px;
           color: #fff;
-          background: #342b78;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -716,13 +1302,13 @@ export default function ApplicationStatus() {
         .as-page-kicker {
           margin-bottom: 15px;
           padding: 9px 13px;
-          box-shadow: 4px 5px 0 #18b5c8;
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
         }
 
         .as-section-kicker {
           margin-bottom: 10px;
           padding: 7px 10px;
-          box-shadow: 3px 4px 0 #18b5c8;
+          box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
         }
 
         .application-status-page .as-page-hero h1 {
@@ -730,14 +1316,14 @@ export default function ApplicationStatus() {
           margin: 0;
           color: var(--as-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(44px, 5.2vw, 77px);
+          font-size: clamp(44px, 5.2vw, 76px);
           font-weight: 760;
           line-height: .94;
           letter-spacing: -.058em;
         }
 
         .application-status-page .as-page-hero h1 em {
-          color: var(--as-violet);
+          color: var(--as-blue);
           font-family: Georgia, "Times New Roman", serif;
           font-weight: 500;
         }
@@ -750,125 +1336,312 @@ export default function ApplicationStatus() {
           line-height: 1.68;
         }
 
-        .application-status-page .as-page-hero .secondary {
-          min-height: 54px;
-          padding-inline: 18px;
+        .as-refresh-stack,
+        .as-panel-refresh-stack {
+          display: grid;
+          gap: 9px;
+          width: 100%;
+          min-width: 0;
+          align-items: start;
+        }
+
+        .as-refresh-stack {
+          width: min(300px, 100%);
+        }
+
+        .application-status-page .secondary {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 9px;
-          border: 1px solid rgba(65, 55, 161, .18);
-          border-radius: 18px;
-          color: #40348d;
-          background: rgba(255, 255, 255, .90);
-          box-shadow:
-            6px 7px 0 #b9d7ff,
-            0 14px 25px rgba(44, 75, 116, .10);
+          gap: 8px;
+          width: max-content;
+          color: #4767b4;
+          background: #fff;
+          box-shadow: none;
+          font: inherit;
+          font-size: 12px;
           font-weight: 900;
-          white-space: nowrap;
+          cursor: pointer;
           transition:
-            transform 190ms cubic-bezier(.22,1,.36,1),
-            box-shadow 190ms ease;
+            transform 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
         }
 
-        .application-status-page .as-page-hero .secondary svg:first-child {
-          animation: asRefreshIdle 4.2s linear infinite;
+        .application-status-page .secondary:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
+          filter: saturate(1.03);
         }
 
-        .application-status-page .as-page-hero .secondary:disabled svg:first-child {
-          animation: asSpin 1s linear infinite;
+        .application-status-page .secondary:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+          transform: none;
         }
 
-        .application-status-page .as-page-hero .secondary:hover {
-          transform: translateY(-3px);
-          box-shadow:
-            8px 9px 0 #b9d7ff,
-            0 18px 30px rgba(44, 75, 116, .14);
+        .as-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
         }
 
-        .application-status-page .stats-grid {
-          gap: 15px;
-        }
-
-        .application-status-page .stats-grid .stat-card {
-          min-height: 122px;
+        .as-kpi-card {
+          min-width: 0;
+          min-height: 120px;
           padding: 18px;
           border: 1px solid rgba(171, 181, 211, .66);
           border-radius: 22px;
           background: #edf6ff;
-          box-shadow:
-            7px 9px 0 #b9d7ff,
-            0 18px 30px rgba(34, 38, 110, .09);
-          transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease;
+          box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
         }
 
-        .application-status-page .stats-grid .stat-card:nth-child(4n + 2) {
+        .as-kpi-card:nth-child(2) {
           background: #eaf8f4;
-          box-shadow:
-            7px 9px 0 #aee6d9,
-            0 18px 30px rgba(34, 38, 110, .09);
         }
 
-        .application-status-page .stats-grid .stat-card:nth-child(4n + 3) {
-          background: #fff0f2;
-          box-shadow:
-            7px 9px 0 #f2c2cc,
-            0 18px 30px rgba(34, 38, 110, .09);
+        .as-kpi-card:nth-child(3) {
+          background: #fff4d5;
         }
 
-        .application-status-page .stats-grid .stat-card:nth-child(4n + 4) {
+        .as-kpi-card:nth-child(4) {
           background: #f1efff;
-          box-shadow:
-            7px 9px 0 #c9c0ff,
-            0 18px 30px rgba(34, 38, 110, .09);
         }
 
-        .application-status-page .stats-grid .stat-card:hover {
-          transform: translateY(-4px);
+        .as-kpi-card span,
+        .as-kpi-card strong,
+        .as-kpi-card small {
+          display: block;
         }
 
-        .application-status-page .stats-grid .stat-card span {
+        .as-kpi-card span {
           color: #5d6785;
           font-size: 9px;
           font-weight: 950;
-          letter-spacing: .10em;
+          letter-spacing: .09em;
           text-transform: uppercase;
         }
 
-        .application-status-page .stats-grid .stat-card strong {
-          margin-top: 9px;
+        .as-kpi-card strong {
+          margin-top: 8px;
           color: var(--as-ink);
           font-family: Georgia, "Times New Roman", serif;
-          font-size: clamp(31px, 3vw, 46px);
+          font-size: clamp(28px, 3vw, 42px);
+          line-height: 1;
+        }
+
+        .as-kpi-card small {
+          margin-top: 7px;
+          color: var(--as-copy);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .as-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 16px 28px rgba(34, 38, 110, .08);
+        }
+
+        .as-section-tab {
+          min-width: 0;
+          min-height: 64px;
+          padding: 11px 13px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: center;
+          border: 1px solid rgba(77, 119, 221, .22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .as-section-tab:hover {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
+        }
+
+        .as-section-tab.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .17);
+        }
+
+        .as-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .as-section-tab-copy strong {
+          font-size: 11px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .as-section-tab-copy small {
+          color: currentColor;
+          font-size: 8px;
+          font-weight: 700;
+          line-height: 1.3;
+          opacity: .78;
+        }
+
+        .as-section-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          font-size: 9px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .as-activity-subtabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+          width: 100%;
+          padding: 10px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 0 12px 24px rgba(34, 38, 110, .06);
+        }
+
+        .as-activity-subtab {
+          min-width: 0;
+          min-height: 54px;
+          padding: 10px 12px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 8px;
+          align-items: center;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .as-activity-subtab:hover {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
+        }
+
+        .as-activity-subtab.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .15);
+        }
+
+        .as-activity-subtab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 2px;
+        }
+
+        .as-activity-subtab-copy strong {
+          font-size: 11px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .as-activity-subtab-copy small {
+          color: currentColor;
+          font-size: 8px;
+          font-weight: 700;
+          line-height: 1.3;
+          opacity: .78;
+        }
+
+        .as-activity-subtab-count {
+          min-width: 26px;
+          height: 26px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          font-size: 9px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .as-activity-subcontent {
+          animation: asSectionReveal 220ms ease both;
+        }
+
+        .as-section-content {
+          display: grid;
+          gap: 18px;
+          animation: asSectionReveal 220ms ease both;
+        }
+
+        @keyframes asSectionReveal {
+          from {
+            opacity: 0;
+            transform: translateY(5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
 
         .application-status-page .panel {
           min-width: 0;
           padding: clamp(20px, 2vw, 28px);
           border: 1px solid rgba(171, 181, 211, .70);
-          border-radius: clamp(26px, 2.2vw, 36px);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow:
-            8px 10px 0 #c4ccff,
-            0 24px 42px rgba(34, 38, 110, .10);
+          border-radius: clamp(24px, 2.2vw, 34px);
+          background: #fff;
+          box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
           transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease,
-            border-color 210ms ease;
+            border-color 180ms ease,
+            box-shadow 180ms ease;
         }
 
         .application-status-page .panel:hover {
-          border-color: rgba(102, 88, 220, .28);
-          transform: translateY(-3px);
-          box-shadow:
-            10px 12px 0 #c4ccff,
-            0 30px 50px rgba(34, 38, 110, .14);
+          border-color: rgba(77, 119, 221, .28);
+          box-shadow: 0 22px 42px rgba(34, 38, 110, .10);
         }
 
         .application-status-page .toolbar {
+          display: flex;
           align-items: flex-start;
+          justify-content: space-between;
           gap: 16px;
         }
 
@@ -876,44 +1649,273 @@ export default function ApplicationStatus() {
           margin: 0;
           color: var(--as-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(26px, 2.4vw, 39px);
+          font-size: clamp(24px, 2.4vw, 35px);
           font-weight: 760;
-          line-height: .98;
+          line-height: 1;
           letter-spacing: -.045em;
         }
 
         .application-status-page .toolbar p {
-          margin-top: 8px;
+          margin: 8px 0 0;
           color: var(--as-copy);
-          line-height: 1.62;
+          line-height: 1.6;
+        }
+
+        .as-leave-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin: 18px 0 4px;
+        }
+
+        .as-leave-summary-card {
+          padding: 13px;
+          border: 1px solid rgba(171, 181, 211, .54);
+          border-radius: 16px;
+          background: #edf6ff;
+        }
+
+        .as-leave-summary-card:nth-child(2) {
+          background: #eaf8f4;
+        }
+
+        .as-leave-summary-card:nth-child(3) {
+          background: #fff0f2;
+        }
+
+        .as-leave-summary-card:nth-child(4) {
+          background: #f1efff;
+        }
+
+        .as-leave-summary-card span,
+        .as-leave-summary-card strong {
+          display: block;
+        }
+
+        .as-leave-summary-card span {
+          color: var(--as-copy);
+          font-size: 9px;
+          font-weight: 900;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .as-leave-summary-card strong {
+          margin-top: 6px;
+          color: var(--as-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: 26px;
+        }
+
+        .as-data-browser {
+          min-width: 0;
+          margin-top: 16px;
+        }
+
+        .as-tracker-browser {
+          margin-top: 0;
+        }
+
+        .as-data-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          margin-bottom: 14px;
+        }
+
+        .as-search-box {
+          position: relative;
+          min-width: 0;
+          display: block;
+        }
+
+        .as-search-box > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--as-blue);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .as-search-box input,
+        .as-page-size select {
+          width: 100%;
+          min-width: 0;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--as-ink);
+          background: rgba(255, 255, 255, .96);
+          font: inherit;
+        }
+
+        .as-search-box input {
+          min-height: 46px;
+          padding: 0 13px 0 39px;
+          font-size: 13px;
+        }
+
+        .as-search-box input:focus,
+        .as-page-size select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+        }
+
+        .as-view-control {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .as-view-control > span {
+          color: var(--as-copy);
+          font-size: 10px;
+          font-weight: 850;
+          white-space: nowrap;
+        }
+
+        .as-page-size {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--as-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .as-page-size select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .as-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 14px;
+          margin-top: 14px;
+          padding-top: 13px;
+          border-top: 1px solid rgba(65, 55, 161, .08);
+        }
+
+        .as-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .as-page-button,
+        .as-page-number {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .as-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 11px;
+        }
+
+        .as-page-nav {
+          min-width: 78px;
+        }
+
+        .as-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .as-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .as-page-number.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        }
+
+        .as-page-button:hover:not(:disabled),
+        .as-page-number:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
+        }
+
+        .as-page-button:disabled,
+        .as-page-number:disabled {
+          opacity: .5;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .as-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .as-page-indicator {
+          min-width: 82px;
+          color: var(--as-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
         }
 
         .as-live-grid {
           display: grid;
-          gap: 18px;
-          margin-top: 18px;
+          gap: 16px;
         }
 
         .as-leave-card {
           padding: clamp(17px, 2vw, 24px);
           border: 1px solid rgba(171, 181, 211, .70);
-          border-radius: 27px;
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow:
-            7px 9px 0 #c4ccff,
-            0 21px 38px rgba(34, 38, 110, .09);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 14px 28px rgba(34, 38, 110, .07);
           transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease,
-            border-color 210ms ease;
+            border-color 180ms ease,
+            box-shadow 180ms ease;
         }
 
         .as-leave-card:hover {
-          border-color: rgba(102, 88, 220, .28);
-          transform: translateY(-3px);
-          box-shadow:
-            9px 11px 0 #c4ccff,
-            0 28px 46px rgba(34, 38, 110, .13);
+          border-color: rgba(77, 119, 221, .28);
+          box-shadow: 0 17px 32px rgba(34, 38, 110, .09);
         }
 
         .as-leave-card-head {
@@ -940,12 +1942,10 @@ export default function ApplicationStatus() {
           place-items: center;
           flex: 0 0 auto;
           border: 3px solid #fff;
-          border-radius: 20px;
+          border-radius: 18px;
           color: #40348d;
           background: linear-gradient(145deg, #edf6ff, #eaf8f4);
-          box-shadow:
-            5px 6px 0 #b9d7ff,
-            0 13px 26px rgba(34, 38, 110, .12);
+          box-shadow: 0 9px 20px rgba(34, 38, 110, .10);
           font-weight: 900;
         }
 
@@ -977,7 +1977,6 @@ export default function ApplicationStatus() {
           border-radius: 999px;
           color: var(--as-copy);
           background: #f8fafc;
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
           font-size: 11px;
           font-weight: 900;
         }
@@ -985,31 +1984,26 @@ export default function ApplicationStatus() {
         .as-stage-pill.team {
           color: #40348d;
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .as-stage-pill.reporting {
           color: #245da8;
           background: #edf6ff;
-          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .as-stage-pill.hr {
           color: #9a6817;
           background: #fff4d5;
-          box-shadow: 3px 4px 0 #ffe0a5;
         }
 
         .as-stage-pill.approved {
           color: #047857;
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .as-stage-pill.rejected {
           color: #a2344d;
           background: #fff0f2;
-          box-shadow: 3px 4px 0 #f2c2cc;
         }
 
         .as-leave-meta-grid {
@@ -1025,22 +2019,18 @@ export default function ApplicationStatus() {
           border: 1px solid rgba(162, 169, 196, .46);
           border-radius: 16px;
           background: #edf6ff;
-          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .as-leave-meta-grid > div:nth-child(4n + 2) {
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .as-leave-meta-grid > div:nth-child(4n + 3) {
           background: #fff4d5;
-          box-shadow: 3px 4px 0 #ffe0a5;
         }
 
         .as-leave-meta-grid > div:nth-child(4n + 4) {
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .as-leave-meta-grid span,
@@ -1069,7 +2059,7 @@ export default function ApplicationStatus() {
           border: 1px solid rgba(171, 181, 211, .55);
           border-radius: 18px;
           background: linear-gradient(145deg, #f8fbff, #f7f4ff);
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
+          box-shadow: none;
         }
 
         .as-reason {
@@ -1100,14 +2090,13 @@ export default function ApplicationStatus() {
           border-radius: 16px;
           color: var(--as-copy);
           background: #f8fafc;
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+          box-shadow: none;
         }
 
         .as-stage-grid > div.done {
           border-color: rgba(52, 201, 196, .36);
           color: #047857;
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .as-stage-grid span {
@@ -1135,7 +2124,6 @@ export default function ApplicationStatus() {
           border-radius: 16px;
           color: #a2344d;
           background: #fff0f2;
-          box-shadow: 3px 4px 0 #f2c2cc;
           font-weight: 850;
         }
 
@@ -1158,8 +2146,8 @@ export default function ApplicationStatus() {
           height: 12px;
           margin-top: 4px;
           border-radius: 999px;
-          background: linear-gradient(135deg, #6658dc, #34c9c4);
-          box-shadow: 0 0 0 4px rgba(102, 88, 220, .10);
+          background: linear-gradient(135deg, #4d77dd, #2eb2b9);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
         }
 
         .as-timeline-item strong {
@@ -1185,22 +2173,36 @@ export default function ApplicationStatus() {
         }
 
         .as-empty {
+          min-height: 140px;
           padding: 24px;
-          border: 1px dashed rgba(102, 88, 220, .34);
-          border-radius: 22px;
+          border: 1px dashed rgba(77, 119, 221, .30);
+          border-radius: 18px;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 8px;
           color: var(--as-copy);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
+          background: linear-gradient(145deg, #f8fbff, #f8f7ff);
           text-align: center;
           font-weight: 800;
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .07);
+          box-shadow: none;
         }
 
         .application-status-page .table-wrap {
-          margin-top: 16px;
+          width: 100%;
+          max-width: 100%;
+          overflow-x: auto;
+          margin-top: 0;
           border: 1px solid rgba(171, 181, 211, .56);
           border-radius: 18px;
           background: #fff;
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
+          box-shadow: none;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior-x: contain;
+        }
+
+        .application-status-page table {
+          min-width: max-content;
         }
 
         .application-status-page th {
@@ -1209,87 +2211,188 @@ export default function ApplicationStatus() {
         }
 
         .application-status-page tr:hover td {
-          background: #fafaff;
+          background: #fafcff;
         }
 
-        .application-status-page .secondary {
-          border-radius: 15px;
-          border-color: rgba(65, 55, 161, .18);
+        .as-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
           color: #40348d;
-          background: rgba(255, 255, 255, .90);
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
-          font-weight: 900;
-          transition:
-            transform 190ms ease,
-            box-shadow 190ms ease;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
         }
 
-        .application-status-page .secondary:hover {
-          transform: translateY(-2px);
+        .as-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
         }
 
-        .as-dual-section {
-          gap: 24px;
-          align-items: stretch;
+        .as-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
         }
 
-        .as-dual-section > .panel {
-          height: 100%;
+        .as-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
         }
 
-        @keyframes asRefreshIdle {
-          0%, 84% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+        .as-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .as-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .as-inline-feedback-copy strong,
+        .as-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .as-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .as-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .as-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .as-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .as-page-feedback {
+          width: min(600px, 100%);
+        }
+
+        .as-panel-refresh-stack {
+          width: min(260px, 100%);
+        }
+
+        .as-panel-refresh-stack .secondary {
+          justify-self: start;
+        }
+
+        .as-two-col {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+          align-items: start;
+        }
+
+        .as-spin {
+          animation: asSpin .82s linear infinite;
         }
 
         @keyframes asSpin {
-          to { transform: rotate(360deg); }
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         @media (max-width: 1180px) {
+          .as-kpi-grid,
+          .as-leave-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .as-section-tabs {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .as-activity-subtabs {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
           .as-leave-meta-grid {
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }
         }
 
+        @media (max-width: 900px) {
+          .application-status-page .as-page-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .as-refresh-stack {
+            width: min(360px, 100%);
+          }
+
+          .as-two-col {
+            grid-template-columns: 1fr;
+          }
+
+          .as-data-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .as-view-control {
+            justify-content: space-between;
+          }
+        }
+
         @media (max-width: 760px) {
           .application-status-page {
-            gap: 18px;
+            gap: 15px;
           }
 
           .application-status-page .as-page-hero {
-            grid-template-columns: 1fr;
             min-height: 0;
             padding: 20px;
             border-radius: 26px;
-            box-shadow:
-              6px 7px 0 #c6d8f7,
-              0 18px 30px rgba(34, 38, 110, .10);
+            box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
           }
 
           .application-status-page .as-page-hero h1 {
             font-size: clamp(36px, 10vw, 52px);
           }
 
-          .application-status-page .as-page-hero .secondary {
-            width: 100%;
+          .as-section-tabs,
+          .as-activity-subtabs {
+            grid-template-columns: 1fr;
           }
 
-          .application-status-page .stats-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+          .application-status-page .toolbar {
+            align-items: stretch;
+            flex-direction: column;
           }
 
-          .application-status-page .stats-grid .stat-card,
-          .application-status-page .panel,
-          .as-leave-card {
-            border-radius: 22px;
-            box-shadow:
-              5px 6px 0 #c4ccff,
-              0 17px 28px rgba(34, 38, 110, .09);
-          }
-
-          .as-leave-card {
-            padding: 15px;
+          .as-panel-refresh-stack {
+            width: min(320px, 100%);
           }
 
           .as-leave-meta-grid,
@@ -1297,31 +2400,54 @@ export default function ApplicationStatus() {
             grid-template-columns: 1fr;
           }
 
-          .application-status-page .toolbar {
+          .as-leave-card {
+            padding: 15px;
+          }
+
+          .as-pagination {
+            justify-content: stretch;
+          }
+
+          .as-pagination-controls {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             align-items: stretch;
           }
 
-          .application-status-page .toolbar > button {
+          .as-page-numbers,
+          .as-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .as-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .as-page-nav {
             width: 100%;
           }
         }
 
-        @media (max-width: 430px) {
-          .application-status-page .as-page-hero {
-            padding: 16px;
-          }
-
-          .application-status-page .as-page-hero h1 {
-            font-size: clamp(32px, 11vw, 44px);
-          }
-
-          .application-status-page .stats-grid {
+        @media (max-width: 520px) {
+          .as-kpi-grid,
+          .as-leave-summary-grid {
             grid-template-columns: 1fr;
           }
 
-          .application-status-page .stats-grid .stat-card {
-            min-height: 106px;
-            padding: 15px;
+          .as-view-control {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .as-page-size {
+            justify-content: space-between;
+          }
+
+          .as-page-size select {
+            flex: 1 1 auto;
           }
 
           .as-leave-card-head {
@@ -1330,6 +2456,21 @@ export default function ApplicationStatus() {
 
           .as-stage-pill {
             align-self: flex-start;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .application-status-page .as-page-hero {
+            padding: 16px;
+          }
+
+          .application-status-page .as-page-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .as-page-number {
+            width: 34px;
+            height: 34px;
           }
         }
 
@@ -1344,7 +2485,7 @@ export default function ApplicationStatus() {
       `}</style>
 
       <section className="hero compact as-page-hero">
-        <div>
+        <div className="as-hero-copy">
           <span className="as-page-kicker">
             <Sparkles size={13} />
             Live Status
@@ -1355,157 +2496,425 @@ export default function ApplicationStatus() {
           </h1>
 
           <p>
-            Track leave, holiday work approvals, tickets, grievances, comp-off
-            records and notifications from one connected YourComate workspace.
+            Track leave, holiday work approvals, tickets, grievances,
+            comp-off records and notifications from one connected
+            YourComate workspace.
           </p>
         </div>
 
+        <div className="as-refresh-stack">
           <button
             type="button"
             className="secondary"
             onClick={refreshAllStatus}
             disabled={loading || loadingHolidayWork}
           >
-            <RefreshCcw size={16} />
-            {loading || loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
-            <ArrowUpRight size={15} />
+            {loading || loadingHolidayWork ? (
+              <Loader2 size={16} className="as-spin" />
+            ) : (
+              <RefreshCcw size={16} />
+            )}
+            {loading || loadingHolidayWork
+              ? 'Refreshing...'
+              : 'Refresh'}
           </button>
-      </section>
 
-      <section className="stats-grid">
-        <Stat label="Total Requests" value={summary.total || 0} />
-        <Stat label="Pending / Open" value={summary.pending || 0} />
-        <Stat label="Approved / Resolved" value={summary.approved || 0} />
-        <Stat label="Rejected / Cancelled" value={summary.rejected || 0} />
-      </section>
-
-      <section className="stats-grid">
-        <Stat label="Pending Leaves" value={pendingLeaves} />
-        <Stat label="Approved / Stage Approved Leaves" value={approvedLeaves} />
-        <Stat label="Rejected Leaves" value={rejectedLeaves} />
-        <Stat label="HR Notified Leave Records" value={hrNotifiedLeaves} />
-      </section>
-
-      <section className="panel as-section-panel">
-        <div className="toolbar">
-          <div>
-            <span className="as-section-kicker">Approval Journey</span>
-            <h3>Leave Approval Live Tracker</h3>
-            <p>
-              Shows Team Leader approval, Reporting Officer approval, final
-              approval/rejection, and HR record notification status.
-            </p>
-          </div>
+          <ApplicationInlineMessage
+            message={feedbackMap['refresh-all']}
+            onClose={() => clearFeedback('refresh-all')}
+          />
         </div>
+      </section>
 
-        <div className="as-live-grid">
-          {rawLeaveRows.map((row) => (
-            <LeaveStatusCard key={row._id || row.id || row.request_id} row={row} />
-          ))}
+      <section className="as-kpi-grid" aria-label="Application status summary">
+        <article className="as-kpi-card">
+          <span>Total Requests</span>
+          <strong>{summary.total || 0}</strong>
+          <small>All tracked application and request records</small>
+        </article>
 
-          {!rawLeaveRows.length && (
-            <div className="as-empty">
-              <Clock3 size={28} />
-              <p>No leave request status found.</p>
+        <article className="as-kpi-card">
+          <span>Pending / Open</span>
+          <strong>{summary.pending || 0}</strong>
+          <small>Requests still waiting for action or completion</small>
+        </article>
+
+        <article className="as-kpi-card">
+          <span>Approved / Resolved</span>
+          <strong>{summary.approved || 0}</strong>
+          <small>Requests already approved or successfully resolved</small>
+        </article>
+
+        <article className="as-kpi-card">
+          <span>Rejected / Cancelled</span>
+          <strong>{summary.rejected || 0}</strong>
+          <small>Requests closed through rejection or cancellation</small>
+        </article>
+      </section>
+
+      {feedbackMap.page ? (
+        <div className="as-page-feedback">
+          <ApplicationInlineMessage
+            message={feedbackMap.page}
+            onClose={() => clearFeedback('page')}
+          />
+        </div>
+      ) : null}
+
+      <nav
+        className="as-section-tabs"
+        aria-label="Application status sections"
+      >
+        <button
+          type="button"
+          className={`as-section-tab ${
+            activeSection === 'leave' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('leave')}
+          aria-pressed={activeSection === 'leave'}
+        >
+          <ShieldCheck size={18} />
+          <span className="as-section-tab-copy">
+            <strong>Leave Approvals</strong>
+            <small>Live journey and leave records</small>
+          </span>
+          <span className="as-section-tab-count">
+            {rawLeaveRows.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`as-section-tab ${
+            activeSection === 'applications' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('applications')}
+          aria-pressed={activeSection === 'applications'}
+        >
+          <FileText size={18} />
+          <span className="as-section-tab-copy">
+            <strong>All Applications</strong>
+            <small>Unified request overview</small>
+          </span>
+          <span className="as-section-tab-count">{mainRows.length}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`as-section-tab ${
+            activeSection === 'holiday' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('holiday')}
+          aria-pressed={activeSection === 'holiday'}
+        >
+          <Clock3 size={18} />
+          <span className="as-section-tab-copy">
+            <strong>Holiday Work</strong>
+            <small>Holiday attendance approvals</small>
+          </span>
+          <span className="as-section-tab-count">
+            {holidayWorkRows.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`as-section-tab ${
+            activeSection === 'activity' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('activity')}
+          aria-pressed={activeSection === 'activity'}
+        >
+          <CheckCircle2 size={18} />
+          <span className="as-section-tab-copy">
+            <strong>Support & Activity</strong>
+            <small>Tickets, comp-off and notifications</small>
+          </span>
+          <span className="as-section-tab-count">
+            {otherActivityCount}
+          </span>
+        </button>
+      </nav>
+
+      {activeSection === 'leave' ? (
+        <div className="as-section-content">
+          <section className="panel as-section-panel">
+            <div className="toolbar">
+              <div>
+                <span className="as-section-kicker">
+                  Approval Journey
+                </span>
+                <h3>Leave Approval Live Tracker</h3>
+                <p>
+                  Shows Team Leader approval, Reporting Officer approval,
+                  final approval/rejection, and HR record notification
+                  status.
+                </p>
+              </div>
             </div>
-          )}
-        </div>
-      </section>
 
-      <section className="panel as-section-panel">
-        <div className="toolbar">
-          <div>
-            <span className="as-section-kicker">Unified Overview</span>
-            <h3>All Application Status</h3>
-            <p>
-              This table shows the latest live status across all request types.
-            </p>
-          </div>
-        </div>
+            <div className="as-leave-summary-grid">
+              <article className="as-leave-summary-card">
+                <span>Pending Leaves</span>
+                <strong>{pendingLeaves}</strong>
+              </article>
 
-        <Table rows={mainRows} maxColumns={8} />
-      </section>
+              <article className="as-leave-summary-card">
+                <span>Approved / Stage Approved</span>
+                <strong>{approvedLeaves}</strong>
+              </article>
 
-      <section className="panel as-section-panel">
-        <div className="toolbar">
-          <div>
-            <span className="as-section-kicker">Leave Records</span>
-            <h3>Leave Requests Table</h3>
-            <p>
-              Shows whether leave is pending with Team Leader, approved by Team
-              Leader and pending with Reporting Officer, approved by Reporting
-              Officer, rejected, or notified to HR.
-            </p>
-          </div>
-        </div>
+              <article className="as-leave-summary-card">
+                <span>Rejected Leaves</span>
+                <strong>{rejectedLeaves}</strong>
+              </article>
 
-        <Table rows={leaveRows} maxColumns={14} />
-      </section>
-
-<section className="panel as-section-panel">
-  <div className="toolbar">
-    <div>
-      <span className="as-section-kicker">Holiday Attendance</span>
-      <h3>Holiday Work Requests</h3>
-      <p>
-        Shows holiday work approval status before marking attendance on
-        Sunday, second Saturday, fourth Saturday, or HR-created holidays.
-      </p>
-    </div>
-
-    <button
-      type="button"
-      className="secondary"
-      onClick={loadHolidayWorkRequests}
-      disabled={loadingHolidayWork}
-    >
-      {loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
-    </button>
-  </div>
-
-  <Table rows={holidayWorkRows} maxColumns={10} />
-</section>
-
-      <section className="panel as-section-panel">
-        <div className="toolbar">
-          <div>
-            <span className="as-section-kicker">Support Tracking</span>
-            <h3>Tickets / Grievances</h3>
-            <p>Shows the current status of your raised tickets and grievances.</p>
-          </div>
-        </div>
-
-        <Table rows={ticketRows} maxColumns={8} />
-      </section>
-
-      <section className="two-col as-dual-section">
-        <div className="panel as-section-panel">
-          <div className="toolbar">
-            <div>
-              <span className="as-section-kicker">Earned Benefits</span>
-              <h3>Comp-Off Status</h3>
-              <p>
-                Shows available, claimed, used, and expired comp-off records with claim
-                window and linked leave request.
-              </p>
+              <article className="as-leave-summary-card">
+                <span>HR Notified Records</span>
+                <strong>{hrNotifiedLeaves}</strong>
+              </article>
             </div>
-          </div>
 
-          <Table rows={compOffRows} maxColumns={8} />
-        </div>
+            <LeaveTrackerBrowser rows={rawLeaveRows} />
+          </section>
 
-        <div className="panel as-section-panel">
-          <div className="toolbar">
-            <div>
-              <span className="as-section-kicker">Recent Activity</span>
-              <h3>Recent Notifications</h3>
-              <p>Shows recent notifications related to your requests.</p>
+          <section className="panel as-section-panel">
+            <div className="toolbar">
+              <div>
+                <span className="as-section-kicker">
+                  Leave Records
+                </span>
+                <h3>Leave Requests Table</h3>
+                <p>
+                  Shows whether leave is pending with Team Leader,
+                  approved by Team Leader and pending with Reporting
+                  Officer, approved by Reporting Officer, rejected, or
+                  notified to HR.
+                </p>
+              </div>
             </div>
-          </div>
 
-          <Table rows={notificationRows} maxColumns={8} />
+            <PaginatedStatusTable
+              rows={leaveRows}
+              maxColumns={14}
+              searchPlaceholder="Search leave type, stage, dates or status..."
+              emptyText="No leave request records found."
+            />
+          </section>
         </div>
-      </section>
+      ) : null}
+
+      {activeSection === 'applications' ? (
+        <div className="as-section-content">
+          <section className="panel as-section-panel">
+            <div className="toolbar">
+              <div>
+                <span className="as-section-kicker">
+                  Unified Overview
+                </span>
+                <h3>All Application Status</h3>
+                <p>
+                  This table shows the latest live status across all
+                  request types.
+                </p>
+              </div>
+            </div>
+
+            <PaginatedStatusTable
+              rows={mainRows}
+              maxColumns={8}
+              searchPlaceholder="Search request type, title, date or status..."
+              emptyText="No application status records found."
+            />
+          </section>
+        </div>
+      ) : null}
+
+      {activeSection === 'holiday' ? (
+        <div className="as-section-content">
+          <section className="panel as-section-panel">
+            <div className="toolbar">
+              <div>
+                <span className="as-section-kicker">
+                  Holiday Attendance
+                </span>
+                <h3>Holiday Work Requests</h3>
+                <p>
+                  Shows holiday work approval status before marking
+                  attendance on Sunday, second Saturday, fourth Saturday,
+                  or HR-created holidays.
+                </p>
+              </div>
+
+              <div className="as-panel-refresh-stack">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    loadHolidayWorkRequests({
+                      feedbackScope: 'holiday-refresh',
+                    })
+                  }
+                  disabled={loadingHolidayWork}
+                >
+                  {loadingHolidayWork ? (
+                    <Loader2 size={15} className="as-spin" />
+                  ) : (
+                    <RefreshCcw size={15} />
+                  )}
+                  {loadingHolidayWork ? 'Refreshing...' : 'Refresh'}
+                </button>
+
+                <ApplicationInlineMessage
+                  message={feedbackMap['holiday-refresh']}
+                  onClose={() => clearFeedback('holiday-refresh')}
+                />
+              </div>
+            </div>
+
+            <PaginatedStatusTable
+              rows={holidayWorkRows}
+              maxColumns={10}
+              searchPlaceholder="Search holiday, stage, location or status..."
+              emptyText="No holiday work request records found."
+            />
+          </section>
+        </div>
+      ) : null}
+
+      {activeSection === 'activity' ? (
+        <div className="as-section-content">
+          <nav
+            className="as-activity-subtabs"
+            aria-label="Support and activity sections"
+          >
+            <button
+              type="button"
+              className={`as-activity-subtab ${
+                activeActivitySection === 'tickets' ? 'is-active' : ''
+              }`}
+              onClick={() => setActiveActivitySection('tickets')}
+              aria-pressed={activeActivitySection === 'tickets'}
+            >
+              <FileText size={16} />
+              <span className="as-activity-subtab-copy">
+                <strong>Tickets / Grievances</strong>
+                <small>Support request tracking</small>
+              </span>
+              <span className="as-activity-subtab-count">
+                {ticketRows.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`as-activity-subtab ${
+                activeActivitySection === 'compoff' ? 'is-active' : ''
+              }`}
+              onClick={() => setActiveActivitySection('compoff')}
+              aria-pressed={activeActivitySection === 'compoff'}
+            >
+              <Clock3 size={16} />
+              <span className="as-activity-subtab-copy">
+                <strong>Comp-Off Status</strong>
+                <small>Earned benefit records</small>
+              </span>
+              <span className="as-activity-subtab-count">
+                {compOffRows.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`as-activity-subtab ${
+                activeActivitySection === 'notifications' ? 'is-active' : ''
+              }`}
+              onClick={() => setActiveActivitySection('notifications')}
+              aria-pressed={activeActivitySection === 'notifications'}
+            >
+              <CheckCircle2 size={16} />
+              <span className="as-activity-subtab-copy">
+                <strong>Recent Notifications</strong>
+                <small>Recent request activity</small>
+              </span>
+              <span className="as-activity-subtab-count">
+                {notificationRows.length}
+              </span>
+            </button>
+          </nav>
+
+          {activeActivitySection === 'tickets' ? (
+            <section className="panel as-section-panel as-activity-subcontent">
+              <div className="toolbar">
+                <div>
+                  <span className="as-section-kicker">
+                    Support Tracking
+                  </span>
+                  <h3>Tickets / Grievances</h3>
+                  <p>
+                    Shows the current status of your raised tickets and
+                    grievances.
+                  </p>
+                </div>
+              </div>
+
+              <PaginatedStatusTable
+                rows={ticketRows}
+                maxColumns={8}
+                searchPlaceholder="Search ticket, category, priority or status..."
+                emptyText="No ticket or grievance records found."
+              />
+            </section>
+          ) : null}
+
+          {activeActivitySection === 'compoff' ? (
+            <section className="panel as-section-panel as-activity-subcontent">
+              <div className="toolbar">
+                <div>
+                  <span className="as-section-kicker">
+                    Earned Benefits
+                  </span>
+                  <h3>Comp-Off Status</h3>
+                  <p>
+                    Shows available, claimed, used, and expired comp-off
+                    records with claim window and linked leave request.
+                  </p>
+                </div>
+              </div>
+
+              <PaginatedStatusTable
+                rows={compOffRows}
+                maxColumns={8}
+                searchPlaceholder="Search comp-off date, claim or status..."
+                emptyText="No comp-off records found."
+              />
+            </section>
+          ) : null}
+
+          {activeActivitySection === 'notifications' ? (
+            <section className="panel as-section-panel as-activity-subcontent">
+              <div className="toolbar">
+                <div>
+                  <span className="as-section-kicker">
+                    Recent Activity
+                  </span>
+                  <h3>Recent Notifications</h3>
+                  <p>
+                    Shows recent notifications related to your requests.
+                  </p>
+                </div>
+              </div>
+
+              <PaginatedStatusTable
+                rows={notificationRows}
+                maxColumns={8}
+                searchPlaceholder="Search notification title, message or status..."
+                emptyText="No recent notifications found."
+              />
+            </section>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

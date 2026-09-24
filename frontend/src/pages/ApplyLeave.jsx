@@ -1,22 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowUpRight,
   CalendarDays,
   CheckCircle2,
   CreditCard,
   FileText,
+  Loader2,
   RefreshCcw,
   Send,
   ShieldCheck,
   Sparkles,
   UserCheck,
+  XCircle,
 } from 'lucide-react';
 import {
   applyLeaveRequest,
   getLeaveOptions,
 } from '../api/client';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const HR_ADMIN_ROLES = new Set([
   'super_admin',
@@ -373,8 +373,46 @@ function extractLeaveBalances(data = {}) {
   };
 }
 
+const APPLY_LEAVE_NOTICE_HIDE_MS = 3600;
+
+function ApplyLeaveInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`apply-leave-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="apply-leave-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="apply-leave-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="apply-leave-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="apply-leave-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 export default function ApplyLeave({ user = {}, setPage } = {}) {
-  const alerts = useCustomAlert();
   const userRoles = useMemo(() => normalizeRoles(user), [user]);
   const isHrAdminUser = hasAnyRole(userRoles, HR_ADMIN_ROLES);
   const isAdminUser = hasAnyRole(userRoles, ADMIN_ROLES);
@@ -396,7 +434,10 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
   const [members, setMembers] = useState([]);
   const [leaveBalances, setLeaveBalances] = useState({ cl: 0, el: 0 });
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const [refreshingOptions, setRefreshingOptions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
 
   const leaveDays = useMemo(
     () => daysBetween(form.from_date, form.to_date, form.day_type),
@@ -444,30 +485,165 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
     return 'This leave request will be sent to HR.';
   }, [isHrUser, isAdminUser, employeeProfile]);
 
-  async function loadOptions() {
-    try {
-      setLoadingOptions(true);
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
 
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, APPLY_LEAVE_NOTICE_HIDE_MS);
+    }
+  }
+
+  async function loadOptions({ showLoader = true, feedbackScope = '' } = {}) {
+    if (showLoader) {
+      setLoadingOptions(true);
+    } else {
+      setRefreshingOptions(true);
+    }
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing leave balances and handover options...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
+
+    try {
       const data = await getLeaveOptions();
 
       setProjects(data.projects || []);
       setMembers(data.task_handover_options || data.members || []);
       setLeaveBalances(extractLeaveBalances(data));
-        } catch (error) {
-          setProjects([]);
-          setMembers([]);
-          setLeaveBalances({ cl: 0, el: 0 });
-          alerts.error(error.message || 'Unable to load leave options.');
-        } finally {
-      setLoadingOptions(false);
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Leave balances and handover options are up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
+    } catch (error) {
+      const errorMessage =
+        error.message || 'Unable to load leave options.';
+
+      if (showLoader) {
+        setProjects([]);
+        setMembers([]);
+        setLeaveBalances({ cl: 0, el: 0 });
+      }
+
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
+        errorMessage,
+        feedbackScope ? 'Refresh Failed' : 'Leave Options Failed',
+      );
+
+      return false;
+    } finally {
+      if (showLoader) {
+        setLoadingOptions(false);
+      } else {
+        setRefreshingOptions(false);
+      }
     }
   }
 
   useEffect(() => {
     loadOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.apply-leave-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
   }, []);
 
   function openBillingPage() {
+    showFeedback(
+      'billing',
+      'info',
+      'Opening Billing so you can review or upgrade the subscription.',
+      'Opening Billing',
+    );
+
     if (typeof setPage === 'function') {
       setPage('billing');
     }
@@ -506,9 +682,12 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
 
 async function handleSubmit(event) {
   event.preventDefault();
+  clearFeedback('submit');
 
   if (isExpiredOrSuspendedTenant) {
-    alerts.warning(
+    showFeedback(
+      'submit',
+      'warning',
       'Your demo subscription is expired or suspended. Please upgrade to continue.',
       'Subscription Required',
     );
@@ -517,64 +696,110 @@ async function handleSubmit(event) {
   }
 
   if (!form.from_date || !form.to_date) {
-      alerts.warning('From date and to date are required.', 'Missing Details');
-      return;
-    }
-
-    if (form.to_date < form.from_date) {
-      alerts.warning('To date cannot be before from date.', 'Invalid Date Range');
-      return;
-    }
-
-    if (!form.reason.trim()) {
-      alerts.warning('Leave reason is required.', 'Missing Reason');
-      return;
-    }
-
-    if (isHrAdminUser && !form.work_project_name.trim() && !form.project_handover_id) {
-          alerts.warning(
-          'Please enter your work/project details before applying leave.',
-          'Work Details Required',
-        );
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-
-      const selectedProject = projects.find((project) => String(project._id || project.id) === form.project_handover_id);
-
-      const payload = {
-        leave_type: form.day_type === 'half_day' ? 'HALF-DAY' : form.leave_type,
-        from_date: form.from_date,
-        to_date: form.to_date,
-        upto_date: form.to_date,
-        day_type: form.day_type,
-        is_half_day: form.day_type === 'half_day',
-        leave_days: leaveDays,
-        reason: form.reason.trim(),
-        task_handover_to_id: form.task_handover_to_id,
-        project_handover_id: form.project_handover_id,
-        project_handover_name: selectedProject ? projectName(selectedProject) : '',
-        work_project_name: form.work_project_name.trim(),
-        manual_project_name: form.work_project_name.trim(),
-      };
-
-      const data = await applyLeaveRequest(payload);
-
-      alerts.success(data.message || 'Leave request submitted successfully.', 'Leave Submitted');
-
-      setForm({
-        ...EMPTY_FORM,
-        from_date: today,
-        to_date: today,
-      });
-    } catch (error) {
-      alerts.error(error.message || 'Unable to submit leave request.', 'Leave Not Submitted');
-    } finally {
-      setSubmitting(false);
-    }
+    showFeedback(
+      'submit',
+      'warning',
+      'From date and to date are required.',
+      'Missing Details',
+    );
+    return;
   }
+
+  if (form.to_date < form.from_date) {
+    showFeedback(
+      'submit',
+      'warning',
+      'To date cannot be before from date.',
+      'Invalid Date Range',
+    );
+    return;
+  }
+
+  if (!form.reason.trim()) {
+    showFeedback(
+      'submit',
+      'warning',
+      'Leave reason is required.',
+      'Missing Reason',
+    );
+    return;
+  }
+
+  if (
+    isHrAdminUser &&
+    !form.work_project_name.trim() &&
+    !form.project_handover_id
+  ) {
+    showFeedback(
+      'submit',
+      'warning',
+      'Please enter your work/project details before applying leave.',
+      'Work Details Required',
+    );
+    return;
+  }
+
+  try {
+    setSubmitting(true);
+
+    showFeedback(
+      'submit',
+      'info',
+      'Submitting your leave request for approval...',
+      'Submitting Leave',
+      { loading: true },
+    );
+
+    const selectedProject = projects.find(
+      (project) =>
+        String(project._id || project.id) === form.project_handover_id,
+    );
+
+    const payload = {
+      leave_type:
+        form.day_type === 'half_day' ? 'HALF-DAY' : form.leave_type,
+      from_date: form.from_date,
+      to_date: form.to_date,
+      upto_date: form.to_date,
+      day_type: form.day_type,
+      is_half_day: form.day_type === 'half_day',
+      leave_days: leaveDays,
+      reason: form.reason.trim(),
+      task_handover_to_id: form.task_handover_to_id,
+      project_handover_id: form.project_handover_id,
+      project_handover_name: selectedProject
+        ? projectName(selectedProject)
+        : '',
+      work_project_name: form.work_project_name.trim(),
+      manual_project_name: form.work_project_name.trim(),
+    };
+
+    const data = await applyLeaveRequest(payload);
+
+    showFeedback(
+      'submit',
+      'success',
+      data.message || 'Leave request submitted successfully.',
+      'Leave Submitted',
+    );
+
+    setForm({
+      ...EMPTY_FORM,
+      from_date: today,
+      to_date: today,
+    });
+  } catch (error) {
+    showFeedback(
+      'submit',
+      'error',
+      error.message || 'Unable to submit leave request.',
+      'Leave Not Submitted',
+    );
+  } finally {
+    setSubmitting(false);
+  }
+}
+
 
   return (
     <div className="apply-leave-page">
@@ -582,17 +807,40 @@ async function handleSubmit(event) {
         {`
           .apply-leave-page {
             --al-ink: #101a3a;
-            --al-ink-soft: #5b6f92;
-            --al-violet: #6658dc;
-            --al-violet-deep: #40348d;
-            --al-blue: #3766db;
-            --al-cyan: #18b5c8;
-            --al-teal: #34c9c4;
-            --al-paper: #fbfcff;
-            --al-line: rgba(16, 26, 58, 0.14);
+            --al-copy: #5d6d8d;
+            --al-blue: #4d77dd;
+            --al-cyan: #2eb2b9;
+            --al-violet: #575092;
+            width: 100%;
+            min-width: 0;
             display: grid;
-            gap: clamp(18px, 2vw, 26px);
+            gap: clamp(16px, 1.8vw, 24px);
             color: var(--al-ink);
+          }
+
+          .apply-leave-page,
+          .apply-leave-page * {
+            box-sizing: border-box;
+          }
+
+          .apply-leave-page > *,
+          .apply-leave-page section,
+          .apply-leave-page article,
+          .apply-leave-page form,
+          .apply-leave-page label {
+            min-width: 0;
+            max-width: 100%;
+          }
+
+          .apply-leave-page::before,
+          .apply-leave-page::after,
+          .apply-leave-hero::before,
+          .apply-leave-hero::after,
+          .apply-leave-balance-card::before,
+          .apply-leave-balance-card::after {
+            content: none;
+            display: none;
+            background: none;
           }
 
           .apply-leave-hero {
@@ -600,20 +848,28 @@ async function handleSubmit(event) {
             isolation: isolate;
             overflow: hidden;
             display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 24px;
+            grid-template-columns: minmax(0, 1fr) minmax(210px, 300px);
+            gap: clamp(20px, 3vw, 38px);
             align-items: center;
-            min-height: 245px;
-            padding: clamp(24px, 3vw, 42px);
-            border: 1px solid rgba(154, 164, 205, 0.58);
-            border-radius: clamp(28px, 2.6vw, 40px);
+            min-height: 240px;
+            padding: clamp(24px, 3vw, 40px);
+            border: 1px solid rgba(154, 164, 205, .58);
+            border-radius: clamp(28px, 2.7vw, 40px);
             background:
-              radial-gradient(circle at 9% 8%, rgba(105, 217, 208, 0.24), transparent 29%),
-              radial-gradient(circle at 94% 10%, rgba(153, 164, 245, 0.24), transparent 31%),
-              linear-gradient(135deg, #edf8ff 0%, #f8f3ff 52%, #f0fbf8 100%);
-            box-shadow:
-              12px 14px 0 #c6d8f7,
-              0 28px 48px rgba(34, 38, 110, 0.13);
+              linear-gradient(
+                90deg,
+                #d3f4fb 0%,
+                #f7fcfb 34%,
+                #fffdf8 52%,
+                #fbf8fa 68%,
+                #f0edfb 100%
+              );
+            box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
+          }
+
+          .apply-leave-hero-copy {
+            min-width: 0;
+            max-width: 900px;
           }
 
           .apply-leave-kicker,
@@ -624,8 +880,8 @@ async function handleSubmit(event) {
             width: max-content;
             max-width: 100%;
             border-radius: 999px;
-            color: #ffffff;
-            background: #342b78;
+            color: #fff;
+            background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
             font-size: 9px;
             font-weight: 950;
             line-height: 1;
@@ -636,178 +892,246 @@ async function handleSubmit(event) {
           .apply-leave-kicker {
             margin-bottom: 15px;
             padding: 9px 13px;
+            box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
           }
 
           .apply-leave-section-kicker {
             margin-bottom: 10px;
             padding: 7px 10px;
+            box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
           }
 
           .apply-leave-hero h1 {
-            max-width: 780px;
+            max-width: 820px;
             margin: 0;
             color: var(--al-ink);
             font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-            font-size: clamp(42px, 5vw, 76px);
+            font-size: clamp(44px, 5.2vw, 76px);
             font-weight: 760;
             line-height: .94;
             letter-spacing: -.058em;
           }
 
           .apply-leave-hero h1 em {
-            display: inline;
-            color: var(--al-violet);
+            color: var(--al-blue);
             font-family: Georgia, "Times New Roman", serif;
             font-weight: 500;
           }
 
           .apply-leave-hero p {
-            max-width: 760px;
+            max-width: 820px;
             margin: 17px 0 0;
-            color: var(--al-ink-soft);
+            color: var(--al-copy);
             font-size: clamp(13px, 1vw, 16px);
             line-height: 1.68;
+          }
+
+          .apply-leave-refresh-stack,
+          .apply-leave-upgrade-stack,
+          .apply-leave-submit-stack {
+            display: grid;
+            gap: 9px;
+            width: 100%;
+            min-width: 0;
+          }
+
+          .apply-leave-refresh-stack {
+            width: min(300px, 100%);
           }
 
           .apply-leave-refresh,
           .apply-leave-upgrade-btn,
           .apply-leave-submit {
-            border: 1px solid rgba(65, 55, 161, .18);
-            font-weight: 950;
-            cursor: pointer;
-            transition:
-              transform 190ms cubic-bezier(.22, 1, .36, 1),
-              box-shadow 190ms ease,
-              filter 190ms ease;
-          }
-
-          .apply-leave-refresh {
-            min-height: 54px;
-            padding: 0 18px;
+            min-height: 44px;
+            padding: 10px 15px;
+            border: 1px solid transparent;
+            border-radius: 14px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            gap: 8px;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 900;
+            cursor: pointer;
+            transition:
+              transform 180ms ease,
+              border-color 180ms ease,
+              filter 180ms ease,
+              opacity 180ms ease;
+          }
+
+          .apply-leave-refresh {
+            width: max-content;
+            min-width: 140px;
+            color: #4767b4;
+            border-color: rgba(77, 119, 221, .18);
+            background: #fff;
+          }
+
+          .apply-leave-upgrade-btn,
+          .apply-leave-submit {
+            color: #fff;
+            background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+            box-shadow: 0 10px 22px rgba(77, 119, 221, .18);
+          }
+
+          .apply-leave-refresh:hover:not(:disabled),
+          .apply-leave-upgrade-btn:hover:not(:disabled),
+          .apply-leave-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            filter: saturate(1.03);
+          }
+
+          .apply-leave-refresh:disabled,
+          .apply-leave-upgrade-btn:disabled,
+          .apply-leave-submit:disabled {
+            opacity: .55;
+            cursor: not-allowed;
+            transform: none;
+          }
+
+          .apply-leave-inline-feedback {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
             gap: 9px;
-            border-radius: 18px;
-            color: #342b78;
-            background: rgba(255, 255, 255, .88);
-            box-shadow:
-              6px 7px 0 #b9d7ff,
-              0 14px 25px rgba(44, 75, 116, .10);
-            white-space: nowrap;
+            align-items: start;
+            width: 100%;
+            min-width: 0;
+            padding: 10px 11px;
+            border: 1px solid rgba(102, 88, 220, .18);
+            border-radius: 12px;
+            color: #40348d;
+            background: #f1efff;
+            font-size: 10px;
+            line-height: 1.45;
           }
 
-          .apply-leave-refresh svg {
-            animation: applyLeaveRefreshIdle 4.2s linear infinite;
+          .apply-leave-inline-feedback.success {
+            border-color: rgba(4, 120, 87, .18);
+            color: #047857;
+            background: #eaf8f4;
           }
 
-          .apply-leave-refresh:hover,
-          .apply-leave-upgrade-btn:hover,
-          .apply-leave-submit:hover {
-            transform: translateY(-3px);
-            filter: saturate(1.05);
+          .apply-leave-inline-feedback.warning {
+            border-color: rgba(154, 104, 23, .18);
+            color: #9a6817;
+            background: #fff4d5;
           }
 
-          .apply-leave-refresh:hover {
-            box-shadow:
-              8px 9px 0 #b9d7ff,
-              0 18px 30px rgba(44, 75, 116, .14);
+          .apply-leave-inline-feedback.error {
+            border-color: rgba(162, 52, 77, .18);
+            color: #a2344d;
+            background: #fff0f2;
           }
 
-          .apply-leave-refresh:disabled svg {
-            animation: applyLeaveSpin 1s linear infinite;
+          .apply-leave-inline-feedback-icon {
+            width: 22px;
+            height: 22px;
+            display: inline-grid;
+            place-items: center;
           }
 
-          .apply-leave-alert {
-            padding: 14px 16px;
-            border: 1px solid #b9d7ff;
-            border-radius: 18px;
-            color: #244f9b;
-            background: #edf6ff;
-            box-shadow: 5px 6px 0 rgba(185, 215, 255, .9);
-            font-weight: 780;
+          .apply-leave-inline-feedback-copy {
+            min-width: 0;
+          }
+
+          .apply-leave-inline-feedback-copy strong,
+          .apply-leave-inline-feedback-copy span {
+            display: block;
+            overflow-wrap: anywhere;
+          }
+
+          .apply-leave-inline-feedback-copy strong {
+            margin-bottom: 2px;
+            font-weight: 950;
+          }
+
+          .apply-leave-inline-feedback-copy span {
+            font-weight: 750;
+          }
+
+          .apply-leave-inline-feedback-close {
+            width: 24px;
+            min-width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 0;
+            border-radius: 8px;
+            display: inline-grid;
+            place-items: center;
+            color: currentColor;
+            background: rgba(255, 255, 255, .58);
+            font: inherit;
+            font-size: 17px;
+            line-height: 1;
+            cursor: pointer;
+          }
+
+          .apply-leave-inline-feedback-close:hover {
+            background: #fff;
+          }
+
+          .apply-leave-page-feedback {
+            width: min(620px, 100%);
           }
 
           .apply-leave-balance-strip {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
           }
 
           .apply-leave-balance-card {
-            --balance-bg: #edf6ff;
-            --balance-shadow: #b9d7ff;
-            position: relative;
-            isolation: isolate;
-            overflow: hidden;
-            display: grid;
-            grid-template-columns: 54px minmax(0, 1fr) auto;
-            align-items: center;
-            gap: 15px;
-            min-height: 112px;
+            min-width: 0;
+            min-height: 120px;
             padding: 18px;
-            border: 1px solid rgba(178, 185, 210, .72);
-            border-radius: 25px;
-            background: var(--balance-bg);
-            box-shadow:
-              8px 10px 0 var(--balance-shadow),
-              0 18px 30px rgba(15, 20, 75, .11);
-            transition:
-              transform 210ms cubic-bezier(.22, 1, .36, 1),
-              box-shadow 210ms ease;
+            border: 1px solid rgba(171, 181, 211, .66);
+            border-radius: 22px;
+            background: #edf6ff;
+            box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
           }
 
-          .apply-leave-balance-card.el {
-            --balance-bg: #eaf8f4;
-            --balance-shadow: #aee6d9;
+          .apply-leave-balance-card:nth-child(2) {
+            background: #eaf8f4;
           }
 
-          .apply-leave-balance-card:hover {
-            transform: translateY(-4px);
-            box-shadow:
-              10px 12px 0 var(--balance-shadow),
-              0 23px 38px rgba(15, 20, 75, .14);
+          .apply-leave-balance-card:nth-child(3) {
+            background: #fff4d5;
           }
 
-          .apply-leave-balance-icon {
-            width: 54px;
-            height: 54px;
-            display: grid;
-            place-items: center;
-            border-radius: 17px;
-            color: #ffffff;
-            background: linear-gradient(145deg, #3f7ef0, #2ed1c1);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
-            animation: applyLeaveIconFloat 3.4s ease-in-out infinite;
+          .apply-leave-balance-card:nth-child(4) {
+            background: #f1efff;
           }
 
-          .apply-leave-balance-card.el .apply-leave-balance-icon {
-            background: linear-gradient(145deg, #6658dc, #34c9c4);
-            animation-delay: -.9s;
-          }
-
-          .apply-leave-balance-copy span {
+          .apply-leave-balance-card span,
+          .apply-leave-balance-card strong,
+          .apply-leave-balance-card small {
             display: block;
-            color: #566483;
+          }
+
+          .apply-leave-balance-card span {
+            color: #5d6785;
             font-size: 9px;
             font-weight: 950;
-            letter-spacing: .11em;
+            letter-spacing: .09em;
             text-transform: uppercase;
           }
 
-          .apply-leave-balance-copy strong {
-            display: block;
-            margin-top: 6px;
+          .apply-leave-balance-card strong {
+            margin-top: 8px;
+            overflow-wrap: anywhere;
             color: var(--al-ink);
-            font-size: clamp(17px, 1.5vw, 23px);
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: clamp(28px, 3vw, 42px);
+            line-height: 1;
           }
 
-          .apply-leave-balance-value {
-            color: var(--al-violet-deep);
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: clamp(34px, 3vw, 48px);
-            font-weight: 760;
-            line-height: 1;
+          .apply-leave-balance-card small {
+            margin-top: 7px;
+            color: var(--al-copy);
+            font-size: 11px;
+            line-height: 1.45;
           }
 
           .apply-leave-saas-banner {
@@ -816,19 +1140,15 @@ async function handleSubmit(event) {
             align-items: flex-start;
             gap: 18px;
             padding: 20px;
-            border: 1px solid rgba(178, 185, 210, .72);
-            border-radius: 26px;
-            background: linear-gradient(145deg, #edf6ff, #f5f3ff);
-            box-shadow:
-              7px 8px 0 #b9d7ff,
-              0 18px 30px rgba(44, 75, 116, .10);
+            border: 1px solid rgba(171, 181, 211, .66);
+            border-radius: 24px;
+            background: linear-gradient(145deg, #edf6ff, #f6f4ff);
+            box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
           }
 
           .apply-leave-saas-banner.expired {
+            border-color: rgba(154, 104, 23, .20);
             background: linear-gradient(145deg, #fff4d5, #fffaf0);
-            box-shadow:
-              7px 8px 0 #ffe0a5,
-              0 18px 30px rgba(116, 75, 44, .10);
           }
 
           .apply-leave-saas-content {
@@ -845,8 +1165,8 @@ async function handleSubmit(event) {
             display: grid;
             place-items: center;
             border-radius: 16px;
-            color: #ffffff;
-            background: #342b78;
+            color: #fff;
+            background: linear-gradient(135deg, #4d77dd, #2eb2b9);
           }
 
           .apply-leave-saas-banner.expired .apply-leave-saas-icon {
@@ -863,7 +1183,7 @@ async function handleSubmit(event) {
 
           .apply-leave-saas-content p {
             margin: 7px 0 0;
-            color: var(--al-ink-soft);
+            color: var(--al-copy);
             line-height: 1.6;
           }
 
@@ -882,49 +1202,45 @@ async function handleSubmit(event) {
             border: 1px solid rgba(65, 55, 161, .13);
             border-radius: 999px;
             color: #334155;
-            background: rgba(255,255,255,.78);
+            background: rgba(255, 255, 255, .78);
             font-size: 11px;
             font-weight: 820;
           }
 
+          .apply-leave-upgrade-stack {
+            width: min(300px, 100%);
+          }
+
           .apply-leave-upgrade-btn {
-            min-height: 46px;
-            padding: 0 15px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            border-radius: 16px;
-            color: #ffffff;
-            background: #342b78;
-            box-shadow:
-              5px 6px 0 #18b5c8,
-              0 14px 25px rgba(52, 43, 120, .16);
+            width: max-content;
+            justify-self: end;
             white-space: nowrap;
           }
 
           .apply-leave-layout {
             display: grid;
             grid-template-columns: minmax(310px, .72fr) minmax(0, 1.28fr);
-            gap: 24px;
+            gap: 20px;
             align-items: start;
           }
 
           .apply-leave-panel {
             min-width: 0;
             padding: clamp(20px, 2vw, 28px);
-            border: 1px solid rgba(171, 181, 211, .72);
-            border-radius: clamp(28px, 2.3vw, 38px);
-            background: linear-gradient(145deg, #ffffff, #f7fbff);
-            box-shadow:
-              10px 12px 0 #c4ccff,
-              0 28px 48px rgba(34, 38, 110, .12);
+            border: 1px solid rgba(171, 181, 211, .70);
+            border-radius: clamp(24px, 2.2vw, 34px);
+            background: #fff;
+            box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
           }
 
           .apply-leave-panel.form-panel {
-            background: linear-gradient(145deg, #f4fbff 0%, #f8f1ff 52%, #fff8e8 100%);
-            box-shadow:
-              12px 14px 0 #b9d7ff,
-              0 30px 50px rgba(34, 38, 110, .14);
+            background:
+              linear-gradient(
+                145deg,
+                rgba(239, 248, 255, .72),
+                rgba(248, 244, 255, .62) 52%,
+                rgba(255, 250, 238, .68)
+              );
           }
 
           .apply-leave-panel h2,
@@ -940,7 +1256,7 @@ async function handleSubmit(event) {
 
           .apply-leave-panel > p {
             margin: 9px 0 0;
-            color: var(--al-ink-soft);
+            color: var(--al-copy);
             line-height: 1.58;
           }
 
@@ -956,9 +1272,13 @@ async function handleSubmit(event) {
             min-width: 0;
             padding: 13px;
             border: 1px solid rgba(162, 169, 196, .48);
-            border-radius: 17px;
-            background: rgba(255,255,255,.80);
-            box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
+            border-radius: 15px;
+            background: #f8fbff;
+            box-shadow: none;
+          }
+
+          .apply-leave-profile-grid div:nth-child(2n) {
+            background: #f4fbf8;
           }
 
           .apply-leave-profile-grid span,
@@ -986,9 +1306,8 @@ async function handleSubmit(event) {
           }
 
           .apply-leave-summary-card.info {
-            border-color: rgba(98, 84, 218, .25);
+            border-color: rgba(98, 84, 218, .20);
             background: #f1efff;
-            box-shadow: 4px 5px 0 #c9c0ff;
           }
 
           .apply-leave-form {
@@ -1023,15 +1342,15 @@ async function handleSubmit(event) {
             min-height: 50px;
             padding: 0 14px;
             border: 1px solid rgba(151, 161, 197, .58);
-            border-radius: 15px;
-            outline: none;
+            border-radius: 14px;
+            outline: 0;
             color: var(--al-ink);
-            background: rgba(255,255,255,.92);
+            background: rgba(255, 255, 255, .96);
+            font: inherit;
             font-size: 13px;
             transition:
               border-color 170ms ease,
-              box-shadow 170ms ease,
-              transform 170ms ease;
+              box-shadow 170ms ease;
           }
 
           .apply-leave-field textarea {
@@ -1043,62 +1362,33 @@ async function handleSubmit(event) {
           .apply-leave-field input:focus,
           .apply-leave-field select:focus,
           .apply-leave-field textarea:focus {
-            border-color: rgba(98, 84, 218, .65);
-            box-shadow:
-              4px 5px 0 rgba(102, 88, 220, .15),
-              0 0 0 4px rgba(102, 88, 220, .09);
-            transform: translateY(-1px);
+            border-color: rgba(77, 119, 221, .65);
+            box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+          }
+
+          .apply-leave-submit-stack {
+            grid-column: 1 / -1;
           }
 
           .apply-leave-submit {
-            grid-column: 1 / -1;
-            min-height: 56px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            border-radius: 18px;
-            color: #ffffff;
-            background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-            box-shadow:
-              7px 8px 0 #a9d6f5,
-              0 18px 30px rgba(36, 74, 128, .18);
+            width: 100%;
+            min-height: 52px;
           }
 
-          .apply-leave-submit svg {
-            animation: applyLeaveSendFloat 2.8s ease-in-out infinite;
-          }
-
-          .apply-leave-submit:hover {
-            box-shadow:
-              9px 10px 0 #a9d6f5,
-              0 22px 34px rgba(36, 74, 128, .22);
-          }
-
-          .apply-leave-submit:disabled,
-          .apply-leave-refresh:disabled {
-            opacity: .68;
-            cursor: not-allowed;
-            transform: none;
-          }
-
-          @keyframes applyLeaveIconFloat {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            50% { transform: translateY(-4px) rotate(-3deg); }
-          }
-
-          @keyframes applyLeaveSendFloat {
-            0%, 100% { transform: translate(0, 0) rotate(0deg); }
-            50% { transform: translate(3px, -2px) rotate(4deg); }
-          }
-
-          @keyframes applyLeaveRefreshIdle {
-            0%, 84% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+          .apply-leave-spin {
+            animation: applyLeaveSpin .82s linear infinite;
           }
 
           @keyframes applyLeaveSpin {
-            to { transform: rotate(360deg); }
+            to {
+              transform: rotate(360deg);
+            }
+          }
+
+          @media (max-width: 1120px) {
+            .apply-leave-balance-strip {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
           }
 
           @media (max-width: 1100px) {
@@ -1111,79 +1401,49 @@ async function handleSubmit(event) {
             }
           }
 
+          @media (max-width: 820px) {
+            .apply-leave-hero {
+              grid-template-columns: 1fr;
+            }
+
+            .apply-leave-refresh-stack {
+              width: min(360px, 100%);
+            }
+
+            .apply-leave-saas-banner {
+              flex-direction: column;
+            }
+
+            .apply-leave-upgrade-stack {
+              width: min(360px, 100%);
+            }
+
+            .apply-leave-upgrade-btn {
+              justify-self: start;
+            }
+          }
+
           @media (max-width: 760px) {
             .apply-leave-page {
-              gap: 18px;
+              gap: 15px;
             }
 
             .apply-leave-hero {
-              grid-template-columns: 1fr;
               min-height: 0;
-              padding: 22px;
+              padding: 20px;
               border-radius: 26px;
-              box-shadow:
-                6px 7px 0 #c6d8f7,
-                0 18px 30px rgba(34, 38, 110, .10);
+              box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
             }
 
             .apply-leave-hero h1 {
               font-size: clamp(36px, 10vw, 52px);
             }
 
-            .apply-leave-refresh {
-              width: 100%;
-            }
-
-            .apply-leave-balance-strip {
-              gap: 12px;
-            }
-
-            .apply-leave-balance-card {
-              grid-template-columns: 42px minmax(0, 1fr);
-              min-height: 100px;
-              gap: 10px;
-              padding: 14px;
-              border-radius: 20px;
-              box-shadow:
-                5px 6px 0 var(--balance-shadow),
-                0 13px 22px rgba(15, 20, 75, .09);
-            }
-
-            .apply-leave-balance-icon {
-              width: 42px;
-              height: 42px;
-              border-radius: 13px;
-            }
-
-            .apply-leave-balance-value {
-              grid-column: 1 / -1;
-              justify-self: end;
-              margin-top: -34px;
-              font-size: 30px;
-            }
-
-            .apply-leave-saas-banner {
-              flex-direction: column;
-              border-radius: 22px;
-            }
-
+            .apply-leave-refresh,
+            .apply-leave-refresh-stack,
+            .apply-leave-upgrade-stack,
             .apply-leave-upgrade-btn {
               width: 100%;
-              justify-content: center;
-            }
-
-            .apply-leave-panel {
-              padding: 18px;
-              border-radius: 24px;
-              box-shadow:
-                6px 7px 0 #c4ccff,
-                0 18px 30px rgba(34, 38, 110, .10);
-            }
-
-            .apply-leave-panel.form-panel {
-              box-shadow:
-                6px 7px 0 #b9d7ff,
-                0 18px 30px rgba(34, 38, 110, .11);
             }
 
             .apply-leave-profile-grid {
@@ -1195,25 +1455,20 @@ async function handleSubmit(event) {
             }
 
             .apply-leave-field.full,
-            .apply-leave-submit {
+            .apply-leave-submit-stack {
               grid-column: auto;
+            }
+
+            .apply-leave-panel {
+              padding: 18px;
+              border-radius: 24px;
             }
           }
 
-          @media (max-width: 430px) {
+          @media (max-width: 520px) {
             .apply-leave-balance-strip,
             .apply-leave-profile-grid {
               grid-template-columns: 1fr;
-            }
-
-            .apply-leave-balance-card {
-              grid-template-columns: 42px minmax(0, 1fr) auto;
-            }
-
-            .apply-leave-balance-value {
-              grid-column: auto;
-              justify-self: end;
-              margin-top: 0;
             }
 
             .apply-leave-saas-content {
@@ -1224,6 +1479,16 @@ async function handleSubmit(event) {
               width: 40px;
               height: 40px;
               border-radius: 13px;
+            }
+          }
+
+          @media (max-width: 390px) {
+            .apply-leave-hero {
+              padding: 16px;
+            }
+
+            .apply-leave-hero h1 {
+              font-size: clamp(32px, 11vw, 44px);
             }
           }
 
@@ -1239,14 +1504,16 @@ async function handleSubmit(event) {
       </style>
 
       <section className="apply-leave-hero">
-        <div>
+        <div className="apply-leave-hero-copy">
           <span className="apply-leave-kicker">
             <Sparkles size={13} />
             Employee Leave Workspace
           </span>
+
           <h1>
             Plan your time off, <em>clearly.</em>
           </h1>
+
           <p>
             Submit a leave request, review your available Casual Leave and
             Earned Leave, confirm the approval path, and hand over work from
@@ -1254,47 +1521,70 @@ async function handleSubmit(event) {
           </p>
         </div>
 
-        <button
-          type="button"
-          className="apply-leave-refresh"
-          onClick={loadOptions}
-          disabled={loadingOptions}
-        >
-          <RefreshCcw size={16} />
-          {loadingOptions ? 'Refreshing...' : 'Refresh'}
-          <ArrowUpRight size={15} />
-        </button>
+        <div className="apply-leave-refresh-stack">
+          <button
+            type="button"
+            className="apply-leave-refresh"
+            onClick={() =>
+              loadOptions({
+                showLoader: false,
+                feedbackScope: 'refresh',
+              })
+            }
+            disabled={loadingOptions || refreshingOptions}
+          >
+            {loadingOptions || refreshingOptions ? (
+              <Loader2 size={16} className="apply-leave-spin" />
+            ) : (
+              <RefreshCcw size={16} />
+            )}
+            {refreshingOptions ? 'Refreshing...' : 'Refresh'}
+          </button>
+
+          <ApplyLeaveInlineMessage
+            message={feedbackMap.refresh}
+            onClose={() => clearFeedback('refresh')}
+          />
+        </div>
       </section>
 
-      <section className="apply-leave-balance-strip" aria-label="Available leave balance">
-        <article className="apply-leave-balance-card cl">
-          <div className="apply-leave-balance-icon" aria-hidden="true">
-            <CalendarDays size={23} />
-          </div>
+      {feedbackMap.page ? (
+        <div className="apply-leave-page-feedback">
+          <ApplyLeaveInlineMessage
+            message={feedbackMap.page}
+            onClose={() => clearFeedback('page')}
+          />
+        </div>
+      ) : null}
 
-          <div className="apply-leave-balance-copy">
-            <span>Available CL</span>
-            <strong>Casual Leave</strong>
-          </div>
-
-          <div className="apply-leave-balance-value">
-            {loadingOptions ? '—' : leaveBalances.cl}
-          </div>
+      <section
+        className="apply-leave-balance-strip"
+        aria-label="Leave request summary"
+      >
+        <article className="apply-leave-balance-card">
+          <span>Available CL</span>
+          <strong>{loadingOptions ? '—' : leaveBalances.cl}</strong>
+          <small>Casual Leave currently available</small>
         </article>
 
-        <article className="apply-leave-balance-card el">
-          <div className="apply-leave-balance-icon" aria-hidden="true">
-            <CheckCircle2 size={23} />
-          </div>
+        <article className="apply-leave-balance-card">
+          <span>Available EL</span>
+          <strong>{loadingOptions ? '—' : leaveBalances.el}</strong>
+          <small>Earned Leave currently available</small>
+        </article>
 
-          <div className="apply-leave-balance-copy">
-            <span>Available EL</span>
-            <strong>Earned Leave</strong>
-          </div>
+        <article className="apply-leave-balance-card">
+          <span>Request Days</span>
+          <strong>{leaveDays}</strong>
+          <small>Calculated from the selected dates and day type</small>
+        </article>
 
-          <div className="apply-leave-balance-value">
-            {loadingOptions ? '—' : leaveBalances.el}
-          </div>
+        <article className="apply-leave-balance-card">
+          <span>Leave Type</span>
+          <strong>
+            {form.day_type === 'half_day' ? 'Half Day' : form.leave_type}
+          </strong>
+          <small>Current leave type selected in the request form</small>
         </article>
       </section>
 
@@ -1340,14 +1630,21 @@ async function handleSubmit(event) {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="apply-leave-upgrade-btn"
-            onClick={openBillingPage}
-          >
-            <CreditCard size={16} />
-            Upgrade Plan
-          </button>
+          <div className="apply-leave-upgrade-stack">
+            <button
+              type="button"
+              className="apply-leave-upgrade-btn"
+              onClick={openBillingPage}
+            >
+              <CreditCard size={16} />
+              Upgrade Plan
+            </button>
+
+            <ApplyLeaveInlineMessage
+              message={feedbackMap.billing}
+              onClose={() => clearFeedback('billing')}
+            />
+          </div>
         </section>
       ) : null}
 
@@ -1539,14 +1836,25 @@ async function handleSubmit(event) {
               />
             </div>
 
-            <button
-              type="submit"
-              className="apply-leave-submit"
-              disabled={submitting || isExpiredOrSuspendedTenant}
-            >
-              <Send size={17} />
-              {submitting ? 'Submitting...' : 'Submit Leave Request'}
-            </button>
+            <div className="apply-leave-submit-stack">
+              <button
+                type="submit"
+                className="apply-leave-submit"
+                disabled={submitting || isExpiredOrSuspendedTenant}
+              >
+                {submitting ? (
+                  <Loader2 size={17} className="apply-leave-spin" />
+                ) : (
+                  <Send size={17} />
+                )}
+                {submitting ? 'Submitting...' : 'Submit Leave Request'}
+              </button>
+
+              <ApplyLeaveInlineMessage
+                message={feedbackMap.submit}
+                onClose={() => clearFeedback('submit')}
+              />
+            </div>
           </form>
         </main>
       </section>

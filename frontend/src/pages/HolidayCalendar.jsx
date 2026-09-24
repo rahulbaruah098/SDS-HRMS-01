@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
@@ -14,6 +13,7 @@ import {
   Sparkles,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -42,6 +42,9 @@ const EMPTY_FILTERS = {
   date_to: '',
   search: '',
 };
+
+const HOLIDAY_NOTICE_HIDE_MS = 3600;
+const HOLIDAY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function normalizeRole(role = '') {
   return String(role || '')
@@ -304,6 +307,160 @@ function buildCalendarDays(monthDate, holidayMap = {}) {
   return cells;
 }
 
+function holidayPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function HolidayInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`holiday-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="holiday-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="holiday-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="holiday-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function HolidayPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="holiday-pagination">
+      <div className="holiday-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>holidays</span>
+      </div>
+
+      <div className="holiday-pagination-controls">
+        <label className="holiday-page-size">
+          <span>View</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            aria-label="Holidays per page"
+          >
+            {HOLIDAY_PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="holiday-page-button holiday-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="holiday-page-numbers" aria-label="Pagination">
+          {holidayPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`holiday-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span key={item} className="holiday-page-ellipsis">
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="holiday-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="holiday-page-button holiday-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function HolidayCalendar({ user = {} }) {
   const canManage = hasManageAccess(user);
 
@@ -318,9 +475,74 @@ export default function HolidayCalendar({ user = {} }) {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [activeSection, setActiveSection] = useState('calendar');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
+
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, HOLIDAY_NOTICE_HIDE_MS);
+    }
+  }
 
   const filteredItems = useMemo(() => {
     const keyword = String(filters.search || '').trim().toLowerCase();
@@ -349,6 +571,30 @@ export default function HolidayCalendar({ user = {} }) {
   const upcomingCount = useMemo(() => {
     return items.filter((item) => isUpcomingHoliday(item)).length;
   }, [items]);
+
+  const activeCount = useMemo(
+    () =>
+      items.filter(
+        (item) => String(item.status || 'active').toLowerCase() === 'active',
+      ).length,
+    [items],
+  );
+
+  const inactiveCount = useMemo(
+    () =>
+      items.filter(
+        (item) => String(item.status || 'active').toLowerCase() === 'inactive',
+      ).length,
+    [items],
+  );
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredItems.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedItems = filteredItems.slice(pageStart, pageStart + pageSize);
 
   const holidayMap = useMemo(() => {
     return items.reduce((acc, item) => {
@@ -429,9 +675,21 @@ export default function HolidayCalendar({ user = {} }) {
     setCalendarMonth(new Date());
   }
 
-  async function loadHolidays(nextFilters = filters) {
+  async function loadHolidays(
+    nextFilters = filters,
+    { feedbackScope = '' } = {},
+  ) {
     setLoading(true);
-    setError('');
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing holiday records...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
 
     try {
       const data = await api(
@@ -454,9 +712,36 @@ export default function HolidayCalendar({ user = {} }) {
 
       // Do not silently select a state for new holidays. HR/Admin must
       // deliberately choose the state that the declared holiday applies to.
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Holiday records are up to date.',
+          'Refresh Complete',
+        );
+      }
     } catch (err) {
-      setError(err?.message || 'Unable to load holiday calendar.');
+      const errorMessage =
+        err?.message || 'Unable to load holiday calendar.';
+
       setItems([]);
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'error',
+          errorMessage,
+          'Refresh Failed',
+        );
+      } else {
+        showFeedback(
+          'page',
+          'error',
+          errorMessage,
+          'Holiday Load Failed',
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -468,8 +753,7 @@ export default function HolidayCalendar({ user = {} }) {
     if (!canManage) return;
 
     setSaving(true);
-    setError('');
-    setMessage('');
+    clearFeedback('form');
 
     const state = String(form.state || '').trim();
     const title = String(form.title || '').trim();
@@ -478,34 +762,69 @@ export default function HolidayCalendar({ user = {} }) {
     const endDate = isRange ? form.end_date : form.date;
 
     if (!state) {
-      setError('Please select the state this holiday applies to.');
+      showFeedback(
+        'form',
+        'warning',
+        'Please select the state this holiday applies to.',
+        'State Required',
+      );
       setSaving(false);
       return;
     }
 
     if (!title) {
-      setError('Holiday title is required.');
+      showFeedback(
+        'form',
+        'warning',
+        'Holiday title is required.',
+        'Title Required',
+      );
       setSaving(false);
       return;
     }
 
     if (!startDate) {
-      setError(isRange ? 'Holiday from date is required.' : 'Holiday date is required.');
+      showFeedback(
+        'form',
+        'warning',
+        isRange
+          ? 'Holiday from date is required.'
+          : 'Holiday date is required.',
+        'Date Required',
+      );
       setSaving(false);
       return;
     }
 
     if (isRange && !endDate) {
-      setError('Holiday to date is required for a date range.');
+      showFeedback(
+        'form',
+        'warning',
+        'Holiday to date is required for a date range.',
+        'End Date Required',
+      );
       setSaving(false);
       return;
     }
 
     if (isRange && endDate < startDate) {
-      setError('Holiday to date cannot be earlier than the from date.');
+      showFeedback(
+        'form',
+        'warning',
+        'Holiday to date cannot be earlier than the from date.',
+        'Invalid Date Range',
+      );
       setSaving(false);
       return;
     }
+
+    showFeedback(
+      'form',
+      'info',
+      editingId ? 'Updating the holiday...' : 'Creating the holiday...',
+      editingId ? 'Updating Holiday' : 'Creating Holiday',
+      { loading: true },
+    );
 
     try {
       const payload = {
@@ -527,20 +846,35 @@ export default function HolidayCalendar({ user = {} }) {
           body: JSON.stringify(payload),
         });
 
-        setMessage('Holiday updated successfully.');
+        showFeedback(
+          'form',
+          'success',
+          'Holiday updated successfully.',
+          'Holiday Updated',
+        );
       } else {
         await api('/attendance/holidays', {
           method: 'POST',
           body: JSON.stringify(payload),
         });
 
-        setMessage('Holiday added successfully.');
+        showFeedback(
+          'form',
+          'success',
+          'Holiday added successfully.',
+          'Holiday Created',
+        );
       }
 
       resetForm();
       await loadHolidays();
     } catch (err) {
-      setError(err?.message || 'Unable to save holiday.');
+      showFeedback(
+        'form',
+        'error',
+        err?.message || 'Unable to save holiday.',
+        'Holiday Save Failed',
+      );
     } finally {
       setSaving(false);
     }
@@ -568,47 +902,81 @@ export default function HolidayCalendar({ user = {} }) {
       status: item.status || 'active',
     });
 
+    setActiveSection('manage');
+    showFeedback(
+      'form',
+      'info',
+      `Editing ${item.title || 'holiday'}.`,
+      'Edit Mode',
+    );
+
     window.scrollTo({
       top: 0,
       behavior: 'smooth',
     });
   }
 
-  async function handleDelete(item) {
+  function handleDelete(item) {
     if (!canManage || !item?._id) return;
 
-    const confirmed = window.confirm(
-      `Delete holiday "${item.title}" for ${item.state}?`,
+    clearFeedback('delete-modal');
+    setDeleteTarget(item);
+  }
+
+  function closeDeleteDialog() {
+    if (deleting) return;
+    clearFeedback('delete-modal');
+    setDeleteTarget(null);
+  }
+
+  async function confirmDelete() {
+    if (!canManage || !deleteTarget?._id) return;
+
+    setDeleting(true);
+
+    showFeedback(
+      'delete-modal',
+      'info',
+      'Deleting the selected holiday...',
+      'Deleting Holiday',
+      { loading: true },
     );
 
-    if (!confirmed) return;
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
     try {
-      await api(`/attendance/holidays/${item._id}`, {
+      await api(`/attendance/holidays/${deleteTarget._id}`, {
         method: 'DELETE',
       });
 
-      setMessage('Holiday deleted successfully.');
+      setDeleteTarget(null);
+
+      showFeedback(
+        'directory',
+        'success',
+        'Holiday deleted successfully.',
+        'Holiday Deleted',
+      );
+
       await loadHolidays();
     } catch (err) {
-      setError(err?.message || 'Unable to delete holiday.');
+      showFeedback(
+        'delete-modal',
+        'error',
+        err?.message || 'Unable to delete holiday.',
+        'Delete Failed',
+      );
     } finally {
-      setSaving(false);
+      setDeleting(false);
     }
   }
 
   function applyFilters() {
-    loadHolidays(filters);
+    loadHolidays(filters, { feedbackScope: 'filters' });
   }
 
   function clearFilters() {
     const nextFilters = { ...EMPTY_FILTERS };
     setFilters(nextFilters);
-    loadHolidays(nextFilters);
+    loadHolidays(nextFilters, { feedbackScope: 'filters' });
   }
 
   useEffect(() => {
@@ -616,23 +984,130 @@ export default function HolidayCalendar({ user = {} }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    setPage(1);
+  }, [filters.search, filters.state, filters.date_from, filters.date_to, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.holiday-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!deleteTarget || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    function blockBackgroundScroll(event) {
+      if (event.target?.closest?.('.holiday-confirm-dialog')) return;
+      event.preventDefault();
+    }
+
+    function closeOnEscape(event) {
+      if (event.key === 'Escape' && !deleting) {
+        closeDeleteDialog();
+      }
+    }
+
+    document.addEventListener('wheel', blockBackgroundScroll, {
+      passive: false,
+    });
+    document.addEventListener('touchmove', blockBackgroundScroll, {
+      passive: false,
+    });
+    window.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+      window.removeEventListener('keydown', closeOnEscape);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [deleteTarget, deleting]);
+
   return (
     <section className="holiday-page">
       <style>{`
         .holiday-page {
           --hc-ink: #101a3a;
           --hc-copy: #5d6d8d;
-          --hc-violet: #6658dc;
-          --hc-violet-deep: #40348d;
-          --hc-blue: #3766db;
-          --hc-cyan: #18b5c8;
-          --hc-teal: #34c9c4;
-          --hc-yellow: #d8ff43;
-          --hc-danger: #d84d68;
-          --hc-line: rgba(16, 26, 58, .14);
+          --hc-blue: #4d77dd;
+          --hc-cyan: #2eb2b9;
+          --hc-violet: #575092;
+          --hc-danger: #a2344d;
+          --hc-line: rgba(16,26,58,.14);
+          width: 100%;
+          min-width: 0;
           display: grid;
-          gap: clamp(18px, 2vw, 26px);
+          gap: clamp(16px, 1.8vw, 24px);
           color: var(--hc-ink);
+        }
+
+        .holiday-page,
+        .holiday-page * {
+          box-sizing: border-box;
+        }
+
+        .holiday-page > *,
+        .holiday-page section,
+        .holiday-page article,
+        .holiday-page form,
+        .holiday-page nav,
+        .holiday-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .holiday-page::before,
+        .holiday-page::after,
+        .holiday-page .holiday-hero::before,
+        .holiday-page .holiday-hero::after,
+        .holiday-page .holiday-kpi::before,
+        .holiday-page .holiday-kpi::after {
+          content: none;
+          display: none;
+          background: none;
         }
 
         .holiday-hero {
@@ -640,20 +1115,34 @@ export default function HolidayCalendar({ user = {} }) {
           isolation: isolate;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: clamp(22px, 3vw, 40px);
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 310px);
+          gap: clamp(20px, 3vw, 38px);
           align-items: center;
-          min-height: 270px;
-          padding: clamp(25px, 3vw, 42px);
-          border: 1px solid rgba(154, 164, 205, .58);
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154,164,205,.58);
           border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
-          box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70,92,140,.10);
+        }
+
+        .holiday-hero-copy {
+          min-width: 0;
+          max-width: 900px;
+        }
+
+        .holiday-hero-actions {
+          width: 100%;
+          display: grid;
+          gap: 9px;
         }
 
         .holiday-eyebrow {
@@ -666,8 +1155,8 @@ export default function HolidayCalendar({ user = {} }) {
           padding: 9px 13px;
           border-radius: 999px;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77,119,221,.18);
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -680,14 +1169,14 @@ export default function HolidayCalendar({ user = {} }) {
           margin: 0;
           color: var(--hc-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(44px, 5.2vw, 77px);
+          font-size: clamp(44px, 5.2vw, 76px);
           font-weight: 760;
           line-height: .94;
           letter-spacing: -.058em;
         }
 
         .holiday-hero h1 em {
-          color: var(--hc-violet);
+          color: var(--hc-blue);
           font-family: Georgia, "Times New Roman", serif;
           font-weight: 500;
         }
@@ -700,115 +1189,10 @@ export default function HolidayCalendar({ user = {} }) {
           line-height: 1.68;
         }
 
-        .holiday-hero-card {
-          min-width: 190px;
-          padding: 20px;
-          border: 1px solid rgba(171, 181, 211, .66);
-          border-radius: 24px;
-          background: #f1efff;
-          box-shadow:
-            7px 9px 0 #c9c0ff,
-            0 18px 30px rgba(34, 38, 110, .09);
-          text-align: center;
-        }
-
-        .holiday-hero-card span {
-          display: block;
-          color: #5d6785;
-          font-size: 9px;
-          font-weight: 950;
-          letter-spacing: .10em;
-          text-transform: uppercase;
-        }
-
-        .holiday-hero-card strong {
-          display: block;
-          margin-top: 8px;
-          color: var(--hc-ink);
-          font-family: Georgia, "Times New Roman", serif;
-          font-size: clamp(34px, 3vw, 48px);
-          line-height: 1;
-        }
-
-        .holiday-hero-card small {
-          display: block;
-          margin-top: 7px;
-          color: var(--hc-copy);
-          font-weight: 800;
-        }
-
-        .holiday-alert {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 14px 16px;
-          border-radius: 18px;
-          border: 1px solid;
-          font-weight: 850;
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
-        }
-
-        .holiday-alert.success {
-          color: #047857;
-          background: #eaf8f4;
-          border-color: rgba(52, 201, 196, .36);
-          box-shadow: 4px 5px 0 #aee6d9;
-        }
-
-        .holiday-alert.error {
-          color: #a2344d;
-          background: #fff0f2;
-          border-color: rgba(216, 77, 104, .28);
-          box-shadow: 4px 5px 0 #f2c2cc;
-        }
-
-        .holiday-toolbar,
-        .holiday-filter-card,
-        .holiday-calendar-card,
-        .holiday-form-card,
-        .holiday-list-card {
-          border: 1px solid rgba(171, 181, 211, .70);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow:
-            8px 10px 0 #c4ccff,
-            0 24px 42px rgba(34, 38, 110, .10);
-        }
-
-        .holiday-toolbar {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          flex-wrap: wrap;
-          padding: 15px;
-          border-radius: 24px;
-        }
-
-        .holiday-search {
-          min-width: min(430px, 100%);
-          flex: 1;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 0 14px;
-          border: 1px solid rgba(151, 161, 197, .58);
-          border-radius: 999px;
-          background: rgba(255, 255, 255, .94);
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .08);
-        }
-
-        .holiday-search svg {
-          color: var(--hc-violet);
-        }
-
-        .holiday-search input {
-          width: 100%;
-          border: 0;
-          outline: 0;
-          background: transparent;
-          padding: 13px 0;
-          color: var(--hc-ink);
-          font-weight: 700;
+        .holiday-refresh-stack {
+          width: min(300px, 100%);
+          display: grid;
+          gap: 9px;
         }
 
         .holiday-refresh-btn,
@@ -816,73 +1200,267 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-calendar-actions button,
         .holiday-save-btn,
         .holiday-cancel-btn,
-        .holiday-row-actions button {
-          border: 0;
+        .holiday-row-actions button,
+        .holiday-section-tab,
+        .holiday-page-button,
+        .holiday-page-number,
+        .holiday-confirm-close,
+        .holiday-confirm-actions button,
+        .holiday-inline-feedback-close {
+          font: inherit;
           cursor: pointer;
-          border-radius: 15px;
-          font-weight: 900;
-          transition:
-            transform 190ms cubic-bezier(.22,1,.36,1),
-            box-shadow 190ms ease,
-            filter 190ms ease;
         }
 
-        .holiday-refresh-btn {
-          min-height: 46px;
-          padding: 0 15px;
+        .holiday-refresh-btn,
+        .holiday-save-btn,
+        .holiday-cancel-btn,
+        .holiday-filter-actions button,
+        .holiday-confirm-actions button {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid transparent;
+          border-radius: 14px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
+          font-size: 12px;
+          font-weight: 900;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
+        }
+
+        .holiday-refresh-btn,
+        .holiday-cancel-btn,
+        .holiday-filter-actions button:last-child {
+          color: #4767b4;
+          border-color: rgba(77,119,221,.18);
+          background: #fff;
+        }
+
+        .holiday-save-btn,
+        .holiday-filter-actions button:first-child,
+        .holiday-confirm-actions .danger {
           color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow:
-            5px 6px 0 #a9d6f5,
-            0 14px 25px rgba(36, 74, 128, .16);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 10px 22px rgba(77,119,221,.18);
         }
 
-        .holiday-refresh-btn:hover,
-        .holiday-filter-actions button:hover,
-        .holiday-calendar-actions button:hover,
-        .holiday-save-btn:hover,
-        .holiday-cancel-btn:hover,
-        .holiday-row-actions button:hover {
-          transform: translateY(-2px);
-          filter: saturate(1.04);
+        .holiday-confirm-actions .danger {
+          background: linear-gradient(135deg, #b4445c, #d85f75);
         }
 
-        .holiday-refresh-btn svg:first-child:not(.spin) {
-          animation: holidayRefreshIdle 4.2s linear infinite;
+        .holiday-refresh-btn:hover:not(:disabled),
+        .holiday-save-btn:hover:not(:disabled),
+        .holiday-cancel-btn:hover:not(:disabled),
+        .holiday-filter-actions button:hover:not(:disabled),
+        .holiday-row-actions button:hover:not(:disabled),
+        .holiday-calendar-actions button:hover:not(:disabled),
+        .holiday-section-tab:hover,
+        .holiday-page-button:hover:not(:disabled),
+        .holiday-page-number:hover:not(:disabled),
+        .holiday-confirm-actions button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: saturate(1.03);
+        }
+
+        .holiday-refresh-btn:disabled,
+        .holiday-save-btn:disabled,
+        .holiday-cancel-btn:disabled,
+        .holiday-filter-actions button:disabled,
+        .holiday-row-actions button:disabled,
+        .holiday-page-button:disabled,
+        .holiday-page-number:disabled,
+        .holiday-confirm-actions button:disabled,
+        .holiday-confirm-close:disabled {
+          opacity: .54;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .holiday-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .holiday-kpi {
+          min-width: 0;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171,181,211,.66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow: 0 16px 30px rgba(34,38,110,.07);
+        }
+
+        .holiday-kpi:nth-child(2) {
+          background: #eaf8f4;
+        }
+
+        .holiday-kpi:nth-child(3) {
+          background: #fff4d5;
+        }
+
+        .holiday-kpi:nth-child(4) {
+          background: #f1efff;
+        }
+
+        .holiday-kpi span,
+        .holiday-kpi strong,
+        .holiday-kpi small {
+          display: block;
+        }
+
+        .holiday-kpi span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .holiday-kpi strong {
+          margin-top: 8px;
+          color: var(--hc-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(28px, 3vw, 42px);
+          line-height: 1;
+        }
+
+        .holiday-kpi small {
+          margin-top: 7px;
+          color: var(--hc-copy);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .holiday-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 16px 28px rgba(34,38,110,.08);
+        }
+
+        .holiday-section-tab {
+          min-width: 0;
+          min-height: 62px;
+          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          text-align: left;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .holiday-section-tab.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77,119,221,.17);
+        }
+
+        .holiday-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .holiday-section-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .holiday-section-tab-copy small {
+          color: currentColor;
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.35;
+          opacity: .78;
+        }
+
+        .holiday-section-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          font-size: 9px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .holiday-section-content {
+          animation: holidaySectionReveal 220ms ease both;
+        }
+
+        @keyframes holidaySectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .holiday-filter-card,
         .holiday-calendar-card,
         .holiday-form-card,
         .holiday-list-card {
-          padding: clamp(20px, 2vw, 28px);
-          border-radius: clamp(26px, 2.2vw, 36px);
-          transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease,
-            border-color 210ms ease;
+          border: 1px solid rgba(171,181,211,.70);
+          border-radius: clamp(24px, 2.2vw, 34px);
+          background: #fff;
+          box-shadow: 0 20px 38px rgba(34,38,110,.08);
         }
 
-        .holiday-filter-card:hover,
-        .holiday-calendar-card:hover,
-        .holiday-form-card:hover,
-        .holiday-list-card:hover {
-          border-color: rgba(102, 88, 220, .28);
-          transform: translateY(-3px);
-          box-shadow:
-            10px 12px 0 #c4ccff,
-            0 30px 50px rgba(34, 38, 110, .14);
+        .holiday-filter-card,
+        .holiday-calendar-card,
+        .holiday-form-card {
+          padding: clamp(18px, 2vw, 26px);
+        }
+
+        .holiday-calendar-card {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow: hidden;
+        }
+
+        .holiday-section-content.calendar {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          display: grid;
+          gap: 18px;
         }
 
         .holiday-section-title {
+          min-width: 0;
+          max-width: 100%;
           display: flex;
           align-items: flex-start;
           gap: 11px;
-          color: var(--hc-violet);
+          color: var(--hc-blue);
+        }
+
+        .holiday-section-title > div {
+          min-width: 0;
         }
 
         .holiday-section-title > svg {
@@ -894,7 +1472,7 @@ export default function HolidayCalendar({ user = {} }) {
           margin: 0;
           color: var(--hc-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(25px, 2.3vw, 37px);
+          font-size: clamp(24px, 2.3vw, 35px);
           font-weight: 760;
           line-height: 1;
           letter-spacing: -.045em;
@@ -903,7 +1481,9 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-section-title p {
           margin: 7px 0 0;
           color: var(--hc-copy);
+          font-size: 13px;
           line-height: 1.55;
+          overflow-wrap: anywhere;
         }
 
         .holiday-filter-grid,
@@ -918,7 +1498,6 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-form-grid label {
           display: grid;
           gap: 8px;
-          min-width: 0;
           color: #303b5b;
           font-size: 11px;
           font-weight: 900;
@@ -928,20 +1507,25 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-filter-grid select,
         .holiday-form-grid input,
         .holiday-form-grid select,
-        .holiday-form-grid textarea {
+        .holiday-form-grid textarea,
+        .holiday-search input,
+        .holiday-page-size select {
           width: 100%;
           min-width: 0;
-          min-height: 48px;
-          padding: 0 13px;
-          border: 1px solid rgba(151, 161, 197, .58);
-          border-radius: 15px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 14px;
           outline: 0;
           color: var(--hc-ink);
-          background: rgba(255, 255, 255, .94);
-          transition:
-            border-color 170ms ease,
-            box-shadow 170ms ease,
-            transform 170ms ease;
+          background: rgba(255,255,255,.96);
+          font: inherit;
+        }
+
+        .holiday-filter-grid input,
+        .holiday-filter-grid select,
+        .holiday-form-grid input,
+        .holiday-form-grid select {
+          min-height: 46px;
+          padding: 0 13px;
         }
 
         .holiday-form-grid textarea {
@@ -954,12 +1538,11 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-filter-grid select:focus,
         .holiday-form-grid input:focus,
         .holiday-form-grid select:focus,
-        .holiday-form-grid textarea:focus {
-          border-color: rgba(102, 88, 220, .65);
-          box-shadow:
-            4px 5px 0 rgba(102, 88, 220, .14),
-            0 0 0 4px rgba(102, 88, 220, .08);
-          transform: translateY(-1px);
+        .holiday-form-grid textarea:focus,
+        .holiday-search input:focus,
+        .holiday-page-size select:focus {
+          border-color: rgba(77,119,221,.65);
+          box-shadow: 0 0 0 4px rgba(77,119,221,.09);
         }
 
         .holiday-filter-actions {
@@ -968,21 +1551,16 @@ export default function HolidayCalendar({ user = {} }) {
           gap: 8px;
         }
 
-        .holiday-filter-actions button {
-          min-height: 48px;
-          padding: 0 15px;
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
-        }
-
-        .holiday-filter-actions button:first-child {
-          color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+        .holiday-filter-feedback,
+        .holiday-form-feedback,
+        .holiday-directory-feedback {
+          margin-top: 12px;
         }
 
         .holiday-calendar-head {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
@@ -991,6 +1569,8 @@ export default function HolidayCalendar({ user = {} }) {
         }
 
         .holiday-calendar-actions {
+          min-width: 0;
+          max-width: 100%;
           display: flex;
           align-items: center;
           gap: 8px;
@@ -1000,19 +1580,21 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-calendar-actions button {
           min-width: 38px;
           min-height: 38px;
+          padding: 0 10px;
+          border: 1px solid rgba(77,119,221,.18);
+          border-radius: 11px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
+          color: #4767b4;
+          background: #fff;
         }
 
         .holiday-calendar-actions button.today {
           padding-inline: 13px;
+          border-color: transparent;
           color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
         }
 
         .holiday-calendar-actions strong {
@@ -1024,6 +1606,9 @@ export default function HolidayCalendar({ user = {} }) {
         }
 
         .holiday-calendar-legend {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
@@ -1035,7 +1620,6 @@ export default function HolidayCalendar({ user = {} }) {
           border-radius: 999px;
           font-size: 10px;
           font-weight: 900;
-          box-shadow: 2px 3px 0 rgba(52, 43, 120, .07);
         }
 
         .holiday-calendar-legend .manual {
@@ -1063,10 +1647,45 @@ export default function HolidayCalendar({ user = {} }) {
           background: #eaf8f4;
         }
 
+        .holiday-calendar-scroll {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          overscroll-behavior-x: contain;
+          -webkit-overflow-scrolling: touch;
+          touch-action: pan-x pan-y;
+          scroll-behavior: smooth;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(77,119,221,.48) rgba(77,119,221,.08);
+          padding-bottom: 6px;
+        }
+
+        .holiday-calendar-scroll::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .holiday-calendar-scroll::-webkit-scrollbar-track {
+          border-radius: 999px;
+          background: rgba(77,119,221,.08);
+        }
+
+        .holiday-calendar-scroll::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(77,119,221,.48);
+        }
+
+        .holiday-calendar-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(46,178,185,.68);
+        }
+
         .holiday-calendar-grid {
+          width: 100%;
+          min-width: 560px;
           display: grid;
-          grid-template-columns: repeat(7, minmax(0, 1fr));
-          gap: 8px;
+          grid-template-columns: repeat(7, minmax(72px, 1fr));
+          gap: 7px;
         }
 
         .holiday-calendar-weekdays {
@@ -1088,19 +1707,19 @@ export default function HolidayCalendar({ user = {} }) {
         }
 
         .holiday-calendar-day {
-          min-height: 96px;
+          min-height: 90px;
           padding: 10px;
-          border: 1px solid rgba(171, 181, 211, .56);
-          border-radius: 17px;
+          border: 1px solid rgba(171,181,211,.56);
+          border-radius: 14px;
           background: #fff;
-          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
           transition:
             transform 170ms ease,
-            box-shadow 170ms ease;
+            border-color 170ms ease;
         }
 
         .holiday-calendar-day:not(.blank):hover {
-          transform: translateY(-2px);
+          transform: translateY(-1px);
+          border-color: rgba(77,119,221,.30);
         }
 
         .holiday-calendar-day.blank {
@@ -1126,27 +1745,22 @@ export default function HolidayCalendar({ user = {} }) {
 
         .holiday-calendar-day.manual {
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
         }
 
         .holiday-calendar-day.sunday {
           background: #fff0f2;
-          box-shadow: 3px 4px 0 #f2c2cc;
         }
 
         .holiday-calendar-day.second-saturday {
           background: #edf6ff;
-          box-shadow: 3px 4px 0 #b9d7ff;
         }
 
         .holiday-calendar-day.fourth-saturday {
           background: #fff4d5;
-          box-shadow: 3px 4px 0 #ffe0a5;
         }
 
         .holiday-calendar-day.working {
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
         }
 
         .holiday-message-field {
@@ -1160,37 +1774,284 @@ export default function HolidayCalendar({ user = {} }) {
           margin-top: 18px;
         }
 
-        .holiday-save-btn,
-        .holiday-cancel-btn {
+        .holiday-list-card {
+          overflow: hidden;
+        }
+
+        .holiday-list-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          padding: clamp(18px, 2vw, 24px);
+          border-bottom: 1px solid rgba(65,55,161,.08);
+        }
+
+        .holiday-list-head h3 {
+          margin: 0;
+          color: var(--hc-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(24px, 2.3vw, 35px);
+          font-weight: 760;
+          letter-spacing: -.045em;
+        }
+
+        .holiday-list-head p {
+          margin: 7px 0 0;
+          color: var(--hc-copy);
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .holiday-directory-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          padding: 16px clamp(18px, 2vw, 24px);
+          background:
+            linear-gradient(
+              145deg,
+              rgba(237,248,255,.44),
+              rgba(248,241,255,.30)
+            );
+        }
+
+        .holiday-search {
+          position: relative;
+          min-width: 0;
+        }
+
+        .holiday-search svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--hc-blue);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .holiday-search input {
           min-height: 46px;
-          padding: 0 16px;
+          padding: 0 13px 0 39px;
+          font-size: 13px;
+        }
+
+        .holiday-view-label {
+          display: inline-flex;
+          align-items: center;
+          min-height: 38px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .holiday-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .holiday-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+        }
+
+        .holiday-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+        }
+
+        .holiday-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .holiday-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .holiday-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .holiday-inline-feedback-copy strong,
+        .holiday-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .holiday-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .holiday-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .holiday-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255,255,255,.58);
+          font-size: 17px;
+          line-height: 1;
+        }
+
+        .holiday-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .holiday-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 13px clamp(18px, 2vw, 24px);
+          border-top: 1px solid rgba(65,55,161,.08);
+          border-bottom: 1px solid rgba(65,55,161,.08);
+          background: #fff;
+        }
+
+        .holiday-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          color: var(--hc-copy);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .holiday-pagination-copy strong {
+          color: var(--hc-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .holiday-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .holiday-page-size {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--hc-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .holiday-page-size select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .holiday-page-button,
+        .holiday-page-number {
+          border: 1px solid rgba(77,119,221,.18);
+          color: #4767b4;
+          background: #fff;
+          font-size: 10px;
+          font-weight: 900;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .holiday-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 8px;
+          gap: 5px;
+          border-radius: 11px;
         }
 
-        .holiday-save-btn {
+        .holiday-page-nav {
+          min-width: 78px;
+        }
+
+        .holiday-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .holiday-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .holiday-page-number.is-active {
+          border-color: transparent;
           color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow:
-            5px 6px 0 #a9d6f5,
-            0 14px 25px rgba(36, 74, 128, .16);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
         }
 
-        .holiday-cancel-btn {
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
+        .holiday-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .holiday-page-indicator {
+          min-width: 82px;
+          color: var(--hc-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
         }
 
         .holiday-table-wrap {
-          margin-top: 18px;
           overflow-x: auto;
-          border: 1px solid rgba(171, 181, 211, .56);
-          border-radius: 18px;
           background: #fff;
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .08);
         }
 
         .holiday-table {
@@ -1201,7 +2062,7 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-table th,
         .holiday-table td {
           padding: 13px 14px;
-          border-bottom: 1px solid rgba(171, 181, 211, .42);
+          border-bottom: 1px solid rgba(171,181,211,.42);
           text-align: left;
           vertical-align: middle;
         }
@@ -1221,7 +2082,7 @@ export default function HolidayCalendar({ user = {} }) {
         }
 
         .holiday-table tbody tr:hover td {
-          background: #fafaff;
+          background: #fafcff;
         }
 
         .holiday-title-cell strong,
@@ -1240,13 +2101,11 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-status.active {
           color: #047857;
           background: #eaf8f4;
-          box-shadow: 2px 3px 0 #aee6d9;
         }
 
         .holiday-status.inactive {
           color: #a2344d;
           background: #fff0f2;
-          box-shadow: 2px 3px 0 #f2c2cc;
         }
 
         .holiday-row-actions {
@@ -1258,19 +2117,21 @@ export default function HolidayCalendar({ user = {} }) {
         .holiday-row-actions button {
           min-height: 36px;
           padding: 0 11px;
+          border: 1px solid rgba(77,119,221,.18);
+          border-radius: 11px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 7px;
-          color: #40348d;
-          background: #f1efff;
-          box-shadow: 2px 3px 0 #c9c0ff;
+          color: #4767b4;
+          background: #fff;
+          font-weight: 900;
         }
 
         .holiday-row-actions button.delete {
           color: #a2344d;
+          border-color: rgba(216,77,104,.20);
           background: #fff0f2;
-          box-shadow: 2px 3px 0 #f2c2cc;
         }
 
         .holiday-mobile-list {
@@ -1279,10 +2140,10 @@ export default function HolidayCalendar({ user = {} }) {
 
         .holiday-mobile-card {
           padding: 15px;
-          border: 1px solid rgba(171, 181, 211, .62);
-          border-radius: 20px;
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
-          box-shadow: 5px 6px 0 #c4ccff;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 0 12px 24px rgba(34,38,110,.06);
         }
 
         .holiday-mobile-card > div:first-child span {
@@ -1317,36 +2178,140 @@ export default function HolidayCalendar({ user = {} }) {
         }
 
         .holiday-empty {
+          min-height: 180px;
+          margin: 18px;
+          padding: 24px;
+          border: 1px dashed rgba(77,119,221,.30);
+          border-radius: 18px;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 10px;
-          min-height: 120px;
-          margin-top: 18px;
-          padding: 22px;
-          border: 1px dashed rgba(102, 88, 220, .34);
-          border-radius: 22px;
           color: var(--hc-copy);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
+          background: linear-gradient(145deg, #f8fbff, #f8f7ff);
           text-align: center;
           font-weight: 800;
-          box-shadow: 4px 5px 0 rgba(52, 43, 120, .07);
+        }
+
+        .holiday-confirm-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 10000;
+          width: 100vw;
+          height: 100dvh;
+          padding:
+            max(14px, env(safe-area-inset-top))
+            max(14px, env(safe-area-inset-right))
+            max(14px, env(safe-area-inset-bottom))
+            max(14px, env(safe-area-inset-left));
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          background: rgba(15,23,42,.48);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+        }
+
+        .holiday-confirm-dialog {
+          width: min(100%, 520px);
+          max-height: calc(100dvh - 28px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          border: 1px solid rgba(255,255,255,.62);
+          border-radius: 26px;
+          background: #fff;
+          box-shadow: 0 34px 90px rgba(9,16,35,.28);
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .holiday-confirm-head {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          padding: 18px 20px;
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          border-bottom: 1px solid rgba(65,55,161,.10);
+          background: linear-gradient(135deg, #fff0f2 0%, #fff8f9 100%);
+        }
+
+        .holiday-confirm-head h2 {
+          margin: 0;
+          color: var(--hc-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 26px;
+          font-weight: 760;
+          letter-spacing: -.035em;
+        }
+
+        .holiday-confirm-head p {
+          margin: 6px 0 0;
+          color: var(--hc-copy);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .holiday-confirm-close {
+          width: 40px;
+          min-width: 40px;
+          height: 40px;
+          padding: 0;
+          border: 1px solid rgba(216,77,104,.18);
+          border-radius: 13px;
+          display: grid;
+          place-items: center;
+          color: #a2344d;
+          background: #fff;
+        }
+
+        .holiday-confirm-body {
+          padding: 20px;
+        }
+
+        .holiday-confirm-summary {
+          padding: 14px;
+          border: 1px solid rgba(216,77,104,.16);
+          border-radius: 15px;
+          color: var(--hc-copy);
+          background: #fff8f9;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
+        .holiday-confirm-summary strong {
+          display: block;
+          margin-bottom: 4px;
+          color: var(--hc-ink);
+          font-size: 14px;
+        }
+
+        .holiday-confirm-action-stack {
+          display: grid;
+          gap: 9px;
+          margin-top: 16px;
+        }
+
+        .holiday-confirm-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
         }
 
         .spin {
-          animation: holidaySpin 1s linear infinite;
-        }
-
-        @keyframes holidayRefreshIdle {
-          0%, 84% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+          animation: holidaySpin .85s linear infinite;
         }
 
         @keyframes holidaySpin {
           to { transform: rotate(360deg); }
         }
 
-        @media (max-width: 1100px) {
+        @media (max-width: 1180px) {
+          .holiday-kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .holiday-filter-grid,
           .holiday-form-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1355,53 +2320,61 @@ export default function HolidayCalendar({ user = {} }) {
           .holiday-message-field {
             grid-column: 1 / -1;
           }
+
+          .holiday-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .holiday-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 820px) {
+          .holiday-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .holiday-hero-actions,
+          .holiday-refresh-stack {
+            width: min(360px, 100%);
+          }
+
+          .holiday-directory-controls {
+            grid-template-columns: 1fr;
+          }
         }
 
         @media (max-width: 760px) {
           .holiday-page {
-            gap: 18px;
+            gap: 15px;
           }
 
           .holiday-hero {
-            grid-template-columns: 1fr;
             min-height: 0;
             padding: 20px;
             border-radius: 26px;
-            box-shadow:
-              6px 7px 0 #c6d8f7,
-              0 18px 30px rgba(34, 38, 110, .10);
+            box-shadow: 0 18px 30px rgba(34,38,110,.09);
           }
 
           .holiday-hero h1 {
             font-size: clamp(36px, 10vw, 52px);
           }
 
-          .holiday-hero-card {
-            width: 100%;
-            min-width: 0;
+          .holiday-kpi-grid {
+            grid-template-columns: 1fr;
           }
 
-          .holiday-toolbar,
-          .holiday-filter-card,
-          .holiday-calendar-card,
-          .holiday-form-card,
-          .holiday-list-card {
-            border-radius: 22px;
-            box-shadow:
-              5px 6px 0 #c4ccff,
-              0 17px 28px rgba(34, 38, 110, .09);
+          .holiday-section-tabs {
+            grid-template-columns: 1fr;
           }
 
-          .holiday-toolbar {
+          .holiday-calendar-head,
+          .holiday-list-head {
             align-items: stretch;
-          }
-
-          .holiday-refresh-btn {
-            width: 100%;
-          }
-
-          .holiday-calendar-head {
-            align-items: stretch;
+            flex-direction: column;
           }
 
           .holiday-calendar-actions {
@@ -1414,22 +2387,12 @@ export default function HolidayCalendar({ user = {} }) {
             min-width: 0;
           }
 
-          .holiday-calendar-grid {
-            gap: 5px;
+          .holiday-form-actions {
+            flex-direction: column-reverse;
           }
 
-          .holiday-calendar-day {
-            min-height: 76px;
-            padding: 7px;
-            border-radius: 13px;
-          }
-
-          .holiday-calendar-day strong {
-            font-size: 17px;
-          }
-
-          .holiday-calendar-day span {
-            font-size: 8px;
+          .holiday-form-actions button {
+            width: 100%;
           }
 
           .holiday-table-wrap {
@@ -1439,15 +2402,56 @@ export default function HolidayCalendar({ user = {} }) {
           .holiday-mobile-list {
             display: grid;
             gap: 13px;
-            margin-top: 18px;
+            padding: 14px;
           }
 
-          .holiday-form-actions {
-            flex-direction: column-reverse;
+          .holiday-pagination {
+            padding: 12px;
           }
 
-          .holiday-form-actions button {
+          .holiday-pagination-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .holiday-page-size,
+          .holiday-page-numbers,
+          .holiday-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .holiday-page-size {
+            justify-content: space-between;
+          }
+
+          .holiday-page-size select {
+            flex: 1 1 auto;
+          }
+
+          .holiday-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .holiday-page-nav {
             width: 100%;
+          }
+
+          .holiday-confirm-backdrop {
+            align-items: stretch;
+            padding: 0;
+          }
+
+          .holiday-confirm-dialog {
+            width: 100%;
+            max-width: 100%;
+            height: 100dvh;
+            max-height: 100dvh;
+            margin: 0;
+            border-radius: 0;
+            box-shadow: none;
           }
         }
 
@@ -1470,24 +2474,27 @@ export default function HolidayCalendar({ user = {} }) {
             width: 100%;
           }
 
-          .holiday-calendar-weekdays span {
-            font-size: 8px;
-            padding-inline: 2px;
+          .holiday-calendar-actions {
+            display: grid;
+            grid-template-columns: 38px 1fr 38px;
           }
 
-          .holiday-calendar-day {
-            min-height: 64px;
-            padding: 5px;
+          .holiday-calendar-actions .today {
+            grid-column: 1 / -1;
+            width: 100%;
           }
 
-          .holiday-calendar-day strong {
-            font-size: 15px;
+          .holiday-page-number {
+            width: 34px;
+            height: 34px;
           }
 
-          .holiday-calendar-day span {
-            margin-top: 5px;
-            font-size: 6.8px;
-            line-height: 1.2;
+          .holiday-confirm-actions {
+            flex-direction: column-reverse;
+          }
+
+          .holiday-confirm-actions button {
+            width: 100%;
           }
         }
 
@@ -1502,33 +2509,14 @@ export default function HolidayCalendar({ user = {} }) {
 
           .holiday-filter-card,
           .holiday-calendar-card,
-          .holiday-form-card,
-          .holiday-list-card {
+          .holiday-form-card {
             padding: 15px;
           }
+        }
 
-          .holiday-calendar-actions {
-            display: grid;
-            grid-template-columns: 38px 1fr 38px;
-          }
-
-          .holiday-calendar-actions .today {
-            grid-column: 1 / -1;
-            width: 100%;
-          }
-
-          .holiday-calendar-grid {
-            gap: 4px;
-          }
-
-          .holiday-calendar-day {
-            min-height: 58px;
-            padding: 4px;
-            border-radius: 10px;
-          }
-
-          .holiday-calendar-day span {
-            display: none;
+        @media (orientation: landscape) and (max-height: 600px) {
+          .holiday-confirm-dialog {
+            max-height: 100dvh;
           }
         }
 
@@ -1542,7 +2530,7 @@ export default function HolidayCalendar({ user = {} }) {
         }
       `}</style>
       <div className="holiday-hero">
-        <div>
+        <div className="holiday-hero-copy">
           <span className="holiday-eyebrow">
             <Sparkles size={14} />
             Holiday Calendar
@@ -1559,170 +2547,290 @@ export default function HolidayCalendar({ user = {} }) {
           </p>
         </div>
 
-        <div className="holiday-hero-card">
-          <span>Total Holidays</span>
-          <strong>{items.length}</strong>
-          <small>{upcomingCount} upcoming</small>
+        <div className="holiday-hero-actions">
+          <div className="holiday-refresh-stack">
+            <button
+              type="button"
+              className="holiday-refresh-btn"
+              onClick={() =>
+                loadHolidays(filters, {
+                  feedbackScope: 'refresh',
+                })
+              }
+              disabled={loading}
+            >
+              {loading ? (
+                <Loader2 size={17} className="spin" />
+              ) : (
+                <RefreshCcw size={17} />
+              )}
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+
+            <HolidayInlineMessage
+              message={feedbackMap.refresh}
+              onClose={() => clearFeedback('refresh')}
+            />
+          </div>
         </div>
       </div>
 
-      {(message || error) && (
-        <div className={`holiday-alert ${error ? 'error' : 'success'}`}>
-          {error ? <X size={18} /> : <CheckCircle2 size={18} />}
-          <span>{error || message}</span>
-        </div>
-      )}
+      <section className="holiday-kpi-grid" aria-label="Holiday summary">
+        <article className="holiday-kpi">
+          <span>Total Holidays</span>
+          <strong>{items.length}</strong>
+          <small>Holiday records in the current loaded view</small>
+        </article>
 
-      <div className="holiday-toolbar">
-        <div className="holiday-search">
-          <Search size={18} />
-          <input
-            value={filters.search}
-            onChange={(event) => updateFilter('search', event.target.value)}
-            placeholder="Search holiday, state, date, added by..."
-          />
-        </div>
+        <article className="holiday-kpi">
+          <span>Upcoming Holidays</span>
+          <strong>{upcomingCount}</strong>
+          <small>Current and future holiday dates</small>
+        </article>
+
+        <article className="holiday-kpi">
+          <span>Active Holidays</span>
+          <strong>{activeCount}</strong>
+          <small>Records currently marked active</small>
+        </article>
+
+        <article className="holiday-kpi">
+          <span>Inactive Holidays</span>
+          <strong>{inactiveCount}</strong>
+          <small>Historical or disabled holiday records</small>
+        </article>
+      </section>
+
+      {feedbackMap.page ? (
+        <HolidayInlineMessage
+          message={feedbackMap.page}
+          onClose={() => clearFeedback('page')}
+        />
+      ) : null}
+
+      <nav
+        className="holiday-section-tabs"
+        aria-label="Holiday calendar sections"
+      >
+        <button
+          type="button"
+          className={`holiday-section-tab ${
+            activeSection === 'calendar' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('calendar')}
+          aria-pressed={activeSection === 'calendar'}
+        >
+          <CalendarDays size={18} />
+          <span className="holiday-section-tab-copy">
+            <strong>Calendar & Filters</strong>
+            <small>State/date filters and monthly holiday view</small>
+          </span>
+          <span className="holiday-section-tab-count">{items.length}</span>
+        </button>
 
         <button
           type="button"
-          className="holiday-refresh-btn"
-          onClick={() => loadHolidays()}
-          disabled={loading}
+          className={`holiday-section-tab ${
+            activeSection === 'directory' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('directory')}
+          aria-pressed={activeSection === 'directory'}
         >
-          {loading ? <Loader2 size={17} className="spin" /> : <RefreshCcw size={17} />}
-          Refresh
-          <ArrowUpRight size={15} />
+          <Search size={18} />
+          <span className="holiday-section-tab-copy">
+            <strong>Holiday Directory</strong>
+            <small>Search, review and manage holiday records</small>
+          </span>
+          <span className="holiday-section-tab-count">
+            {filteredItems.length}
+          </span>
         </button>
-      </div>
 
-      <div className="holiday-filter-card">
-        <div className="holiday-section-title">
-          <Filter size={18} />
-          <div>
-            <h3>Filter Holidays</h3>
-            <p>Current view: {currentStateLabel}</p>
+        {canManage ? (
+          <button
+            type="button"
+            className={`holiday-section-tab ${
+              activeSection === 'manage' ? 'is-active' : ''
+            }`}
+            onClick={() => setActiveSection('manage')}
+            aria-pressed={activeSection === 'manage'}
+          >
+            <Plus size={18} />
+            <span className="holiday-section-tab-copy">
+              <strong>{editingId ? 'Update Holiday' : 'Manage Holiday'}</strong>
+              <small>Create or edit declared holiday records</small>
+            </span>
+          </button>
+        ) : null}
+      </nav>
+
+      {activeSection === 'calendar' ? (
+        <div className="holiday-section-content calendar">
+          <div className="holiday-filter-card">
+            <div className="holiday-section-title">
+              <Filter size={18} />
+              <div>
+                <h3>Filter Holidays</h3>
+                <p>Current view: {currentStateLabel}</p>
+              </div>
+            </div>
+
+            <div className="holiday-filter-grid">
+              <label>
+                State
+                <select
+                  value={filters.state}
+                  onChange={(event) =>
+                    updateFilter('state', event.target.value)
+                  }
+                >
+                  <option value="">Default / All</option>
+                  {states.map((state) => (
+                    <option key={state} value={state}>
+                      {state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                From Date
+                <input
+                  type="date"
+                  value={filters.date_from}
+                  onChange={(event) =>
+                    updateFilter('date_from', event.target.value)
+                  }
+                />
+              </label>
+
+              <label>
+                To Date
+                <input
+                  type="date"
+                  value={filters.date_to}
+                  onChange={(event) =>
+                    updateFilter('date_to', event.target.value)
+                  }
+                />
+              </label>
+
+              <div className="holiday-filter-actions">
+                <button
+                  type="button"
+                  onClick={applyFilters}
+                  disabled={loading}
+                >
+                  {loading ? <Loader2 size={16} className="spin" /> : null}
+                  Apply
+                </button>
+
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  disabled={loading}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {feedbackMap.filters ? (
+              <div className="holiday-filter-feedback">
+                <HolidayInlineMessage
+                  message={feedbackMap.filters}
+                  onClose={() => clearFeedback('filters')}
+                />
+              </div>
+            ) : null}
           </div>
-        </div>
 
-        <div className="holiday-filter-grid">
-          <label>
-            State
-            <select
-              value={filters.state}
-              onChange={(event) => updateFilter('state', event.target.value)}
-            >
-              <option value="">Default / All</option>
-              {states.map((state) => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="holiday-calendar-card">
+            <div className="holiday-calendar-head">
+              <div className="holiday-section-title">
+                <CalendarDays size={18} />
+                <div>
+                  <h3>Monthly Holiday Calendar</h3>
+                  <p>
+                    Sundays, 2nd Saturday, 4th Saturday and declared holidays
+                    are highlighted separately.
+                  </p>
+                </div>
+              </div>
 
-          <label>
-            From Date
-            <input
-              type="date"
-              value={filters.date_from}
-              onChange={(event) => updateFilter('date_from', event.target.value)}
-            />
-          </label>
+              <div className="holiday-calendar-actions">
+                <button type="button" onClick={goToPreviousMonth}>
+                  <ChevronLeft size={17} />
+                </button>
 
-          <label>
-            To Date
-            <input
-              type="date"
-              value={filters.date_to}
-              onChange={(event) => updateFilter('date_to', event.target.value)}
-            />
-          </label>
+                <strong>{getMonthLabel(calendarMonth)}</strong>
 
-          <div className="holiday-filter-actions">
-            <button type="button" onClick={applyFilters} disabled={loading}>
-              Apply
-            </button>
+                <button type="button" onClick={goToNextMonth}>
+                  <ChevronRight size={17} />
+                </button>
 
-            <button type="button" onClick={clearFilters} disabled={loading}>
-              Clear
-            </button>
-          </div>
-        </div>
-      </div>
+                <button
+                  type="button"
+                  className="today"
+                  onClick={goToCurrentMonth}
+                >
+                  Today
+                </button>
+              </div>
+            </div>
 
-      <div className="holiday-calendar-card">
-        <div className="holiday-calendar-head">
-          <div className="holiday-section-title">
-            <CalendarDays size={18} />
-            <div>
-              <h3>Monthly Holiday Calendar</h3>
-              <p>
-                Sundays, 2nd Saturday, 4th Saturday and declared holidays are
-                highlighted separately.
-              </p>
+            <div className="holiday-calendar-legend">
+              <span className="manual">Declared Holiday</span>
+              <span className="sunday">Sunday</span>
+              <span className="second-saturday">2nd Saturday</span>
+              <span className="fourth-saturday">4th Saturday</span>
+              <span className="working">Working Day</span>
+            </div>
+
+            <div className="holiday-calendar-scroll">
+              <div className="holiday-calendar-grid holiday-calendar-weekdays">
+                <span>Sun</span>
+                <span>Mon</span>
+                <span>Tue</span>
+                <span>Wed</span>
+                <span>Thu</span>
+                <span>Fri</span>
+                <span>Sat</span>
+              </div>
+
+              <div className="holiday-calendar-grid holiday-calendar-days">
+                {calendarDays.map((cell) => (
+                  <div
+                    key={cell.key}
+                    className={`holiday-calendar-day ${cell.type}`}
+                    title={cell.label}
+                  >
+                    {cell.day && (
+                      <>
+                        <strong>{cell.day}</strong>
+                        <span>{cell.label}</span>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-
-          <div className="holiday-calendar-actions">
-            <button type="button" onClick={goToPreviousMonth}>
-              <ChevronLeft size={17} />
-            </button>
-
-            <strong>{getMonthLabel(calendarMonth)}</strong>
-
-            <button type="button" onClick={goToNextMonth}>
-              <ChevronRight size={17} />
-            </button>
-
-            <button type="button" className="today" onClick={goToCurrentMonth}>
-              Today
-            </button>
-          </div>
         </div>
+      ) : null}
 
-        <div className="holiday-calendar-legend">
-          <span className="manual">Declared Holiday</span>
-          <span className="sunday">Sunday</span>
-          <span className="second-saturday">2nd Saturday</span>
-          <span className="fourth-saturday">4th Saturday</span>
-          <span className="working">Working Day</span>
-        </div>
-
-        <div className="holiday-calendar-grid holiday-calendar-weekdays">
-          <span>Sun</span>
-          <span>Mon</span>
-          <span>Tue</span>
-          <span>Wed</span>
-          <span>Thu</span>
-          <span>Fri</span>
-          <span>Sat</span>
-        </div>
-
-        <div className="holiday-calendar-grid holiday-calendar-days">
-          {calendarDays.map((cell) => (
-            <div
-              key={cell.key}
-              className={`holiday-calendar-day ${cell.type}`}
-              title={cell.label}
-            >
-              {cell.day && (
-                <>
-                  <strong>{cell.day}</strong>
-                  <span>{cell.label}</span>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {canManage && (
-        <form className="holiday-form-card" onSubmit={handleSubmit}>
+      {activeSection === 'manage' && canManage ? (
+        <form
+          className="holiday-section-content holiday-form-card"
+          onSubmit={handleSubmit}
+        >
           <div className="holiday-section-title">
             <Plus size={18} />
             <div>
               <h3>{editingId ? 'Update Holiday' : 'Add Holiday'}</h3>
-              <p>Only tenant Admin and HR users can create or modify holidays.</p>
+              <p>
+                Only tenant Admin and HR users can create or modify holidays.
+              </p>
             </div>
           </div>
 
@@ -1747,7 +2855,9 @@ export default function HolidayCalendar({ user = {} }) {
               Holiday Duration *
               <select
                 value={form.date_type}
-                onChange={(event) => updateForm('date_type', event.target.value)}
+                onChange={(event) =>
+                  updateForm('date_type', event.target.value)
+                }
               >
                 <option value="single_day">Single Day</option>
                 <option value="date_range">Date Range</option>
@@ -1761,7 +2871,9 @@ export default function HolidayCalendar({ user = {} }) {
                   <input
                     type="date"
                     value={form.start_date}
-                    onChange={(event) => updateForm('start_date', event.target.value)}
+                    onChange={(event) =>
+                      updateForm('start_date', event.target.value)
+                    }
                     required
                   />
                 </label>
@@ -1772,7 +2884,9 @@ export default function HolidayCalendar({ user = {} }) {
                     type="date"
                     min={form.start_date || undefined}
                     value={form.end_date}
-                    onChange={(event) => updateForm('end_date', event.target.value)}
+                    onChange={(event) =>
+                      updateForm('end_date', event.target.value)
+                    }
                     required
                   />
                 </label>
@@ -1783,7 +2897,9 @@ export default function HolidayCalendar({ user = {} }) {
                 <input
                   type="date"
                   value={form.date}
-                  onChange={(event) => updateForm('date', event.target.value)}
+                  onChange={(event) =>
+                    updateForm('date', event.target.value)
+                  }
                   required
                 />
               </label>
@@ -1814,7 +2930,9 @@ export default function HolidayCalendar({ user = {} }) {
               Message
               <textarea
                 value={form.message}
-                onChange={(event) => updateForm('message', event.target.value)}
+                onChange={(event) =>
+                  updateForm('message', event.target.value)
+                }
                 placeholder="Short note for employees..."
                 rows={4}
               />
@@ -1822,158 +2940,310 @@ export default function HolidayCalendar({ user = {} }) {
           </div>
 
           <div className="holiday-form-actions">
-            {editingId && (
+            {editingId ? (
               <button
                 type="button"
                 className="holiday-cancel-btn"
-                onClick={resetForm}
+                onClick={() => {
+                  resetForm();
+                  clearFeedback('form');
+                }}
                 disabled={saving}
               >
                 Cancel
               </button>
-            )}
+            ) : null}
 
-            <button type="submit" className="holiday-save-btn" disabled={saving}>
+            <button
+              type="submit"
+              className="holiday-save-btn"
+              disabled={saving}
+            >
               {saving ? <Loader2 size={17} className="spin" /> : null}
-              {editingId ? 'Update Holiday' : 'Create Holiday'}
+              {saving
+                ? editingId
+                  ? 'Updating...'
+                  : 'Creating...'
+                : editingId
+                  ? 'Update Holiday'
+                  : 'Create Holiday'}
             </button>
           </div>
+
+          {feedbackMap.form ? (
+            <div className="holiday-form-feedback">
+              <HolidayInlineMessage
+                message={feedbackMap.form}
+                onClose={() => clearFeedback('form')}
+              />
+            </div>
+          ) : null}
         </form>
-      )}
+      ) : null}
 
-      <div className="holiday-list-card">
-        <div className="holiday-section-title">
-          <CalendarDays size={18} />
-          <div>
-            <h3>Holiday List</h3>
-            <p>
-              Showing {filteredItems.length} record
-              {filteredItems.length === 1 ? '' : 's'}
-            </p>
+      {activeSection === 'directory' ? (
+        <div className="holiday-section-content holiday-list-card">
+          <div className="holiday-list-head">
+            <div>
+              <h3>Holiday Directory</h3>
+              <p>
+                Search and review {filteredItems.length} holiday record
+                {filteredItems.length === 1 ? '' : 's'} in the current view.
+              </p>
+            </div>
+
+            <span className="holiday-view-label">{currentStateLabel}</span>
           </div>
-        </div>
 
-        {loading ? (
-          <div className="holiday-empty">
-            <Loader2 size={24} className="spin" />
-            Loading holidays...
+          <div className="holiday-directory-controls">
+            <div className="holiday-search">
+              <Search size={18} />
+              <input
+                type="search"
+                value={filters.search}
+                onChange={(event) =>
+                  updateFilter('search', event.target.value)
+                }
+                placeholder="Search holiday, state, date, added by..."
+                aria-label="Search holidays"
+              />
+            </div>
+
+            <span className="holiday-view-label">
+              {safePage} / {pageCount}
+            </span>
           </div>
-        ) : filteredItems.length ? (
-          <>
-            <div className="holiday-table-wrap">
-              <table className="holiday-table">
-                <thead>
-                  <tr>
-                    <th>Date / Range</th>
-                    <th>Holiday</th>
-                    <th>State</th>
-                    <th>Status</th>
-                    <th>Created By</th>
-                    {canManage && <th>Action</th>}
-                  </tr>
-                </thead>
 
-                <tbody>
-                  {filteredItems.map((item) => (
-                    <tr key={item._id || `${item.state}-${item.date}-${item.title}`}>
-                      <td>
-                        <strong>{formatHolidayDate(item)}</strong>
-                      </td>
+          {feedbackMap.directory ? (
+            <div className="holiday-directory-feedback">
+              <HolidayInlineMessage
+                message={feedbackMap.directory}
+                onClose={() => clearFeedback('directory')}
+              />
+            </div>
+          ) : null}
 
-                      <td>
-                        <div className="holiday-title-cell">
-                          <strong>{item.title}</strong>
-                        </div>
-                      </td>
+          <HolidayPagination
+            total={filteredItems.length}
+            page={safePage}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(value) => {
+              setPage(1);
+              setPageSize(value);
+            }}
+          />
 
-                      <td>{item.state}</td>
+          {loading ? (
+            <div className="holiday-empty">
+              <Loader2 size={24} className="spin" />
+              Loading holidays...
+            </div>
+          ) : filteredItems.length ? (
+            <>
+              <div className="holiday-table-wrap">
+                <table className="holiday-table">
+                  <thead>
+                    <tr>
+                      <th>Date / Range</th>
+                      <th>Holiday</th>
+                      <th>State</th>
+                      <th>Status</th>
+                      <th>Created By</th>
+                      {canManage ? <th>Action</th> : null}
+                    </tr>
+                  </thead>
 
-                      <td>
-                        <span className={`holiday-status ${item.status}`}>
-                          {statusLabel(item.status)}
-                        </span>
-                      </td>
-
-                      <td>{item.created_by_name}</td>
-
-                      {canManage && (
+                  <tbody>
+                    {pagedItems.map((item) => (
+                      <tr
+                        key={
+                          item._id ||
+                          `${item.state}-${item.date}-${item.title}`
+                        }
+                      >
                         <td>
-                          <div className="holiday-row-actions">
-                            <button
-                              type="button"
-                              onClick={() => handleEdit(item)}
-                              title="Edit holiday"
-                            >
-                              <Edit3 size={15} />
-                              Edit
-                            </button>
+                          <strong>{formatHolidayDate(item)}</strong>
+                        </td>
 
-                            <button
-                              type="button"
-                              className="delete"
-                              onClick={() => handleDelete(item)}
-                              title="Delete holiday"
-                            >
-                              <Trash2 size={15} />
-                              Delete
-                            </button>
+                        <td>
+                          <div className="holiday-title-cell">
+                            <strong>{item.title}</strong>
                           </div>
                         </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
-            <div className="holiday-mobile-list">
-              {filteredItems.map((item) => (
-                <article
-                  className="holiday-mobile-card"
-                  key={`mobile-${item._id || `${item.state}-${item.date}-${item.title}`}`}
-                >
-                  <div>
-                    <span>{formatHolidayDate(item)}</span>
-                    <strong>{item.title}</strong>
-                  </div>
+                        <td>{item.state}</td>
 
-                  <p>{item.state}</p>
+                        <td>
+                          <span className={`holiday-status ${item.status}`}>
+                            {statusLabel(item.status)}
+                          </span>
+                        </td>
 
-                  <div className="holiday-mobile-meta">
-                    <span className={`holiday-status ${item.status}`}>
-                      {statusLabel(item.status)}
-                    </span>
-                    <span>Created by {item.created_by_name}</span>
-                  </div>
+                        <td>{item.created_by_name}</td>
 
-                  {canManage && (
-                    <div className="holiday-row-actions">
-                      <button type="button" onClick={() => handleEdit(item)}>
-                        <Edit3 size={15} />
-                        Edit
-                      </button>
+                        {canManage ? (
+                          <td>
+                            <div className="holiday-row-actions">
+                              <button
+                                type="button"
+                                onClick={() => handleEdit(item)}
+                                title="Edit holiday"
+                              >
+                                <Edit3 size={15} />
+                                Edit
+                              </button>
 
-                      <button
-                        type="button"
-                        className="delete"
-                        onClick={() => handleDelete(item)}
-                      >
-                        <Trash2 size={15} />
-                        Delete
-                      </button>
+                              <button
+                                type="button"
+                                className="delete"
+                                onClick={() => handleDelete(item)}
+                                title="Delete holiday"
+                              >
+                                <Trash2 size={15} />
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="holiday-mobile-list">
+                {pagedItems.map((item) => (
+                  <article
+                    className="holiday-mobile-card"
+                    key={`mobile-${
+                      item._id ||
+                      `${item.state}-${item.date}-${item.title}`
+                    }`}
+                  >
+                    <div>
+                      <span>{formatHolidayDate(item)}</span>
+                      <strong>{item.title}</strong>
                     </div>
-                  )}
-                </article>
-              ))}
+
+                    <p>{item.state}</p>
+
+                    <div className="holiday-mobile-meta">
+                      <span className={`holiday-status ${item.status}`}>
+                        {statusLabel(item.status)}
+                      </span>
+                      <span>Created by {item.created_by_name}</span>
+                    </div>
+
+                    {canManage ? (
+                      <div className="holiday-row-actions">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(item)}
+                        >
+                          <Edit3 size={15} />
+                          Edit
+                        </button>
+
+                        <button
+                          type="button"
+                          className="delete"
+                          onClick={() => handleDelete(item)}
+                        >
+                          <Trash2 size={15} />
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="holiday-empty">
+              <CalendarDays size={26} />
+              No holiday records found.
             </div>
-          </>
-        ) : (
-          <div className="holiday-empty">
-            <CalendarDays size={26} />
-            No holiday records found.
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      ) : null}
+
+      {deleteTarget ? (
+        <div
+          className="holiday-confirm-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeDeleteDialog();
+            }
+          }}
+        >
+          <section
+            className="holiday-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="holiday-delete-title"
+          >
+            <div className="holiday-confirm-head">
+              <div>
+                <h2 id="holiday-delete-title">Delete Holiday</h2>
+                <p>
+                  Confirm before permanently removing this holiday record.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="holiday-confirm-close"
+                onClick={closeDeleteDialog}
+                disabled={deleting}
+                aria-label="Close delete confirmation"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="holiday-confirm-body">
+              <div className="holiday-confirm-summary">
+                <strong>{deleteTarget.title}</strong>
+                {deleteTarget.state} · {formatHolidayDate(deleteTarget)}
+              </div>
+
+              <div className="holiday-confirm-action-stack">
+                <div className="holiday-confirm-actions">
+                  <button
+                    type="button"
+                    className="holiday-cancel-btn"
+                    onClick={closeDeleteDialog}
+                    disabled={deleting}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={confirmDelete}
+                    disabled={deleting}
+                  >
+                    {deleting ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <Trash2 size={16} />
+                    )}
+                    {deleting ? 'Deleting...' : 'Delete Holiday'}
+                  </button>
+                </div>
+
+                <HolidayInlineMessage
+                  message={feedbackMap['delete-modal']}
+                  onClose={() => clearFeedback('delete-modal')}
+                />
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Download,
   Filter,
+  Loader2,
   RefreshCcw,
   Search,
+  Sparkles,
   XCircle,
 } from 'lucide-react';
 import {
@@ -14,7 +18,6 @@ import {
   getActiveEmployees,
   downloadCsv,
 } from '../api/client';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -273,31 +276,196 @@ function leaveStatusClass(value = '') {
   return 'leave-status neutral';
 }
 
-export default function Leave() {
-  const alerts = useCustomAlert();
 
+function preventDateWheelChange(event) {
+  event.currentTarget?.blur?.();
+}
+
+
+const LEAVE_NOTICE_HIDE_MS = 3600;
+const LEAVE_PAGE_SIZES = [10, 25, 50, 100];
+
+function leavePageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function LeaveInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`leave-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="leave-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="leave-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="leave-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="leave-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function LeavePagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="leave-pagination">
+      <div className="leave-pagination-controls">
+        <button
+          type="button"
+          className="leave-page-button leave-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="leave-page-numbers" aria-label="Leave table pagination">
+          {leavePageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`leave-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span className="leave-page-ellipsis" key={item}>
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="leave-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="leave-page-button leave-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function Leave() {
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [feedbackMap, setFeedbackMap] = useState({});
+
+  const feedbackTimersRef = useRef({});
+  const hasLoadedLeavesRef = useRef(false);
+  const tableWrapRef = useRef(null);
+  const tableDragRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startScrollLeft: 0,
+    moved: false,
+  });
 
   const normalizedRows = useMemo(() => normalizeLeaveRows(rows), [rows]);
 
   const computedSummary = useMemo(() => {
     const total = normalizedRows.length;
     const pending = normalizedRows.filter((row) =>
-      String(row.live_status || row.status || '').toLowerCase().includes('pending')
+      String(row.live_status || row.status || '')
+        .toLowerCase()
+        .includes('pending'),
     ).length;
     const approved = normalizedRows.filter((row) =>
-      String(row.live_status || row.status || '').toLowerCase().includes('approved')
+      String(row.live_status || row.status || '')
+        .toLowerCase()
+        .includes('approved'),
     ).length;
     const rejected = normalizedRows.filter((row) =>
-      String(row.live_status || row.status || '').toLowerCase().includes('rejected')
+      String(row.live_status || row.status || '')
+        .toLowerCase()
+        .includes('rejected'),
     ).length;
-    const halfDay = normalizedRows.filter((row) => row.day_type_label === 'Half Day').length;
-    const lwp = normalizedRows.reduce((sum, row) => sum + Number(row.lwp_days || 0), 0);
+    const halfDay = normalizedRows.filter(
+      (row) => row.day_type_label === 'Half Day',
+    ).length;
+    const lwp = normalizedRows.reduce(
+      (sum, row) => sum + Number(row.lwp_days || 0),
+      0,
+    );
 
     return {
       total: summary.total ?? total,
@@ -309,6 +477,79 @@ export default function Leave() {
     };
   }, [normalizedRows, summary]);
 
+  const pageCount = Math.max(
+    1,
+    Math.ceil(
+      normalizedRows.length / Math.max(1, Number(pageSize || 10)),
+    ),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedRows = normalizedRows.slice(
+    pageStart,
+    pageStart + pageSize,
+  );
+
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, LEAVE_NOTICE_HIDE_MS);
+    }
+  }
+
   async function loadEmployees() {
     try {
       setLoadingEmployees(true);
@@ -319,43 +560,124 @@ export default function Leave() {
       });
 
       setEmployees(data.items || []);
+      clearFeedback('employees');
+      return true;
     } catch (error) {
       setEmployees([]);
-      alerts.error(
+      showFeedback(
+        'employees',
+        'error',
         error.message || 'Unable to load employee list.',
         'Employee List Failed',
       );
+      return false;
     } finally {
       setLoadingEmployees(false);
     }
   }
 
-  async function loadLeaves(nextFilters = filters, options = {}) {
-    const errorTitle = options.errorTitle || 'Leave Records Load Failed';
+  async function loadLeaves(
+    nextFilters = filters,
+    {
+      showLoader = !hasLoadedLeavesRef.current,
+      feedbackScope = '',
+      successText = 'Leave records are up to date.',
+      successTitle = 'Update Complete',
+      errorTitle = 'Leave Records Load Failed',
+    } = {},
+  ) {
+    if (showLoader) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Updating leave records...',
+        'Working',
+        { loading: true },
+      );
+    }
 
     try {
-      setLoading(true);
-
-      const data = await getLeaveRequestReports(buildReportParams(nextFilters));
+      const data = await getLeaveRequestReports(
+        buildReportParams(nextFilters),
+      );
 
       setRows(data.items || []);
       setSummary(data.summary || {});
+      clearFeedback('page');
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          successText,
+          successTitle,
+        );
+      }
+
+      return true;
     } catch (error) {
-      setRows([]);
-      setSummary({});
-      alerts.error(
-        error.message || 'Unable to load leave records.',
+      const errorMessage =
+        error.message || 'Unable to load leave records.';
+
+      if (!hasLoadedLeavesRef.current) {
+        setRows([]);
+        setSummary({});
+      }
+
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
+        errorMessage,
         errorTitle,
       );
+
+      return false;
     } finally {
+      hasLoadedLeavesRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
     loadEmployees();
-    loadLeaves({ ...EMPTY_FILTERS });
+    loadLeaves({ ...EMPTY_FILTERS }, { showLoader: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.leave-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
   }, []);
 
   function updateFilter(key, value) {
@@ -372,7 +694,10 @@ export default function Leave() {
           next.date_to = '';
         }
 
-        if (['day', 'week', 'month', 'year'].includes(value) && !next.on_date) {
+        if (
+          ['day', 'week', 'month', 'year'].includes(value) &&
+          !next.on_date
+        ) {
           next.on_date = today;
         }
 
@@ -388,561 +713,1274 @@ export default function Leave() {
 
   async function handleSearch(event) {
     event.preventDefault();
-    await loadLeaves(filters, { errorTitle: 'Search Failed' });
+    setPage(1);
+
+    await loadLeaves(filters, {
+      showLoader: false,
+      feedbackScope: 'search',
+      successText: 'Leave filters were applied successfully.',
+      successTitle: 'Search Complete',
+      errorTitle: 'Search Failed',
+    });
   }
 
   async function handleReset() {
     const cleared = { ...EMPTY_FILTERS };
     setFilters(cleared);
-    await loadLeaves(cleared, { errorTitle: 'Reset Failed' });
+    setPage(1);
+
+    await loadLeaves(cleared, {
+      showLoader: false,
+      feedbackScope: 'reset',
+      successText: 'Leave filters were reset successfully.',
+      successTitle: 'Filters Reset',
+      errorTitle: 'Reset Failed',
+    });
   }
 
-function handleCsvExport() {
-  if (!normalizedRows.length) {
-    alerts.warning('There are no leave records to export.', 'Export Not Available');
-    return;
+  async function handleRefresh() {
+    await loadLeaves(filters, {
+      showLoader: false,
+      feedbackScope: 'refresh',
+      successText: 'Leave records are up to date.',
+      successTitle: 'Refresh Complete',
+      errorTitle: 'Refresh Failed',
+    });
   }
 
-  const exportRows = normalizedRows.map((row) => ({
-    ...row,
-    from_date: row.from_date_display,
-    to_date: row.to_date_display,
-    created_at: row.created_at_display,
-    compoff_holiday_title: row.is_compoff_leave ? row.compoff_holiday_title : '',
-    compoff_earned_date: row.is_compoff_leave ? row.compoff_earned_date : '',
-    compoff_available_from: row.is_compoff_leave ? row.compoff_available_from : '',
-    compoff_valid_until: row.is_compoff_leave ? row.compoff_valid_until : '',
-    holiday_work_request_id: row.is_compoff_leave ? row.holiday_work_request_id : '',
-    attendance_log_id: row.is_compoff_leave ? row.attendance_log_id : '',
-  }));
+  function handleCsvExport() {
+    clearFeedback('export');
 
-  downloadCsv('hr-leave-management.csv', exportRows, LEAVE_COLUMNS);
-  alerts.success('Leave records CSV export is ready.', 'Export Ready');
-}
+    if (!normalizedRows.length) {
+      showFeedback(
+        'export',
+        'warning',
+        'There are no leave records to export.',
+        'Export Not Available',
+      );
+      return;
+    }
+
+    try {
+      const exportRows = normalizedRows.map((row) => ({
+        ...row,
+        from_date: row.from_date_display,
+        to_date: row.to_date_display,
+        created_at: row.created_at_display,
+        compoff_holiday_title: row.is_compoff_leave
+          ? row.compoff_holiday_title
+          : '',
+        compoff_earned_date: row.is_compoff_leave
+          ? row.compoff_earned_date
+          : '',
+        compoff_available_from: row.is_compoff_leave
+          ? row.compoff_available_from
+          : '',
+        compoff_valid_until: row.is_compoff_leave
+          ? row.compoff_valid_until
+          : '',
+        holiday_work_request_id: row.is_compoff_leave
+          ? row.holiday_work_request_id
+          : '',
+        attendance_log_id: row.is_compoff_leave
+          ? row.attendance_log_id
+          : '',
+      }));
+
+      downloadCsv(
+        'hr-leave-management.csv',
+        exportRows,
+        LEAVE_COLUMNS,
+      );
+
+      showFeedback(
+        'export',
+        'success',
+        'Leave records CSV export is ready.',
+        'Export Ready',
+      );
+    } catch (error) {
+      showFeedback(
+        'export',
+        'error',
+        error.message || 'Unable to export leave records.',
+        'Export Failed',
+      );
+    }
+  }
+
+  function handleTablePointerDown(event) {
+    const scroller = tableWrapRef.current;
+
+    if (!scroller) return;
+
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
+
+    const rect = scroller.getBoundingClientRect();
+
+    if (
+      event.pointerType === 'mouse' &&
+      event.clientY >= rect.bottom - 14
+    ) {
+      return;
+    }
+
+    tableDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startScrollLeft: scroller.scrollLeft,
+      moved: false,
+    };
+
+    // Pointer capture intentionally starts only after a real horizontal
+    // movement begins, so ordinary clicks and controls remain untouched.
+  }
+
+  function handleTablePointerMove(event) {
+    const scroller = tableWrapRef.current;
+    const drag = tableDragRef.current;
+
+    if (
+      !scroller ||
+      !drag.active ||
+      drag.pointerId !== event.pointerId
+    ) {
+      return;
+    }
+
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+
+    if (!drag.moved) {
+      if (Math.abs(deltaX) < 6) {
+        return;
+      }
+
+      if (
+        event.pointerType === 'touch' &&
+        Math.abs(deltaY) > Math.abs(deltaX)
+      ) {
+        drag.active = false;
+        drag.pointerId = null;
+        return;
+      }
+
+      drag.moved = true;
+      scroller.classList.add('is-dragging');
+
+      try {
+        scroller.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Pointer capture is optional; drag/swipe still works natively.
+      }
+    }
+
+    scroller.scrollLeft = drag.startScrollLeft - deltaX;
+
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  }
+
+  function finishTablePointerDrag(event) {
+    const scroller = tableWrapRef.current;
+    const drag = tableDragRef.current;
+
+    if (!drag.active || drag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    drag.active = false;
+    drag.pointerId = null;
+    scroller?.classList.remove('is-dragging');
+
+    try {
+      scroller?.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Browser may already have released the pointer.
+    }
+  }
+
+  function cancelTablePointerDrag(event) {
+    const scroller = tableWrapRef.current;
+
+    tableDragRef.current.active = false;
+    tableDragRef.current.pointerId = null;
+    scroller?.classList.remove('is-dragging');
+
+    try {
+      scroller?.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Browser may already have released the pointer.
+    }
+  }
 
   return (
     <div className="page-grid leave-management-page">
-
       <style>{`
-        .leave-management-page{
-          --leave-ink:#101a3a;
-          --leave-muted:#596483;
-          --leave-primary:#6254da;
-          --leave-deep:#342b78;
-          --leave-teal:#18aaa8;
-          --leave-blue:#3766db;
-          --leave-ease:cubic-bezier(.22,1,.36,1);
-          display:grid;
-          gap:22px;
-          width:100%;
-          min-width:0;
-          padding-bottom:max(34px,env(safe-area-inset-bottom));
-          color:var(--leave-ink);
-          font-family:var(--yc-ui,var(--body),inherit);
+        .leave-management-page {
+          --leave-ink: #101a3a;
+          --leave-muted: #5d6d8d;
+          --leave-primary: #4d77dd;
+          --leave-deep: #40348d;
+          --leave-teal: #2eb2b9;
+          display: grid;
+          gap: clamp(16px, 1.8vw, 24px);
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          padding-bottom: max(34px, env(safe-area-inset-bottom));
+          color: var(--leave-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .leave-management-page .leave-hero{
-          position:relative;
-          isolation:isolate;
-          overflow:hidden;
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          gap:28px;
-          min-height:230px;
-          padding:clamp(25px,3vw,40px);
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(28px,2.5vw,40px);
+        .leave-management-page,
+        .leave-management-page * {
+          box-sizing: border-box;
+        }
+
+        .leave-management-page > *,
+        .leave-management-page section,
+        .leave-management-page form,
+        .leave-management-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .leave-management-page::before,
+        .leave-management-page::after,
+        .leave-management-page .leave-hero::before,
+        .leave-management-page .leave-hero::after,
+        .leave-management-page .stat-card::before,
+        .leave-management-page .stat-card::after {
+          content: none;
+          display: none;
+          background: none;
+        }
+
+        .leave-management-page .leave-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(210px, 300px);
+          align-items: center;
+          gap: clamp(20px, 3vw, 38px);
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 8%,rgba(121,219,238,.34),transparent 31%),
-            radial-gradient(circle at 92% 12%,rgba(191,190,249,.3),transparent 34%),
-            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
-          box-shadow:12px 14px 0 #b9d7ff,0 28px 48px rgba(34,38,110,.13);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
         }
 
-        .leave-management-page .leave-hero::before{
-          content:"";
-          position:absolute;
-          inset:0;
-          z-index:-2;
-          opacity:.42;
-          background-image:
-            linear-gradient(rgba(65,55,161,.035) 1px,transparent 1px),
-            linear-gradient(90deg,rgba(65,55,161,.035) 1px,transparent 1px);
-          background-size:42px 42px;
-          pointer-events:none;
+        .leave-management-page .leave-hero-copy {
+          min-width: 0;
+          max-width: 900px;
         }
 
-        .leave-management-page .leave-hero>div{min-width:0;max-width:860px}
-        .leave-management-page .kicker{
-          display:inline-flex;
-          align-items:center;
-          width:fit-content;
-          padding:9px 13px;
-          border-radius:999px;
-          background:var(--leave-deep);
-          color:#fff;
-          font-size:9px;
-          font-weight:950;
-          line-height:1;
-          letter-spacing:.12em;
-          text-transform:uppercase;
-        }
-        .leave-management-page .leave-hero h1{
-          margin:15px 0 10px;
-          color:var(--leave-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(34px,4.4vw,66px);
-          font-weight:760;
-          line-height:.94;
-          letter-spacing:-.055em;
-        }
-        .leave-management-page .leave-hero p{
-          max-width:810px;
-          margin:0;
-          color:var(--leave-muted);
-          font-size:clamp(13px,1vw,16px);
-          line-height:1.68;
+        .leave-management-page .kicker,
+        .leave-management-page .section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
         }
 
-        .leave-management-page button{
-          touch-action:manipulation;
-          font-weight:900;
-          transition:transform 240ms var(--leave-ease),box-shadow 240ms var(--leave-ease),filter 200ms ease;
+        .leave-management-page .kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
         }
-        .leave-management-page button:hover:not(:disabled){transform:translateY(-2px);filter:saturate(1.04)}
-        .leave-management-page button:active:not(:disabled){transform:translateY(0) scale(.985)}
-        .leave-management-page button:disabled{opacity:.56;cursor:not-allowed;transform:none;filter:none}
+
+        .leave-management-page .section-kicker {
+          margin-bottom: 9px;
+          padding: 7px 10px;
+          box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
+        }
+
+        .leave-management-page .leave-hero h1 {
+          max-width: 840px;
+          margin: 0;
+          color: var(--leave-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 76px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
+        }
+
+        .leave-management-page .leave-hero h1 em {
+          color: var(--leave-primary);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
+        }
+
+        .leave-management-page .leave-hero p {
+          max-width: 810px;
+          margin: 17px 0 0;
+          color: var(--leave-muted);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .leave-management-page button {
+          touch-action: manipulation;
+          font-weight: 900;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
+        }
+
+        .leave-management-page button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: saturate(1.03);
+        }
+
+        .leave-management-page button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        .leave-management-page button:disabled {
+          opacity: .56;
+          cursor: not-allowed;
+          transform: none;
+          filter: none;
+        }
 
         .leave-management-page .primary,
-        .leave-management-page .secondary{
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
-          gap:8px;
-          min-height:46px;
-          padding:0 17px;
-          border-radius:14px;
-          line-height:1;
-          white-space:nowrap;
-        }
-        .leave-management-page .primary{
-          border:1px solid rgba(52,43,120,.16);
-          color:#fff;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5);
-          box-shadow:5px 6px 0 rgba(52,43,120,.8),0 12px 22px rgba(55,102,219,.16);
-        }
-        .leave-management-page .secondary{
-          border:1px solid rgba(98,84,218,.18);
-          color:var(--leave-deep);
-          background:#f1efff;
-          box-shadow:4px 5px 0 rgba(98,84,218,.14);
+        .leave-management-page .secondary {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid transparent;
+          border-radius: 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1;
+          white-space: nowrap;
+          cursor: pointer;
         }
 
-        .leave-management-page .stats-grid{
-          display:grid;
-          grid-template-columns:repeat(6,minmax(0,1fr));
-          gap:15px;
-        }
-        .leave-management-page .stat-card{
-          min-width:0;
-          min-height:118px;
-          padding:18px;
-          border:1px solid rgba(171,181,211,.68);
-          border-radius:21px;
-          background:#f8fbff;
-          box-shadow:7px 9px 0 #b9d7ff,0 18px 30px rgba(15,20,75,.08);
-          transition:transform 260ms var(--leave-ease),border-color 220ms ease;
-        }
-        .leave-management-page .stat-card:nth-child(2){background:#fff4d5;box-shadow:7px 9px 0 #ffe0a5,0 18px 30px rgba(15,20,75,.08)}
-        .leave-management-page .stat-card:nth-child(3){background:#eaf8f4;box-shadow:7px 9px 0 #aee6d9,0 18px 30px rgba(15,20,75,.08)}
-        .leave-management-page .stat-card:nth-child(4){background:#ffe8ef;box-shadow:7px 9px 0 #ffc4d5,0 18px 30px rgba(15,20,75,.08)}
-        .leave-management-page .stat-card:nth-child(5){background:#f1efff;box-shadow:7px 9px 0 #c9c0ff,0 18px 30px rgba(15,20,75,.08)}
-        .leave-management-page .stat-card:nth-child(6){background:#edf6ff;box-shadow:7px 9px 0 #c7def8,0 18px 30px rgba(15,20,75,.08)}
-        .leave-management-page .stat-card:hover{transform:translateY(-3px);border-color:rgba(98,84,218,.3)}
-        .leave-management-page .stat-card span{
-          display:block;
-          color:var(--leave-muted);
-          font-size:10px;
-          font-weight:900;
-          letter-spacing:.06em;
-          text-transform:uppercase;
-        }
-        .leave-management-page .stat-card strong{
-          display:block;
-          margin-top:8px;
-          color:var(--leave-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:31px;
-          line-height:1;
-          letter-spacing:-.04em;
-        }
-        .leave-management-page .stat-card small{
-          display:block;
-          margin-top:7px;
-          color:#7d88a4;
-          font-size:11px;
-          line-height:1.35;
+        .leave-management-page .primary {
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 10px 22px rgba(77, 119, 221, .18);
         }
 
-        .leave-management-page .panel{
-          min-width:0;
-          overflow:hidden;
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(24px,2vw,32px);
-          background:linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
-          box-shadow:9px 11px 0 #d1dcfa,0 24px 42px rgba(34,38,110,.1);
-        }
-        .leave-management-page .toolbar{
-          display:flex;
-          align-items:flex-end;
-          justify-content:space-between;
-          gap:18px;
-          padding:23px 25px 18px;
-          border-bottom:1px solid rgba(65,55,161,.08);
-          background:rgba(255,255,255,.66);
-        }
-        .leave-management-page .toolbar>div{min-width:0}
-        .leave-management-page .toolbar h3{
-          margin:0;
-          color:var(--leave-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(22px,2vw,30px);
-          font-weight:760;
-          line-height:1;
-          letter-spacing:-.03em;
-        }
-        .leave-management-page .toolbar p{
-          margin:6px 0 0;
-          color:var(--leave-muted);
-          font-size:12px;
-          line-height:1.5;
+        .leave-management-page .secondary {
+          border-color: rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
         }
 
-        .leave-management-page .dynamic-form{
-          display:grid;
-          grid-template-columns:repeat(4,minmax(0,1fr));
-          gap:14px;
-          padding:20px 25px 25px;
-          background:linear-gradient(145deg,rgba(237,248,255,.44),rgba(248,241,255,.34));
+        .leave-management-page .hero-action-stack,
+        .leave-management-page .toolbar-action-stack,
+        .leave-management-page .form-action-stack {
+          display: grid;
+          gap: 9px;
+          min-width: 0;
         }
-        .leave-management-page .dynamic-form label{
-          display:grid;
-          min-width:0;
-          gap:7px;
-          color:#334164;
-          font-size:12px;
-          font-weight:900;
+
+        .leave-management-page .hero-action-stack {
+          width: min(300px, 100%);
         }
+
+        .leave-management-page .hero-action-stack .secondary {
+          width: max-content;
+          min-width: 130px;
+        }
+
+        .leave-management-page .leave-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .leave-management-page .leave-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+        }
+
+        .leave-management-page .leave-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
+        }
+
+        .leave-management-page .leave-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .leave-management-page .leave-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .leave-management-page .leave-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .leave-management-page .leave-inline-feedback-copy strong,
+        .leave-management-page .leave-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .leave-management-page .leave-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .leave-management-page .leave-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .leave-management-page .leave-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .leave-management-page .leave-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .leave-management-page .page-feedback {
+          width: min(620px, 100%);
+        }
+
+        .leave-management-page .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .leave-management-page .stat-card {
+          min-width: 0;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
+        }
+
+        .leave-management-page .stat-card:nth-child(2) {
+          background: #fff4d5;
+        }
+
+        .leave-management-page .stat-card:nth-child(3) {
+          background: #eaf8f4;
+        }
+
+        .leave-management-page .stat-card:nth-child(4) {
+          background: #fff0f2;
+        }
+
+        .leave-management-page .stat-card span,
+        .leave-management-page .stat-card strong,
+        .leave-management-page .stat-card small {
+          display: block;
+        }
+
+        .leave-management-page .stat-card span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .leave-management-page .stat-card strong {
+          margin-top: 8px;
+          color: var(--leave-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(28px, 3vw, 42px);
+          line-height: 1;
+        }
+
+        .leave-management-page .stat-card small {
+          margin-top: 7px;
+          color: var(--leave-muted);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .leave-management-page .panel {
+          min-width: 0;
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(24px, 2.2vw, 34px);
+          background: #fff;
+          box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
+        }
+
+        .leave-management-page .toolbar {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 23px 25px 18px;
+          border-bottom: 1px solid rgba(65, 55, 161, .08);
+          background:
+            linear-gradient(
+              180deg,
+              rgba(245, 248, 255, .82),
+              rgba(255, 255, 255, .32)
+            );
+        }
+
+        .leave-management-page .toolbar > div {
+          min-width: 0;
+        }
+
+        .leave-management-page .toolbar h3 {
+          margin: 0;
+          color: var(--leave-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(24px, 2.4vw, 35px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+        }
+
+        .leave-management-page .toolbar p {
+          margin: 8px 0 0;
+          color: var(--leave-muted);
+          font-size: 13px;
+          line-height: 1.55;
+        }
+
+        .leave-management-page .dynamic-form {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          padding: 20px 25px 25px;
+          background:
+            linear-gradient(
+              145deg,
+              rgba(237, 248, 255, .44),
+              rgba(248, 241, 255, .34)
+            );
+        }
+
+        .leave-management-page .dynamic-form label {
+          display: grid;
+          min-width: 0;
+          gap: 7px;
+          color: #334164;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
         .leave-management-page .dynamic-form input,
-        .leave-management-page .dynamic-form select{
-          width:100%;
-          min-width:0;
-          min-height:46px;
-          border:1px solid rgba(159,169,205,.62);
-          border-radius:14px;
-          outline:none;
-          background:rgba(255,255,255,.9);
-          color:var(--leave-ink);
-          padding:0 13px;
-          font:inherit;
-          font-weight:600;
-          transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease;
+        .leave-management-page .dynamic-form select {
+          width: 100%;
+          min-width: 0;
+          min-height: 46px;
+          border: 1px solid rgba(159, 169, 205, .62);
+          border-radius: 14px;
+          outline: none;
+          background: rgba(255, 255, 255, .96);
+          color: var(--leave-ink);
+          padding: 0 13px;
+          font: inherit;
+          font-weight: 600;
+          transition:
+            border-color 180ms ease,
+            box-shadow 180ms ease,
+            background 180ms ease;
         }
+
         .leave-management-page .dynamic-form input:hover,
-        .leave-management-page .dynamic-form select:hover{border-color:rgba(98,84,218,.34)}
+        .leave-management-page .dynamic-form select:hover {
+          border-color: rgba(77, 119, 221, .34);
+        }
+
         .leave-management-page .dynamic-form input:focus,
-        .leave-management-page .dynamic-form select:focus{
-          border-color:var(--leave-primary);
-          background:#fff;
-          box-shadow:0 0 0 4px rgba(98,84,218,.11);
-        }
-        .leave-management-page .dynamic-form>button{align-self:end}
-
-        .leave-management-page .inline-message{
-          margin:22px 25px;
-          padding:15px 16px;
-          border:1px solid rgba(98,84,218,.14);
-          border-radius:15px;
-          background:#f1efff;
-          color:var(--leave-deep);
-          font-size:12px;
-          font-weight:850;
-        }
-        .leave-management-page .empty-state{
-          display:grid;
-          justify-items:center;
-          gap:10px;
-          padding:52px 22px;
-          background:linear-gradient(145deg,rgba(237,248,255,.58),rgba(248,241,255,.52));
-          color:var(--leave-muted);
-          text-align:center;
-        }
-        .leave-management-page .empty-state svg{color:var(--leave-primary)}
-        .leave-management-page .empty-state h3{margin:0;color:var(--leave-ink);font-size:18px;font-weight:950}
-        .leave-management-page .empty-state p{max-width:540px;margin:0;font-size:12px;line-height:1.6}
-
-        .leave-management-page .leave-card-grid{
-          display:grid;
-          grid-template-columns:repeat(2,minmax(0,1fr));
-          gap:16px;
-          padding:20px 25px 25px;
-        }
-        .leave-management-page .leave-card{
-          min-width:0;
-          overflow:hidden;
-          border:1px solid rgba(171,181,211,.68);
-          border-radius:22px;
-          background:linear-gradient(145deg,#fff,#f7fbff);
-          box-shadow:6px 8px 0 rgba(185,215,255,.76),0 18px 28px rgba(34,38,110,.08);
-          transition:transform 260ms var(--leave-ease),border-color 220ms ease;
-        }
-        .leave-management-page .leave-card:hover{transform:translateY(-3px);border-color:rgba(98,84,218,.3)}
-        .leave-management-page .leave-card-head{
-          display:flex;
-          align-items:flex-start;
-          justify-content:space-between;
-          gap:14px;
-          padding:18px;
-          border-bottom:1px solid rgba(65,55,161,.09);
-          background:linear-gradient(145deg,rgba(241,239,255,.65),rgba(237,248,255,.52));
-        }
-        .leave-management-page .leave-card-head>div{min-width:0}
-        .leave-management-page .leave-card-head h3{
-          margin:0;
-          color:var(--leave-ink);
-          font-size:17px;
-          font-weight:950;
-          overflow-wrap:anywhere;
-        }
-        .leave-management-page .leave-card-head p{
-          margin:5px 0 0;
-          color:var(--leave-muted);
-          font-size:11px;
-          line-height:1.45;
-          overflow-wrap:anywhere;
-        }
-        .leave-management-page .leave-status{
-          display:inline-flex;
-          align-items:center;
-          min-height:30px;
-          padding:0 10px;
-          border-radius:999px;
-          font-size:10px;
-          font-weight:900;
-          white-space:nowrap;
-        }
-        .leave-management-page .leave-status.approved{color:#13736f;background:#dff8f3}
-        .leave-management-page .leave-status.rejected{color:#b62f55;background:#ffe4ec}
-        .leave-management-page .leave-status.pending{color:#996400;background:#fff0c3}
-        .leave-management-page .leave-status.neutral{color:#5f6983;background:#edf0f6}
-
-        .leave-management-page .leave-card-body{
-          display:grid;
-          grid-template-columns:repeat(3,minmax(0,1fr));
-          gap:10px;
-          padding:16px 18px;
-        }
-        .leave-management-page .leave-card-body>span{
-          min-width:0;
-          padding:11px;
-          border:1px solid rgba(98,84,218,.08);
-          border-radius:13px;
-          background:rgba(241,239,255,.48);
-        }
-        .leave-management-page .leave-card-body small,
-        .leave-management-page .leave-card-footer small{
-          display:block;
-          color:var(--leave-muted);
-          font-size:9px;
-          font-weight:900;
-          letter-spacing:.04em;
-          text-transform:uppercase;
-        }
-        .leave-management-page .leave-card-body strong{
-          display:block;
-          margin-top:5px;
-          color:#334164;
-          font-size:12px;
-          line-height:1.4;
-          overflow-wrap:anywhere;
-        }
-        .leave-management-page .leave-card-footer{
-          display:grid;
-          gap:14px;
-          padding:0 18px 18px;
-        }
-        .leave-management-page .leave-card-footer p{
-          margin:6px 0 0;
-          color:#4d5b7a;
-          font-size:12px;
-          line-height:1.55;
-          overflow-wrap:anywhere;
-        }
-        .leave-management-page .leave-meta-row{
-          display:flex;
-          flex-wrap:wrap;
-          gap:8px;
-        }
-        .leave-management-page .leave-meta-row span{
-          display:inline-flex;
-          align-items:center;
-          gap:6px;
-          min-height:30px;
-          padding:0 10px;
-          border-radius:999px;
-          background:#edf6ff;
-          color:#46577f;
-          font-size:10px;
-          font-weight:850;
+        .leave-management-page .dynamic-form select:focus {
+          border-color: var(--leave-primary);
+          background: #fff;
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
         }
 
-        @media (min-width:1500px){
-          .leave-management-page .leave-card-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+        .leave-management-page .form-action-stack {
+          align-self: end;
+          width: 100%;
         }
-        @media (max-width:1180px){
-          .leave-management-page .stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
-          .leave-management-page .dynamic-form{grid-template-columns:repeat(3,minmax(0,1fr))}
+
+        .leave-management-page .form-action-stack .primary,
+        .leave-management-page .form-action-stack .secondary {
+          width: 100%;
         }
-        @media (max-width:860px){
-          .leave-management-page .leave-card-grid{grid-template-columns:1fr}
-          .leave-management-page .dynamic-form{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+        .leave-management-page .employee-feedback {
+          margin: 0 25px 18px;
         }
-        @media (max-width:640px){
-          .leave-management-page{gap:16px}
-          .leave-management-page .leave-hero{
-            align-items:flex-start;
-            flex-direction:column;
-            min-height:auto;
-            padding:20px;
-            border-radius:24px;
-            box-shadow:7px 8px 0 #b9d7ff,0 18px 30px rgba(34,38,110,.1);
+
+        .leave-management-page .records-summary-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 13px 24px;
+          border-bottom: 1px solid rgba(65, 55, 161, .08);
+          background: #fff;
+        }
+
+        .leave-management-page .records-summary-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .leave-management-page .records-summary-meta span {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-height: 32px;
+          padding: 0 10px;
+          border-radius: 999px;
+          color: #4767b4;
+          background: #edf6ff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .leave-management-page .records-summary-meta span:nth-child(2) {
+          color: #40348d;
+          background: #f1efff;
+        }
+
+        .leave-management-page .page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--leave-muted);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .leave-management-page .page-size-control select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 12px;
+          outline: 0;
+          color: #40348d;
+          background: #f1efff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .leave-management-page .page-size-control select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+        }
+
+        .leave-management-page .leave-table-wrap {
+          width: 100%;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          border-top: 1px solid rgba(171, 181, 211, .35);
+          background: #fff;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(77, 119, 221, .35) transparent;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior-x: contain;
+          touch-action: pan-y;
+          cursor: grab;
+        }
+
+        .leave-management-page .leave-table-wrap.is-dragging {
+          cursor: grabbing;
+          user-select: none;
+        }
+
+        .leave-management-page .leave-table-wrap.is-dragging * {
+          user-select: none;
+        }
+
+        .leave-management-page .leave-table-wrap::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .leave-management-page .leave-table-wrap::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(77, 119, 221, .30);
+        }
+
+        .leave-management-page .leave-table {
+          width: 100%;
+          min-width: 1580px;
+          border-collapse: collapse;
+          table-layout: auto;
+        }
+
+        .leave-management-page .leave-table th,
+        .leave-management-page .leave-table td {
+          padding: 14px 16px;
+          border-bottom: 1px solid #edf0f5;
+          text-align: left;
+          vertical-align: top;
+        }
+
+        .leave-management-page .leave-table th {
+          color: #526079;
+          background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .07em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .leave-management-page .leave-table td {
+          color: #334155;
+          font-size: 12px;
+          line-height: 1.48;
+        }
+
+        .leave-management-page .leave-table tbody tr:hover td {
+          background: #fafcff;
+        }
+
+        .leave-management-page .leave-employee-cell {
+          min-width: 210px;
+        }
+
+        .leave-management-page .leave-employee-cell strong,
+        .leave-management-page .leave-employee-cell span {
+          display: block;
+        }
+
+        .leave-management-page .leave-employee-cell span {
+          margin-top: 4px;
+          color: var(--leave-muted);
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .leave-management-page .leave-date-cell {
+          min-width: 120px;
+          white-space: nowrap;
+        }
+
+        .leave-management-page .leave-reason-cell {
+          min-width: 240px;
+          max-width: 330px;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+
+        .leave-management-page .leave-compoff-cell {
+          min-width: 260px;
+          max-width: 340px;
+          white-space: normal;
+        }
+
+        .leave-management-page .leave-compoff-cell span,
+        .leave-management-page .leave-compoff-cell small {
+          display: block;
+        }
+
+        .leave-management-page .leave-compoff-cell small {
+          margin-top: 4px;
+          color: var(--leave-muted);
+          line-height: 1.4;
+        }
+
+        .leave-management-page .leave-status {
+          display: inline-flex;
+          align-items: center;
+          min-height: 30px;
+          padding: 0 10px;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .leave-management-page .leave-status.approved {
+          color: #047857;
+          background: #eaf8f4;
+        }
+
+        .leave-management-page .leave-status.rejected {
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .leave-management-page .leave-status.pending {
+          color: #9a6817;
+          background: #fff4d5;
+        }
+
+        .leave-management-page .leave-status.neutral {
+          color: #5f6983;
+          background: #edf0f6;
+        }
+
+        .leave-management-page .leave-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 14px;
+          padding: 13px 24px;
+          border-top: 1px solid rgba(65, 55, 161, .08);
+          background: #fff;
+        }
+
+        .leave-management-page .leave-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .leave-management-page .leave-page-button,
+        .leave-management-page .leave-page-number {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .leave-management-page .leave-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 11px;
+        }
+
+        .leave-management-page .leave-page-nav {
+          min-width: 78px;
+        }
+
+        .leave-management-page .leave-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .leave-management-page .leave-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .leave-management-page .leave-page-number.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        }
+
+        .leave-management-page .leave-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .leave-management-page .leave-page-indicator {
+          min-width: 82px;
+          color: var(--leave-muted);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
+        .leave-management-page .loading-line,
+        .leave-management-page .empty-state {
+          margin: 18px 24px 24px;
+          border-radius: 18px;
+          text-align: center;
+        }
+
+        .leave-management-page .loading-line {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          padding: 18px;
+          color: var(--leave-muted);
+          background: #f8fbff;
+          font-size: 12px;
+          font-weight: 850;
+        }
+
+        .leave-management-page .empty-state {
+          display: grid;
+          justify-items: center;
+          gap: 10px;
+          padding: 44px 20px;
+          border: 1px dashed rgba(77, 119, 221, .28);
+          color: var(--leave-muted);
+          background: linear-gradient(145deg, #f8fbff, #f8f7ff);
+        }
+
+        .leave-management-page .empty-state svg {
+          color: var(--leave-primary);
+        }
+
+        .leave-management-page .empty-state h3 {
+          margin: 0;
+          color: var(--leave-ink);
+          font-size: 18px;
+          font-weight: 950;
+        }
+
+        .leave-management-page .empty-state p {
+          max-width: 540px;
+          margin: 0;
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .leave-management-page .leave-spin {
+          animation: leaveSpin .82s linear infinite;
+        }
+
+        @keyframes leaveSpin {
+          to {
+            transform: rotate(360deg);
           }
-          .leave-management-page .leave-hero h1{font-size:clamp(31px,9.2vw,43px)}
-          .leave-management-page .leave-hero .secondary{width:100%}
-          .leave-management-page .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-          .leave-management-page .stat-card{min-height:112px;padding:14px;border-radius:17px}
-          .leave-management-page .stat-card strong{font-size:25px}
-          .leave-management-page .panel{
-            border-radius:23px;
-            box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08);
-          }
-          .leave-management-page .toolbar{
-            align-items:flex-start;
-            flex-direction:column;
-            padding:20px 17px 15px;
-          }
-          .leave-management-page .toolbar .secondary{width:100%}
-          .leave-management-page .dynamic-form{grid-template-columns:1fr;padding:16px 17px 20px}
-          .leave-management-page .dynamic-form>button{width:100%}
-          .leave-management-page .leave-card-grid{padding:15px 12px 19px}
-          .leave-management-page .leave-card-head{flex-direction:column}
-          .leave-management-page .leave-card-body{grid-template-columns:repeat(2,minmax(0,1fr))}
         }
-        @media (max-width:430px){
-          .leave-management-page .stats-grid{grid-template-columns:1fr}
-          .leave-management-page .stat-card{min-height:auto}
-          .leave-management-page .leave-card-body{grid-template-columns:1fr}
+
+        @media (max-width: 1180px) {
+          .leave-management-page .stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .leave-management-page .dynamic-form {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
         }
-        @media (prefers-reduced-motion:reduce){
+
+        @media (max-width: 860px) {
+          .leave-management-page .leave-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .leave-management-page .hero-action-stack {
+            width: min(360px, 100%);
+          }
+
+          .leave-management-page .dynamic-form {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .leave-management-page .toolbar {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .leave-management-page .toolbar-action-stack {
+            width: min(360px, 100%);
+          }
+        }
+
+        @media (max-width: 640px) {
+          .leave-management-page {
+            gap: 15px;
+          }
+
+          .leave-management-page .leave-hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
+          }
+
+          .leave-management-page .leave-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .leave-management-page .hero-action-stack,
+          .leave-management-page .hero-action-stack .secondary {
+            width: 100%;
+          }
+
+          .leave-management-page .stats-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .leave-management-page .panel {
+            border-radius: 23px;
+          }
+
+          .leave-management-page .toolbar {
+            padding: 20px 17px 15px;
+          }
+
+          .leave-management-page .dynamic-form {
+            grid-template-columns: 1fr;
+            padding: 16px 17px 20px;
+          }
+
+          .leave-management-page .form-action-stack {
+            width: 100%;
+          }
+
+          .leave-management-page .records-summary-row {
+            align-items: stretch;
+            flex-direction: column;
+            padding: 12px 14px;
+          }
+
+          .leave-management-page .page-size-control {
+            justify-content: space-between;
+          }
+
+          .leave-management-page .leave-pagination {
+            justify-content: stretch;
+            padding: 12px;
+          }
+
+          .leave-management-page .leave-pagination-controls {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .leave-management-page .leave-page-numbers,
+          .leave-management-page .leave-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .leave-management-page .leave-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .leave-management-page .leave-page-nav {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .leave-management-page .leave-hero {
+            padding: 16px;
+          }
+
+          .leave-management-page .leave-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .leave-management-page .leave-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
           .leave-management-page *,
           .leave-management-page *::before,
-          .leave-management-page *::after{
-            animation-duration:.01ms!important;
-            animation-iteration-count:1!important;
-            transition-duration:.01ms!important;
-            scroll-behavior:auto!important;
+          .leave-management-page *::after {
+            animation: none !important;
+            transition: none !important;
           }
         }
       `}</style>
 
       <section className="hero compact leave-hero">
-        <div>
-          <span className="kicker">HR Leave Management</span>
-          <h1>Leave Records & Daily Availability</h1>
-            <p>
-              Review all leave records by default, track approval status, comp-off
-              claims, holiday work references, and filter leave records by employee,
-              leave type, date range, status, and approval stage.
-            </p>
+        <div className="leave-hero-copy">
+          <span className="kicker">
+            <CalendarDays size={14} />
+            HR Leave Management
+          </span>
+
+          <h1>
+            Leave records, <em>clearly.</em>
+          </h1>
+
+          <p>
+            Review all leave records by default, track approval status,
+            comp-off claims, holiday work references, and filter leave
+            records by employee, leave type, date range, status, and
+            approval stage.
+          </p>
         </div>
 
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => loadLeaves(filters, { errorTitle: 'Refresh Failed' })}
-          disabled={loading}
-        >
-          <RefreshCcw size={16} />
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
+        <div className="hero-action-stack">
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleRefresh}
+            disabled={loading || refreshing}
+          >
+            {refreshing ? (
+              <Loader2 size={16} className="leave-spin" />
+            ) : (
+              <RefreshCcw size={16} />
+            )}
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+
+          <LeaveInlineMessage
+            message={feedbackMap.refresh}
+            onClose={() => clearFeedback('refresh')}
+          />
+        </div>
       </section>
 
-      <section className="stats-grid">
-        <div className="stat-card">
+      <section className="stats-grid" aria-label="Leave summary">
+        <article className="stat-card">
           <span>Total Leaves</span>
           <strong>{computedSummary.total}</strong>
-          <small>Filtered records</small>
-        </div>
+          <small>Filtered leave records</small>
+        </article>
 
-        <div className="stat-card">
+        <article className="stat-card">
           <span>Pending</span>
           <strong>{computedSummary.pending}</strong>
-          <small>Awaiting action</small>
-        </div>
+          <small>Awaiting approval action</small>
+        </article>
 
-        <div className="stat-card">
+        <article className="stat-card">
           <span>Approved</span>
           <strong>{computedSummary.approved}</strong>
-          <small>Confirmed leaves</small>
-        </div>
+          <small>Confirmed leave requests</small>
+        </article>
 
-        <div className="stat-card">
+        <article className="stat-card">
           <span>Rejected</span>
           <strong>{computedSummary.rejected}</strong>
-          <small>Rejected requests</small>
-        </div>
-
-        <div className="stat-card">
-          <span>Half Day</span>
-          <strong>{computedSummary.half_day}</strong>
-          <small>Half-day records</small>
-        </div>
-
-        <div className="stat-card">
-          <span>LWP Days</span>
-          <strong>{computedSummary.lwp}</strong>
-          <small>Leave without pay</small>
-        </div>
+          <small>Rejected leave requests</small>
+        </article>
       </section>
+
+      {feedbackMap.page ? (
+        <div className="page-feedback">
+          <LeaveInlineMessage
+            message={feedbackMap.page}
+            onClose={() => clearFeedback('page')}
+          />
+        </div>
+      ) : null}
 
       <section className="panel leave-filter-panel">
         <div className="toolbar">
           <div>
-            <h3>Leave Filters</h3>
-              <p>
-                All leave records are shown by default. Select a period or use
-                custom dates to narrow the results.
-              </p>
+            <span className="section-kicker">
+              Leave Filters
+            </span>
+            <h3>Filter Leave Records</h3>
+            <p>
+              All leave records are shown by default. Select a period or
+              use custom dates to narrow the results.
+            </p>
           </div>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleCsvExport}
-            disabled={!normalizedRows.length}
-          >
-            <Download size={16} />
-            Export CSV
-          </button>
+          <div className="toolbar-action-stack">
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleCsvExport}
+              disabled={!normalizedRows.length}
+            >
+              <Download size={16} />
+              Export CSV
+            </button>
+
+            <LeaveInlineMessage
+              message={feedbackMap.export}
+              onClose={() => clearFeedback('export')}
+            />
+          </div>
         </div>
+
+        {feedbackMap.employees ? (
+          <div className="employee-feedback">
+            <LeaveInlineMessage
+              message={feedbackMap.employees}
+              onClose={() => clearFeedback('employees')}
+            />
+          </div>
+        ) : null}
 
         <form className="dynamic-form" onSubmit={handleSearch}>
           <label>
             Period
             <select
               value={filters.period}
-              onChange={(e) => updateFilter('period', e.target.value)}
+              onChange={(event) =>
+                updateFilter('period', event.target.value)
+              }
             >
               <option value="all">All Records</option>
               <option value="today">Today</option>
@@ -954,52 +1992,63 @@ function handleCsvExport() {
             </select>
           </label>
 
-          {['today', 'day', 'week', 'month', 'year'].includes(filters.period) && (
+          {['today', 'day', 'week', 'month', 'year'].includes(
+            filters.period,
+          ) ? (
             <label>
               Reference Date
-                <input
-                  type="date"
-                  value={filters.on_date}
-                  onChange={(e) => updateFilter('on_date', e.target.value)}
-                  onWheel={preventDateWheelChange}
-                />
+              <input
+                type="date"
+                value={filters.on_date}
+                onChange={(event) =>
+                  updateFilter('on_date', event.target.value)
+                }
+                onWheel={preventDateWheelChange}
+              />
             </label>
-          )}
+          ) : null}
 
-          {filters.period === 'custom' && (
+          {filters.period === 'custom' ? (
             <>
               <label>
                 Date From
                 <input
                   type="date"
                   value={filters.date_from}
-                  onChange={(e) => updateFilter('date_from', e.target.value)}
+                  onChange={(event) =>
+                    updateFilter('date_from', event.target.value)
+                  }
                   onWheel={preventDateWheelChange}
                 />
               </label>
 
               <label>
                 Date To
-                  <input
-                    type="date"
-                    value={filters.date_to}
-                    onChange={(e) => updateFilter('date_to', e.target.value)}
-                    onWheel={preventDateWheelChange}
-                  />
+                <input
+                  type="date"
+                  value={filters.date_to}
+                  onChange={(event) =>
+                    updateFilter('date_to', event.target.value)
+                  }
+                  onWheel={preventDateWheelChange}
+                />
               </label>
             </>
-          )}
+          ) : null}
 
           <label>
             Employee
             <select
               value={filters.employee_id}
-              onChange={(e) => updateFilter('employee_id', e.target.value)}
+              onChange={(event) =>
+                updateFilter('employee_id', event.target.value)
+              }
               disabled={loadingEmployees}
             >
               <option value="">All Employees</option>
               {employees.map((employee) => {
                 const id = employee.id || employee._id || '';
+
                 return (
                   <option
                     key={id || employee.employee_code || employee.email}
@@ -1016,7 +2065,9 @@ function handleCsvExport() {
             Leave Type
             <select
               value={filters.leave_type}
-              onChange={(e) => updateFilter('leave_type', e.target.value)}
+              onChange={(event) =>
+                updateFilter('leave_type', event.target.value)
+              }
             >
               <option value="">All Leave Types</option>
               <option value="CL">Casual Leave</option>
@@ -1031,7 +2082,9 @@ function handleCsvExport() {
             Status
             <select
               value={filters.status}
-              onChange={(e) => updateFilter('status', e.target.value)}
+              onChange={(event) =>
+                updateFilter('status', event.target.value)
+              }
             >
               <option value="">All Status</option>
               <option value="pending">Pending</option>
@@ -1044,11 +2097,15 @@ function handleCsvExport() {
             Approval Stage
             <select
               value={filters.approval_stage}
-              onChange={(e) => updateFilter('approval_stage', e.target.value)}
+              onChange={(event) =>
+                updateFilter('approval_stage', event.target.value)
+              }
             >
               <option value="">All Stages</option>
               <option value="team_leader">Team Leader</option>
-              <option value="reporting_officer">Reporting Officer</option>
+              <option value="reporting_officer">
+                Reporting Officer
+              </option>
               <option value="hr">HR</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
@@ -1059,39 +2116,76 @@ function handleCsvExport() {
             Live Status
             <select
               value={filters.live_status}
-              onChange={(e) => updateFilter('live_status', e.target.value)}
+              onChange={(event) =>
+                updateFilter('live_status', event.target.value)
+              }
             >
               <option value="">All Live Status</option>
-              <option value="pending_with_team_leader">Pending with Team Leader</option>
-              <option value="pending_with_reporting_officer">Pending with Reporting Officer</option>
-              <option value="pending_with_hr">Pending with HR</option>
+              <option value="pending_with_team_leader">
+                Pending with Team Leader
+              </option>
+              <option value="pending_with_reporting_officer">
+                Pending with Reporting Officer
+              </option>
+              <option value="pending_with_hr">
+                Pending with HR
+              </option>
             </select>
           </label>
 
-          <button
-            type="submit"
-            className="primary"
-            disabled={loading}
-          >
-            <Search size={16} />
-            {loading ? 'Searching...' : 'Search Leaves'}
-          </button>
+          <div className="form-action-stack">
+            <button
+              type="submit"
+              className="primary"
+              disabled={loading || refreshing}
+            >
+              {refreshing && feedbackMap.search?.loading ? (
+                <Loader2 size={16} className="leave-spin" />
+              ) : (
+                <Search size={16} />
+              )}
+              {feedbackMap.search?.loading
+                ? 'Searching...'
+                : 'Search Leaves'}
+            </button>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleReset}
-            disabled={loading}
-          >
-            <Filter size={16} />
-            Reset Filters
-          </button>
+            <LeaveInlineMessage
+              message={feedbackMap.search}
+              onClose={() => clearFeedback('search')}
+            />
+          </div>
+
+          <div className="form-action-stack">
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleReset}
+              disabled={loading || refreshing}
+            >
+              {refreshing && feedbackMap.reset?.loading ? (
+                <Loader2 size={16} className="leave-spin" />
+              ) : (
+                <Filter size={16} />
+              )}
+              {feedbackMap.reset?.loading
+                ? 'Resetting...'
+                : 'Reset Filters'}
+            </button>
+
+            <LeaveInlineMessage
+              message={feedbackMap.reset}
+              onClose={() => clearFeedback('reset')}
+            />
+          </div>
         </form>
       </section>
 
       <section className="panel leave-record-panel">
         <div className="toolbar">
           <div>
+            <span className="section-kicker">
+              Leave Directory
+            </span>
             <h3>Leave Records</h3>
             <p>
               {filters.period === 'all'
@@ -1103,116 +2197,165 @@ function handleCsvExport() {
           </div>
         </div>
 
-        {loading && <div className="inline-message">Loading leave records...</div>}
+        <div className="records-summary-row">
+          <div className="records-summary-meta">
+            <span>
+              Half Day: {computedSummary.half_day}
+            </span>
+            <span>
+              LWP Days: {computedSummary.lwp}
+            </span>
+          </div>
 
-        {!loading && !normalizedRows.length && (
+          <label className="page-size-control">
+            <span>View</span>
+            <select
+              value={pageSize}
+              onChange={(event) => {
+                setPage(1);
+                setPageSize(Number(event.target.value));
+              }}
+              aria-label="Leave records per page"
+            >
+              {LEAVE_PAGE_SIZES.map((size) => (
+                <option value={size} key={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {loading && !normalizedRows.length ? (
+          <div className="loading-line">
+            <Loader2 size={17} className="leave-spin" />
+            Loading leave records...
+          </div>
+        ) : null}
+
+        {!loading && !normalizedRows.length ? (
           <div className="empty-state">
             <CalendarDays size={34} />
             <h3>No leave records found</h3>
-            <p>No employees are on leave for the selected period or filters.</p>
+            <p>
+              No employees are on leave for the selected period or
+              filters.
+            </p>
           </div>
-        )}
+        ) : null}
 
-        {!!normalizedRows.length && (
-          <div className="leave-card-grid">
-            {normalizedRows.map((row) => (
-              <article key={row.id || `${row.employee_name}-${row.from_date_display}`} className="leave-card">
-                <div className="leave-card-head">
-                  <div>
-                    <h3>{row.employee_name}</h3>
-                    <p>
-                      {row.employee_code} • {row.department} • {row.designation}
-                    </p>
-                  </div>
+        {!!normalizedRows.length ? (
+          <>
+            <div
+              className="leave-table-wrap"
+              ref={tableWrapRef}
+              onPointerDown={handleTablePointerDown}
+              onPointerMove={handleTablePointerMove}
+              onPointerUp={finishTablePointerDrag}
+              onPointerCancel={cancelTablePointerDrag}
+              onLostPointerCapture={cancelTablePointerDrag}
+            >
+              <table className="leave-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Leave Type</th>
+                    <th>Day Type</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Leave Days</th>
+                    <th>LWP Days</th>
+                    <th>Current Status</th>
+                    <th>Approval Stage</th>
+                    <th>Reason</th>
+                    <th>Comp-Off Details</th>
+                    <th>Applied On</th>
+                  </tr>
+                </thead>
 
-                  <span className={leaveStatusClass(row.live_status)}>
-                    {row.live_status}
-                  </span>
-                </div>
+                <tbody>
+                  {pagedRows.map((row) => (
+                    <tr
+                      key={
+                        row.id ||
+                        `${row.employee_name}-${row.from_date_display}`
+                      }
+                    >
+                      <td>
+                        <div className="leave-employee-cell">
+                          <strong>{row.employee_name}</strong>
+                          <span>
+                            {row.employee_code} • {row.department} •{' '}
+                            {row.designation}
+                          </span>
+                        </div>
+                      </td>
 
-                <div className="leave-card-body">
-                  <span>
-                    <small>Leave Type</small>
-                    <strong>{row.leave_type_label}</strong>
-                  </span>
+                      <td>{row.leave_type_label}</td>
+                      <td>{row.day_type_label}</td>
+                      <td className="leave-date-cell">
+                        {row.from_date_display}
+                      </td>
+                      <td className="leave-date-cell">
+                        {row.to_date_display}
+                      </td>
+                      <td>{row.leave_days}</td>
+                      <td>{row.lwp_days || '—'}</td>
+                      <td>
+                        <span
+                          className={leaveStatusClass(row.live_status)}
+                        >
+                          {row.live_status}
+                        </span>
+                      </td>
+                      <td>{row.approval_stage_label}</td>
+                      <td className="leave-reason-cell">
+                        {row.reason}
+                      </td>
+                      <td className="leave-compoff-cell">
+                        {row.is_compoff_leave ? (
+                          <>
+                            <span>
+                              {row.compoff_holiday_title}
+                            </span>
+                            <small>
+                              Earned: {row.compoff_earned_date}
+                            </small>
+                            <small>
+                              Claim: {row.compoff_available_from} to{' '}
+                              {row.compoff_valid_until}
+                            </small>
+                            <small>
+                              Comp-Off Credit: {row.compoff_id || '—'}
+                            </small>
+                            <small>
+                              Holiday Work: {row.holiday_work_request_id}
+                            </small>
+                            <small>
+                              Attendance: {row.attendance_log_id}
+                            </small>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="leave-date-cell">
+                        {row.created_at_display}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-                  <span>
-                    <small>Day Type</small>
-                    <strong>{row.day_type_label}</strong>
-                  </span>
-
-                  <span>
-                    <small>From</small>
-                    <strong>{row.from_date_display}</strong>
-                  </span>
-
-                  <span>
-                    <small>To</small>
-                    <strong>{row.to_date_display}</strong>
-                  </span>
-
-                  <span>
-                    <small>Leave Days</small>
-                    <strong>{row.leave_days}</strong>
-                  </span>
-
-                  <span>
-                    <small>LWP Days</small>
-                    <strong>{row.lwp_days || '—'}</strong>
-                  </span>
-
-                  {row.is_compoff_leave && (
-                    <>
-                      <span>
-                        <small>Comp-Off Holiday</small>
-                        <strong>{row.compoff_holiday_title}</strong>
-                      </span>
-
-                      <span>
-                        <small>Claim Window</small>
-                        <strong>
-                          {row.compoff_available_from} to {row.compoff_valid_until}
-                        </strong>
-                      </span>
-                    </>
-                  )}
-
-                </div>
-
-                <div className="leave-card-footer">
-                  <div>
-                    <small>Reason</small>
-                    <p>{row.reason}</p>
-
-                    {row.is_compoff_leave && (
-                      <p>
-                        Comp-Off Credit: {row.compoff_id || '—'} <br />
-                        Holiday Work Request: {row.holiday_work_request_id} <br />
-                        Attendance Log: {row.attendance_log_id}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="leave-meta-row">
-                    <span>
-                      <Clock3 size={14} />
-                      Applied: {row.created_at_display}
-                    </span>
-
-                    <span>
-                      {String(row.live_status || '').toLowerCase().includes('approved') ? (
-                        <CheckCircle2 size={14} />
-                      ) : (
-                        <XCircle size={14} />
-                      )}
-                      Stage: {row.approval_stage_label}
-                    </span>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
+            <LeavePagination
+              total={normalizedRows.length}
+              page={safePage}
+              pageSize={pageSize}
+              onPageChange={setPage}
+            />
+          </>
+        ) : null}
       </section>
     </div>
   );

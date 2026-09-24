@@ -1,23 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   BellRing,
-  Building2,
-  CalendarClock,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Download,
   FileText,
-  IndianRupee,
   Loader2,
-  Lock,
   ReceiptText,
   RefreshCw,
+  Search,
   ShieldCheck,
   Sparkles,
-  TimerReset,
-  Unlock,
   Users,
 } from 'lucide-react';
 
@@ -497,32 +494,6 @@ function invoiceStatus(invoice = {}) {
   );
 }
 
-function invoiceStatusStyle(status) {
-  const normalized = normalizeStatus(status);
-
-  if (['paid', 'captured', 'success', 'completed', 'converted'].includes(normalized)) {
-    return {
-      background: 'rgba(22,163,74,0.12)',
-      color: '#166534',
-      border: '1px solid rgba(22,163,74,0.24)',
-    };
-  }
-
-  if (['failed', 'cancelled', 'refunded', 'expired'].includes(normalized)) {
-    return {
-      background: 'rgba(220,38,38,0.1)',
-      color: '#991b1b',
-      border: '1px solid rgba(220,38,38,0.22)',
-    };
-  }
-
-  return {
-    background: 'rgba(234,88,12,0.1)',
-    color: '#9a3412',
-    border: '1px solid rgba(234,88,12,0.22)',
-  };
-}
-
 function buildBillingApiUrl(path = '') {
   const value = String(path || '').trim();
 
@@ -578,67 +549,169 @@ function getDownloadFilename(response, invoice = {}) {
   return `${reference}.pdf`;
 }
 
+
+const BILLING_NOTICE_HIDE_MS = 3600;
+const BILLING_INVOICE_PAGE_SIZES = [10, 25, 50, 100];
+
+function billingPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function BillingInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`billing-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="billing-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <AlertTriangle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="billing-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="billing-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function BillingPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="billing-pagination">
+      <div className="billing-pagination-controls">
+        <button
+          type="button"
+          className="billing-page-button billing-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="billing-page-numbers" aria-label="Pagination">
+          {billingPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`billing-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span className="billing-page-ellipsis" key={item}>
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="billing-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="billing-page-button billing-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function BillingAlerts({ alerts = [] }) {
   if (!alerts.length) {
     return null;
   }
 
-  const palette = {
-    success: {
-      background: 'linear-gradient(135deg, rgba(240,253,244,0.98), #ffffff)',
-      border: '1px solid rgba(22,163,74,0.24)',
-      color: '#166534',
-      icon: CheckCircle2,
-    },
-    warning: {
-      background: 'linear-gradient(135deg, rgba(255,247,237,0.98), #ffffff)',
-      border: '1px solid rgba(234,88,12,0.25)',
-      color: '#9a3412',
-      icon: AlertTriangle,
-    },
-    error: {
-      background: 'linear-gradient(135deg, rgba(254,242,242,0.98), #ffffff)',
-      border: '1px solid rgba(220,38,38,0.24)',
-      color: '#991b1b',
-      icon: AlertTriangle,
-    },
-    info: {
-      background: 'linear-gradient(135deg, rgba(239,246,255,0.98), #ffffff)',
-      border: '1px solid rgba(37,99,235,0.22)',
-      color: '#1d4ed8',
-      icon: BellRing,
-    },
-  };
-
   return (
-    <div style={{ display: 'grid', gap: 12, marginTop: 24 }}>
+    <div className="billing-alert-list">
       {alerts.map((alert, index) => {
         const level = normalizeStatus(alert.level || alert.type || 'info');
-        const style = palette[level] || palette.info;
-        const Icon = style.icon;
+        const Icon =
+          level === 'success'
+            ? CheckCircle2
+            : level === 'info'
+              ? BellRing
+              : AlertTriangle;
 
         return (
           <div
             key={alert.code || `${level}-${index}`}
+            className={`billing-alert-item ${level}`}
             role={level === 'error' ? 'alert' : 'status'}
-            style={{
-              ...style,
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 13,
-              padding: 17,
-              borderRadius: 20,
-              boxShadow: '0 12px 28px rgba(15,23,42,0.05)',
-            }}
           >
-            <Icon size={21} style={{ flexShrink: 0, marginTop: 1 }} />
+            <Icon size={19} />
             <div>
-              <strong style={{ display: 'block', color: style.color }}>
-                {safeText(alert.title, 'Billing notice')}
-              </strong>
-              <p style={{ margin: '5px 0 0', color: '#475569', lineHeight: 1.65 }}>
-                {safeText(alert.message)}
-              </p>
+              <strong>{safeText(alert.title, 'Billing notice')}</strong>
+              <p>{safeText(alert.message)}</p>
             </div>
           </div>
         );
@@ -647,180 +720,531 @@ function BillingAlerts({ alerts = [] }) {
   );
 }
 
-function InvoiceHistory({ invoices = [], downloadingInvoiceId = '', onDownload }) {
+function InvoiceHistory({
+  invoices = [],
+  downloadingInvoiceId = '',
+  onDownload,
+}) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredInvoices = useMemo(() => {
+    const term = query.trim().toLowerCase();
+
+    if (!term) return invoices;
+
+    return invoices.filter((invoice) =>
+      [
+        invoice.invoice_number,
+        invoice.receipt_number,
+        invoice.razorpay_payment_id,
+        invoice.razorpay_order_id,
+        invoicePlan(invoice),
+        formatDate(invoiceDate(invoice)),
+        invoiceStatus(invoice),
+        invoiceAmount(invoice),
+      ]
+        .filter((value) => value !== undefined && value !== null)
+        .join(' ')
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [invoices, query]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredInvoices.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedInvoices = filteredInvoices.slice(
+    pageStart,
+    pageStart + pageSize,
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
   return (
-    <section
-      className="billing-invoice-history"
-      style={{
-        marginTop: 28,
-        borderRadius: 26,
-        padding: 22,
-        background: '#ffffff',
-        border: '1px solid rgba(226,232,240,0.92)',
-        boxShadow: '0 16px 38px rgba(15,23,42,0.06)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 14,
-          alignItems: 'flex-start',
-          flexWrap: 'wrap',
-        }}
-      >
+    <section className="billing-invoice-history">
+      <div className="billing-section-head">
         <div>
-          <h2
-            style={{
-              margin: 0,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              color: '#0f172a',
-            }}
-          >
-            <ReceiptText size={23} color="#2563eb" />
-            Invoices and payment history
-          </h2>
-          <p style={{ margin: '7px 0 0', color: '#64748b', lineHeight: 1.65 }}>
-            Review payment status and download your company subscription invoices.
+          <span className="billing-section-kicker">
+            <ReceiptText size={14} />
+            Invoice History
+          </span>
+          <h2>Invoices and payment history</h2>
+          <p>
+            Review payment status and download your company subscription
+            invoices.
           </p>
         </div>
 
-        <span
-          style={{
-            borderRadius: 999,
-            padding: '7px 11px',
-            background: 'rgba(37,99,235,0.08)',
-            color: '#1d4ed8',
-            fontSize: 12,
-            fontWeight: 900,
-          }}
-        >
+        <span className="billing-count-badge">
           {invoices.length} invoice{invoices.length === 1 ? '' : 's'}
         </span>
       </div>
 
-      {!invoices.length ? (
-        <div
-          style={{
-            marginTop: 18,
-            padding: 22,
-            borderRadius: 18,
-            background: '#f8fafc',
-            border: '1px dashed #cbd5e1',
-            textAlign: 'center',
-            color: '#64748b',
-          }}
-        >
-          <FileText size={28} style={{ marginBottom: 8 }} />
-          <p style={{ margin: 0, lineHeight: 1.65 }}>
-            No subscription invoice has been generated yet. Paid invoices will appear here automatically.
+      <div className="billing-invoice-controls">
+        <label className="billing-search-box">
+          <Search size={17} />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search invoice, plan, payment ID or status..."
+            aria-label="Search invoices"
+          />
+        </label>
+
+        <div className="billing-view-control">
+          <span>
+            {filteredInvoices.length.toLocaleString('en-IN')} record
+            {filteredInvoices.length === 1 ? '' : 's'}
+          </span>
+
+          <label className="billing-page-size">
+            <span>View</span>
+            <select
+              value={pageSize}
+              onChange={(event) =>
+                setPageSize(Number(event.target.value))
+              }
+              aria-label="Invoices per page"
+            >
+              {BILLING_INVOICE_PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {!filteredInvoices.length ? (
+        <div className="billing-empty">
+          <FileText size={28} />
+          <p>
+            {query
+              ? 'No matching invoice or payment record found.'
+              : 'No subscription invoice has been generated yet. Paid invoices will appear here automatically.'}
           </p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: 12, marginTop: 18 }}>
-          {invoices.map((invoice, index) => {
-            const id = invoiceId(invoice, index);
-            const status = invoiceStatus(invoice);
-            const statusStyle = invoiceStatusStyle(status);
-            const downloadUrl = safeText(invoice.download_url, '');
-            const downloading = downloadingInvoiceId === id;
+        <>
+          <div className="billing-invoice-list">
+            {pagedInvoices.map((invoice, index) => {
+              const originalIndex = pageStart + index;
+              const id = invoiceId(invoice, originalIndex);
+              const status = invoiceStatus(invoice);
+              const downloadUrl = safeText(invoice.download_url, '');
+              const downloading = downloadingInvoiceId === id;
 
-            return (
-              <div
-                key={id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(190px, 1.4fr) repeat(3, minmax(120px, 1fr)) auto',
-                  gap: 14,
-                  alignItems: 'center',
-                  padding: 16,
-                  borderRadius: 18,
-                  background: '#f8fafc',
-                  border: '1px solid rgba(226,232,240,0.92)',
-                  overflowX: 'auto',
-                }}
-              >
-                <div style={{ minWidth: 190 }}>
-                  <strong style={{ display: 'block', color: '#0f172a' }}>
-                    {safeText(invoice.invoice_number || invoice.receipt_number, 'Payment invoice')}
-                  </strong>
-                  <span style={{ display: 'block', marginTop: 5, color: '#64748b', fontSize: 12 }}>
-                    {safeText(invoice.razorpay_payment_id || invoice.razorpay_order_id, 'Recorded payment')}
-                  </span>
-                </div>
+              return (
+                <article className="billing-invoice-row" key={id}>
+                  <div className="billing-invoice-primary">
+                    <strong>
+                      {safeText(
+                        invoice.invoice_number || invoice.receipt_number,
+                        'Payment invoice',
+                      )}
+                    </strong>
+                    <span>
+                      {safeText(
+                        invoice.razorpay_payment_id ||
+                          invoice.razorpay_order_id,
+                        'Recorded payment',
+                      )}
+                    </span>
+                  </div>
 
-                <div style={{ minWidth: 120 }}>
-                  <span style={{ display: 'block', color: '#94a3b8', fontSize: 11, fontWeight: 900, textTransform: 'uppercase' }}>
-                    Plan
-                  </span>
-                  <strong style={{ display: 'block', marginTop: 4, color: '#334155' }}>
-                    {invoicePlan(invoice)}
-                  </strong>
-                </div>
+                  <div className="billing-invoice-field">
+                    <span>Plan</span>
+                    <strong>{invoicePlan(invoice)}</strong>
+                  </div>
 
-                <div style={{ minWidth: 120 }}>
-                  <span style={{ display: 'block', color: '#94a3b8', fontSize: 11, fontWeight: 900, textTransform: 'uppercase' }}>
-                    Paid on
-                  </span>
-                  <strong style={{ display: 'block', marginTop: 4, color: '#334155' }}>
-                    {formatDate(invoiceDate(invoice))}
-                  </strong>
-                </div>
+                  <div className="billing-invoice-field">
+                    <span>Paid on</span>
+                    <strong>{formatDate(invoiceDate(invoice))}</strong>
+                  </div>
 
-                <div style={{ minWidth: 120 }}>
-                  <span style={{ display: 'block', color: '#94a3b8', fontSize: 11, fontWeight: 900, textTransform: 'uppercase' }}>
-                    Amount
-                  </span>
-                  <strong style={{ display: 'block', marginTop: 4, color: '#0f172a' }}>
-                    {formatCurrency(invoiceAmount(invoice), invoice.currency || 'INR')}
-                  </strong>
-                </div>
+                  <div className="billing-invoice-field">
+                    <span>Amount</span>
+                    <strong>
+                      {formatCurrency(
+                        invoiceAmount(invoice),
+                        invoice.currency || 'INR',
+                      )}
+                    </strong>
+                  </div>
 
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'flex-end', minWidth: 210 }}>
-                  <span
-                    style={{
-                      ...statusStyle,
-                      borderRadius: 999,
-                      padding: '6px 10px',
-                      fontSize: 11,
-                      fontWeight: 900,
-                      textTransform: 'uppercase',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {safeText(status).replaceAll('_', ' ')}
-                  </span>
+                  <div className="billing-invoice-actions">
+                    <span
+                      className={`billing-status-pill ${normalizeStatus(
+                        status,
+                      )}`}
+                    >
+                      {safeText(status).replaceAll('_', ' ')}
+                    </span>
 
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => onDownload(invoice, index)}
-                    disabled={!downloadUrl || downloading}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      minHeight: 40,
-                      whiteSpace: 'nowrap',
-                      opacity: !downloadUrl ? 0.55 : 1,
-                    }}
-                  >
-                    {downloading ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
-                    {downloading ? 'Downloading...' : 'Download PDF'}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => onDownload(invoice, originalIndex)}
+                      disabled={!downloadUrl || downloading}
+                    >
+                      {downloading ? (
+                        <Loader2 size={16} className="spin" />
+                      ) : (
+                        <Download size={16} />
+                      )}
+                      {downloading ? 'Downloading...' : 'Download PDF'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <BillingPagination
+            total={filteredInvoices.length}
+            page={safePage}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
+        </>
       )}
     </section>
   );
 }
 
+function StatusBadge({ planType, status }) {
+  const normalizedStatus = normalizeStatus(status);
+  const isPositive =
+    normalizedStatus === 'active' ||
+    normalizedStatus === 'paid' ||
+    normalizedStatus === 'lifetime';
+
+  const isNegative =
+    normalizedStatus === 'expired' ||
+    normalizedStatus === 'suspended' ||
+    normalizedStatus === 'cancelled';
+
+  return (
+    <span
+      className={`billing-status-badge ${
+        isPositive ? 'positive' : isNegative ? 'negative' : 'warning'
+      }`}
+    >
+      {isPositive ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+      {safeText(planType, 'Plan')} · {safeText(status, 'Status')}
+    </span>
+  );
+}
+
+function SummaryCard({ label, value }) {
+  return (
+    <article className="billing-summary-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function PricingPlanCard({
+  plan,
+  selected,
+  disabled,
+  onSelect,
+}) {
+  const planCode = plan.plan_code || plan.code || '';
+  const planName = plan.display_name || plan.plan_name || planCode;
+  const amount = toNumber(plan.amount, 0);
+  const currency = plan.currency || 'INR';
+  const interval = plan.billing_interval || 'monthly';
+  const isCustom = Boolean(plan.is_custom_pricing);
+  const allowOnlinePayment =
+    plan.allow_online_payment !== false && !isCustom;
+  const employeeText = plan.is_unlimited_employees
+    ? 'Unlimited employees'
+    : `Up to ${
+        plan.employee_limit || plan.included_employees || 0
+      } employees`;
+
+  return (
+    <button
+      className={`billing-plan-card ${
+        selected ? 'selected' : ''
+      }`}
+      type="button"
+      onClick={() => onSelect(planCode)}
+      disabled={disabled}
+    >
+      <div className="billing-plan-head">
+        <h3>{planName}</h3>
+
+        {plan.is_recommended ? (
+          <span className="billing-recommended-badge">
+            Recommended
+          </span>
+        ) : null}
+      </div>
+
+      <p className="billing-plan-description">
+        {safeText(plan.description, 'Full HRMS subscription plan.')}
+      </p>
+
+      <div className="billing-plan-price">
+        <strong>
+          {isCustom ? 'Custom' : formatCurrency(amount, currency)}
+        </strong>
+        <span>
+          {isCustom ? 'Contact Sales Team' : `per ${interval}`}
+        </span>
+      </div>
+
+      <div className="billing-plan-employee">
+        <Users size={17} />
+        {employeeText}
+      </div>
+
+      <ul className="billing-plan-features">
+        {(plan.features || []).slice(0, 5).map((feature) => (
+          <li key={`${planCode}-${feature}`}>{feature}</li>
+        ))}
+      </ul>
+
+      <div className="billing-plan-state">
+        {selected ? (
+          <>
+            <CheckCircle2 size={18} />
+            <span>Selected</span>
+          </>
+        ) : allowOnlinePayment ? (
+          <>
+            <CreditCard size={18} />
+            <span>Select plan</span>
+          </>
+        ) : (
+          <>
+            <AlertTriangle size={18} />
+            <span>Custom plan</span>
+          </>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function PremiumQuotationPanel({
+  quotation = {},
+  onPay,
+  creatingOrder = false,
+  verifyingPayment = false,
+  paymentDisabled = false,
+  paymentDisabledReason = '',
+  isRenewal = false,
+}) {
+  if (!quotation || !Object.keys(quotation).length) {
+    return null;
+  }
+
+  const amount = getPremiumQuotationAmount(quotation);
+  const currency =
+    quotation.quoted_currency || quotation.currency || 'INR';
+  const interval =
+    quotation.quoted_billing_interval ||
+    quotation.billing_interval ||
+    'monthly';
+  const paymentLink = safeText(quotation.payment_link, '');
+  const reference =
+    quotation.quotation_reference ||
+    quotation.request_reference ||
+    quotation.reference ||
+    'Premium quotation';
+  const status = getPremiumPaymentStatus(quotation);
+  const history = getPremiumHistory(quotation);
+  const busy = creatingOrder || verifyingPayment;
+
+  return (
+    <section className="billing-premium-quotation">
+      <div className="billing-section-head">
+        <div>
+          <span className="billing-section-kicker success">
+            <ShieldCheck size={14} />
+            Premium Quotation
+          </span>
+
+          <h2>
+            {isRenewal
+              ? 'Premium renewal payment is ready'
+              : 'Premium payment details are ready'}
+          </h2>
+
+          <p>
+            Review the quotation amount, billing interval and payment due
+            date below. Pay through Razorpay to{' '}
+            {isRenewal ? 'renew' : 'activate'} Premium access.
+          </p>
+        </div>
+
+        <span className="billing-count-badge">
+          <CheckCircle2 size={14} />
+          {safeText(status).replaceAll('_', ' ')}
+        </span>
+      </div>
+
+      <div className="billing-quote-summary-grid">
+        <SummaryCard
+          label="Quoted / Renewal Amount"
+          value={formatCurrency(amount, currency)}
+        />
+        <SummaryCard
+          label="Billing Interval"
+          value={formatBillingInterval(interval)}
+        />
+        <SummaryCard
+          label="Employee Limit"
+          value={employeeLimitText(quotation.quoted_employee_limit)}
+        />
+        <SummaryCard
+          label="Payment Due Date"
+          value={formatDate(quotation.payment_due_date)}
+        />
+      </div>
+
+      <div className="billing-quotation-details">
+        <div>
+          <strong>Quotation Reference</strong>
+          <p>{safeText(reference)}</p>
+
+          <strong>Valid Until</strong>
+          <p>{formatDate(quotation.quotation_valid_until)}</p>
+        </div>
+
+        <div>
+          <strong>Premium Renewal Rule</strong>
+          <p>
+            The finalized quotation amount remains the recurring
+            monthly/yearly renewal amount until Superadmin revises the
+            quotation.
+          </p>
+        </div>
+      </div>
+
+      {quotation.sales_note ? (
+        <div className="billing-sales-note">
+          <strong>Sales Note</strong>
+          <p>{quotation.sales_note}</p>
+        </div>
+      ) : null}
+
+      <div className="billing-payment-row">
+        <button
+          type="button"
+          className="primary"
+          onClick={onPay}
+          disabled={paymentDisabled || busy}
+        >
+          {busy ? (
+            <Loader2 size={18} className="spin" />
+          ) : (
+            <CreditCard size={18} />
+          )}
+          {verifyingPayment
+            ? 'Verifying Payment...'
+            : creatingOrder
+              ? 'Opening Razorpay...'
+              : isRenewal
+                ? 'Pay Premium Renewal'
+                : 'Pay Premium Quotation'}
+        </button>
+
+        {paymentLink ? (
+          <a
+            href={paymentLink}
+            target="_blank"
+            rel="noreferrer"
+            className="ghost"
+          >
+            <CreditCard size={18} />
+            Open Supplied Payment Link
+          </a>
+        ) : null}
+
+        <span
+          className={
+            paymentDisabled
+              ? 'billing-payment-help warning'
+              : 'billing-payment-help'
+          }
+        >
+          {paymentDisabledReason ||
+            `After successful payment, Premium access will be ${
+              isRenewal ? 'renewed' : 'activated'
+            } automatically.`}
+        </span>
+      </div>
+
+      {history.length ? (
+        <div className="billing-quotation-history">
+          <strong>Quotation / Invoice History</strong>
+
+          <div className="billing-quotation-history-list">
+            {history.map((item, index) => (
+              <div
+                className="billing-quotation-history-row"
+                key={`${item.history_type}-${
+                  item.history_date || index
+                }-${
+                  item.payment_id ||
+                  item.quotation_reference ||
+                  index
+                }`}
+              >
+                <span>
+                  <strong>Type:</strong> {item.history_type}
+                </span>
+                <span>
+                  <strong>Date:</strong>{' '}
+                  {formatDate(item.history_date)}
+                </span>
+                <span>
+                  <strong>Amount:</strong>{' '}
+                  {formatCurrency(
+                    item.history_amount,
+                    item.history_currency || currency,
+                  )}
+                </span>
+                <span>
+                  <strong>Interval:</strong>{' '}
+                  {formatBillingInterval(
+                    item.history_interval || interval,
+                  )}
+                </span>
+                <span>
+                  <strong>Status:</strong>{' '}
+                  {safeText(
+                    item.status ||
+                      item.payment_status ||
+                      item.quotation_status,
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function loadRazorpayCheckout() {
   if (typeof window === 'undefined') {
@@ -849,525 +1273,6 @@ function loadRazorpayCheckout() {
   });
 }
 
-function StatusBadge({ planType, status }) {
-  const normalizedStatus = normalizeStatus(status);
-  const isPositive =
-    normalizedStatus === 'active' ||
-    normalizedStatus === 'paid' ||
-    normalizedStatus === 'lifetime';
-
-  const isNegative =
-    normalizedStatus === 'expired' ||
-    normalizedStatus === 'suspended' ||
-    normalizedStatus === 'cancelled';
-
-  const style = isPositive
-    ? {
-        background: 'rgba(22, 163, 74, 0.12)',
-        color: '#166534',
-        border: '1px solid rgba(22, 163, 74, 0.25)',
-      }
-    : isNegative
-      ? {
-          background: 'rgba(220, 38, 38, 0.12)',
-          color: '#991b1b',
-          border: '1px solid rgba(220, 38, 38, 0.25)',
-        }
-      : {
-          background: 'rgba(234, 88, 12, 0.12)',
-          color: '#9a3412',
-          border: '1px solid rgba(234, 88, 12, 0.25)',
-        };
-
-  return (
-    <span
-      style={{
-        ...style,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 7,
-        borderRadius: 999,
-        padding: '7px 12px',
-        fontSize: 12,
-        fontWeight: 900,
-        textTransform: 'uppercase',
-        letterSpacing: '0.04em',
-      }}
-    >
-      {isPositive ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-      {safeText(planType, 'Plan')} · {safeText(status, 'Status')}
-    </span>
-  );
-}
-
-function SummaryCard({ icon: Icon, label, value, tone = '#2563eb' }) {
-  return (
-    <div
-      className="stat-card billing-summary-card"
-      style={{
-        padding: 18,
-        minHeight: 116,
-        border: '1px solid rgba(226,232,240,0.9)',
-      }}
-    >
-      <div
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 16,
-          display: 'grid',
-          placeItems: 'center',
-          background: `${tone}18`,
-          color: tone,
-          marginBottom: 10,
-        }}
-      >
-        <Icon size={22} />
-      </div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function PricingPlanCard({ plan, selected, disabled, onSelect }) {
-  const planCode = plan.plan_code || plan.code || '';
-  const planName = plan.display_name || plan.plan_name || planCode;
-  const amount = toNumber(plan.amount, 0);
-  const currency = plan.currency || 'INR';
-  const interval = plan.billing_interval || 'monthly';
-  const isCustom = Boolean(plan.is_custom_pricing);
-  const allowOnlinePayment = plan.allow_online_payment !== false && !isCustom;
-  const employeeText = plan.is_unlimited_employees
-    ? 'Unlimited employees'
-    : `Up to ${plan.employee_limit || plan.included_employees || 0} employees`;
-
-  return (
-    <button
-      className={`billing-plan-card ${selected ? 'selected' : ''}`}
-      type="button"
-      onClick={() => onSelect(planCode)}
-      disabled={disabled}
-      style={{
-        textAlign: 'left',
-        border: selected
-          ? '2px solid rgba(37,99,235,0.8)'
-          : '1px solid rgba(226,232,240,0.95)',
-        borderRadius: 24,
-        padding: 22,
-        background: selected
-          ? 'linear-gradient(135deg, rgba(239,246,255,0.98), #ffffff)'
-          : '#ffffff',
-        boxShadow: selected
-          ? '0 22px 48px rgba(37,99,235,0.13)'
-          : '0 14px 34px rgba(15,23,42,0.06)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.65 : 1,
-        position: 'relative',
-      }}
-    >
-      {plan.is_recommended ? (
-        <span
-          style={{
-            position: 'absolute',
-            right: 18,
-            top: 16,
-            borderRadius: 999,
-            padding: '5px 10px',
-            background: 'rgba(37,99,235,0.1)',
-            color: '#1d4ed8',
-            fontSize: 11,
-            fontWeight: 900,
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-          }}
-        >
-          Recommended
-        </span>
-      ) : null}
-
-      <h3 style={{ margin: '0 0 8px', color: '#0f172a', fontSize: 22 }}>
-        {planName}
-      </h3>
-
-      <p style={{ margin: 0, color: '#64748b', lineHeight: 1.55, minHeight: 48 }}>
-        {safeText(plan.description, 'Full HRMS subscription plan.')}
-      </p>
-
-      <div style={{ marginTop: 18 }}>
-        <strong
-          style={{
-            display: 'block',
-            fontSize: 30,
-            color: '#0f172a',
-            letterSpacing: '-0.04em',
-          }}
-        >
-          {isCustom ? 'Custom' : formatCurrency(amount, currency)}
-        </strong>
-        <span style={{ color: '#64748b', fontSize: 13 }}>
-          {isCustom ? 'Contact Sales Team' : `per ${interval}`}
-        </span>
-      </div>
-
-      <div
-        style={{
-          marginTop: 14,
-          borderRadius: 16,
-          padding: '11px 13px',
-          background: selected ? 'rgba(37,99,235,0.1)' : 'rgba(15,23,42,0.04)',
-          color: selected ? '#1d4ed8' : '#334155',
-          fontWeight: 900,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 9,
-        }}
-      >
-        <Users size={17} />
-        {employeeText}
-      </div>
-
-      <ul style={{ margin: '16px 0 0', paddingLeft: 20, color: '#475569', lineHeight: 1.8 }}>
-        {(plan.features || []).slice(0, 5).map((feature) => (
-          <li key={`${planCode}-${feature}`}>{feature}</li>
-        ))}
-      </ul>
-
-      <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
-        {selected ? (
-          <>
-            <CheckCircle2 size={18} color="#2563eb" />
-            <span style={{ color: '#2563eb', fontWeight: 900 }}>Selected</span>
-          </>
-        ) : allowOnlinePayment ? (
-          <>
-            <CreditCard size={18} color="#64748b" />
-            <span style={{ color: '#64748b', fontWeight: 800 }}>Select plan</span>
-          </>
-        ) : (
-          <>
-            <AlertTriangle size={18} color="#92400e" />
-            <span style={{ color: '#92400e', fontWeight: 800 }}>Custom plan</span>
-          </>
-        )}
-      </div>
-    </button>
-  );
-}
-
-function PremiumQuotationPanel({
-  quotation = {},
-  onPay,
-  creatingOrder = false,
-  verifyingPayment = false,
-  paymentDisabled = false,
-  paymentDisabledReason = '',
-  isRenewal = false,
-}) {
-  if (!quotation || !Object.keys(quotation).length) {
-    return null;
-  }
-
-  const amount = getPremiumQuotationAmount(quotation);
-  const currency = quotation.quoted_currency || quotation.currency || 'INR';
-  const interval = quotation.quoted_billing_interval || quotation.billing_interval || 'monthly';
-  const paymentLink = safeText(quotation.payment_link, '');
-  const reference =
-    quotation.quotation_reference ||
-    quotation.request_reference ||
-    quotation.reference ||
-    'Premium quotation';
-  const status = getPremiumPaymentStatus(quotation);
-  const history = getPremiumHistory(quotation);
-  const busy = creatingOrder || verifyingPayment;
-
-  return (
-    <section
-      className="billing-premium-quotation"
-      style={{
-        marginTop: 28,
-        borderRadius: 28,
-        padding: 24,
-        background:
-          'linear-gradient(135deg, rgba(240,253,244,0.96), rgba(239,246,255,0.98))',
-        border: '1px solid rgba(34,197,94,0.25)',
-        boxShadow: '0 18px 45px rgba(15,23,42,0.08)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 18,
-          flexWrap: 'wrap',
-          alignItems: 'flex-start',
-        }}
-      >
-        <div>
-          <p
-            style={{
-              margin: '0 0 8px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              color: '#166534',
-              fontWeight: 900,
-              letterSpacing: 0.5,
-              textTransform: 'uppercase',
-              fontSize: 12,
-            }}
-          >
-            <ShieldCheck size={16} />
-            Premium quotation received
-          </p>
-
-          <h2 style={{ margin: 0, color: '#0f172a' }}>
-            {isRenewal ? 'Premium renewal payment is ready' : 'Premium payment details are ready'}
-          </h2>
-
-          <p style={{ margin: '10px 0 0', color: '#475569', lineHeight: 1.7 }}>
-            Review the quotation amount, billing interval and payment due date below.
-            Pay through Razorpay to {isRenewal ? 'renew' : 'activate'} Premium access.
-          </p>
-        </div>
-
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            borderRadius: 999,
-            padding: '8px 12px',
-            background: 'rgba(37,99,235,0.1)',
-            color: '#1d4ed8',
-            border: '1px solid rgba(37,99,235,0.22)',
-            fontWeight: 900,
-            textTransform: 'uppercase',
-            fontSize: 12,
-          }}
-        >
-          <CheckCircle2 size={15} />
-          {safeText(status).replaceAll('_', ' ')}
-        </span>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: 14,
-          marginTop: 22,
-        }}
-      >
-        <SummaryCard
-          icon={IndianRupee}
-          label="Quoted / Renewal Amount"
-          value={formatCurrency(amount, currency)}
-          tone="#16a34a"
-        />
-        <SummaryCard
-          icon={CalendarClock}
-          label="Billing Interval"
-          value={formatBillingInterval(interval)}
-          tone="#2563eb"
-        />
-        <SummaryCard
-          icon={Users}
-          label="Employee Limit"
-          value={employeeLimitText(quotation.quoted_employee_limit)}
-          tone="#7c3aed"
-        />
-        <SummaryCard
-          icon={CalendarClock}
-          label="Payment Due Date"
-          value={formatDate(quotation.payment_due_date)}
-          tone="#ea580c"
-        />
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-          gap: 16,
-          marginTop: 20,
-        }}
-      >
-        <div
-          style={{
-            padding: 18,
-            borderRadius: 20,
-            background: '#ffffff',
-            border: '1px solid rgba(226,232,240,0.95)',
-          }}
-        >
-          <strong style={{ color: '#0f172a' }}>Quotation Reference</strong>
-          <p style={{ margin: '8px 0 0', color: '#475569', lineHeight: 1.7 }}>
-            {safeText(reference)}
-          </p>
-
-          <strong style={{ display: 'block', color: '#0f172a', marginTop: 14 }}>
-            Valid Until
-          </strong>
-          <p style={{ margin: '8px 0 0', color: '#475569', lineHeight: 1.7 }}>
-            {formatDate(quotation.quotation_valid_until)}
-          </p>
-        </div>
-
-        <div
-          style={{
-            padding: 18,
-            borderRadius: 20,
-            background: '#ffffff',
-            border: '1px solid rgba(226,232,240,0.95)',
-          }}
-        >
-          <strong style={{ color: '#0f172a' }}>Premium Renewal Rule</strong>
-          <p style={{ margin: '8px 0 0', color: '#475569', lineHeight: 1.7 }}>
-            The finalized quotation amount remains the recurring monthly/yearly renewal
-            amount until Superadmin revises the quotation.
-          </p>
-        </div>
-      </div>
-
-      {quotation.sales_note ? (
-        <div
-          style={{
-            marginTop: 16,
-            padding: 18,
-            borderRadius: 20,
-            background: '#ffffff',
-            border: '1px solid rgba(226,232,240,0.95)',
-          }}
-        >
-          <strong style={{ color: '#0f172a' }}>Sales Note</strong>
-          <p
-            style={{
-              margin: '8px 0 0',
-              color: '#475569',
-              lineHeight: 1.7,
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {quotation.sales_note}
-          </p>
-        </div>
-      ) : null}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: 12,
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          marginTop: 20,
-        }}
-      >
-        <button
-          type="button"
-          className="primary"
-          onClick={onPay}
-          disabled={paymentDisabled || busy}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            minHeight: 46,
-            opacity: paymentDisabled ? 0.65 : 1,
-          }}
-        >
-          {busy ? <Loader2 size={18} className="spin" /> : <CreditCard size={18} />}
-          {verifyingPayment
-            ? 'Verifying Payment...'
-            : creatingOrder
-              ? 'Opening Razorpay...'
-              : isRenewal
-                ? 'Pay Premium Renewal'
-                : 'Pay Premium Quotation'}
-        </button>
-
-        {paymentLink ? (
-          <a
-            href={paymentLink}
-            target="_blank"
-            rel="noreferrer"
-            className="ghost"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 10,
-              minHeight: 46,
-              textDecoration: 'none',
-            }}
-          >
-            <CreditCard size={18} />
-            Open Supplied Payment Link
-          </a>
-        ) : null}
-
-        <span style={{ color: paymentDisabled ? '#92400e' : '#475569', lineHeight: 1.7 }}>
-          {paymentDisabledReason ||
-            `After successful payment, Premium access will be ${isRenewal ? 'renewed' : 'activated'} automatically.`}
-        </span>
-      </div>
-
-      {history.length ? (
-        <div
-          style={{
-            marginTop: 20,
-            padding: 18,
-            borderRadius: 20,
-            background: '#ffffff',
-            border: '1px solid rgba(226,232,240,0.95)',
-          }}
-        >
-          <strong style={{ color: '#0f172a' }}>Quotation / Invoice History</strong>
-
-          <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
-            {history.map((item, index) => (
-              <div
-                key={`${item.history_type}-${item.history_date || index}-${item.payment_id || item.quotation_reference || index}`}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                  gap: 10,
-                  padding: 12,
-                  borderRadius: 16,
-                  background: '#f8fafc',
-                  border: '1px solid rgba(226,232,240,0.9)',
-                  color: '#475569',
-                }}
-              >
-                <span>
-                  <strong style={{ color: '#0f172a' }}>Type:</strong>{' '}
-                  {item.history_type}
-                </span>
-                <span>
-                  <strong style={{ color: '#0f172a' }}>Date:</strong>{' '}
-                  {formatDate(item.history_date)}
-                </span>
-                <span>
-                  <strong style={{ color: '#0f172a' }}>Amount:</strong>{' '}
-                  {formatCurrency(item.history_amount, item.history_currency || currency)}
-                </span>
-                <span>
-                  <strong style={{ color: '#0f172a' }}>Interval:</strong>{' '}
-                  {formatBillingInterval(item.history_interval || interval)}
-                </span>
-                <span>
-                  <strong style={{ color: '#0f172a' }}>Status:</strong>{' '}
-                  {safeText(item.status || item.payment_status || item.quotation_status)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
 
 export default function Billing({ user = {}, setPage }) {
   const { showAlert } = useCustomAlert();
@@ -1380,6 +1285,9 @@ export default function Billing({ user = {}, setPage }) {
   const [submittingPremiumRequest, setSubmittingPremiumRequest] = useState(false);
   const [premiumRequestResult, setPremiumRequestResult] = useState(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState('');
+  const [activeSection, setActiveSection] = useState('overview');
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
   const [premiumForm, setPremiumForm] = useState({
     contact_name: '',
     contact_email: '',
@@ -1392,6 +1300,66 @@ export default function Billing({ user = {}, setPage }) {
     support_sla: 'Standard business support',
     message: '',
   });
+
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, BILLING_NOTICE_HIDE_MS);
+    }
+  }
 
   const plans = useMemo(() => getPlans(summary || {}), [summary]);
   const premiumQuotation = useMemo(() => getPremiumQuotation(summary || {}), [summary]);
@@ -1517,8 +1485,18 @@ export default function Billing({ user = {}, setPage }) {
 
   const premiumPaymentDisabled = Boolean(premiumPaymentDisabledReason);
 
-  async function loadBillingSummary() {
+  async function loadBillingSummary({ feedbackScope = '' } = {}) {
     setLoading(true);
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing billing and subscription details...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
 
     try {
       const data = await api('/billing/summary');
@@ -1527,8 +1505,11 @@ export default function Billing({ user = {}, setPage }) {
       const defaultCode = getDefaultPlanCode(data);
       const availablePlans = getPlans(data);
       const firstOnlinePlan =
-        availablePlans.find((plan) => plan.allow_online_payment !== false && !plan.is_custom_pricing) ||
-        availablePlans[0];
+        availablePlans.find(
+          (plan) =>
+            plan.allow_online_payment !== false &&
+            !plan.is_custom_pricing,
+        ) || availablePlans[0];
 
       const visiblePremiumQuotation = hasVisiblePremiumQuotation(data);
 
@@ -1540,12 +1521,36 @@ export default function Billing({ user = {}, setPage }) {
               firstOnlinePlan?.code ||
               'growth',
       );
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Billing and subscription details are up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
     } catch (error) {
+      const errorMessage = error.message || 'Please try again.';
+
       showAlert({
         title: 'Unable to load billing details',
-        message: error.message || 'Please try again.',
+        message: errorMessage,
         type: 'error',
       });
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'error',
+          errorMessage,
+          'Refresh Failed',
+        );
+      }
+
+      return false;
     } finally {
       setLoading(false);
     }
@@ -1554,6 +1559,31 @@ export default function Billing({ user = {}, setPage }) {
   useEffect(() => {
     loadBillingSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.billing-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
   }, []);
 
   function buildDefaultPremiumForm() {
@@ -1601,6 +1631,7 @@ export default function Billing({ user = {}, setPage }) {
   }
 
   function openPremiumRequestForm() {
+    clearFeedback('premium-request');
     setPremiumForm((current) => ({
       ...buildDefaultPremiumForm(),
       ...Object.fromEntries(
@@ -1620,8 +1651,15 @@ export default function Billing({ user = {}, setPage }) {
 
   async function submitPremiumRequest(event) {
     event.preventDefault();
+    clearFeedback('premium-request');
 
     if (!selectedPlan) {
+      showFeedback(
+        'premium-request',
+        'warning',
+        'Please select Premium before submitting the request.',
+        'Select Premium Plan',
+      );
       showAlert({
         title: 'Select Premium plan',
         message: 'Please select Premium before submitting the request.',
@@ -1635,6 +1673,12 @@ export default function Billing({ user = {}, setPage }) {
     const employeeCount = Number(premiumForm.employee_count || 0);
 
     if (!contactName) {
+      showFeedback(
+        'premium-request',
+        'warning',
+        'Please enter the contact person name.',
+        'Contact Name Required',
+      );
       showAlert({
         title: 'Contact name required',
         message: 'Please enter the contact person name.',
@@ -1644,6 +1688,12 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (!contactEmail) {
+      showFeedback(
+        'premium-request',
+        'warning',
+        'Please enter the contact email.',
+        'Contact Email Required',
+      );
       showAlert({
         title: 'Contact email required',
         message: 'Please enter the contact email.',
@@ -1653,6 +1703,12 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (!Number.isFinite(employeeCount) || employeeCount <= 0) {
+      showFeedback(
+        'premium-request',
+        'warning',
+        'Please enter the estimated employee count for Premium pricing.',
+        'Employee Count Required',
+      );
       showAlert({
         title: 'Employee count required',
         message: 'Please enter the estimated employee count for Premium pricing.',
@@ -1662,6 +1718,13 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     setSubmittingPremiumRequest(true);
+    showFeedback(
+      'premium-request',
+      'info',
+      'Submitting Premium custom plan request...',
+      'Submitting Request',
+      { loading: true },
+    );
 
     try {
       const planCode = selectedPlan.plan_code || selectedPlan.code || selectedPlanCode || 'premium';
@@ -1699,19 +1762,37 @@ export default function Billing({ user = {}, setPage }) {
           '',
       });
 
+      const successMessage =
+        data.message ||
+        'Premium request submitted successfully. Our sales team will connect with you within 24 hours.';
+
+      showFeedback(
+        'premium-request',
+        'success',
+        successMessage,
+        'Premium Request Submitted',
+      );
+
       showAlert({
         title: 'Premium request submitted',
-        message:
-          data.message ||
-          'Premium request submitted successfully. Our sales team will connect with you within 24 hours.',
+        message: successMessage,
         type: 'success',
       });
     } catch (error) {
+      const errorMessage =
+        error.message ||
+        'Please check the details and try again.';
+
+      showFeedback(
+        'premium-request',
+        'error',
+        errorMessage,
+        'Premium Request Failed',
+      );
+
       showAlert({
         title: 'Unable to submit Premium request',
-        message:
-          error.message ||
-          'Please check the details and try again.',
+        message: errorMessage,
         type: 'error',
       });
     } finally {
@@ -1727,6 +1808,13 @@ export default function Billing({ user = {}, setPage }) {
 
   async function handlePaymentSuccess(paymentResponse, orderResponse) {
     setVerifyingPayment(true);
+    showFeedback(
+      'payment',
+      'info',
+      'Verifying the completed Razorpay payment...',
+      'Verifying Payment',
+      { loading: true },
+    );
 
     try {
       const verifiedPlanCode =
@@ -1765,13 +1853,24 @@ export default function Billing({ user = {}, setPage }) {
         body: JSON.stringify(verifyPayload),
       });
 
+      const successTitle =
+        normalizeStatus(verifiedPlanCode) === 'premium'
+          ? 'Premium Plan Activated'
+          : 'Subscription Activated';
+      const successMessage =
+        data.message ||
+        'Payment verified successfully. Full HRMS access is now unlocked.';
+
+      showFeedback(
+        'payment',
+        'success',
+        successMessage,
+        successTitle,
+      );
+
       showAlert({
-        title: normalizeStatus(verifiedPlanCode) === 'premium'
-          ? 'Premium plan activated'
-          : 'Subscription activated',
-        message:
-          data.message ||
-          'Payment verified successfully. Full HRMS access is now unlocked.',
+        title: successTitle,
+        message: successMessage,
         type: 'success',
       });
 
@@ -1795,11 +1894,20 @@ export default function Billing({ user = {}, setPage }) {
         // Ignore browser history errors.
       }
     } catch (error) {
+      const errorMessage =
+        error.message ||
+        'Payment was received but verification failed. Please contact the sales/support team.';
+
+      showFeedback(
+        'payment',
+        'error',
+        errorMessage,
+        'Payment Verification Failed',
+      );
+
       showAlert({
         title: 'Payment verification failed',
-        message:
-          error.message ||
-          'Payment was received but verification failed. Please contact the sales/support team.',
+        message: errorMessage,
         type: 'error',
       });
     } finally {
@@ -1814,6 +1922,13 @@ export default function Billing({ user = {}, setPage }) {
     quotation = {},
   }) {
     setCreatingOrder(true);
+    showFeedback(
+      'payment',
+      'info',
+      'Preparing the Razorpay checkout...',
+      'Opening Razorpay',
+      { loading: true },
+    );
 
     try {
       await loadRazorpayCheckout();
@@ -1952,6 +2067,12 @@ export default function Billing({ user = {}, setPage }) {
         },
         modal: {
           ondismiss: () => {
+            showFeedback(
+              'payment',
+              'info',
+              'The Razorpay payment window was closed before payment completion.',
+              'Payment Cancelled',
+            );
             showAlert({
               title: 'Payment cancelled',
               message: 'The Razorpay payment window was closed before payment completion.',
@@ -1964,20 +2085,45 @@ export default function Billing({ user = {}, setPage }) {
       const checkout = new window.Razorpay(options);
 
       checkout.on('payment.failed', (response) => {
+        const failureMessage =
+          response?.error?.description ||
+          'Razorpay payment failed. Please try again.';
+
+        showFeedback(
+          'payment',
+          'error',
+          failureMessage,
+          'Payment Failed',
+        );
+
         showAlert({
           title: 'Payment failed',
-          message:
-            response?.error?.description ||
-            'Razorpay payment failed. Please try again.',
+          message: failureMessage,
           type: 'error',
         });
       });
 
       checkout.open();
+
+      showFeedback(
+        'payment',
+        'info',
+        'Complete the payment in the Razorpay checkout window.',
+        'Razorpay Opened',
+      );
     } catch (error) {
+      const errorMessage = error.message || 'Please try again.';
+
+      showFeedback(
+        'payment',
+        'error',
+        errorMessage,
+        'Unable to Start Payment',
+      );
+
       showAlert({
         title: 'Unable to start payment',
-        message: error.message || 'Please try again.',
+        message: errorMessage,
         type: 'error',
       });
     } finally {
@@ -1986,7 +2132,15 @@ export default function Billing({ user = {}, setPage }) {
   }
 
   async function startPremiumQuotationPayment() {
+    clearFeedback('payment');
+
     if (computed.isLifetime) {
+      showFeedback(
+        'payment',
+        'info',
+        'SDS lifetime company does not require payment.',
+        'Lifetime Access Enabled',
+      );
       showAlert({
         title: 'Lifetime access enabled',
         message: 'SDS lifetime company does not require payment.',
@@ -1996,6 +2150,12 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (!hasPremiumQuotation) {
+      showFeedback(
+        'payment',
+        'warning',
+        'Submit a Premium request and wait for Superadmin to release the quotation.',
+        'Premium Quotation Unavailable',
+      );
       showAlert({
         title: 'Premium quotation unavailable',
         message: 'Submit a Premium request and wait for Superadmin to release the quotation.',
@@ -2005,6 +2165,12 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (premiumPaymentDisabled) {
+      showFeedback(
+        'payment',
+        'warning',
+        premiumPaymentDisabledReason,
+        'Premium Payment Unavailable',
+      );
       showAlert({
         title: 'Premium payment unavailable',
         message: premiumPaymentDisabledReason,
@@ -2034,7 +2200,15 @@ export default function Billing({ user = {}, setPage }) {
   }
 
   async function startRazorpayPayment() {
+    clearFeedback('payment');
+
     if (computed.isLifetime) {
+      showFeedback(
+        'payment',
+        'info',
+        'SDS lifetime company does not require payment.',
+        'Lifetime Access Enabled',
+      );
       showAlert({
         title: 'Lifetime access enabled',
         message: 'SDS lifetime company does not require payment.',
@@ -2044,6 +2218,12 @@ export default function Billing({ user = {}, setPage }) {
     }
 
     if (!selectedPlan) {
+      showFeedback(
+        'payment',
+        'warning',
+        'Please select Essential, Growth, or Premium before payment.',
+        'Select a Plan',
+      );
       showAlert({
         title: 'Select a plan',
         message: 'Please select Essential, Growth, or Premium before payment.',
@@ -2063,6 +2243,12 @@ export default function Billing({ user = {}, setPage }) {
         await startPremiumQuotationPayment();
       } else {
         openPremiumRequestForm();
+        showFeedback(
+          'payment',
+          'info',
+          'Complete the Premium request form below to receive a custom quotation.',
+          'Premium Request Required',
+        );
       }
       return;
     }
@@ -2153,1166 +2339,2232 @@ export default function Billing({ user = {}, setPage }) {
     selectedPlanIsPremium && hasPremiumQuotation && !premiumPaymentDisabled;
 
   return (
-    <section className="panel billing-page" style={{ maxWidth: 1180, margin: '0 auto' }}>
-
+    <section className="panel billing-page">
       <style>{`
-        .billing-page{
-          --billing-ink:#101a3a;
-          --billing-muted:#596483;
-          --billing-primary:#6254da;
-          --billing-deep:#342b78;
-          --billing-blue:#3766db;
-          --billing-teal:#18aaa8;
-          --billing-green:#13736f;
-          --billing-red:#b62f55;
-          --billing-amber:#996400;
-          --billing-flat-blue:#b9d7ff;
-          --billing-flat-violet:#c9c0ff;
-          --billing-flat-teal:#aee6d9;
-          --billing-ease:cubic-bezier(.22,1,.36,1);
+        .billing-page {
+          --billing-ink: #101a3a;
+          --billing-muted: #5d6d8d;
+          --billing-blue: #4d77dd;
+          --billing-cyan: #2eb2b9;
+          --billing-violet: #575092;
+          --billing-green: #047857;
+          --billing-red: #a2344d;
+          --billing-amber: #9a6817;
 
-          width:min(1180px,100%);
-          overflow:visible;
-          border:0!important;
-          background:transparent!important;
-          box-shadow:none!important;
-          color:var(--billing-ink);
-          font-family:var(--yc-ui,var(--body),inherit);
+          width: min(1180px, 100%);
+          min-width: 0;
+          margin: 0 auto;
+          overflow: visible;
+          border: 0 !important;
+          background: transparent !important;
+          box-shadow: none !important;
+          color: var(--billing-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .billing-page>div:first-of-type{
-          position:relative;
-          isolation:isolate;
-          overflow:hidden;
-          padding:clamp(22px,3vw,38px)!important;
-          border:1px solid rgba(171,181,211,.72)!important;
-          border-radius:clamp(28px,2.5vw,40px)!important;
+        .billing-page,
+        .billing-page * {
+          box-sizing: border-box;
+        }
+
+        .billing-page > *,
+        .billing-page section,
+        .billing-page article,
+        .billing-page nav,
+        .billing-page form,
+        .billing-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .billing-page::before,
+        .billing-page::after,
+        .billing-page .billing-hero::before,
+        .billing-page .billing-hero::after,
+        .billing-page .billing-summary-card::before,
+        .billing-page .billing-summary-card::after {
+          content: none;
+          display: none;
+          background: none;
+        }
+
+        .billing-page-grid {
+          width: 100%;
+          display: grid;
+          gap: clamp(16px, 1.8vw, 24px);
+        }
+
+        .billing-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(245px, 330px);
+          gap: clamp(20px, 3vw, 38px);
+          align-items: center;
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 3%,rgba(121,219,238,.30),transparent 30%),
-            radial-gradient(circle at 94% 4%,rgba(191,190,249,.30),transparent 34%),
-            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%)!important;
-          box-shadow:
-            12px 14px 0 var(--billing-flat-blue),
-            0 28px 48px rgba(34,38,110,.13)!important;
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
         }
 
-        .billing-page>div:first-of-type::before{
-          content:"";
-          position:absolute;
-          inset:0;
-          z-index:-2;
-          opacity:.42;
-          pointer-events:none;
-          background-image:
-            linear-gradient(rgba(65,55,161,.035) 1px,transparent 1px),
-            linear-gradient(90deg,rgba(65,55,161,.035) 1px,transparent 1px);
-          background-size:42px 42px;
+        .billing-hero-copy {
+          min-width: 0;
+          max-width: 900px;
+        }
+
+        .billing-kicker,
+        .billing-section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .billing-kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
+        }
+
+        .billing-section-kicker {
+          margin-bottom: 10px;
+          padding: 7px 10px;
+          box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
+        }
+
+        .billing-section-kicker.success {
+          background: linear-gradient(135deg, #269c83 0%, #2eb2b9 100%);
         }
 
         .billing-page h1,
         .billing-page h2,
-        .billing-page h3{
-          color:var(--billing-ink)!important;
-          font-family:var(--yc-display,var(--heading),inherit);
+        .billing-page h3 {
+          color: var(--billing-ink);
+          font-family: var(--yc-display, var(--heading), Georgia, "Times New Roman", serif);
         }
 
-        .billing-page>div:first-of-type>div:first-child h1{
-          font-size:clamp(34px,4.4vw,62px)!important;
-          font-weight:760;
-          line-height:.95!important;
-          letter-spacing:-.055em!important;
+        .billing-hero h1 {
+          margin: 0;
+          font-size: clamp(44px, 5.2vw, 76px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
         }
 
-        .billing-page p,
-        .billing-page li{
-          color:var(--billing-muted);
+        .billing-hero h1 em {
+          color: var(--billing-blue);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
+        }
+
+        .billing-hero p {
+          max-width: 820px;
+          margin: 17px 0 0;
+          color: var(--billing-muted);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .billing-hero-side {
+          display: grid;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .billing-current-card {
+          padding: 17px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, .88);
+          box-shadow: 0 12px 26px rgba(70, 92, 140, .08);
+        }
+
+        .billing-current-card > span,
+        .billing-current-card > strong,
+        .billing-current-card > small {
+          display: block;
+        }
+
+        .billing-current-card > span {
+          color: var(--billing-muted);
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        .billing-current-card > strong {
+          margin-top: 6px;
+          color: var(--billing-ink);
+          font-size: 19px;
+          overflow-wrap: anywhere;
+        }
+
+        .billing-current-card > small {
+          margin-top: 7px;
+          color: var(--billing-muted);
+          line-height: 1.45;
+        }
+
+        .billing-hero-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .billing-refresh-stack {
+          grid-column: 1 / -1;
+          display: grid;
+          gap: 8px;
+          width: 100%;
         }
 
         .billing-page button,
-        .billing-page a.ghost{
-          touch-action:manipulation;
-          font-weight:900;
-          transition:
-            transform 240ms var(--billing-ease),
-            box-shadow 240ms var(--billing-ease),
-            border-color 200ms ease,
-            background 200ms ease,
-            color 200ms ease,
-            filter 200ms ease;
-        }
-
-        .billing-page button:hover:not(:disabled),
-        .billing-page a.ghost:hover{
-          transform:translateY(-2px);
-          filter:saturate(1.04);
-        }
-
-        .billing-page button:active:not(:disabled),
-        .billing-page a.ghost:active{
-          transform:translateY(0) scale(.985);
-        }
-
-        .billing-page button:disabled{
-          cursor:not-allowed;
-          opacity:.56;
-          transform:none;
-          filter:none;
+        .billing-page a.ghost {
+          touch-action: manipulation;
+          font: inherit;
+          font-weight: 900;
         }
 
         .billing-page .primary,
-        .billing-page .ghost{
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
-          gap:8px;
-          min-height:44px;
-          padding:0 15px;
-          border-radius:14px;
-          line-height:1;
-          white-space:nowrap;
-        }
-
-        .billing-page .primary{
-          border:1px solid rgba(52,43,120,.16);
-          color:#fff;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5);
-          box-shadow:5px 6px 0 rgba(52,43,120,.8),0 12px 22px rgba(55,102,219,.16);
-        }
-
-        .billing-page .ghost{
-          border:1px solid rgba(98,84,218,.18);
-          color:var(--billing-deep);
-          background:#f1efff;
-          box-shadow:3px 4px 0 rgba(98,84,218,.12);
-        }
-
-        .billing-page .billing-summary-card{
-          min-width:0;
-          min-height:118px!important;
-          border:1px solid rgba(171,181,211,.68)!important;
-          border-radius:21px!important;
-          background:#f8fbff!important;
-          box-shadow:
-            7px 9px 0 var(--billing-flat-blue),
-            0 18px 30px rgba(15,20,75,.08)!important;
+        .billing-page .ghost {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid transparent;
+          border-radius: 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: max-content;
+          line-height: 1;
+          white-space: nowrap;
+          cursor: pointer;
+          text-decoration: none;
           transition:
-            transform 260ms var(--billing-ease),
-            border-color 220ms ease!important;
-        }
-
-        .billing-page .billing-summary-card:nth-child(2n){
-          background:#eaf8f4!important;
-          box-shadow:
-            7px 9px 0 var(--billing-flat-teal),
-            0 18px 30px rgba(15,20,75,.08)!important;
-        }
-
-        .billing-page .billing-summary-card:nth-child(3n){
-          background:#f1efff!important;
-          box-shadow:
-            7px 9px 0 var(--billing-flat-violet),
-            0 18px 30px rgba(15,20,75,.08)!important;
-        }
-
-        .billing-page .billing-summary-card:nth-child(4n){
-          background:#fff4d5!important;
-          box-shadow:
-            7px 9px 0 #ffe0a5,
-            0 18px 30px rgba(15,20,75,.08)!important;
-        }
-
-        .billing-page .billing-summary-card:hover{
-          transform:translateY(-3px);
-          border-color:rgba(98,84,218,.30)!important;
-        }
-
-        .billing-page .billing-summary-card>div:first-child{
-          color:#fff!important;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5)!important;
-          border:1px solid rgba(52,43,120,.15);
-          box-shadow:4px 5px 0 rgba(98,84,218,.16);
-        }
-
-        .billing-page .billing-summary-card span{
-          color:var(--billing-muted);
-          font-size:10px;
-          font-weight:900;
-          letter-spacing:.06em;
-          text-transform:uppercase;
-        }
-
-        .billing-page .billing-summary-card strong{
-          color:var(--billing-ink);
-          font-size:22px;
-          line-height:1.2;
-          letter-spacing:-.03em;
-          overflow-wrap:anywhere;
-        }
-
-        .billing-page .billing-plan-card{
-          min-width:0;
-          border:1px solid rgba(171,181,211,.68)!important;
-          border-radius:24px!important;
-          background:linear-gradient(145deg,#fff,#f7fbff)!important;
-          box-shadow:
-            6px 8px 0 rgba(185,215,255,.74),
-            0 18px 28px rgba(34,38,110,.08)!important;
-          transition:
-            transform 260ms var(--billing-ease),
-            border-color 220ms ease,
-            box-shadow 260ms var(--billing-ease)!important;
-        }
-
-        .billing-page .billing-plan-card:nth-child(2n){
-          box-shadow:
-            6px 8px 0 rgba(174,230,217,.76),
-            0 18px 28px rgba(34,38,110,.08)!important;
-        }
-
-        .billing-page .billing-plan-card:hover:not(:disabled){
-          transform:translateY(-4px)!important;
-          border-color:rgba(98,84,218,.34)!important;
-        }
-
-        .billing-page .billing-plan-card.selected{
-          border:2px solid rgba(98,84,218,.62)!important;
-          background:
-            radial-gradient(circle at 100% 0%,rgba(105,217,208,.18),transparent 36%),
-            linear-gradient(145deg,#f1efff,#f7fbff)!important;
-          box-shadow:
-            7px 9px 0 var(--billing-flat-violet),
-            0 20px 34px rgba(34,38,110,.12)!important;
-        }
-
-        .billing-page input,
-        .billing-page select,
-        .billing-page textarea{
-          border:1px solid rgba(159,169,205,.62)!important;
-          border-radius:14px!important;
-          outline:none!important;
-          color:var(--billing-ink)!important;
-          background:rgba(255,255,255,.94)!important;
-          transition:
+            transform 180ms ease,
             border-color 180ms ease,
-            box-shadow 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
+        }
+
+        .billing-page .primary {
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 10px 22px rgba(77, 119, 221, .18);
+        }
+
+        .billing-page .ghost {
+          color: #4767b4;
+          border-color: rgba(77, 119, 221, .18);
+          background: #fff;
+        }
+
+        .billing-page .primary:hover:not(:disabled),
+        .billing-page .ghost:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: saturate(1.03);
+        }
+
+        .billing-page button:disabled,
+        .billing-page .ghost:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .billing-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          margin-top: 12px;
+          padding: 7px 11px;
+          border: 1px solid rgba(154, 104, 23, .18);
+          border-radius: 999px;
+          color: var(--billing-amber);
+          background: #fff4d5;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+
+        .billing-status-badge.positive {
+          color: var(--billing-green);
+          border-color: rgba(4, 120, 87, .18);
+          background: #eaf8f4;
+        }
+
+        .billing-status-badge.negative {
+          color: var(--billing-red);
+          border-color: rgba(162, 52, 77, .18);
+          background: #fff0f2;
+        }
+
+        .billing-summary-grid,
+        .billing-quote-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .billing-summary-card {
+          min-width: 0;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
+        }
+
+        .billing-summary-card:nth-child(2) {
+          background: #eaf8f4;
+        }
+
+        .billing-summary-card:nth-child(3) {
+          background: #fff4d5;
+        }
+
+        .billing-summary-card:nth-child(4) {
+          background: #f1efff;
+        }
+
+        .billing-summary-card span,
+        .billing-summary-card strong {
+          display: block;
+        }
+
+        .billing-summary-card span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .billing-summary-card strong {
+          margin-top: 9px;
+          overflow-wrap: anywhere;
+          color: var(--billing-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(23px, 2.5vw, 36px);
+          line-height: 1.08;
+        }
+
+        .billing-alert-list {
+          display: grid;
+          gap: 10px;
+        }
+
+        .billing-alert-item {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 10px;
+          align-items: start;
+          padding: 13px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
+          color: #245da8;
+          background: #edf6ff;
+          box-shadow: none;
+        }
+
+        .billing-alert-item.success {
+          color: var(--billing-green);
+          border-color: rgba(4, 120, 87, .18);
+          background: #eaf8f4;
+        }
+
+        .billing-alert-item.warning {
+          color: var(--billing-amber);
+          border-color: rgba(154, 104, 23, .18);
+          background: #fff4d5;
+        }
+
+        .billing-alert-item.error {
+          color: var(--billing-red);
+          border-color: rgba(162, 52, 77, .18);
+          background: #fff0f2;
+        }
+
+        .billing-alert-item strong {
+          display: block;
+          color: currentColor;
+          font-size: 12px;
+        }
+
+        .billing-alert-item p {
+          margin: 4px 0 0;
+          color: var(--billing-muted);
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .billing-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 16px 28px rgba(34, 38, 110, .08);
+        }
+
+        .billing-section-tab {
+          min-width: 0;
+          min-height: 62px;
+          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          border: 1px solid rgba(77, 119, 221, .22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
             background 180ms ease;
         }
 
-        .billing-page input:hover,
-        .billing-page select:hover,
-        .billing-page textarea:hover{
-          border-color:rgba(98,84,218,.34)!important;
+        .billing-section-tab:hover {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
         }
 
-        .billing-page input:focus,
-        .billing-page select:focus,
-        .billing-page textarea:focus{
-          border-color:var(--billing-primary)!important;
-          background:#fff!important;
-          box-shadow:0 0 0 4px rgba(98,84,218,.11)!important;
+        .billing-section-tab.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .17);
         }
 
-        .billing-page .billing-premium-quotation,
-        .billing-page .billing-invoice-history{
-          border:1px solid rgba(171,181,211,.70)!important;
-          border-radius:26px!important;
-          background:
-            radial-gradient(circle at 100% 0%,rgba(105,217,208,.14),transparent 34%),
-            linear-gradient(145deg,#fff,#f4fbff)!important;
-          box-shadow:
-            8px 10px 0 #d1dcfa,
-            0 22px 38px rgba(34,38,110,.09)!important;
+        .billing-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
         }
 
-        .billing-page .billing-premium-quotation{
-          border-color:rgba(19,115,111,.22)!important;
-          box-shadow:
-            8px 10px 0 var(--billing-flat-teal),
-            0 22px 38px rgba(34,38,110,.09)!important;
+        .billing-section-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
         }
 
-        .billing-page .billing-invoice-history>div+div>div{
-          border-color:rgba(98,84,218,.09)!important;
-          background:rgba(241,239,255,.42)!important;
+        .billing-section-tab-copy small {
+          color: currentColor;
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.35;
+          opacity: .78;
         }
 
-        .billing-page .spin{
-          animation:billingPageSpin .8s linear infinite;
+        .billing-section-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          font-size: 9px;
+          font-weight: 950;
+          white-space: nowrap;
         }
 
-        @keyframes billingPageSpin{
-          to{transform:rotate(360deg)}
+        .billing-section-content {
+          display: grid;
+          gap: 18px;
+          animation: billingSectionReveal 220ms ease both;
         }
 
-        @media (max-width:760px){
-          .billing-page>div:first-of-type{
-            padding:20px!important;
-            border-radius:24px!important;
-            box-shadow:
-              7px 8px 0 var(--billing-flat-blue),
-              0 18px 30px rgba(34,38,110,.1)!important;
+        @keyframes billingSectionReveal {
+          from {
+            opacity: 0;
+            transform: translateY(5px);
           }
-
-          .billing-page>div:first-of-type>div:first-child{
-            flex-direction:column;
-            align-items:flex-start!important;
-          }
-
-          .billing-page>div:first-of-type>div:first-child>div:last-child{
-            width:100%;
-          }
-
-          .billing-page .billing-plan-card,
-          .billing-page .billing-summary-card{
-            border-radius:18px!important;
-          }
-
-          .billing-page .billing-premium-quotation,
-          .billing-page .billing-invoice-history{
-            padding:18px!important;
-            border-radius:22px!important;
-            box-shadow:
-              5px 6px 0 #d1dcfa,
-              0 14px 24px rgba(34,38,110,.08)!important;
-          }
-
-          .billing-page .primary,
-          .billing-page .ghost{
-            width:100%;
+          to {
+            opacity: 1;
+            transform: translateY(0);
           }
         }
 
-        @media (max-width:430px){
-          .billing-page>div:first-of-type{
-            padding:16px!important;
-          }
+        .billing-panel,
+        .billing-premium-quotation,
+        .billing-invoice-history {
+          padding: clamp(20px, 2.4vw, 28px);
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(24px, 2.2vw, 34px);
+          background: #fff;
+          box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
+        }
 
-          .billing-page .billing-summary-card{
-            min-height:auto!important;
+        .billing-section-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+
+        .billing-section-head h2,
+        .billing-panel h2 {
+          margin: 0;
+          font-size: clamp(24px, 2.4vw, 35px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+        }
+
+        .billing-section-head p,
+        .billing-panel > p {
+          margin: 8px 0 0;
+          color: var(--billing-muted);
+          font-size: 13px;
+          line-height: 1.58;
+        }
+
+        .billing-overview-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+        }
+
+        .billing-overview-card {
+          min-height: 100%;
+        }
+
+        .billing-overview-card p {
+          margin: 12px 0 0;
+          color: var(--billing-muted);
+          line-height: 1.7;
+        }
+
+        .billing-overview-card p.success {
+          color: var(--billing-green);
+        }
+
+        .billing-overview-card p.error {
+          color: var(--billing-red);
+        }
+
+        .billing-benefit-list,
+        .billing-next-list {
+          margin: 15px 0 0;
+          padding-left: 20px;
+          color: var(--billing-muted);
+          line-height: 1.8;
+        }
+
+        .billing-plan-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+          gap: 16px;
+          margin-top: 16px;
+        }
+
+        .billing-plan-card {
+          position: relative;
+          min-width: 0;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 20px;
+          color: var(--billing-ink);
+          background: #fff;
+          box-shadow: 0 14px 28px rgba(34, 38, 110, .07);
+          text-align: left;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .billing-plan-card:hover:not(:disabled) {
+          transform: translateY(-2px);
+          border-color: rgba(77, 119, 221, .34);
+          box-shadow: 0 17px 32px rgba(34, 38, 110, .09);
+        }
+
+        .billing-plan-card.selected {
+          border-color: rgba(77, 119, 221, .58);
+          background: linear-gradient(145deg, #f1efff, #f7fbff);
+        }
+
+        .billing-plan-card:disabled {
+          opacity: .64;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .billing-plan-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .billing-plan-head h3 {
+          margin: 0;
+          font-size: 21px;
+          font-weight: 900;
+        }
+
+        .billing-recommended-badge {
+          flex: 0 0 auto;
+          padding: 5px 8px;
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .billing-plan-description {
+          min-height: 46px;
+          margin: 9px 0 0;
+          color: var(--billing-muted);
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
+        .billing-plan-price {
+          margin-top: 16px;
+        }
+
+        .billing-plan-price strong,
+        .billing-plan-price span {
+          display: block;
+        }
+
+        .billing-plan-price strong {
+          color: var(--billing-ink);
+          font-size: 28px;
+          line-height: 1;
+        }
+
+        .billing-plan-price span {
+          margin-top: 5px;
+          color: var(--billing-muted);
+          font-size: 11px;
+        }
+
+        .billing-plan-employee {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 13px;
+          padding: 10px 11px;
+          border-radius: 13px;
+          color: #245da8;
+          background: #edf6ff;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .billing-plan-features {
+          margin: 14px 0 0;
+          padding-left: 18px;
+          color: var(--billing-muted);
+          font-size: 11px;
+          line-height: 1.75;
+        }
+
+        .billing-plan-state {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin-top: 15px;
+          color: #4767b4;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .billing-premium-quotation {
+          background: linear-gradient(145deg, #f4fbf8, #fff);
+        }
+
+        .billing-count-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 7px 10px;
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .billing-quote-summary-grid {
+          margin-top: 18px;
+        }
+
+        .billing-quotation-details {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+          margin-top: 16px;
+        }
+
+        .billing-quotation-details > div,
+        .billing-sales-note,
+        .billing-quotation-history {
+          padding: 15px;
+          border: 1px solid rgba(171, 181, 211, .54);
+          border-radius: 16px;
+          background: #fff;
+        }
+
+        .billing-quotation-details strong,
+        .billing-sales-note strong,
+        .billing-quotation-history > strong {
+          color: var(--billing-ink);
+        }
+
+        .billing-quotation-details p,
+        .billing-sales-note p {
+          margin: 6px 0 0;
+          color: var(--billing-muted);
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
+        .billing-quotation-details > div strong:not(:first-child) {
+          display: block;
+          margin-top: 12px;
+        }
+
+        .billing-sales-note {
+          margin-top: 14px;
+        }
+
+        .billing-sales-note p {
+          white-space: pre-wrap;
+        }
+
+        .billing-payment-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-top: 16px;
+        }
+
+        .billing-payment-help {
+          flex: 1 1 260px;
+          color: var(--billing-muted);
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .billing-payment-help.warning {
+          color: var(--billing-amber);
+        }
+
+        .billing-quotation-history {
+          margin-top: 16px;
+        }
+
+        .billing-quotation-history-list {
+          display: grid;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .billing-quotation-history-row {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+          gap: 8px;
+          padding: 10px;
+          border-radius: 12px;
+          color: var(--billing-muted);
+          background: #f8fbff;
+          font-size: 11px;
+        }
+
+        .billing-quotation-history-row strong {
+          color: var(--billing-ink);
+        }
+
+        .billing-action-stack {
+          display: grid;
+          gap: 8px;
+          width: min(360px, 100%);
+          margin-top: 18px;
+        }
+
+        .billing-action-stack .primary {
+          justify-self: start;
+        }
+
+        .billing-premium-request {
+          padding: clamp(20px, 2.4vw, 28px);
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 24px;
+          background: linear-gradient(145deg, #f4fbf8, #f7fbff);
+          box-shadow: 0 18px 34px rgba(34, 38, 110, .07);
+        }
+
+        .billing-premium-request-note,
+        .billing-premium-result,
+        .billing-next-box,
+        .billing-payment-note {
+          margin-top: 14px;
+          padding: 13px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
+          color: #245da8;
+          background: #edf6ff;
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1.55;
+        }
+
+        .billing-premium-result {
+          color: var(--billing-green);
+          border-color: rgba(4, 120, 87, .18);
+          background: #eaf8f4;
+        }
+
+        .billing-premium-result p {
+          margin: 6px 0 0;
+          color: currentColor;
+        }
+
+        .billing-form-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 13px;
+          margin-top: 18px;
+        }
+
+        .billing-field {
+          display: grid;
+          gap: 7px;
+        }
+
+        .billing-field.full {
+          grid-column: 1 / -1;
+        }
+
+        .billing-field > span {
+          color: #303b5b;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .billing-field input,
+        .billing-field select,
+        .billing-field textarea,
+        .billing-search-box input,
+        .billing-page-size select {
+          width: 100%;
+          min-width: 0;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--billing-ink);
+          background: rgba(255, 255, 255, .96);
+          font: inherit;
+        }
+
+        .billing-field input,
+        .billing-field select {
+          min-height: 44px;
+          padding: 0 13px;
+        }
+
+        .billing-field textarea {
+          min-height: 105px;
+          padding: 12px 13px;
+          resize: vertical;
+        }
+
+        .billing-field input:focus,
+        .billing-field select:focus,
+        .billing-field textarea:focus,
+        .billing-search-box input:focus,
+        .billing-page-size select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+        }
+
+        .billing-form-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-top: 16px;
+        }
+
+        .billing-next-box {
+          color: var(--billing-muted);
+          background: #fff;
+        }
+
+        .billing-next-box strong {
+          color: var(--billing-ink);
+        }
+
+        .billing-next-list {
+          margin-top: 8px;
+        }
+
+        .billing-payment-note {
+          display: flex;
+          align-items: flex-start;
+          gap: 9px;
+          color: #245da8;
+        }
+
+        .billing-invoice-history {
+          min-width: 0;
+        }
+
+        .billing-invoice-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          margin-top: 18px;
+        }
+
+        .billing-search-box {
+          position: relative;
+          min-width: 0;
+          display: block;
+        }
+
+        .billing-search-box > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--billing-blue);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .billing-search-box input {
+          min-height: 46px;
+          padding: 0 13px 0 39px;
+          font-size: 13px;
+        }
+
+        .billing-view-control {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .billing-view-control > span {
+          color: var(--billing-muted);
+          font-size: 10px;
+          font-weight: 850;
+          white-space: nowrap;
+        }
+
+        .billing-page-size {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--billing-muted);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .billing-page-size select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .billing-invoice-list {
+          display: grid;
+          gap: 10px;
+          margin-top: 14px;
+        }
+
+        .billing-invoice-row {
+          display: grid;
+          grid-template-columns:
+            minmax(180px, 1.35fr)
+            repeat(3, minmax(110px, .8fr))
+            minmax(190px, auto);
+          gap: 12px;
+          align-items: center;
+          padding: 14px;
+          border: 1px solid rgba(171, 181, 211, .54);
+          border-radius: 16px;
+          background: #f8fbff;
+        }
+
+        .billing-invoice-primary strong,
+        .billing-invoice-primary span,
+        .billing-invoice-field span,
+        .billing-invoice-field strong {
+          display: block;
+        }
+
+        .billing-invoice-primary strong {
+          color: var(--billing-ink);
+        }
+
+        .billing-invoice-primary span {
+          margin-top: 4px;
+          color: var(--billing-muted);
+          font-size: 10px;
+          overflow-wrap: anywhere;
+        }
+
+        .billing-invoice-field span {
+          color: #7b88a5;
+          font-size: 9px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+        }
+
+        .billing-invoice-field strong {
+          margin-top: 4px;
+          color: #334155;
+          font-size: 11px;
+          overflow-wrap: anywhere;
+        }
+
+        .billing-invoice-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .billing-status-pill {
+          padding: 6px 9px;
+          border-radius: 999px;
+          color: var(--billing-amber);
+          background: #fff4d5;
+          font-size: 9px;
+          font-weight: 900;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .billing-status-pill.paid,
+        .billing-status-pill.captured,
+        .billing-status-pill.success,
+        .billing-status-pill.completed,
+        .billing-status-pill.converted {
+          color: var(--billing-green);
+          background: #eaf8f4;
+        }
+
+        .billing-status-pill.failed,
+        .billing-status-pill.cancelled,
+        .billing-status-pill.refunded,
+        .billing-status-pill.expired {
+          color: var(--billing-red);
+          background: #fff0f2;
+        }
+
+        .billing-empty {
+          min-height: 170px;
+          margin-top: 14px;
+          padding: 24px;
+          border: 1px dashed rgba(77, 119, 221, .30);
+          border-radius: 18px;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 8px;
+          color: var(--billing-muted);
+          background: linear-gradient(145deg, #f8fbff, #f8f7ff);
+          text-align: center;
+          font-weight: 800;
+        }
+
+        .billing-empty p {
+          margin: 0;
+          color: inherit;
+        }
+
+        .billing-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 14px;
+          margin-top: 14px;
+          padding-top: 13px;
+          border-top: 1px solid rgba(65, 55, 161, .08);
+        }
+
+        .billing-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .billing-page-button,
+        .billing-page-number {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .billing-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 11px;
+        }
+
+        .billing-page-nav {
+          min-width: 78px;
+        }
+
+        .billing-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .billing-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .billing-page-number.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        }
+
+        .billing-page-button:hover:not(:disabled),
+        .billing-page-number:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46, 178, 185, .42);
+        }
+
+        .billing-page-button:disabled,
+        .billing-page-number:disabled {
+          opacity: .5;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .billing-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .billing-page-indicator {
+          min-width: 82px;
+          color: var(--billing-muted);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
+        .billing-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .billing-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+        }
+
+        .billing-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
+        }
+
+        .billing-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .billing-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .billing-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .billing-inline-feedback-copy strong,
+        .billing-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .billing-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .billing-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .billing-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .billing-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .billing-loading {
+          min-height: 220px;
+          padding: 30px;
+          border: 1px solid rgba(171, 181, 211, .64);
+          border-radius: 24px;
+          display: grid;
+          place-items: center;
+          color: var(--billing-muted);
+          background: #fff;
+          box-shadow: 0 18px 34px rgba(34, 38, 110, .07);
+        }
+
+        .billing-loading span {
+          display: inline-flex;
+          align-items: center;
+          gap: 9px;
+          font-weight: 800;
+        }
+
+        .spin {
+          animation: billingSpin .82s linear infinite;
+        }
+
+        @keyframes billingSpin {
+          to {
+            transform: rotate(360deg);
           }
         }
 
-        @media (prefers-reduced-motion:reduce){
+        @media (max-width: 1180px) {
+          .billing-summary-grid,
+          .billing-quote-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .billing-invoice-row {
+            grid-template-columns:
+              minmax(180px, 1.2fr)
+              repeat(2, minmax(110px, .8fr));
+          }
+
+          .billing-invoice-actions {
+            grid-column: span 3;
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 980px) {
+          .billing-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-hero-side {
+            width: min(520px, 100%);
+          }
+
+          .billing-overview-grid,
+          .billing-quotation-details {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-invoice-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-view-control {
+            justify-content: space-between;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .billing-page-grid {
+            gap: 15px;
+          }
+
+          .billing-hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
+          }
+
+          .billing-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .billing-section-tabs {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-section-head {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .billing-invoice-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .billing-invoice-primary,
+          .billing-invoice-actions {
+            grid-column: 1 / -1;
+          }
+
+          .billing-invoice-actions {
+            justify-content: flex-start;
+          }
+
+          .billing-pagination {
+            justify-content: stretch;
+          }
+
+          .billing-pagination-controls {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .billing-page-numbers,
+          .billing-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .billing-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .billing-page-nav {
+            width: 100%;
+          }
+
+          .billing-form-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-field.full {
+            grid-column: auto;
+          }
+
+          .billing-form-actions,
+          .billing-payment-row {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .billing-form-actions .primary,
+          .billing-form-actions .ghost,
+          .billing-payment-row .primary,
+          .billing-payment-row .ghost {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .billing-summary-grid,
+          .billing-quote-summary-grid,
+          .billing-invoice-row {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-invoice-primary,
+          .billing-invoice-actions {
+            grid-column: auto;
+          }
+
+          .billing-hero-actions {
+            grid-template-columns: 1fr;
+          }
+
+          .billing-refresh-stack {
+            grid-column: auto;
+          }
+
+          .billing-hero-actions .ghost,
+          .billing-refresh-stack .ghost {
+            width: 100%;
+          }
+
+          .billing-view-control {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .billing-page-size {
+            justify-content: space-between;
+          }
+
+          .billing-page-size select {
+            flex: 1 1 auto;
+          }
+
+          .billing-plan-head {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .billing-recommended-badge {
+            align-self: flex-start;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .billing-hero {
+            padding: 16px;
+          }
+
+          .billing-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .billing-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
           .billing-page *,
           .billing-page *::before,
-          .billing-page *::after{
-            animation-duration:.01ms!important;
-            animation-iteration-count:1!important;
-            transition-duration:.01ms!important;
-            scroll-behavior:auto!important;
+          .billing-page *::after {
+            animation: none !important;
+            transition: none !important;
+            scroll-behavior: auto !important;
           }
         }
       `}</style>
 
-      <div
-        style={{
-          borderRadius: 30,
-          padding: 'clamp(22px, 4vw, 38px)',
-          background:
-            'linear-gradient(135deg, rgba(239,246,255,0.98), rgba(255,255,255,0.98))',
-          border: '1px solid rgba(37,99,235,0.14)',
-          boxShadow: '0 24px 60px rgba(15,23,42,0.09)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 18,
-            alignItems: 'flex-start',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ flex: '1 1 520px' }}>
-            <p
-              style={{
-                margin: '0 0 8px',
-                color: '#2563eb',
-                fontWeight: 900,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                fontSize: 13,
-              }}
-            >
+      <div className="billing-page-grid">
+        <section className="billing-hero">
+          <div className="billing-hero-copy">
+            <span className="billing-kicker">
+              <Sparkles size={14} />
               YourComate SaaS Billing
-            </p>
+            </span>
 
-            <h1
-              style={{
-                margin: 0,
-                color: '#0f172a',
-                fontSize: 'clamp(30px, 5vw, 50px)',
-                lineHeight: 1.06,
-                letterSpacing: '-0.045em',
-              }}
-            >
-              Manage your HRMS subscription
+            <h1>
+              Manage your HRMS <em>subscription.</em>
             </h1>
 
-            <p
-              style={{
-                margin: '14px 0 0',
-                maxWidth: 760,
-                color: '#475569',
-                lineHeight: 1.7,
-                fontSize: 16,
-              }}
-            >
-              Check your subscription status, validity, invoices and renewal alerts.
-              Plan selection and payment controls appear only when a trial needs conversion,
-              a subscription has expired, or renewal is approaching.
+            <p>
+              Check your subscription status, validity, invoices and
+              renewal alerts. Plan selection and payment controls appear
+              only when a trial needs conversion, a subscription has
+              expired, or renewal is approaching.
             </p>
 
-            <div style={{ marginTop: 18 }}>
-              <StatusBadge
-                planType={computed.planType || 'demo'}
-                status={computed.status || 'active'}
-              />
-            </div>
-          </div>
-
-          <div
-            style={{
-              minWidth: 250,
-              borderRadius: 24,
-              padding: 22,
-              background: '#ffffff',
-              border: '1px solid rgba(226,232,240,0.9)',
-              boxShadow: '0 16px 40px rgba(15,23,42,0.06)',
-            }}
-          >
-            <div
-              style={{
-                width: 58,
-                height: 58,
-                borderRadius: 20,
-                display: 'grid',
-                placeItems: 'center',
-                background: 'rgba(37,99,235,0.12)',
-                color: '#2563eb',
-                marginBottom: 14,
-              }}
-            >
-              {computed.isLifetime || computed.isPaid ? (
-                <Unlock size={30} />
-              ) : (
-                <Lock size={30} />
-              )}
-            </div>
-
-            <p style={{ margin: 0, color: '#64748b', fontWeight: 700 }}>
-              {computed.showUpgradeActions ? 'Selected Plan' : 'Current Subscription'}
-            </p>
-            <h2 style={{ margin: '6px 0 0', color: '#0f172a', textTransform: 'capitalize' }}>
-              {computed.showUpgradeActions
-                ? selectedPlan?.display_name || selectedPlan?.plan_name || 'Growth'
-                : computed.currentPlanLabel}
-            </h2>
-            <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: 13 }}>
-              {computed.isLifetime
-                ? 'No renewal required'
-                : computed.showUpgradeActions
-                  ? `${formatCurrency(selectedPlan?.amount ?? 4495, selectedPlan?.currency || 'INR')}${selectedPlan?.is_custom_pricing ? '' : ` / ${selectedPlan?.billing_interval || 'monthly'}`}`
-                  : `Valid until ${formatDate(computed.validUntil)}`}
-            </p>
-            <p style={{ margin: '8px 0 0', color: '#334155', fontWeight: 800, fontSize: 13 }}>
-              {computed.showUpgradeActions
-                ? selectedPlanEmployeeText
-                : `${computed.employeesUsed} / ${computed.employeeLimit} employees`}
-            </p>
-          </div>
-        </div>
-
-        {loading ? (
-          <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
-            <Loader2 size={18} className="spin" style={{ marginRight: 8 }} />
-            Loading billing details...
-          </div>
-        ) : (
-          <>
-            <BillingAlerts alerts={billingAlerts} />
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                gap: 14,
-                marginTop: 28,
-              }}
-            >
-              <SummaryCard
-                icon={Building2}
-                label="Company"
-                value={computed.companyName}
-                tone="#2563eb"
-              />
-              <SummaryCard
-                icon={CalendarClock}
-                label={computed.isDemo ? 'Trial Ends On' : 'Subscription Valid Until'}
-                value={computed.isLifetime ? 'Lifetime' : formatDate(computed.validUntil)}
-                tone="#ea580c"
-              />
-              <SummaryCard
-                icon={TimerReset}
-                label="Validity Remaining"
-                value={computed.isLifetime ? 'Lifetime' : computed.daysLeft === null ? 'Not available' : `${computed.daysLeft} day${computed.daysLeft === 1 ? '' : 's'}`}
-                tone={computed.renewalDueSoon || computed.isExpired ? '#dc2626' : '#16a34a'}
-              />
-              <SummaryCard
-                icon={Users}
-                label="Employees Used"
-                value={`${computed.employeesUsed} / ${computed.employeeLimit}`}
-                tone="#7c3aed"
-              />
-              <SummaryCard
-                icon={ReceiptText}
-                label="Available Invoices"
-                value={String(invoices.length)}
-                tone="#0891b2"
-              />
-            </div>
-
-            {computed.showPlanSelection ? (
-              <div style={{ marginTop: 30 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 16,
-                    alignItems: 'flex-end',
-                    flexWrap: 'wrap',
-                    marginBottom: 14,
-                  }}
-                >
-                  <div>
-                    <h2 style={{ margin: 0, color: '#0f172a' }}>
-                      {computed.renewalDueSoon ? 'Renew or change your subscription' : 'Select a subscription plan'}
-                    </h2>
-                    <p style={{ margin: '6px 0 0', color: '#64748b' }}>
-                      Essential and Growth use direct Razorpay payment. Premium is opened only after Superadmin sends a quotation.
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                    gap: 18,
-                  }}
-                >
-                  {plans.map((plan) => {
-                    const code = plan.plan_code || plan.code;
-
-                    return (
-                      <PricingPlanCard
-                        key={code}
-                        plan={plan}
-                        selected={code === selectedPlanCode}
-                        disabled={computed.isLifetime || creatingOrder || verifyingPayment || submittingPremiumRequest}
-                        onSelect={handleSelectPlan}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 18,
-                marginTop: 26,
-              }}
-            >
-              <div
-                style={{
-                  borderRadius: 24,
-                  padding: 22,
-                  background: '#ffffff',
-                  border: '1px solid rgba(226,232,240,0.9)',
-                }}
-              >
-                <h3
-                  style={{
-                    margin: '0 0 14px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    color: '#0f172a',
-                  }}
-                >
-                  <ShieldCheck size={22} color="#2563eb" />
-                  Current Access
-                </h3>
-
-                {computed.isLifetime ? (
-                  <p style={{ margin: 0, color: '#166534', lineHeight: 1.7 }}>
-                    This is the SDS lifetime company. It has full HRMS access
-                    without recharge, renewal, or subscription payment.
-                  </p>
-                ) : computed.isPaid ? (
-                  <p style={{ margin: 0, color: '#166534', lineHeight: 1.7 }}>
-                    This company has active paid access until{' '}
-                    <strong>{formatDate(computed.validUntil)}</strong>.{' '}
-                    <strong>{computed.daysLeft ?? 'An unavailable number of'} day(s)</strong> remain.
-                    Upgrade and payment controls stay hidden until the renewal window opens.
-                  </p>
-                ) : computed.isExpired ? (
-                  <p style={{ margin: 0, color: '#991b1b', lineHeight: 1.7 }}>
-                    Subscription or trial access is expired or suspended. Please renew or
-                    subscribe to continue using YourComate HRMS.
-                  </p>
-                ) : (
-                  <p style={{ margin: 0, color: '#475569', lineHeight: 1.7 }}>
-                    15-day full-access trial is active. Days left:{' '}
-                    <strong>{computed.daysLeft ?? 'Not available'}</strong>.
-                    All HRMS modules remain available until trial expiry.
-                  </p>
-                )}
-              </div>
-
-              <div
-                style={{
-                  borderRadius: 24,
-                  padding: 22,
-                  background: '#ffffff',
-                  border: '1px solid rgba(226,232,240,0.9)',
-                }}
-              >
-                <h3
-                  style={{
-                    margin: '0 0 14px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    color: '#0f172a',
-                  }}
-                >
-                  <Sparkles size={22} color="#7c3aed" />
-                  After Payment
-                </h3>
-
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: 20,
-                    color: '#475569',
-                    lineHeight: 1.85,
-                  }}
-                >
-                  <li>Trial company becomes official paid company</li>
-                  <li>Full HRMS access continues after trial expiry</li>
-                  <li>Employee limit applies according to selected plan</li>
-                  <li>Payment record appears in Superadmin monitoring</li>
-                </ul>
-              </div>
-            </div>
-
-            <InvoiceHistory
-              invoices={invoices}
-              downloadingInvoiceId={downloadingInvoiceId}
-              onDownload={downloadInvoice}
+            <StatusBadge
+              planType={computed.planType || 'demo'}
+              status={computed.status || 'active'}
             />
+          </div>
 
-            {hasPremiumQuotation && computed.showPaymentActions ? (
-              <PremiumQuotationPanel
-                quotation={premiumQuotation}
-                onPay={startPremiumQuotationPayment}
-                creatingOrder={creatingOrder}
-                verifyingPayment={verifyingPayment}
-                paymentDisabled={premiumPaymentDisabled}
-                paymentDisabledReason={premiumPaymentDisabledReason}
-                isRenewal={premiumNeedsRenewal}
-              />
-            ) : null}
+          <div className="billing-hero-side">
+            <div className="billing-current-card">
+              <span>
+                {computed.showUpgradeActions
+                  ? 'Selected Plan'
+                  : 'Current Subscription'}
+              </span>
 
-            <div
-              style={{
-                display: 'flex',
-                gap: 12,
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                marginTop: 28,
-              }}
-            >
-              {computed.showPaymentActions ? (
+              <strong>
+                {computed.showUpgradeActions
+                  ? selectedPlan?.display_name ||
+                    selectedPlan?.plan_name ||
+                    'Growth'
+                  : computed.currentPlanLabel}
+              </strong>
+
+              <small>
+                {computed.isLifetime
+                  ? 'No renewal required'
+                  : computed.showUpgradeActions
+                    ? `${formatCurrency(
+                        selectedPlan?.amount ?? 4495,
+                        selectedPlan?.currency || 'INR',
+                      )}${
+                        selectedPlan?.is_custom_pricing
+                          ? ''
+                          : ` / ${
+                              selectedPlan?.billing_interval || 'monthly'
+                            }`
+                      } · ${selectedPlanEmployeeText}`
+                    : `Valid until ${formatDate(
+                        computed.validUntil,
+                      )} · ${computed.employeesUsed} / ${
+                        computed.employeeLimit
+                      } employees`}
+              </small>
+            </div>
+
+            <div className="billing-hero-actions">
+              <div className="billing-refresh-stack">
                 <button
                   type="button"
-                  className="primary"
-                  onClick={startRazorpayPayment}
-                  disabled={
-                    creatingOrder ||
-                    verifyingPayment ||
-                    submittingPremiumRequest ||
-                    computed.isLifetime
+                  className="ghost"
+                  onClick={() =>
+                    loadBillingSummary({
+                      feedbackScope: 'refresh',
+                    })
                   }
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    minHeight: 46,
-                  }}
+                  disabled={loading}
                 >
-                  {creatingOrder || verifyingPayment || submittingPremiumRequest ? (
-                    <Loader2 size={18} className="spin" />
-                  ) : selectedPremiumCanPay ? (
-                    <CreditCard size={18} />
-                  ) : isCustomSelected ? (
-                    <Users size={18} />
-                  ) : (
-                    <CreditCard size={18} />
-                  )}
-                  {verifyingPayment
-                    ? 'Verifying Payment...'
-                    : creatingOrder
-                      ? 'Opening Razorpay...'
-                      : submittingPremiumRequest
-                        ? 'Submitting Request...'
-                        : selectedPremiumCanPay
-                          ? premiumNeedsRenewal
-                            ? 'Pay Premium Renewal'
-                            : 'Pay Premium Quotation'
-                          : isCustomSelected
-                            ? 'Contact Sales Team'
-                            : computed.renewalDueSoon
-                              ? `Renew ${selectedPlan?.display_name || selectedPlan?.plan_name || 'Subscription'}`
-                              : `Pay for ${selectedPlan?.display_name || selectedPlan?.plan_name || 'Selected Plan'}`}
+                  <RefreshCw
+                    size={17}
+                    className={loading ? 'spin' : ''}
+                  />
+                  {loading ? 'Refreshing...' : 'Refresh Status'}
                 </button>
-              ) : null}
 
-              <button
-                type="button"
-                className="ghost"
-                onClick={loadBillingSummary}
-                disabled={loading}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  minHeight: 46,
-                }}
-              >
-                <RefreshCw size={18} className={loading ? 'spin' : ''} />
-                Refresh Status
-              </button>
+                <BillingInlineMessage
+                  message={feedbackMap.refresh}
+                  onClose={() => clearFeedback('refresh')}
+                />
+              </div>
 
               <button
                 type="button"
                 className="ghost"
                 onClick={goBack}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  minHeight: 46,
-                }}
               >
-                <ArrowLeft size={18} />
-                Back to Dashboard
+                <ArrowLeft size={17} />
+                Back
               </button>
             </div>
+          </div>
+        </section>
 
-            {computed.showUpgradeActions && showSalesContact && isCustomSelected ? (
-              <div
-                style={{
-                  marginTop: 22,
-                  padding: 22,
-                  borderRadius: 22,
-                  background:
-                    'linear-gradient(135deg, rgba(236,253,245,0.96), rgba(239,246,255,0.96))',
-                  border: '1px solid rgba(37,99,235,0.2)',
-                  boxShadow: '0 18px 45px rgba(15,23,42,0.07)',
-                }}
+        {loading && !summary ? (
+          <div className="billing-loading">
+            <span>
+              <Loader2 size={19} className="spin" />
+              Loading billing details...
+            </span>
+          </div>
+        ) : (
+          <>
+            <BillingAlerts alerts={billingAlerts} />
+
+            <section
+              className="billing-summary-grid"
+              aria-label="Billing summary"
+            >
+              <SummaryCard
+                label="Company"
+                value={computed.companyName}
+              />
+
+              <SummaryCard
+                label={
+                  computed.isDemo
+                    ? 'Trial Ends On'
+                    : 'Subscription Valid Until'
+                }
+                value={
+                  computed.isLifetime
+                    ? 'Lifetime'
+                    : formatDate(computed.validUntil)
+                }
+              />
+
+              <SummaryCard
+                label="Validity Remaining"
+                value={
+                  computed.isLifetime
+                    ? 'Lifetime'
+                    : computed.daysLeft === null
+                      ? 'Not available'
+                      : `${computed.daysLeft} day${
+                          computed.daysLeft === 1 ? '' : 's'
+                        }`
+                }
+              />
+
+              <SummaryCard
+                label="Employees Used"
+                value={`${computed.employeesUsed} / ${computed.employeeLimit}`}
+              />
+            </section>
+
+            <nav
+              className="billing-section-tabs"
+              aria-label="Billing sections"
+            >
+              <button
+                type="button"
+                className={`billing-section-tab ${
+                  activeSection === 'overview' ? 'is-active' : ''
+                }`}
+                onClick={() => setActiveSection('overview')}
+                aria-pressed={activeSection === 'overview'}
               >
-                <h3
-                  style={{
-                    margin: '0 0 10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    color: '#0f172a',
-                  }}
-                >
-                  <Users size={22} color="#2563eb" />
-                  Premium custom plan request
-                </h3>
+                <ShieldCheck size={18} />
 
-                <p style={{ margin: 0, color: '#475569', lineHeight: 1.7 }}>
-                  Premium is quote-based and does not open Razorpay directly.
-                  Fill this request form and submit it to Superadmin/Sales for quotation follow-up.
-                </p>
+                <span className="billing-section-tab-copy">
+                  <strong>Subscription Overview</strong>
+                  <small>Current access and payment impact</small>
+                </span>
+              </button>
 
-                <div
-                  style={{
-                    marginTop: 14,
-                    padding: 14,
-                    borderRadius: 16,
-                    background: '#eff6ff',
-                    border: '1px solid rgba(37,99,235,0.2)',
-                    color: '#1e3a8a',
-                    fontWeight: 800,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  Our sales team will connect with you within 24 hours after you submit this request.
-                </div>
+              <button
+                type="button"
+                className={`billing-section-tab ${
+                  activeSection === 'plans' ? 'is-active' : ''
+                }`}
+                onClick={() => setActiveSection('plans')}
+                aria-pressed={activeSection === 'plans'}
+              >
+                <CreditCard size={18} />
 
-                {premiumRequestResult ? (
-                  <div
-                    style={{
-                      marginTop: 18,
-                      padding: 16,
-                      borderRadius: 18,
-                      background: '#f0fdf4',
-                      border: '1px solid rgba(22,163,74,0.25)',
-                      color: '#166534',
-                    }}
-                  >
-                    <strong>Premium request submitted successfully.</strong>
-                    <p style={{ margin: '8px 0 0', lineHeight: 1.65 }}>
-                      Reference:{' '}
-                      <strong>
-                        {premiumRequestResult.request_reference ||
-                          premiumRequestResult.request_id ||
-                          'Created'}
-                      </strong>
-                    </p>
-                    <p style={{ margin: '8px 0 0', lineHeight: 1.65 }}>
-                      Our sales team will connect with you within 24 hours. Superadmin/Sales can now view this request from the Premium Requests page.
-                    </p>
-                  </div>
-                ) : null}
+                <span className="billing-section-tab-copy">
+                  <strong>Plans & Payment</strong>
+                  <small>Select plan, quotation and Razorpay</small>
+                </span>
+              </button>
 
-                <form onSubmit={submitPremiumRequest} style={{ marginTop: 20 }}>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                      gap: 14,
-                    }}
-                  >
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Contact Person Name *
-                      </span>
-                      <input
-                        type="text"
-                        value={premiumForm.contact_name}
-                        onChange={(event) =>
-                          handlePremiumFormChange('contact_name', event.target.value)
-                        }
-                        placeholder="Enter contact person name"
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                        }}
-                      />
-                    </label>
+              <button
+                type="button"
+                className={`billing-section-tab ${
+                  activeSection === 'invoices' ? 'is-active' : ''
+                }`}
+                onClick={() => setActiveSection('invoices')}
+                aria-pressed={activeSection === 'invoices'}
+              >
+                <ReceiptText size={18} />
 
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Contact Email *
-                      </span>
-                      <input
-                        type="email"
-                        value={premiumForm.contact_email}
-                        onChange={(event) =>
-                          handlePremiumFormChange('contact_email', event.target.value)
-                        }
-                        placeholder="Enter contact email"
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                        }}
-                      />
-                    </label>
+                <span className="billing-section-tab-copy">
+                  <strong>Invoices</strong>
+                  <small>Payment history and PDF downloads</small>
+                </span>
 
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Registered Company Email
-                      </span>
-                      <input
-                        type="email"
-                        value={premiumForm.company_email}
-                        onChange={(event) =>
-                          handlePremiumFormChange('company_email', event.target.value)
-                        }
-                        placeholder="Registered company email"
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                        }}
-                      />
-                    </label>
+                <span className="billing-section-tab-count">
+                  {invoices.length}
+                </span>
+              </button>
+            </nav>
 
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Contact Phone
-                      </span>
-                      <input
-                        type="tel"
-                        value={premiumForm.contact_phone}
-                        onChange={(event) =>
-                          handlePremiumFormChange('contact_phone', event.target.value)
-                        }
-                        placeholder="Enter phone number"
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                        }}
-                      />
-                    </label>
-
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Estimated Employee Count *
-                      </span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={premiumForm.employee_count}
-                        onChange={(event) =>
-                          handlePremiumFormChange('employee_count', event.target.value)
-                        }
-                        placeholder="Example: 250"
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                        }}
-                      />
-                    </label>
-
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Onboarding Required?
-                      </span>
-                      <select
-                        value={premiumForm.onboarding_required}
-                        onChange={(event) =>
-                          handlePremiumFormChange('onboarding_required', event.target.value)
-                        }
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                          background: '#ffffff',
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                        <option value="Need discussion">Need discussion</option>
-                      </select>
-                    </label>
-
-                    <label style={{ display: 'grid', gap: 7 }}>
-                      <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                        Training Required?
-                      </span>
-                      <select
-                        value={premiumForm.training_required}
-                        onChange={(event) =>
-                          handlePremiumFormChange('training_required', event.target.value)
-                        }
-                        style={{
-                          minHeight: 44,
-                          borderRadius: 14,
-                          border: '1px solid #cbd5e1',
-                          padding: '0 14px',
-                          outline: 'none',
-                          background: '#ffffff',
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                        <option value="Need discussion">Need discussion</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <label style={{ display: 'grid', gap: 7, marginTop: 14 }}>
-                    <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                      Custom Modules / Requirements
+            {activeSection === 'overview' ? (
+              <div className="billing-section-content">
+                <div className="billing-overview-grid">
+                  <section className="billing-panel billing-overview-card">
+                    <span className="billing-section-kicker">
+                      <ShieldCheck size={14} />
+                      Current Access
                     </span>
-                    <textarea
-                      value={premiumForm.custom_modules}
-                      onChange={(event) =>
-                        handlePremiumFormChange('custom_modules', event.target.value)
-                      }
-                      placeholder="Example: custom reports, payroll rule changes, approval workflow, API integration, data migration..."
-                      rows={3}
-                      style={{
-                        borderRadius: 14,
-                        border: '1px solid #cbd5e1',
-                        padding: 14,
-                        outline: 'none',
-                        resize: 'vertical',
-                      }}
-                    />
-                  </label>
 
-                  <label style={{ display: 'grid', gap: 7, marginTop: 14 }}>
-                    <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                      Support / SLA Requirement
+                    <h2>Subscription access</h2>
+
+                    {computed.isLifetime ? (
+                      <p className="success">
+                        This is the SDS lifetime company. It has full HRMS
+                        access without recharge, renewal, or subscription
+                        payment.
+                      </p>
+                    ) : computed.isPaid ? (
+                      <p className="success">
+                        This company has active paid access until{' '}
+                        <strong>
+                          {formatDate(computed.validUntil)}
+                        </strong>
+                        .{' '}
+                        <strong>
+                          {computed.daysLeft ??
+                            'An unavailable number of'}{' '}
+                          day(s)
+                        </strong>{' '}
+                        remain. Upgrade and payment controls stay hidden
+                        until the renewal window opens.
+                      </p>
+                    ) : computed.isExpired ? (
+                      <p className="error">
+                        Subscription or trial access is expired or
+                        suspended. Please renew or subscribe to continue
+                        using YourComate HRMS.
+                      </p>
+                    ) : (
+                      <p>
+                        15-day full-access trial is active. Days left:{' '}
+                        <strong>
+                          {computed.daysLeft ?? 'Not available'}
+                        </strong>
+                        . All HRMS modules remain available until trial
+                        expiry.
+                      </p>
+                    )}
+                  </section>
+
+                  <section className="billing-panel billing-overview-card">
+                    <span className="billing-section-kicker">
+                      <Sparkles size={14} />
+                      After Payment
                     </span>
-                    <select
-                      value={premiumForm.support_sla}
-                      onChange={(event) =>
-                        handlePremiumFormChange('support_sla', event.target.value)
-                      }
-                      style={{
-                        minHeight: 44,
-                        borderRadius: 14,
-                        border: '1px solid #cbd5e1',
-                        padding: '0 14px',
-                        outline: 'none',
-                        background: '#ffffff',
-                      }}
-                    >
-                      <option value="Standard business support">Standard business support</option>
-                      <option value="Premium / enterprise support discussion required">
-                        Premium / enterprise support discussion required
-                      </option>
-                      <option value="Priority support with faster response">
-                        Priority support with faster response
-                      </option>
-                      <option value="Dedicated support / SLA required">
-                        Dedicated support / SLA required
-                      </option>
-                    </select>
-                  </label>
 
-                  <label style={{ display: 'grid', gap: 7, marginTop: 14 }}>
-                    <span style={{ color: '#334155', fontWeight: 800, fontSize: 13 }}>
-                      Message / Notes
-                    </span>
-                    <textarea
-                      value={premiumForm.message}
-                      onChange={(event) =>
-                        handlePremiumFormChange('message', event.target.value)
-                      }
-                      placeholder="Add any additional Premium plan requirement..."
-                      rows={3}
-                      style={{
-                        borderRadius: 14,
-                        border: '1px solid #cbd5e1',
-                        padding: 14,
-                        outline: 'none',
-                        resize: 'vertical',
-                      }}
-                    />
-                  </label>
+                    <h2>What continues after payment</h2>
 
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      flexWrap: 'wrap',
-                      alignItems: 'center',
-                      marginTop: 18,
-                    }}
-                  >
-                    <button
-                      type="submit"
-                      className="primary"
-                      disabled={submittingPremiumRequest}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        minHeight: 44,
-                      }}
-                    >
-                      {submittingPremiumRequest ? (
-                        <Loader2 size={18} className="spin" />
-                      ) : (
-                        <Users size={18} />
-                      )}
-                      {submittingPremiumRequest
-                        ? 'Submitting Premium Request...'
-                        : 'Submit Premium Request'}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        setShowSalesContact(false);
-                        setPremiumRequestResult(null);
-                      }}
-                      disabled={submittingPremiumRequest}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        minHeight: 44,
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-
-                <div
-                  style={{
-                    marginTop: 18,
-                    padding: 16,
-                    borderRadius: 18,
-                    background: '#ffffff',
-                    border: '1px solid rgba(226,232,240,0.9)',
-                    color: '#475569',
-                    lineHeight: 1.75,
-                  }}
-                >
-                  <strong style={{ color: '#0f172a' }}>What happens next?</strong>
-                  <ol style={{ margin: '10px 0 0', paddingLeft: 18 }}>
-                    <li>Request appears in the Superadmin Premium Requests page.</li>
-                    <li>SDS/Sales discusses employee count, onboarding, training and custom needs.</li>
-                    <li>Superadmin sends the custom amount, interval and payment due date.</li>
-                    <li>The quotation appears here with a Pay Premium Quotation button.</li>
-                    <li>Successful Razorpay payment activates Premium automatically.</li>
-                  </ol>
+                    <ul className="billing-benefit-list">
+                      <li>
+                        Trial company becomes official paid company
+                      </li>
+                      <li>
+                        Full HRMS access continues after trial expiry
+                      </li>
+                      <li>
+                        Employee limit applies according to selected plan
+                      </li>
+                      <li>
+                        Payment record appears in Superadmin monitoring
+                      </li>
+                    </ul>
+                  </section>
                 </div>
               </div>
             ) : null}
 
-            {computed.showUpgradeActions && !computed.isLifetime ? (
-              <div
-                style={{
-                  marginTop: 22,
-                  padding: 16,
-                  borderRadius: 18,
-                  background: 'rgba(37,99,235,0.08)',
-                  color: '#1e3a8a',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                }}
-              >
-                <CheckCircle2 size={20} style={{ flexShrink: 0, marginTop: 2 }} />
-                <p style={{ margin: 0, lineHeight: 1.6 }}>
-                  {isCustomSelected
-                    ? 'Premium is custom quoted. Once Superadmin sends the quotation, the payment details will appear above and the finalized amount will be used for monthly/yearly renewal until Superadmin revises it.'
-                    : 'Razorpay test mode can be used with test payment details. Essential/Growth renewals will use the latest active price configured by Superadmin.'}
-                </p>
+            {activeSection === 'plans' ? (
+              <div className="billing-section-content">
+                <section className="billing-panel">
+                  <div className="billing-section-head">
+                    <div>
+                      <span className="billing-section-kicker">
+                        <CreditCard size={14} />
+                        Plans & Payment
+                      </span>
+
+                      <h2>
+                        {computed.renewalDueSoon
+                          ? 'Renew or change your subscription'
+                          : 'Select a subscription plan'}
+                      </h2>
+
+                      <p>
+                        Essential and Growth use direct Razorpay payment.
+                        Premium is opened only after Superadmin sends a
+                        quotation.
+                      </p>
+                    </div>
+                  </div>
+
+                  {computed.showPlanSelection ? (
+                    <div className="billing-plan-grid">
+                      {plans.map((plan) => {
+                        const code = plan.plan_code || plan.code;
+
+                        return (
+                          <PricingPlanCard
+                            key={code}
+                            plan={plan}
+                            selected={code === selectedPlanCode}
+                            disabled={
+                              computed.isLifetime ||
+                              creatingOrder ||
+                              verifyingPayment ||
+                              submittingPremiumRequest
+                            }
+                            onSelect={handleSelectPlan}
+                          />
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="billing-payment-note">
+                      <CheckCircle2 size={18} />
+                      <span>
+                        Plan selection is not currently required. Your
+                        subscription remains on{' '}
+                        <strong>{computed.currentPlanLabel}</strong>.
+                      </span>
+                    </div>
+                  )}
+
+                  {computed.showPaymentActions ? (
+                    <div className="billing-action-stack">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={startRazorpayPayment}
+                        disabled={
+                          creatingOrder ||
+                          verifyingPayment ||
+                          submittingPremiumRequest ||
+                          computed.isLifetime
+                        }
+                      >
+                        {creatingOrder ||
+                        verifyingPayment ||
+                        submittingPremiumRequest ? (
+                          <Loader2 size={18} className="spin" />
+                        ) : selectedPremiumCanPay ? (
+                          <CreditCard size={18} />
+                        ) : isCustomSelected ? (
+                          <Users size={18} />
+                        ) : (
+                          <CreditCard size={18} />
+                        )}
+
+                        {verifyingPayment
+                          ? 'Verifying Payment...'
+                          : creatingOrder
+                            ? 'Opening Razorpay...'
+                            : submittingPremiumRequest
+                              ? 'Submitting Request...'
+                              : selectedPremiumCanPay
+                                ? premiumNeedsRenewal
+                                  ? 'Pay Premium Renewal'
+                                  : 'Pay Premium Quotation'
+                                : isCustomSelected
+                                  ? 'Contact Sales Team'
+                                  : computed.renewalDueSoon
+                                    ? `Renew ${
+                                        selectedPlan?.display_name ||
+                                        selectedPlan?.plan_name ||
+                                        'Subscription'
+                                      }`
+                                    : `Pay for ${
+                                        selectedPlan?.display_name ||
+                                        selectedPlan?.plan_name ||
+                                        'Selected Plan'
+                                      }`}
+                      </button>
+
+                      <BillingInlineMessage
+                        message={feedbackMap.payment}
+                        onClose={() => clearFeedback('payment')}
+                      />
+                    </div>
+                  ) : null}
+                </section>
+
+                {hasPremiumQuotation &&
+                computed.showPaymentActions ? (
+                  <PremiumQuotationPanel
+                    quotation={premiumQuotation}
+                    onPay={startPremiumQuotationPayment}
+                    creatingOrder={creatingOrder}
+                    verifyingPayment={verifyingPayment}
+                    paymentDisabled={premiumPaymentDisabled}
+                    paymentDisabledReason={
+                      premiumPaymentDisabledReason
+                    }
+                    isRenewal={premiumNeedsRenewal}
+                  />
+                ) : null}
+
+                {computed.showUpgradeActions &&
+                showSalesContact &&
+                isCustomSelected ? (
+                  <section className="billing-premium-request">
+                    <div className="billing-section-head">
+                      <div>
+                        <span className="billing-section-kicker">
+                          <Users size={14} />
+                          Premium Request
+                        </span>
+
+                        <h2>Premium custom plan request</h2>
+
+                        <p>
+                          Premium is quote-based and does not open
+                          Razorpay directly. Fill this request form and
+                          submit it to Superadmin/Sales for quotation
+                          follow-up.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="billing-premium-request-note">
+                      Our sales team will connect with you within 24 hours
+                      after you submit this request.
+                    </div>
+
+                    {premiumRequestResult ? (
+                      <div className="billing-premium-result">
+                        <strong>
+                          Premium request submitted successfully.
+                        </strong>
+
+                        <p>
+                          Reference:{' '}
+                          <strong>
+                            {premiumRequestResult.request_reference ||
+                              premiumRequestResult.request_id ||
+                              'Created'}
+                          </strong>
+                        </p>
+
+                        <p>
+                          Our sales team will connect with you within 24
+                          hours. Superadmin/Sales can now view this
+                          request from the Premium Requests page.
+                        </p>
+                      </div>
+                    ) : null}
+
+                    <form onSubmit={submitPremiumRequest}>
+                      <div className="billing-form-grid">
+                        <label className="billing-field">
+                          <span>Contact Person Name *</span>
+                          <input
+                            type="text"
+                            value={premiumForm.contact_name}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'contact_name',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Enter contact person name"
+                          />
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Contact Email *</span>
+                          <input
+                            type="email"
+                            value={premiumForm.contact_email}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'contact_email',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Enter contact email"
+                          />
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Registered Company Email</span>
+                          <input
+                            type="email"
+                            value={premiumForm.company_email}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'company_email',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Registered company email"
+                          />
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Contact Phone</span>
+                          <input
+                            type="tel"
+                            value={premiumForm.contact_phone}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'contact_phone',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Enter phone number"
+                          />
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Estimated Employee Count *</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={premiumForm.employee_count}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'employee_count',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Example: 250"
+                          />
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Onboarding Required?</span>
+                          <select
+                            value={premiumForm.onboarding_required}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'onboarding_required',
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="Yes">Yes</option>
+                            <option value="No">No</option>
+                            <option value="Need discussion">
+                              Need discussion
+                            </option>
+                          </select>
+                        </label>
+
+                        <label className="billing-field">
+                          <span>Training Required?</span>
+                          <select
+                            value={premiumForm.training_required}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'training_required',
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="Yes">Yes</option>
+                            <option value="No">No</option>
+                            <option value="Need discussion">
+                              Need discussion
+                            </option>
+                          </select>
+                        </label>
+
+                        <label className="billing-field full">
+                          <span>Custom Modules / Requirements</span>
+                          <textarea
+                            value={premiumForm.custom_modules}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'custom_modules',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Example: custom reports, payroll rule changes, approval workflow, API integration, data migration..."
+                            rows={3}
+                          />
+                        </label>
+
+                        <label className="billing-field full">
+                          <span>Support / SLA Requirement</span>
+                          <select
+                            value={premiumForm.support_sla}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'support_sla',
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="Standard business support">
+                              Standard business support
+                            </option>
+                            <option value="Premium / enterprise support discussion required">
+                              Premium / enterprise support discussion
+                              required
+                            </option>
+                            <option value="Priority support with faster response">
+                              Priority support with faster response
+                            </option>
+                            <option value="Dedicated support / SLA required">
+                              Dedicated support / SLA required
+                            </option>
+                          </select>
+                        </label>
+
+                        <label className="billing-field full">
+                          <span>Message / Notes</span>
+                          <textarea
+                            value={premiumForm.message}
+                            onChange={(event) =>
+                              handlePremiumFormChange(
+                                'message',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="Add any additional Premium plan requirement..."
+                            rows={3}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="billing-form-actions">
+                        <button
+                          type="submit"
+                          className="primary"
+                          disabled={submittingPremiumRequest}
+                        >
+                          {submittingPremiumRequest ? (
+                            <Loader2 size={18} className="spin" />
+                          ) : (
+                            <Users size={18} />
+                          )}
+                          {submittingPremiumRequest
+                            ? 'Submitting Premium Request...'
+                            : 'Submit Premium Request'}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            setShowSalesContact(false);
+                            setPremiumRequestResult(null);
+                            clearFeedback('premium-request');
+                          }}
+                          disabled={submittingPremiumRequest}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+
+                      <div className="billing-action-stack">
+                        <BillingInlineMessage
+                          message={feedbackMap['premium-request']}
+                          onClose={() =>
+                            clearFeedback('premium-request')
+                          }
+                        />
+                      </div>
+                    </form>
+
+                    <div className="billing-next-box">
+                      <strong>What happens next?</strong>
+                      <ol className="billing-next-list">
+                        <li>
+                          Request appears in the Superadmin Premium
+                          Requests page.
+                        </li>
+                        <li>
+                          SDS/Sales discusses employee count, onboarding,
+                          training and custom needs.
+                        </li>
+                        <li>
+                          Superadmin sends the custom amount, interval and
+                          payment due date.
+                        </li>
+                        <li>
+                          The quotation appears here with a Pay Premium
+                          Quotation button.
+                        </li>
+                        <li>
+                          Successful Razorpay payment activates Premium
+                          automatically.
+                        </li>
+                      </ol>
+                    </div>
+                  </section>
+                ) : null}
+
+                {computed.showUpgradeActions && !computed.isLifetime ? (
+                  <div className="billing-payment-note">
+                    <CheckCircle2 size={18} />
+                    <p>
+                      {isCustomSelected
+                        ? 'Premium is custom quoted. Once Superadmin sends the quotation, the payment details will appear above and the finalized amount will be used for monthly/yearly renewal until Superadmin revises it.'
+                        : 'Razorpay test mode can be used with test payment details. Essential/Growth renewals will use the latest active price configured by Superadmin.'}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeSection === 'invoices' ? (
+              <div className="billing-section-content">
+                <InvoiceHistory
+                  invoices={invoices}
+                  downloadingInvoiceId={downloadingInvoiceId}
+                  onDownload={downloadInvoice}
+                />
               </div>
             ) : null}
           </>

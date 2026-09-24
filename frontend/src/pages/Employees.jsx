@@ -1,5 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  Archive,
+  BriefcaseBusiness,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Filter,
+  History,
+  Loader2,
+  PlusCircle,
+  RefreshCw,
+  Search,
+  Sparkles,
+  UserPlus,
+  Users,
+  XCircle,
+} from 'lucide-react';
+
 import {
   createEmployee,
   createPastEmployee,
@@ -137,6 +156,9 @@ const STATUS_OPTIONS = [
   { value: 'Terminated', label: 'Terminated' },
   { value: 'Retired', label: 'Retired' },
 ];
+
+const EMPLOYEE_NOTICE_HIDE_MS = 3600;
+const EMPLOYEE_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const EMPLOYEE_TYPE_OPTIONS = [
   { value: 'Full Time', label: 'Full Time' },
@@ -466,6 +488,195 @@ function employeePayloadFromForm(form = {}, extra = {}) {
   return payload;
 }
 
+
+function pageCountFor(rows = [], pageSize = 10) {
+  if (pageSize === 'all') return 1;
+
+  return Math.max(
+    1,
+    Math.ceil((rows?.length || 0) / Number(pageSize || 10)),
+  );
+}
+
+function paginateRows(rows = [], page = 1, pageSize = 10) {
+  if (pageSize === 'all') return rows;
+
+  const size = Number(pageSize || 10);
+  const safePage = Math.max(1, Number(page || 1));
+  const start = (safePage - 1) * size;
+
+  return rows.slice(start, start + size);
+}
+
+function pageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function EmployeeInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`hrms-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="hrms-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="hrms-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="hrms-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="hrms-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function EmployeePagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  label = 'records',
+}) {
+  const pageCount =
+    pageSize === 'all'
+      ? 1
+      : Math.max(
+          1,
+          Math.ceil(Number(total || 0) / Number(pageSize || 10)),
+        );
+
+  if (!total) return null;
+
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  return (
+    <div className="hrms-pagination">
+      <div className="hrms-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>{label}</span>
+      </div>
+
+      <div className="hrms-pagination-controls">
+        <label className="hrms-page-size-control">
+          <span>View</span>
+          <select
+            value={pageSize}
+            onChange={(event) =>
+              onPageSizeChange(
+                event.target.value === 'all'
+                  ? 'all'
+                  : Number(event.target.value),
+              )
+            }
+            aria-label={`Number of ${label} to show`}
+          >
+            <option value="all">View All</option>
+            {EMPLOYEE_PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="hrms-page-button"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1 || pageSize === 'all'}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={14} />
+          <span>Previous</span>
+        </button>
+
+        <div className="hrms-page-numbers" aria-label="Pagination">
+          {pageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`hrms-page-number ${
+                  item === safePage ? 'active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                disabled={pageSize === 'all'}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span key={item} className="hrms-page-ellipsis">
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="hrms-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="hrms-page-button"
+          onClick={() =>
+            onPageChange(Math.min(pageCount, safePage + 1))
+          }
+          disabled={safePage >= pageCount || pageSize === 'all'}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EmployeeAvatar({ employee }) {
   const name = employee?.name || employee?.employee_name || 'Employee';
   const initials = name
@@ -637,6 +848,8 @@ function EmployeeForm({
   setTeamLeaderSearch,
   reportingOfficerSearch,
   setReportingOfficerSearch,
+  feedback = null,
+  onFeedbackClose = () => {},
 }) {
   const entityOptions = organisationOptions(organisations);
   const departmentOptions = masterOptions(departments, 'Choose Department');
@@ -864,6 +1077,12 @@ function EmployeeForm({
           {loading ? 'Saving...' : submitLabel}
         </button>
         {isEdit ? <span className="hrms-form-note">Editing keeps the employee in the active master unless you mark resigned.</span> : null}
+        {feedback?.text ? (
+          <EmployeeInlineMessage
+            message={feedback}
+            onClose={onFeedbackClose}
+          />
+        ) : null}
       </div>
     </form>
   );
@@ -921,7 +1140,7 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
 
             return (
               <tr key={id || employee.email || employee.name}>
-                <td>
+                <td data-label="Employee">
                   <div className="hrms-person-cell">
                     <EmployeeAvatar employee={employee} />
                     <div>
@@ -930,27 +1149,27 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
                     </div>
                   </div>
                 </td>
-                <td>
+                <td data-label="Code">
                   <strong>{displayValue(employee.emp_code || employee.employee_id)}</strong>
                   <small>{displayValue(employee.employee_id, '')}</small>
                 </td>
-                <td>
+                <td data-label="Organisation">
                   <strong>{displayValue(employee.organisation_code || employee.organization_code)}</strong>
                   <small>{displayValue(employee.organisation || employee.organization, '')}</small>
                 </td>
-                <td>{displayValue(employee.department)}</td>
-                <td>{displayValue(employee.designation)}</td>
-                <td>
+                <td data-label="Department">{displayValue(employee.department)}</td>
+                <td data-label="Designation">{displayValue(employee.designation)}</td>
+                <td data-label="Contact">
                   <strong>{displayValue(employee.phone || employee.mobile)}</strong>
                   <small>{displayValue(employee.state || employee.branch, '')}</small>
                 </td>
-                <td>{displayDate(employee.joining_date || employee.date_of_joining)}</td>
-                <td>
+                <td data-label="Joining">{displayDate(employee.joining_date || employee.date_of_joining)}</td>
+                <td data-label="Status">
                   <span className="hrms-pill hrms-pill-green">
                     {displayValue(employee.employment_status || employee.status, 'Active')}
                   </span>
                 </td>
-                <td className="hrms-table-action">
+                <td className="hrms-table-action" data-label="Action">
                   <div className="hrms-row-actions">
                     <button type="button" className="hrms-secondary-btn compact" onClick={() => onEdit(employee)} disabled={!id}>
                       Edit
@@ -991,7 +1210,7 @@ function AlumniTable({ rows, loading }) {
         <tbody>
           {rows.map((employee) => (
             <tr key={employeeRowId(employee) || employee.email || employee.name}>
-              <td>
+              <td data-label="Employee">
                 <div className="hrms-person-cell">
                   <EmployeeAvatar employee={employee} />
                   <div>
@@ -1000,16 +1219,16 @@ function AlumniTable({ rows, loading }) {
                   </div>
                 </div>
               </td>
-              <td>
+              <td data-label="Code">
                 <strong>{displayValue(employee.emp_code || employee.employee_id)}</strong>
                 <small>{displayValue(employee.employee_id, '')}</small>
               </td>
-              <td>{displayValue(employee.department)}</td>
-              <td>{displayValue(employee.designation)}</td>
-              <td>{displayValue(employee.exit_type)}</td>
-              <td>{displayDate(employee.last_working_date || employee.resignation_date)}</td>
-              <td>{displayValue(employee.resignation_reason)}</td>
-              <td>
+              <td data-label="Department">{displayValue(employee.department)}</td>
+              <td data-label="Designation">{displayValue(employee.designation)}</td>
+              <td data-label="Exit Type">{displayValue(employee.exit_type)}</td>
+              <td data-label="Last Working Date">{displayDate(employee.last_working_date || employee.resignation_date)}</td>
+              <td data-label="Reason">{displayValue(employee.resignation_reason)}</td>
+              <td data-label="Status">
                 <span className="hrms-pill hrms-pill-red">
                   {displayValue(employee.employment_status || employee.status, 'Resigned')}
                 </span>
@@ -1201,7 +1420,13 @@ export default function Employees({ user = {}, setPage } = {}) {
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingAlumni, setLoadingAlumni] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [message, setMessage] = useState({ type: '', text: '', scope: 'page' });
+  const messageTimerRef = useRef(null);
+
+  const [employeePage, setEmployeePage] = useState(1);
+  const [employeePageSize, setEmployeePageSize] = useState(10);
+  const [alumniPage, setAlumniPage] = useState(1);
+  const [alumniPageSize, setAlumniPageSize] = useState(10);
 
   const [organisations, setOrganisations] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -1233,6 +1458,39 @@ export default function Employees({ user = {}, setPage } = {}) {
 
   const filteredEmployees = useMemo(() => filterEmployees(employees, filters), [employees, filters]);
   const filteredAlumni = useMemo(() => filterEmployees(alumni, alumniFilters), [alumni, alumniFilters]);
+
+  const employeePageCount = pageCountFor(filteredEmployees, employeePageSize);
+  const alumniPageCount = pageCountFor(filteredAlumni, alumniPageSize);
+
+  const pagedEmployees = useMemo(
+    () =>
+      paginateRows(
+        filteredEmployees,
+        Math.min(employeePage, employeePageCount),
+        employeePageSize,
+      ),
+    [
+      filteredEmployees,
+      employeePage,
+      employeePageCount,
+      employeePageSize,
+    ],
+  );
+
+  const pagedAlumni = useMemo(
+    () =>
+      paginateRows(
+        filteredAlumni,
+        Math.min(alumniPage, alumniPageCount),
+        alumniPageSize,
+      ),
+    [
+      filteredAlumni,
+      alumniPage,
+      alumniPageCount,
+      alumniPageSize,
+    ],
+  );
 
   const employeeStats = useMemo(() => ({
     active: employees.length,
@@ -1274,13 +1532,38 @@ export default function Employees({ user = {}, setPage } = {}) {
     hasPaidEmployeeLimit && employeesUsedForLimit >= saasEmployeeLimit,
   );
 
-  const showMessage = (type, text) => {
-    setMessage({ type, text });
-    window.clearTimeout(window.__employeeMessageTimer);
-    window.__employeeMessageTimer = window.setTimeout(() => setMessage({ type: '', text: '' }), 4000);
+  const clearMessage = () => {
+    if (messageTimerRef.current) {
+      window.clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = null;
+    }
+
+    setMessage({ type: '', text: '', scope: 'page' });
   };
 
-    const openBillingPage = () => {
+  const showMessage = (type, text, title = '', options = {}) => {
+    if (messageTimerRef.current) {
+      window.clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = null;
+    }
+
+    setMessage({
+      type,
+      text,
+      title,
+      loading: Boolean(options.loading),
+      scope: options.scope || 'page',
+    });
+
+    if (!options.loading) {
+      messageTimerRef.current = window.setTimeout(() => {
+        setMessage({ type: '', text: '', scope: 'page' });
+        messageTimerRef.current = null;
+      }, EMPLOYEE_NOTICE_HIDE_MS);
+    }
+  };
+
+  const openBillingPage = () => {
     if (typeof setPage === 'function') {
       setPage('billing');
     }
@@ -1292,7 +1575,7 @@ export default function Employees({ user = {}, setPage } = {}) {
     }
   };
 
-  const loadFormOptions = async () => {
+  const loadFormOptions = async (feedbackScope = 'page') => {
     try {
       const [masterData, organisationData, teamLeaderData, reportingOfficerData] = await Promise.all([
         getEmployeeFormOptions(),
@@ -1307,37 +1590,91 @@ export default function Employees({ user = {}, setPage } = {}) {
       setStates(masterData.states || []);
       setTeamLeaders(teamLeaderData.items || []);
       setReportingOfficers(reportingOfficerData.items || []);
+      return true;
     } catch (error) {
-      showMessage('error', error.message || 'Unable to load employee form dropdowns.');
+      showMessage(
+        'error',
+        error.message || 'Unable to load employee form dropdowns.',
+        'Employee Data Load Failed',
+        { scope: feedbackScope },
+      );
+      return false;
     }
   };
 
-  const loadEmployees = async () => {
+  const loadEmployees = async (feedbackScope = 'page') => {
     setLoadingEmployees(true);
     try {
       const data = await getActiveEmployees({ limit: 500, sort_by: 'created_at', sort_dir: 'desc' });
       setEmployees(data.items || []);
+      return true;
     } catch (error) {
-      showMessage('error', error.message || 'Unable to load employees.');
+      showMessage(
+        'error',
+        error.message || 'Unable to load employees.',
+        'Employee Load Failed',
+        { scope: feedbackScope },
+      );
+      return false;
     } finally {
       setLoadingEmployees(false);
     }
   };
 
-  const loadAlumni = async () => {
+  const loadAlumni = async (feedbackScope = 'page') => {
     setLoadingAlumni(true);
     try {
       const data = await getAlumniEmployees({ limit: 500, sort_by: 'last_working_date', sort_dir: 'desc' });
       setAlumni(data.items || []);
+      return true;
     } catch (error) {
-      showMessage('error', error.message || 'Unable to load alumni employees.');
+      showMessage(
+        'error',
+        error.message || 'Unable to load alumni employees.',
+        'Alumni Load Failed',
+        { scope: feedbackScope },
+      );
+      return false;
     } finally {
       setLoadingAlumni(false);
     }
   };
 
-  const reloadAll = async () => {
-    await Promise.all([loadFormOptions(), loadEmployees(), loadAlumni()]);
+  const reloadAll = async ({ feedbackScope = '' } = {}) => {
+    if (feedbackScope) {
+      showMessage(
+        'info',
+        'Refreshing employee, alumni and form-option data...',
+        'Refreshing',
+        { loading: true, scope: feedbackScope },
+      );
+    }
+
+    const results = await Promise.all([
+      loadFormOptions(feedbackScope || 'page'),
+      loadEmployees(feedbackScope || 'page'),
+      loadAlumni(feedbackScope || 'page'),
+    ]);
+
+    if (feedbackScope) {
+      if (results.every(Boolean)) {
+        showMessage(
+          'success',
+          'Employee management data refreshed successfully.',
+          'Refresh Complete',
+          { scope: feedbackScope },
+        );
+      } else {
+        showMessage(
+          'error',
+          'Some employee management data could not be refreshed. Please try again.',
+          'Refresh Failed',
+          { scope: feedbackScope },
+        );
+      }
+    }
+
+    return results;
   };
 
   useEffect(() => {
@@ -1345,18 +1682,187 @@ export default function Employees({ user = {}, setPage } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleFilterChange = (event) => setFilters((previous) => ({ ...previous, [event.target.name]: event.target.value }));
-  const handleAlumniFilterChange = (event) => setAlumniFilters((previous) => ({ ...previous, [event.target.name]: event.target.value }));
-  const resetFilters = () => setFilters({ q: '', department: '', designation: '', state: '', employment_status: '' });
-  const resetAlumniFilters = () => setAlumniFilters({ q: '', department: '', designation: '', state: '', employment_status: '' });
+  useEffect(() => {
+    setEmployeePage((current) => Math.min(current, employeePageCount));
+  }, [employeePageCount]);
+
+  useEffect(() => {
+    setAlumniPage((current) => Math.min(current, alumniPageCount));
+  }, [alumniPageCount]);
+
+  useEffect(() => {
+    if (
+      (!editingEmployee && !resignEmployee) ||
+      typeof document === 'undefined'
+    ) {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    const blockBackgroundScroll = (event) => {
+      const modal = event.target?.closest?.('.hrms-modal');
+
+      if (modal) return;
+      event.preventDefault();
+    };
+
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape' || saving) return;
+
+      if (resignEmployee) {
+        closeResignModal();
+        return;
+      }
+
+      if (editingEmployee) {
+        closeEditModal();
+      }
+    };
+
+    document.addEventListener('wheel', blockBackgroundScroll, {
+      passive: false,
+    });
+    document.addEventListener('touchmove', blockBackgroundScroll, {
+      passive: false,
+    });
+    window.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+      window.removeEventListener('keydown', closeOnEscape);
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [editingEmployee, resignEmployee, saving]);
+
+  useEffect(() => {
+    const dismissMessage = (event) => {
+      if (event.target?.closest?.('.hrms-inline-feedback')) return;
+
+      if (messageTimerRef.current) {
+        window.clearTimeout(messageTimerRef.current);
+        messageTimerRef.current = null;
+      }
+
+      setMessage((current) =>
+        current.text
+          ? { type: '', text: '', scope: 'page' }
+          : current,
+      );
+    };
+
+    document.addEventListener('pointerdown', dismissMessage);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissMessage);
+
+      if (messageTimerRef.current) {
+        window.clearTimeout(messageTimerRef.current);
+        messageTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleFilterChange = (event) => {
+    setEmployeePage(1);
+    setFilters((previous) => ({
+      ...previous,
+      [event.target.name]: event.target.value,
+    }));
+  };
+
+  const handleAlumniFilterChange = (event) => {
+    setAlumniPage(1);
+    setAlumniFilters((previous) => ({
+      ...previous,
+      [event.target.name]: event.target.value,
+    }));
+  };
+
+  const resetFilters = () => {
+    setEmployeePage(1);
+    setFilters({
+      q: '',
+      department: '',
+      designation: '',
+      state: '',
+      employment_status: '',
+    });
+  };
+
+  const resetAlumniFilters = () => {
+    setAlumniPage(1);
+    setAlumniFilters({
+      q: '',
+      department: '',
+      designation: '',
+      state: '',
+      employment_status: '',
+    });
+  };
 
   const handleDownloadEmployeeExcel = async () => {
+    showMessage(
+      'info',
+      'Preparing the active employee Excel report...',
+      'Preparing Download',
+      { loading: true, scope: 'master-actions' },
+    );
+
     try {
       await downloadEmployeeMasterExcel(filters);
+      showMessage(
+        'success',
+        'Active employee Excel report download started successfully.',
+        'Download Ready',
+        { scope: 'master-actions' },
+      );
     } catch (error) {
       showMessage(
         'error',
         error.message || 'Unable to download employee Excel report.',
+        'Download Failed',
+        { scope: 'master-actions' },
+      );
+    }
+  };
+
+  const handleDownloadAlumniCsv = async () => {
+    showMessage(
+      'info',
+      'Preparing the alumni CSV report...',
+      'Preparing Download',
+      { loading: true, scope: 'alumni-actions' },
+    );
+
+    try {
+      await Promise.resolve(downloadAlumniCsv(filteredAlumni));
+      showMessage(
+        'success',
+        'Alumni CSV report download started successfully.',
+        'Download Ready',
+        { scope: 'alumni-actions' },
+      );
+    } catch (error) {
+      showMessage(
+        'error',
+        error.message || 'Unable to download alumni CSV report.',
+        'Download Failed',
+        { scope: 'alumni-actions' },
       );
     }
   };
@@ -1365,7 +1871,7 @@ export default function Employees({ user = {}, setPage } = {}) {
     event.preventDefault();
 
     if (isExpiredOrSuspendedTenant) {
-      showMessage('error', 'Your trial/subscription is expired or suspended. Please upgrade to continue.');
+      showMessage('error', 'Your trial/subscription is expired or suspended. Please upgrade to continue.', 'Access Restricted', { scope: 'create' });
       openBillingPage();
       return;
     }
@@ -1375,18 +1881,29 @@ export default function Employees({ user = {}, setPage } = {}) {
         showMessage(
           'error',
           `Your ${saasPlanName} plan allows only ${saasEmployeeLimit} employees. Renew or change the plan from Billing to continue.`,
+          'Employee Limit Reached',
+          { scope: 'create' },
         );
         openBillingPage();
       } else {
         showMessage(
           'error',
           `Your ${saasPlanName} employee limit has been reached. Upgrade controls stay hidden while the subscription is active. Contact Superadmin for an immediate plan revision.`,
+          'Employee Limit Reached',
+          { scope: 'create' },
         );
       }
       return;
     }
 
     setSaving(true);
+    showMessage(
+      'info',
+      'Creating the employee record...',
+      'Creating Employee',
+      { loading: true, scope: 'create' },
+    );
+
     try {
       await createEmployee(employeePayloadFromForm(employeeForm, { status: 'active', employment_status: 'active', is_alumni: false }));
       setEmployeeForm(EMPTY_EMPLOYEE_FORM);
@@ -1394,9 +1911,19 @@ export default function Employees({ user = {}, setPage } = {}) {
       setReportingOfficerSearch('');
       await loadEmployees();
       setActiveTab('master');
-      showMessage('success', 'Employee created successfully.');
+      showMessage(
+        'success',
+        'Employee created successfully.',
+        'Employee Created',
+        { scope: 'master-actions' },
+      );
     } catch (error) {
-      showMessage('error', error.message || 'Unable to create employee.');
+      showMessage(
+        'error',
+        error.message || 'Unable to create employee.',
+        'Employee Creation Failed',
+        { scope: 'create' },
+      );
     } finally {
       setSaving(false);
     }
@@ -1405,6 +1932,13 @@ export default function Employees({ user = {}, setPage } = {}) {
   const handleCreatePastEmployee = async (event) => {
     event.preventDefault();
     setSaving(true);
+    showMessage(
+      'info',
+      'Adding the past employee to Alumni...',
+      'Adding Past Employee',
+      { loading: true, scope: 'alumni-create' },
+    );
+
     try {
       await createPastEmployee(employeePayloadFromForm(alumniForm, {
         is_alumni: true,
@@ -1415,9 +1949,19 @@ export default function Employees({ user = {}, setPage } = {}) {
       setAlumniForm(EMPTY_ALUMNI_FORM);
       await loadAlumni();
       setActiveAlumniSection('employees');
-      showMessage('success', 'Past employee added to alumni successfully.');
+      showMessage(
+        'success',
+        'Past employee added to alumni successfully.',
+        'Alumni Updated',
+        { scope: 'alumni-actions' },
+      );
     } catch (error) {
-      showMessage('error', error.message || 'Unable to add past employee.');
+      showMessage(
+        'error',
+        error.message || 'Unable to add past employee.',
+        'Unable To Add Past Employee',
+        { scope: 'alumni-create' },
+      );
     } finally {
       setSaving(false);
     }
@@ -1444,18 +1988,40 @@ export default function Employees({ user = {}, setPage } = {}) {
 
     const id = employeeRowId(editingEmployee || {});
     if (!id) {
-      showMessage('error', 'Employee ID not found.');
+      showMessage(
+        'error',
+        'Employee ID not found.',
+        'Employee Update Failed',
+        { scope: 'edit-modal' },
+      );
       return;
     }
 
     setSaving(true);
+    showMessage(
+      'info',
+      'Saving the employee changes...',
+      'Updating Employee',
+      { loading: true, scope: 'edit-modal' },
+    );
+
     try {
       await updateEmployee(id, employeePayloadFromForm(editForm));
       closeEditModal();
       await reloadAll();
-      showMessage('success', 'Employee updated successfully.');
+      showMessage(
+        'success',
+        'Employee updated successfully.',
+        'Employee Updated',
+        { scope: 'master-actions' },
+      );
     } catch (error) {
-      showMessage('error', error.message || 'Unable to update employee.');
+      showMessage(
+        'error',
+        error.message || 'Unable to update employee.',
+        'Employee Update Failed',
+        { scope: 'edit-modal' },
+      );
     } finally {
       setSaving(false);
     }
@@ -1488,11 +2054,23 @@ export default function Employees({ user = {}, setPage } = {}) {
 
     const id = employeeRowId(resignEmployee);
     if (!id) {
-      showMessage('error', 'Employee ID not found.');
+      showMessage(
+        'error',
+        'Employee ID not found.',
+        'Resignation Update Failed',
+        { scope: 'resign-modal' },
+      );
       return;
     }
 
     setSaving(true);
+    showMessage(
+      'info',
+      'Moving the employee to Alumni...',
+      'Updating Employee Status',
+      { loading: true, scope: 'resign-modal' },
+    );
+
     try {
       await markEmployeeAsResigned(id, {
         ...resignForm,
@@ -1501,9 +2079,19 @@ export default function Employees({ user = {}, setPage } = {}) {
       });
       closeResignModal();
       await reloadAll();
-      showMessage('success', 'Employee moved to alumni successfully.');
+      showMessage(
+        'success',
+        'Employee moved to alumni successfully.',
+        'Employee Moved To Alumni',
+        { scope: 'master-actions' },
+      );
     } catch (error) {
-      showMessage('error', error.message || 'Unable to mark employee as resigned.');
+      showMessage(
+        'error',
+        error.message || 'Unable to mark employee as resigned.',
+        'Resignation Update Failed',
+        { scope: 'resign-modal' },
+      );
     } finally {
       setSaving(false);
     }
@@ -1512,81 +2100,142 @@ export default function Employees({ user = {}, setPage } = {}) {
   return (
     <section className="hrms-employees-page">
       <style>{`
+        @keyframes hrmsEmployeeSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        @keyframes hrmsEmployeeRefreshIdle {
+          0%, 84% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes hrmsEmployeeSectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes hrmsEmployeeModalFade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes hrmsEmployeeModalIn {
+          from { opacity: 0; transform: translateY(24px) scale(.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
         .hrms-employees-page {
           --emp-ink: #101a3a;
-          --emp-soft: #596483;
-          --emp-violet: #6254da;
-          --emp-deep: #342b78;
-          --emp-blue: #3766db;
-          --emp-teal: #18aaa8;
+          --emp-soft: #5d6d8d;
+          --emp-violet: #4d77dd;
+          --emp-deep: #575092;
+          --emp-blue: #4d77dd;
+          --emp-cyan: #2eb2b9;
+          --emp-teal: #2eb2b9;
+          --emp-yellow: #d8ff43;
+          --emp-danger: #d84d68;
+          --emp-line: rgba(16, 26, 58, .14);
           --emp-flat-blue: #b9d7ff;
           --emp-flat-violet: #c9c0ff;
           --emp-flat-teal: #aee6d9;
           --emp-ease: cubic-bezier(.22, 1, .36, 1);
 
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
-          min-width: 0;
+          display: grid;
+          gap: clamp(16px, 1.8vw, 24px);
           width: 100%;
+          min-width: 0;
+          max-width: 100%;
           padding-bottom: max(18px, env(safe-area-inset-bottom));
           color: var(--emp-ink);
+          background: transparent;
           font-family: var(--yc-ui, var(--body), inherit);
         }
 
- .hrms-hero {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  padding: clamp(24px, 2.8vw, 36px);
-  border: 1px solid rgba(171,181,211,.72);
-  border-radius: clamp(28px, 2.5vw, 40px);
-  color: var(--emp-ink);
-
-  background: linear-gradient(
-    90deg,
-    #d3f4fb 0%,
-    #f7fcfb 34%,
-    #fffdf8 52%,
-    #fbf8fa 68%,
-    #f0edfb 100%
-  );
-
-  box-shadow: 12px 14px 0 var(--emp-flat-blue), 0 28px 48px rgba(34,38,110,.13);
-}
-
-        .hrms-hero::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          z-index: -2;
-          opacity: .42;
-          pointer-events: none;
-          background-image:
-            linear-gradient(rgba(65,55,161,.035) 1px,transparent 1px),
-            linear-gradient(90deg,rgba(65,55,161,.035) 1px,transparent 1px);
-          background-size: 42px 42px;
+        .hrms-employees-page,
+        .hrms-employees-page * {
+          box-sizing: border-box;
         }
 
-       
+        .hrms-employees-page > *,
+        .hrms-employees-page section,
+        .hrms-employees-page article,
+        .hrms-employees-page form,
+        .hrms-employees-page nav,
+        .hrms-employees-page aside,
+        .hrms-employees-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .hrms-employees-page h1,
+        .hrms-employees-page h2,
+        .hrms-employees-page h3,
+        .hrms-employees-page h4,
+        .hrms-employees-page p,
+        .hrms-employees-page strong,
+        .hrms-employees-page small,
+        .hrms-employees-page span,
+        .hrms-employees-page td,
+        .hrms-employees-page th {
+          overflow-wrap: anywhere;
+        }
+
+        .hrms-employees-page button,
+        .hrms-employees-page input,
+        .hrms-employees-page select,
+        .hrms-employees-page textarea {
+          font: inherit;
+          max-width: 100%;
+        }
+
+        .hrms-employees-page button {
+          min-width: 0;
+          cursor: pointer;
+        }
+
+        .hrms-spin {
+          animation: hrmsEmployeeSpin 1s linear infinite;
+        }
+
+        .hrms-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 300px);
+          gap: clamp(20px, 3vw, 36px);
+          align-items: center;
+          min-height: 250px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            10px 12px 0 #b9d7ff,
+            0 26px 44px rgba(70, 92, 140, .12);
+        }
 
         .hrms-hero-content {
-          position: relative;
-          z-index: 2;
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 24px;
+          display: contents;
         }
 
-        .hrms-kicker {
+        .hrms-kicker,
+        .hrms-section-kicker {
           display: inline-flex;
           align-items: center;
-          width: fit-content;
-          padding: 9px 13px;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
           border-radius: 999px;
           color: #fff;
-          background: var(--emp-deep);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -1594,251 +2243,1458 @@ export default function Employees({ user = {}, setPage } = {}) {
           text-transform: uppercase;
         }
 
+        .hrms-kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 4px 5px 0 #575092;
+        }
+
+        .hrms-section-kicker {
+          margin-bottom: 10px;
+          padding: 7px 10px;
+          box-shadow: 3px 4px 0 #575092;
+        }
+
         .hrms-hero h1 {
           max-width: 900px;
-          margin: 15px 0 9px;
+          margin: 0;
           color: var(--emp-ink);
-          font-family: var(--yc-display, var(--heading), inherit);
-          font-size: clamp(34px,4.4vw,66px);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 77px);
           font-weight: 760;
           line-height: .94;
-          letter-spacing: -.055em;
+          letter-spacing: -.058em;
+        }
+
+        .hrms-hero h1 em {
+          color: var(--emp-violet);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
         }
 
         .hrms-hero p {
-          max-width: 880px;
-          margin: 0;
+          max-width: 840px;
+          margin: 17px 0 0;
           color: var(--emp-soft);
-          font-size: clamp(13px,1vw,16px);
+          font-size: clamp(13px, 1vw, 16px);
           line-height: 1.68;
         }
 
-        .hrms-refresh-btn,.hrms-primary-btn,.hrms-secondary-btn,.hrms-danger-soft-btn,.hrms-tab-btn {
-          appearance: none;
-          border: 1px solid transparent;
-          cursor: pointer;
-          font: inherit;
-          font-weight: 900;
-          line-height: 1;
-          touch-action: manipulation;
-          transition: transform 240ms var(--emp-ease),box-shadow 240ms var(--emp-ease),background 200ms ease,border-color 200ms ease,filter 200ms ease;
+        .hrms-hero-actions {
+          display: flex;
+          justify-content: flex-end;
+          width: 100%;
         }
 
-        .hrms-refresh-btn:hover,.hrms-primary-btn:hover,.hrms-secondary-btn:hover,.hrms-danger-soft-btn:hover,.hrms-tab-btn:hover {
+        .hrms-action-stack {
+          width: min(320px, 100%);
+          display: grid;
+          gap: 9px;
+        }
+
+        .hrms-refresh-btn,
+        .hrms-primary-btn,
+        .hrms-secondary-btn,
+        .hrms-danger-soft-btn,
+        .hrms-tab-btn,
+        .hrms-alumni-subtab-btn,
+        .hrms-page-button,
+        .hrms-page-number,
+        .hrms-inline-feedback-close {
+          appearance: none;
+          font-weight: 900;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease,
+            filter 190ms ease,
+            opacity 190ms ease;
+        }
+
+        .hrms-refresh-btn {
+          min-height: 54px;
+          padding: 10px 18px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 15px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow:
+            6px 7px 0 #575092,
+            0 14px 25px rgba(67, 116, 170, .12);
+          white-space: nowrap;
+        }
+
+        .hrms-refresh-btn svg:first-child {
+          animation: hrmsEmployeeRefreshIdle 4.2s linear infinite;
+        }
+
+        .hrms-refresh-btn:disabled svg:first-child {
+          animation: hrmsEmployeeSpin 1s linear infinite;
+        }
+
+        .hrms-refresh-btn:hover:not(:disabled),
+        .hrms-primary-btn:hover:not(:disabled),
+        .hrms-secondary-btn:hover:not(:disabled),
+        .hrms-danger-soft-btn:hover:not(:disabled),
+        .hrms-page-button:hover:not(:disabled),
+        .hrms-page-number:hover:not(:disabled) {
           transform: translateY(-2px);
           filter: saturate(1.04);
         }
 
-        .hrms-refresh-btn:active,.hrms-primary-btn:active,.hrms-secondary-btn:active,.hrms-danger-soft-btn:active,.hrms-tab-btn:active {
-          transform: translateY(0) scale(.985);
-        }
-
-        .hrms-refresh-btn {
-          flex: 0 0 auto;
-          min-height: 44px;
-          padding: 12px 16px;
-          border-color: rgba(98,84,218,.18);
-          border-radius: 15px;
-          color: var(--emp-deep);
-          background: rgba(255,255,255,.86);
-          box-shadow: 5px 6px 0 rgba(52,43,120,.18);
+        .hrms-refresh-btn:disabled,
+        .hrms-primary-btn:disabled,
+        .hrms-secondary-btn:disabled,
+        .hrms-danger-soft-btn:disabled,
+        .hrms-page-button:disabled,
+        .hrms-page-number:disabled {
+          opacity: .58;
+          cursor: not-allowed;
+          transform: none;
         }
 
         .hrms-stats-grid {
           display: grid;
-          grid-template-columns: repeat(4,minmax(0,1fr));
-          gap: 16px;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
         }
 
         .hrms-stat-card {
           min-width: 0;
+          min-height: 120px;
           padding: 18px;
-          border: 1px solid rgba(171,181,211,.68);
-          border-radius: 21px;
-          background: #f8fbff;
-          box-shadow: 7px 9px 0 var(--emp-flat-blue),0 18px 30px rgba(15,20,75,.08);
-          transition: transform 260ms var(--emp-ease),box-shadow 260ms var(--emp-ease),border-color 200ms ease;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow:
+            7px 9px 0 #b9d7ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+          transition: transform 190ms ease;
         }
-        .hrms-stat-card:nth-child(2){background:#f1efff;box-shadow:7px 9px 0 var(--emp-flat-violet),0 18px 30px rgba(15,20,75,.08)}
-        .hrms-stat-card:nth-child(3){background:#eaf8f4;box-shadow:7px 9px 0 var(--emp-flat-teal),0 18px 30px rgba(15,20,75,.08)}
-        .hrms-stat-card:nth-child(4){background:#fff4d5;box-shadow:7px 9px 0 #ffe0a5,0 18px 30px rgba(15,20,75,.08)}
-        .hrms-stat-card:hover{transform:translateY(-3px);border-color:rgba(98,84,218,.28)}
-        .hrms-stat-card span{display:block;margin-bottom:8px;color:var(--emp-soft);font-size:11px;font-weight:900;letter-spacing:.05em;text-transform:uppercase}
-        .hrms-stat-card strong{color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:clamp(29px,3vw,44px);line-height:1;letter-spacing:-.04em}
+
+        .hrms-stat-card:nth-child(2) {
+          background: #eaf8f4;
+          box-shadow:
+            7px 9px 0 #aee6d9,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:nth-child(3) {
+          background: #fff4d5;
+          box-shadow:
+            7px 9px 0 #ffe0a5,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:nth-child(4) {
+          background: #f1efff;
+          box-shadow:
+            7px 9px 0 #c9c0ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:hover {
+          transform: translateY(-4px);
+        }
+
+        .hrms-stat-card span {
+          display: block;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .hrms-stat-card strong {
+          display: block;
+          margin-top: 10px;
+          color: var(--emp-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(30px, 3vw, 43px);
+          line-height: 1;
+        }
+
+        .hrms-section-tabs-holder {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
 
         .hrms-tabs {
-          position: sticky;
-          top: max(8px,env(safe-area-inset-top));
-          z-index: 30;
-          display: flex;
-          gap: 7px;
-          overflow-x: auto;
-          padding: 8px;
-          border: 1px solid rgba(171,181,211,.7);
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .62);
           border-radius: 22px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 7px 9px 0 #d1dcfa,0 18px 32px rgba(34,38,110,.09);
-          backdrop-filter: blur(16px);
-          scrollbar-width: none;
-          scroll-snap-type: x proximity;
-          overscroll-behavior-x: contain;
-          -webkit-overflow-scrolling: touch;
+          background: #fff;
+          box-shadow:
+            6px 7px 0 #c4ccff,
+            0 16px 28px rgba(34, 38, 110, .08);
         }
-        .hrms-tabs::-webkit-scrollbar{display:none}
-        .hrms-tab-btn{flex:0 0 auto;min-height:42px;padding:10px 14px;border-radius:13px;color:#4f5e7f;background:transparent;scroll-snap-align:start}
-        .hrms-tab-btn:hover{color:var(--emp-deep);background:#f1efff;border-color:rgba(98,84,218,.16)}
-        .hrms-tab-btn.active{color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(52,43,120,.72)}
 
-        .hrms-alert {
-          border-radius: 18px;
-          padding: 14px 16px;
-          font-weight: 800;
-          animation: hrmsSlideDown 380ms var(--emp-ease) both;
-        }
-        .hrms-alert.success{color:#13736f;background:#dff8f3;border:1px solid rgba(19,115,111,.2);box-shadow:5px 6px 0 rgba(174,230,217,.7)}
-        .hrms-alert.error{color:#b62f55;background:#ffe4ec;border:1px solid rgba(182,47,85,.18);box-shadow:5px 6px 0 rgba(255,209,223,.7)}
-        @keyframes hrmsSlideDown{from{opacity:0;transform:translateY(-10px);filter:blur(2px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
-
-        .hrms-panel,.hrms-form-card {
+        .hrms-tab-btn {
           min-width: 0;
-          padding: clamp(17px,1.8vw,24px);
-          border: 1px solid rgba(171,181,211,.72);
-          border-radius: clamp(24px,2vw,32px);
-          background: linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
-          box-shadow: 9px 11px 0 #d1dcfa,0 24px 42px rgba(34,38,110,.1);
-          animation: hrmsContentIn 520ms var(--emp-ease) both;
+          min-height: 62px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          padding: 11px 14px;
+          border: 1px solid rgba(77, 119, 221, .22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87, 80, 146, .16);
+          text-align: left;
         }
-        .hrms-form-card{background:linear-gradient(145deg,#f4fbff 0%,#f8f1ff 56%,#fffaf0 100%);box-shadow:9px 11px 0 #c9ddf5,0 24px 42px rgba(34,38,110,.1)}
-        @keyframes hrmsContentIn{from{opacity:0;transform:translateY(16px) scale(.992);filter:blur(3px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
 
-        .hrms-section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}
-        .hrms-section-heading>div{min-width:0}
-        .hrms-section-heading h3{margin:0 0 6px;color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:clamp(22px,2vw,30px);line-height:1;letter-spacing:-.03em}
-        .hrms-section-heading p{margin:0;color:var(--emp-soft);font-size:13px;line-height:1.55}
-        .hrms-actions,.hrms-row-actions{display:flex;flex-wrap:wrap;gap:10px}
-
-        .hrms-filter-grid{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(130px,1fr)) auto;gap:10px;margin-bottom:18px;padding:13px;border:1px solid rgba(171,181,211,.55);border-radius:18px;background:rgba(255,255,255,.72)}
-        .hrms-filter-grid input,.hrms-filter-grid select,.hrms-field input,.hrms-field select{width:100%;min-width:0;border:1px solid rgba(159,169,205,.62);border-radius:14px;outline:none;color:var(--emp-ink);background:rgba(255,255,255,.9);padding:12px 13px;font:inherit;transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease}
-        .hrms-filter-grid input:hover,.hrms-filter-grid select:hover,.hrms-field input:hover,.hrms-field select:hover{border-color:rgba(98,84,218,.34)}
-        .hrms-filter-grid input:focus,.hrms-filter-grid select:focus,.hrms-field input:focus,.hrms-field select:focus{border-color:var(--emp-violet);background:#fff;box-shadow:0 0 0 4px rgba(98,84,218,.11)}
-
-        .hrms-primary-btn{min-height:42px;padding:12px 16px;border-radius:14px;color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:5px 6px 0 rgba(52,43,120,.8)}
-        .hrms-primary-btn:disabled,.hrms-secondary-btn:disabled,.hrms-danger-soft-btn:disabled{opacity:.62;cursor:not-allowed;transform:none;box-shadow:none}
-        .hrms-secondary-btn{min-height:40px;padding:11px 14px;border-color:rgba(98,84,218,.18);border-radius:13px;color:var(--emp-deep);background:#f1efff;box-shadow:4px 5px 0 rgba(98,84,218,.14)}
-        .hrms-danger-soft-btn{min-height:40px;padding:10px 13px;border-color:rgba(182,47,85,.16);border-radius:13px;color:#b62f55;background:#ffe4ec}
-        .compact{min-height:34px!important;padding:8px 10px!important;font-size:11px}
-
-        .hrms-table-wrap{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;border:1px solid rgba(171,181,211,.62);border-radius:18px;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:rgba(98,84,218,.35) transparent;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;cursor:grab}
-        .hrms-table-wrap.is-dragging{cursor:grabbing;user-select:none}
-        .hrms-table-wrap::-webkit-scrollbar{height:8px}.hrms-table-wrap::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(98,84,218,.35)}
-        .hrms-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;background:rgba(255,255,255,.72)}
-        .hrms-table th{position:sticky;top:0;z-index:2;padding:14px 16px;border-bottom:1px solid rgba(65,55,161,.12);color:#4f5e7f;background:rgba(241,239,255,.94);font-size:10px;font-weight:900;letter-spacing:.07em;text-align:left;text-transform:uppercase;backdrop-filter:blur(12px);white-space:nowrap}
-       .hrms-table th:first-child{
-  padding-left:72px;
-}
-        .hrms-table td{padding:15px 16px;border-bottom:1px solid rgba(65,55,161,.09);color:#334164;background:rgba(255,255,255,.64);vertical-align:middle;transition:background 180ms ease;white-space:nowrap}
-        .hrms-table tbody tr:hover td{background:rgba(237,246,255,.82)}
-        .hrms-table tr:last-child td{border-bottom:0}
-.hrms-person-cell{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  min-width:230px;
-}
-        .hrms-person-cell strong,.hrms-table td strong{display:block;color:var(--emp-ink);font-weight:900;white-space:nowrap;overflow-wrap:normal}
-        .hrms-person-cell small,.hrms-table td small{display:block;margin-top:4px;color:var(--emp-soft);font-size:11px;white-space:nowrap;overflow-wrap:normal}
-        .hrms-employee-avatar{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:44px;height:44px;border:3px solid #fff;border-radius:15px;color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(98,84,218,.16),0 10px 20px rgba(34,38,110,.1);font-weight:900;object-fit:cover}
-        .hrms-pill{display:inline-flex;align-items:center;width:fit-content;padding:7px 10px;border-radius:999px;font-size:10px;font-weight:900;line-height:1}.hrms-pill-green{color:#13736f;background:#dff8f3}.hrms-pill-red{color:#b62f55;background:#ffe4ec}
-       .hrms-table-action{
-  text-align:left!important;
-  white-space:nowrap
-}
-        .hrms-empty-state{padding:30px 22px;border:1px dashed rgba(98,84,218,.35);border-radius:20px;color:var(--emp-soft);background:linear-gradient(145deg,rgba(237,248,255,.76),rgba(248,241,255,.72));font-weight:900;text-align:center}
-
-        .hrms-form-section{margin-top:16px;padding:16px;border:1px solid rgba(171,181,211,.55);border-radius:20px;background:rgba(255,255,255,.68);transition:transform 220ms var(--emp-ease),border-color 180ms ease,box-shadow 220ms var(--emp-ease)}
-        .hrms-form-section:hover{transform:translateY(-2px);border-color:rgba(98,84,218,.24);box-shadow:5px 6px 0 rgba(185,215,255,.5)}
-        .hrms-form-section:first-of-type{margin-top:0}.hrms-form-section h4{margin:0 0 13px;color:var(--emp-ink);font-size:15px;font-weight:950}
-        .hrms-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
-        .hrms-field{display:flex;min-width:0;flex-direction:column;gap:7px}.hrms-field span{color:#334164;font-size:12px;font-weight:900}.hrms-field b{margin-left:3px;color:#dc3f67}
-        .hrms-searchable-field input{margin-bottom:8px}.hrms-searchable-field select{background:#fff}
-        .hrms-checkbox-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
-        .hrms-checkbox{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid rgba(159,169,205,.55);border-radius:15px;color:#334164;background:rgba(255,255,255,.72);font-size:12px;font-weight:900;transition:transform 180ms ease,border-color 180ms ease,background 180ms ease}.hrms-checkbox:hover{transform:translateY(-1px);border-color:rgba(98,84,218,.25);background:#fff}.hrms-checkbox input{width:18px;height:18px;accent-color:var(--emp-violet)}
-        .hrms-form-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px;padding-top:15px;border-top:1px solid rgba(65,55,161,.11)}
-        .hrms-form-note{color:var(--emp-soft);font-size:12px;font-weight:750;line-height:1.5}
-        .hrms-alumni-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start;min-width:0;width:100%}
-        .hrms-alumni-subtabs{display:flex;gap:7px;overflow-x:auto;padding:8px;border:1px solid rgba(171,181,211,.7);border-radius:20px;background:rgba(255,255,255,.88);box-shadow:7px 9px 0 #d1dcfa,0 18px 32px rgba(34,38,110,.09);scrollbar-width:none;scroll-snap-type:x proximity;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
-        .hrms-alumni-subtabs::-webkit-scrollbar{display:none}
-        .hrms-alumni-subtab-btn{flex:0 0 auto;min-height:42px;padding:10px 14px;border:1px solid transparent;border-radius:13px;color:#4f5e7f;background:transparent;font:inherit;font-weight:900;cursor:pointer;scroll-snap-align:start;transition:transform 220ms var(--emp-ease),box-shadow 220ms var(--emp-ease),border-color 180ms ease,background 180ms ease,color 180ms ease}
-        .hrms-alumni-subtab-btn:hover{color:var(--emp-deep);background:#f1efff;border-color:rgba(98,84,218,.16);transform:translateY(-1px)}
-        .hrms-alumni-subtab-btn.active{color:#fff;background:linear-gradient(145deg,#4f72df,#2bb9b5);box-shadow:4px 5px 0 rgba(52,43,120,.72)}
-        .hrms-alumni-section{min-width:0;width:100%}
-
-        .hrms-modal-backdrop{--emp-ink:#101a3a;--emp-soft:#596483;--emp-violet:#6254da;--emp-deep:#342b78;--emp-blue:#3766db;--emp-teal:#18aaa8;--emp-flat-blue:#b9d7ff;--emp-flat-violet:#c9c0ff;--emp-flat-teal:#aee6d9;--emp-ease:cubic-bezier(.22,1,.36,1);position:fixed;inset:0;z-index:10000;width:100vw;height:100dvh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));background:rgba(15,23,42,.48);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:hrmsBackdropIn 260ms ease both}
-        .hrms-modal{width:min(1120px,100%);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;padding:20px;border:1px solid rgba(171,181,211,.72);border-radius:26px;background:linear-gradient(145deg,#fff 0%,#f4fbff 52%,#f8f1ff 100%);box-shadow:0 30px 80px rgba(34,38,110,.24),10px 12px 0 rgba(185,215,255,.56);animation:hrmsModalIn 420ms var(--emp-ease) both;transform-origin:50% 14%;-webkit-overflow-scrolling:touch}
-        .hrms-modal.small{width:min(560px,100%)}
-        @keyframes hrmsBackdropIn{from{opacity:0;backdrop-filter:blur(0)}to{opacity:1;backdrop-filter:blur(8px)}}
-        @keyframes hrmsModalIn{from{opacity:0;transform:translateY(22px) scale(.965);filter:blur(4px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
-        .hrms-modal h3{margin:0 0 6px;color:var(--emp-ink);font-family:var(--yc-display,var(--heading),inherit);font-size:24px;letter-spacing:-.03em}.hrms-modal p{margin:0 0 16px;color:var(--emp-soft)}
-        .hrms-modal-grid{display:grid;gap:12px}.hrms-modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px}
-
-        @media(min-width:1600px){.hrms-stats-grid{gap:20px}.hrms-form-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
-        @media(max-width:1180px){.hrms-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hrms-checkbox-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-        @media(max-width:820px){.hrms-hero-content,.hrms-section-heading{flex-direction:column}.hrms-refresh-btn{width:100%}.hrms-actions{width:100%}.hrms-actions button{flex:1 1 auto}.hrms-filter-grid{grid-template-columns:1fr}.hrms-filter-grid .hrms-secondary-btn{width:100%}.hrms-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-        @media(max-width:640px){
-          .hrms-employees-page{gap:15px}.hrms-hero{padding:20px;border-radius:24px;box-shadow:7px 8px 0 var(--emp-flat-blue),0 18px 30px rgba(34,38,110,.1)}.hrms-hero h1{font-size:clamp(31px,9.5vw,43px)}
-          .hrms-tabs{top:max(6px,env(safe-area-inset-top));padding:7px;border-radius:17px}.hrms-tab-btn{min-height:42px;padding:10px 12px;font-size:10px}
-          .hrms-alumni-subtabs{padding:7px;border-radius:17px}.hrms-alumni-subtab-btn{min-height:42px;padding:10px 12px;font-size:10px}
-          .hrms-table-wrap{border-radius:15px}.hrms-table th,.hrms-table td{padding:13px 14px}
-          .hrms-stat-card{padding:14px;border-radius:17px;box-shadow:4px 5px 0 var(--emp-flat-blue),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(2){box-shadow:4px 5px 0 var(--emp-flat-violet),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(3){box-shadow:4px 5px 0 var(--emp-flat-teal),0 12px 20px rgba(15,20,75,.07)}.hrms-stat-card:nth-child(4){box-shadow:4px 5px 0 #ffe0a5,0 12px 20px rgba(15,20,75,.07)}
-          .hrms-panel,.hrms-form-card{padding:16px;border-radius:22px;box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08)}.hrms-form-card{box-shadow:6px 7px 0 #c9ddf5,0 16px 28px rgba(34,38,110,.08)}
-          .hrms-form-grid,.hrms-checkbox-grid{grid-template-columns:1fr}.hrms-form-section{padding:14px}.hrms-actions,.hrms-row-actions,.hrms-form-actions,.hrms-modal-actions{width:100%;justify-content:stretch}.hrms-actions button,.hrms-form-actions button,.hrms-modal-actions button{width:100%}
-          .hrms-modal-backdrop{align-items:flex-end;padding:0}.hrms-modal,.hrms-modal.small{width:100%;max-width:100%;max-height:calc(100dvh - max(8px,env(safe-area-inset-top)));margin:0;padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));border-radius:24px 24px 0 0;box-shadow:0 -18px 60px rgba(34,38,110,.24);animation-name:hrmsMobileSheetIn;transform-origin:50% 100%}
-          @keyframes hrmsMobileSheetIn{from{opacity:0;transform:translateY(100%);filter:blur(3px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
+        .hrms-tab-btn:hover {
+          transform: translateY(-2px);
+          border-color: rgba(46, 178, 185, .46);
         }
-        @media(max-width:420px){.hrms-stats-grid{grid-template-columns:1fr}.hrms-stat-card{min-height:auto}.hrms-row-actions{display:grid;grid-template-columns:1fr}.hrms-row-actions button{width:100%}}
-        @media(orientation:landscape) and (max-height:600px){.hrms-modal,.hrms-modal.small{max-height:calc(100dvh - 8px)}}
-        @media(prefers-reduced-motion:reduce){.hrms-employees-page *,.hrms-employees-page *::before,.hrms-employees-page *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-`}</style>
 
-      <div className="hrms-hero">
+        .hrms-tab-btn.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .hrms-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .hrms-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .hrms-tab-copy small {
+          color: currentColor;
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.35;
+          opacity: .78;
+        }
+
+        .hrms-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(52, 43, 120, .10);
+          font-size: 9px;
+          font-weight: 950;
+        }
+
+        .hrms-section-content {
+          width: 100%;
+          min-width: 0;
+          animation: hrmsEmployeeSectionReveal 220ms ease both;
+        }
+
+        .hrms-panel,
+        .hrms-form-card {
+          min-width: 0;
+          width: 100%;
+          padding: clamp(18px, 2vw, 28px);
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: #fff;
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
+        }
+
+        .hrms-section-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          width: 100%;
+          min-width: 0;
+          margin-bottom: 18px;
+        }
+
+        .hrms-section-heading > div {
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+
+        .hrms-section-heading h3,
+        .hrms-section-heading h2 {
+          margin: 0;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(25px, 2.3vw, 37px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+        }
+
+        .hrms-section-heading p {
+          margin: 8px 0 0;
+          color: var(--emp-soft);
+          font-size: 13px;
+          line-height: 1.58;
+        }
+
+        .hrms-actions,
+        .hrms-row-actions,
+        .hrms-form-actions,
+        .hrms-modal-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .hrms-primary-btn,
+        .hrms-secondary-btn,
+        .hrms-danger-soft-btn {
+          min-height: 44px;
+          padding: 9px 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border-radius: 15px;
+        }
+
+        .hrms-primary-btn {
+          border: 0;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .hrms-secondary-btn {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        .hrms-danger-soft-btn {
+          border: 1px solid rgba(216, 77, 104, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 4px 5px 0 #f2c2cc;
+        }
+
+        .hrms-primary-btn.compact,
+        .hrms-secondary-btn.compact,
+        .hrms-danger-soft-btn.compact {
+          min-height: 36px;
+          padding: 7px 10px;
+          border-radius: 11px;
+          font-size: 10px;
+        }
+
+        .hrms-plan-alert {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          flex-wrap: wrap;
+          width: 100%;
+          padding: 15px 16px;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 18px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+          font-size: 11px;
+          line-height: 1.55;
+        }
+
+        .hrms-plan-alert.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 4px 5px 0 #aee6d9;
+        }
+
+        .hrms-plan-alert.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 4px 5px 0 #f2c2cc;
+        }
+
+        .hrms-plan-alert strong {
+          display: block;
+          margin-bottom: 4px;
+          font-weight: 950;
+        }
+
+        .hrms-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .hrms-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .hrms-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .hrms-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .hrms-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 22px;
+        }
+
+        .hrms-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .hrms-inline-feedback-copy strong,
+        .hrms-inline-feedback-copy span {
+          display: block;
+        }
+
+        .hrms-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .hrms-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .hrms-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          display: inline-grid;
+          place-items: center;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          box-shadow: none;
+          font-size: 17px;
+          line-height: 1;
+        }
+
+        .hrms-inline-feedback-close:hover {
+          transform: none;
+          filter: none;
+          background: #fff;
+        }
+
+        .hrms-filter-grid {
+          display: grid;
+          grid-template-columns:
+            auto
+            minmax(220px, 1.45fr)
+            repeat(4, minmax(135px, .9fr))
+            auto;
+          gap: 10px;
+          align-items: stretch;
+          width: 100%;
+          min-width: 0;
+          margin-bottom: 18px;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+        }
+
+        .hrms-filter-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          align-self: center;
+          color: #5d6785;
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .hrms-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .hrms-search-wrap svg {
+          position: absolute;
+          left: 13px;
+          top: 50%;
+          color: #6c7da2;
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .hrms-search-wrap input {
+          padding-left: 38px;
+        }
+
+        .hrms-filter-grid input,
+        .hrms-filter-grid select,
+        .hrms-field input,
+        .hrms-field select,
+        .hrms-field textarea,
+        .hrms-searchable-field input,
+        .hrms-searchable-field select,
+        .hrms-modal input,
+        .hrms-modal select,
+        .hrms-modal textarea {
+          width: 100%;
+          min-width: 0;
+          min-height: 49px;
+          padding: 0 14px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 15px;
+          outline: 0;
+          color: var(--emp-ink);
+          background: rgba(255, 255, 255, .96);
+          font-size: 13px;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
+        }
+
+        .hrms-field textarea,
+        .hrms-modal textarea {
+          min-height: 120px;
+          padding: 14px;
+          resize: vertical;
+        }
+
+        .hrms-filter-grid input:focus,
+        .hrms-filter-grid select:focus,
+        .hrms-field input:focus,
+        .hrms-field select:focus,
+        .hrms-field textarea:focus,
+        .hrms-searchable-field input:focus,
+        .hrms-searchable-field select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow:
+            4px 5px 0 rgba(87, 80, 146, .14),
+            0 0 0 4px rgba(77, 119, 221, .08);
+          transform: translateY(-1px);
+        }
+
+        .hrms-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          min-width: 0;
+          margin: 0 0 15px;
+          padding: 12px 13px;
+          border: 1px solid rgba(171, 181, 211, .52);
+          border-radius: 16px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+        }
+
+        .hrms-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          min-width: 0;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .hrms-pagination-copy strong {
+          color: var(--emp-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .hrms-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+          max-width: 100%;
+          flex-wrap: wrap;
+        }
+
+        .hrms-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .hrms-page-size-control select {
+          min-width: 108px;
+          height: 38px;
+          padding: 0 30px 0 10px;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .hrms-page-button {
+          min-width: 78px;
+          height: 38px;
+          padding: 0 11px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+          font-size: 10px;
+        }
+
+        .hrms-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .hrms-page-number {
+          width: 36px;
+          height: 36px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 11px;
+          color: #4767b4;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(87, 80, 146, .12);
+          font-size: 10px;
+        }
+
+        .hrms-page-number.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #575092;
+        }
+
+        .hrms-page-ellipsis {
+          width: 20px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .hrms-page-indicator {
+          min-width: 82px;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
+        .hrms-table-wrap {
+          width: 100%;
+          min-width: 0;
+          overflow-x: auto;
+          overflow-y: hidden;
+          border: 1px solid rgba(171, 181, 211, .54);
+          border-radius: 18px;
+          background: #fff;
+          scrollbar-width: thin;
+          scrollbar-color: #b9c7e8 #f4f6fb;
+          cursor: grab;
+        }
+
+        .hrms-table-wrap.is-dragging {
+          cursor: grabbing;
+          user-select: none;
+        }
+
+        .hrms-table {
+          width: 100%;
+          min-width: 1050px;
+          border-collapse: separate;
+          border-spacing: 0;
+          color: var(--emp-ink);
+        }
+
+        .hrms-table th {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          padding: 12px 13px;
+          border-bottom: 1px solid rgba(171, 181, 211, .55);
+          color: #5d6785;
+          background: #f8f9ff;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-align: left;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .hrms-table td {
+          padding: 13px;
+          border-bottom: 1px solid rgba(171, 181, 211, .32);
+          color: #384564;
+          font-size: 11px;
+          line-height: 1.45;
+          vertical-align: middle;
+        }
+
+        .hrms-table tbody tr {
+          transition: background 170ms ease;
+        }
+
+        .hrms-table tbody tr:hover {
+          background: #fbfcff;
+        }
+
+        .hrms-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .hrms-table td > strong,
+        .hrms-person-cell strong {
+          display: block;
+          color: var(--emp-ink);
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .hrms-table td > small,
+        .hrms-person-cell small {
+          display: block;
+          margin-top: 3px;
+          color: #74809c;
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .hrms-table-action {
+          min-width: 180px;
+        }
+
+        .hrms-person-cell {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 190px;
+        }
+
+        .hrms-employee-avatar {
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 11px;
+          font-weight: 950;
+          object-fit: cover;
+        }
+
+        .hrms-pill {
+          display: inline-flex;
+          align-items: center;
+          padding: 6px 9px;
+          border-radius: 999px;
+          font-size: 9px;
+          font-weight: 900;
+          text-transform: capitalize;
+          white-space: nowrap;
+        }
+
+        .hrms-pill-green {
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 2px 3px 0 #aee6d9;
+        }
+
+        .hrms-pill-red {
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 2px 3px 0 #f2c2cc;
+        }
+
+        .hrms-empty-state {
+          min-height: 180px;
+          padding: 24px;
+          display: grid;
+          place-items: center;
+          gap: 8px;
+          border: 1px dashed rgba(77, 119, 221, .28);
+          border-radius: 20px;
+          color: var(--emp-soft);
+          background: #fafbff;
+          text-align: center;
+        }
+
+        .hrms-form-card {
+          display: grid;
+          gap: 18px;
+        }
+
+        .hrms-form-section {
+          padding: clamp(15px, 1.8vw, 20px);
+          border: 1px solid rgba(77, 119, 221, .16);
+          border-radius: 20px;
+          background: linear-gradient(135deg, #f8fbff 0%, #fbfffe 100%);
+          box-shadow: 4px 5px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-form-section h4 {
+          margin: 0 0 14px;
+          color: #4767b4;
+          font-size: 11px;
+          font-weight: 950;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .hrms-form-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .hrms-field {
+          display: block;
+          min-width: 0;
+        }
+
+        .hrms-field > span {
+          display: block;
+          margin-bottom: 8px;
+          color: #303b5b;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .hrms-field > span b {
+          margin-left: 3px;
+          color: var(--emp-danger);
+        }
+
+        .hrms-searchable-field {
+          display: grid;
+          gap: 8px;
+        }
+
+        .hrms-searchable-field > span {
+          margin-bottom: 0;
+        }
+
+        .hrms-checkbox-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .hrms-checkbox {
+          min-height: 48px;
+          padding: 12px 14px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          border: 1px solid rgba(77, 119, 221, .16);
+          border-radius: 15px;
+          color: #384564;
+          background: #f8f9ff;
+          font-size: 11px;
+          font-weight: 850;
+        }
+
+        .hrms-checkbox input {
+          width: 16px;
+          min-width: 16px;
+          height: 16px;
+          accent-color: #4d77dd;
+        }
+
+        .hrms-form-note {
+          color: #6b7897;
+          font-size: 10px;
+          line-height: 1.55;
+        }
+
+        .hrms-form-actions {
+          padding-top: 2px;
+        }
+
+        .hrms-alumni-layout {
+          display: grid;
+          gap: 16px;
+        }
+
+        .hrms-alumni-subtabs {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          width: 100%;
+          padding: 10px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 4px 5px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-alumni-subtab-btn {
+          min-height: 48px;
+          padding: 10px 13px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
+          color: #4767b4;
+          background: #f0f5ff;
+          box-shadow: 3px 4px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-alumni-subtab-btn.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+        }
+
+        .hrms-alumni-section {
+          animation: hrmsEmployeeSectionReveal 220ms ease both;
+        }
+
+        .hrms-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 980;
+          padding: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(16, 26, 58, .48);
+          backdrop-filter: blur(7px);
+          animation: hrmsEmployeeModalFade 180ms ease both;
+        }
+
+        .hrms-modal {
+          width: min(1120px, calc(100vw - 36px));
+          max-height: calc(100dvh - 36px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: clamp(16px, 2vw, 22px);
+          border: 1px solid rgba(255, 255, 255, .70);
+          border-radius: 28px;
+          background: #fff;
+          box-shadow: 0 30px 80px rgba(16, 26, 58, .30);
+          animation: hrmsEmployeeModalIn 230ms var(--emp-ease) both;
+        }
+
+        .hrms-modal.small {
+          width: min(620px, calc(100vw - 36px));
+          padding: clamp(22px, 3vw, 32px);
+        }
+
+        .hrms-modal.small > h3 {
+          margin: 0;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(28px, 3vw, 40px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.04em;
+        }
+
+        .hrms-modal.small > p {
+          margin: 12px 0 0;
+          color: var(--emp-soft);
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .hrms-modal-grid {
+          margin-top: 20px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .hrms-modal-actions {
+          margin-top: 18px;
+        }
+
+        @media (max-width: 1366px) {
+          .hrms-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-filter-grid {
+            grid-template-columns:
+              auto
+              minmax(210px, 1.35fr)
+              repeat(3, minmax(130px, .85fr));
+          }
+
+          .hrms-filter-grid > select:nth-of-type(4),
+          .hrms-filter-grid > .hrms-secondary-btn {
+            grid-column: span 1;
+          }
+
+          .hrms-form-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 1024px) {
+          .hrms-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-hero-actions {
+            justify-content: flex-start;
+          }
+
+          .hrms-action-stack {
+            width: min(360px, 100%);
+          }
+
+          .hrms-tabs {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-filter-label {
+            grid-column: 1 / -1;
+          }
+
+          .hrms-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .hrms-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .hrms-employees-page {
+            gap: 16px;
+          }
+
+          .hrms-hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow:
+              6px 7px 0 #b9d7ff,
+              0 18px 30px rgba(34, 38, 110, .10);
+          }
+
+          .hrms-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .hrms-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-panel,
+          .hrms-form-card {
+            padding: 18px;
+            border-radius: 22px;
+            box-shadow:
+              5px 6px 0 #c4ccff,
+              0 17px 28px rgba(34, 38, 110, .09);
+          }
+
+          .hrms-section-heading {
+            flex-direction: column;
+          }
+
+          .hrms-actions {
+            width: 100%;
+            justify-content: flex-start;
+          }
+
+          .hrms-filter-grid,
+          .hrms-form-grid,
+          .hrms-checkbox-grid,
+          .hrms-modal-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-filter-label {
+            grid-column: auto;
+          }
+
+          .hrms-filter-grid > * {
+            grid-column: auto !important;
+          }
+
+          .hrms-pagination-controls {
+            align-items: stretch;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-page-size-control,
+          .hrms-page-numbers,
+          .hrms-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .hrms-page-size-control {
+            justify-content: space-between;
+          }
+
+          .hrms-page-size-control select {
+            flex: 1 1 auto;
+          }
+
+          .hrms-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .hrms-page-indicator {
+            text-align: center;
+          }
+
+          .hrms-page-button {
+            width: 100%;
+          }
+
+          .hrms-alumni-subtabs {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-table-wrap {
+            overflow: visible;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            cursor: default;
+          }
+
+          .hrms-table {
+            min-width: 0;
+            border-collapse: separate;
+            border-spacing: 0 12px;
+          }
+
+          .hrms-table thead {
+            display: none;
+          }
+
+          .hrms-table,
+          .hrms-table tbody,
+          .hrms-table tr,
+          .hrms-table td {
+            display: block;
+            width: 100%;
+          }
+
+          .hrms-table tbody tr {
+            overflow: hidden;
+            border: 1px solid rgba(171, 181, 211, .58);
+            border-radius: 18px;
+            background: #fff;
+            box-shadow:
+              4px 5px 0 #c4ccff,
+              0 14px 24px rgba(34, 38, 110, .07);
+          }
+
+          .hrms-table td {
+            min-height: 46px;
+            padding: 11px 13px 11px 42%;
+            border-bottom: 1px solid rgba(171, 181, 211, .28);
+            position: relative;
+          }
+
+          .hrms-table td::before {
+            content: attr(data-label);
+            position: absolute;
+            top: 12px;
+            left: 13px;
+            width: 34%;
+            color: #5d6785;
+            font-size: 8px;
+            font-weight: 950;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+          }
+
+          .hrms-table td:last-child {
+            border-bottom: 0;
+          }
+
+          .hrms-table-action {
+            min-width: 0;
+          }
+
+          .hrms-person-cell {
+            min-width: 0;
+          }
+
+          .hrms-row-actions {
+            justify-content: flex-start;
+          }
+
+          .hrms-modal-backdrop {
+            align-items: flex-end;
+            padding: 0;
+          }
+
+          .hrms-modal,
+          .hrms-modal.small {
+            width: 100%;
+            max-width: 100%;
+            max-height: calc(100dvh - max(8px, env(safe-area-inset-top)));
+            margin: 0;
+            padding:
+              16px
+              max(16px, env(safe-area-inset-right))
+              max(16px, env(safe-area-inset-bottom))
+              max(16px, env(safe-area-inset-left));
+            border-radius: 24px 24px 0 0;
+            box-shadow: 0 -18px 60px rgba(34, 38, 110, .24);
+          }
+        }
+
+        @media (max-width: 520px) {
+          .hrms-hero {
+            padding: 16px;
+          }
+
+          .hrms-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .hrms-stats-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-stat-card {
+            min-height: 102px;
+          }
+
+          .hrms-panel,
+          .hrms-form-card {
+            padding: 15px;
+          }
+
+          .hrms-tabs {
+            padding: 9px;
+            border-radius: 18px;
+          }
+
+          .hrms-tab-btn {
+            min-height: 58px;
+            padding: 10px 11px;
+          }
+
+          .hrms-filter-grid {
+            padding: 10px;
+          }
+
+          .hrms-actions,
+          .hrms-row-actions,
+          .hrms-form-actions,
+          .hrms-modal-actions {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-actions button,
+          .hrms-row-actions button,
+          .hrms-form-actions button,
+          .hrms-modal-actions button,
+          .hrms-refresh-btn {
+            width: 100%;
+          }
+
+          .hrms-table td {
+            padding-left: 13px;
+            padding-top: 30px;
+          }
+
+          .hrms-table td::before {
+            top: 9px;
+            width: calc(100% - 26px);
+          }
+
+          .hrms-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (orientation: landscape) and (max-height: 600px) {
+          .hrms-modal,
+          .hrms-modal.small {
+            max-height: calc(100dvh - 8px);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .hrms-employees-page *,
+          .hrms-employees-page *::before,
+          .hrms-employees-page *::after {
+            animation: none !important;
+            transition: none !important;
+            scroll-behavior: auto !important;
+          }
+        }
+      `}</style>
+
+      <section className="hrms-hero">
         <div className="hrms-hero-content">
           <div>
-            <span className="hrms-kicker">HR Employee Management</span>
-            <h1>Employee Master, Create Employee & Alumni</h1>
+            <span className="hrms-kicker">
+              <Sparkles size={13} />
+              HR Employee Management
+            </span>
+
+            <h1>
+              People operations, <em>clearly organised.</em>
+            </h1>
+
             <p>
-              Manage active employees separately from past employees. Create employees with the full employee form,
-              edit existing employees, mark resigned employees and maintain alumni records.
+              Manage active employees, create new employee records and maintain
+              alumni separately, while preserving the existing employee,
+              reporting, subscription and account workflows.
             </p>
           </div>
-          <button type="button" className="hrms-refresh-btn" onClick={reloadAll}>Refresh Data</button>
-        </div>
-      </div>
 
-      <div className="hrms-stats-grid">
-        <div className="hrms-stat-card"><span>Active Employees</span><strong>{employeeStats.active}</strong></div>
-        <div className="hrms-stat-card"><span>Departments</span><strong>{employeeStats.departments}</strong></div>
-        <div className="hrms-stat-card"><span>Designations</span><strong>{employeeStats.designations}</strong></div>
-        <div className="hrms-stat-card"><span>Alumni</span><strong>{employeeStats.alumni}</strong></div>
-      </div>
+          <div className="hrms-hero-actions">
+            <div className="hrms-action-stack">
+              <button
+                type="button"
+                className="hrms-refresh-btn"
+                onClick={() => reloadAll({ feedbackScope: 'refresh' })}
+                disabled={loadingEmployees || loadingAlumni}
+              >
+                {loadingEmployees || loadingAlumni ? (
+                  <Loader2 size={16} className="hrms-spin" />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+                {loadingEmployees || loadingAlumni
+                  ? 'Refreshing...'
+                  : 'Refresh Data'}
+              </button>
+
+              {message.scope === 'refresh' ? (
+                <EmployeeInlineMessage
+                  message={message}
+                  onClose={clearMessage}
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="hrms-stats-grid" aria-label="Employee summary">
+        <div className="hrms-stat-card">
+          <span>Active Employees</span>
+          <strong>{employeeStats.active}</strong>
+        </div>
+
+        <div className="hrms-stat-card">
+          <span>Departments</span>
+          <strong>{employeeStats.departments}</strong>
+        </div>
+
+        <div className="hrms-stat-card">
+          <span>Designations</span>
+          <strong>{employeeStats.designations}</strong>
+        </div>
+
+        <div className="hrms-stat-card">
+          <span>Alumni</span>
+          <strong>{employeeStats.alumni}</strong>
+        </div>
+      </section>
 
       {hasFullTrialAccess ? (
-        <div
-          className="hrms-alert success"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 14,
-            flexWrap: 'wrap',
-          }}
-        >
+        <div className="hrms-plan-alert success">
           <div>
             <strong>YourComate 15-Day Full Access Trial</strong>
             <div>
-              All HRMS modules and employee management are available during the active trial.
+              All HRMS modules and employee management are available during the
+              active trial.
             </div>
             <div>
-              Trial end date: {formatSaasDate(getTrialEndDate(user))}. After expiry, subscription payment is required.
+              Trial end date: {formatSaasDate(getTrialEndDate(user))}. After
+              expiry, subscription payment is required.
             </div>
           </div>
 
@@ -1854,14 +3710,9 @@ export default function Employees({ user = {}, setPage } = {}) {
 
       {hasPaidEmployeeLimit ? (
         <div
-          className={`hrms-alert ${isPaidEmployeeLimitReached ? 'error' : 'success'}`}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 14,
-            flexWrap: 'wrap',
-          }}
+          className={`hrms-plan-alert ${
+            isPaidEmployeeLimitReached ? 'error' : 'success'
+          }`}
         >
           <div>
             <strong>YourComate {saasPlanName} Employee Limit</strong>
@@ -1873,9 +3724,12 @@ export default function Employees({ user = {}, setPage } = {}) {
                   : `${saasPlanName} employee limit reached. Contact Superadmin for an immediate plan revision.`
                 : `${paidEmployeesRemaining} employee slot(s) remaining in this plan.`}
             </div>
+
             {!isPaidRenewalDueSoon ? (
               <div style={{ marginTop: 5 }}>
-                Subscription active until {formatSaasDate(paidSubscriptionEndDate)}. Upgrade and renewal controls remain hidden until the final 7 days.
+                Subscription active until{' '}
+                {formatSaasDate(paidSubscriptionEndDate)}. Upgrade and renewal
+                controls remain hidden until the final 7 days.
               </div>
             ) : null}
           </div>
@@ -1892,157 +3746,407 @@ export default function Employees({ user = {}, setPage } = {}) {
         </div>
       ) : null}
 
-      <div className="hrms-tabs">
-        <button type="button" className={`hrms-tab-btn ${activeTab === 'master' ? 'active' : ''}`} onClick={() => setActiveTab('master')}>Employee Master</button>
-        <button
-          type="button"
-          className={`hrms-tab-btn ${activeTab === 'create' ? 'active' : ''}`}
-          onClick={() => {
-            if (isExpiredOrSuspendedTenant) {
-              openBillingPage();
-              return;
-            }
+      <div className="hrms-section-tabs-holder">
+        <nav className="hrms-tabs" aria-label="Employee management sections">
+          <button
+            type="button"
+            className={`hrms-tab-btn ${
+              activeTab === 'master' ? 'active' : ''
+            }`}
+            onClick={() => setActiveTab('master')}
+            aria-pressed={activeTab === 'master'}
+          >
+            <Users size={18} />
+            <span className="hrms-tab-copy">
+              <strong>Employee Master</strong>
+              <small>Search, filter, edit and manage active employees</small>
+            </span>
+            <span className="hrms-tab-count">{employees.length}</span>
+          </button>
 
-            if (isPaidEmployeeLimitReached) {
-              if (isPaidRenewalDueSoon) {
+          <button
+            type="button"
+            className={`hrms-tab-btn ${
+              activeTab === 'create' ? 'active' : ''
+            }`}
+            onClick={() => {
+              if (isExpiredOrSuspendedTenant) {
                 openBillingPage();
-              } else {
-                showMessage(
-                  'error',
-                  `Your ${saasPlanName} employee limit has been reached. Contact Superadmin for an immediate plan revision.`,
-                );
+                return;
               }
-              return;
-            }
 
-            setActiveTab('create');
-          }}
-        >
-          Create Employee
-        </button>
-        <button type="button" className={`hrms-tab-btn ${activeTab === 'alumni' ? 'active' : ''}`} onClick={() => setActiveTab('alumni')}>Alumni</button>
+              if (isPaidEmployeeLimitReached) {
+                if (isPaidRenewalDueSoon) {
+                  openBillingPage();
+                } else {
+                  showMessage(
+                    'error',
+                    `Your ${saasPlanName} employee limit has been reached. Contact Superadmin for an immediate plan revision.`,
+                  );
+                }
+                return;
+              }
+
+              setActiveTab('create');
+            }}
+            aria-pressed={activeTab === 'create'}
+          >
+            <UserPlus size={18} />
+            <span className="hrms-tab-copy">
+              <strong>Create Employee</strong>
+              <small>Add an active employee using the complete form</small>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`hrms-tab-btn ${
+              activeTab === 'alumni' ? 'active' : ''
+            }`}
+            onClick={() => setActiveTab('alumni')}
+            aria-pressed={activeTab === 'alumni'}
+          >
+            <Archive size={18} />
+            <span className="hrms-tab-copy">
+              <strong>Alumni</strong>
+              <small>Review past employees or add historical records</small>
+            </span>
+            <span className="hrms-tab-count">{alumni.length}</span>
+          </button>
+        </nav>
       </div>
 
-      {message.text ? <div className={`hrms-alert ${message.type}`}>{message.text}</div> : null}
+      {message.scope === 'page' ? (
+        <EmployeeInlineMessage message={message} onClose={clearMessage} />
+      ) : null}
 
       {activeTab === 'master' ? (
-        <div className="hrms-panel">
+        <section className="hrms-section-content hrms-panel">
           <div className="hrms-section-heading">
             <div>
+              <span className="hrms-section-kicker">
+                <BriefcaseBusiness size={12} />
+                Active Workforce
+              </span>
               <h3>Employee Master</h3>
-              <p>Showing only active/current employees. Use Edit to update existing employee details.</p>
+              <p>
+                Showing only active/current employees. Use Edit to update
+                existing employee details or mark an employee as resigned.
+              </p>
             </div>
+
             <div className="hrms-actions">
-              <button type="button" className="hrms-secondary-btn" onClick={handleDownloadEmployeeExcel}>Download Active Excel</button>
-              <button type="button" className="hrms-primary-btn" onClick={() => setActiveTab('create')}>Create Employee</button>
+              <button
+                type="button"
+                className="hrms-secondary-btn"
+                onClick={handleDownloadEmployeeExcel}
+              >
+                <Download size={15} />
+                Download Active Excel
+              </button>
+
+              <button
+                type="button"
+                className="hrms-primary-btn"
+                onClick={() => setActiveTab('create')}
+              >
+                <PlusCircle size={15} />
+                Create Employee
+              </button>
+
+              {message.scope === 'master-actions' ? (
+                <EmployeeInlineMessage
+                  message={message}
+                  onClose={clearMessage}
+                />
+              ) : null}
             </div>
           </div>
 
           <div className="hrms-filter-grid">
-            <input name="q" value={filters.q} onChange={handleFilterChange} placeholder="Search Employee here" />
-            <select name="department" value={filters.department} onChange={handleFilterChange}>
+            <div className="hrms-filter-label">
+              <Filter size={16} />
+              <span>Filters</span>
+            </div>
+
+            <div className="hrms-search-wrap">
+              <Search size={15} />
+              <input
+                name="q"
+                type="search"
+                value={filters.q}
+                onChange={handleFilterChange}
+                placeholder="Search employee, code, email..."
+                aria-label="Search active employees"
+              />
+            </div>
+
+            <select
+              name="department"
+              value={filters.department}
+              onChange={handleFilterChange}
+            >
               <option value="">All Departments</option>
-              {employeeDepartments.map((item) => <option key={item} value={item}>{item}</option>)}
+              {employeeDepartments.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
             </select>
-            <select name="designation" value={filters.designation} onChange={handleFilterChange}>
+
+            <select
+              name="designation"
+              value={filters.designation}
+              onChange={handleFilterChange}
+            >
               <option value="">All Designations</option>
-              {employeeDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
+              {employeeDesignations.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
             </select>
-            <select name="state" value={filters.state} onChange={handleFilterChange}>
+
+            <select
+              name="state"
+              value={filters.state}
+              onChange={handleFilterChange}
+            >
               <option value="">All States</option>
-              {employeeStates.map((item) => <option key={item} value={item}>{item}</option>)}
+              {employeeStates.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
             </select>
-            <select name="employment_status" value={filters.employment_status} onChange={handleFilterChange}>
+
+            <select
+              name="employment_status"
+              value={filters.employment_status}
+              onChange={handleFilterChange}
+            >
               <option value="">All Status</option>
               <option value="active">Active</option>
               <option value="probation">Probation</option>
               <option value="confirmed">Confirmed</option>
             </select>
-            <button type="button" className="hrms-secondary-btn" onClick={resetFilters}>Reset</button>
+
+            <button
+              type="button"
+              className="hrms-secondary-btn"
+              onClick={resetFilters}
+            >
+              Reset
+            </button>
           </div>
 
-          <EmployeeMasterTable rows={filteredEmployees} loading={loadingEmployees} onEdit={openEditModal} onResign={openResignModal} />
-        </div>
+          <EmployeePagination
+            total={filteredEmployees.length}
+            page={Math.min(employeePage, employeePageCount)}
+            pageSize={employeePageSize}
+            onPageChange={setEmployeePage}
+            onPageSizeChange={(value) => {
+              setEmployeePage(1);
+              setEmployeePageSize(value);
+            }}
+            label="active employees"
+          />
+
+          <EmployeeMasterTable
+            rows={pagedEmployees}
+            loading={loadingEmployees}
+            onEdit={openEditModal}
+            onResign={openResignModal}
+          />
+        </section>
       ) : null}
 
       {activeTab === 'create' ? (
-        <EmployeeForm
-          title="Create Employee"
-          subtitle="Create a new active employee using the full employee form. Login user will be created automatically by the backend."
-          form={employeeForm}
-          setForm={setEmployeeForm}
-          onSubmit={handleCreateEmployee}
-          submitLabel="Create Employee"
-          loading={saving}
-          organisations={organisations}
-          departments={departments}
-          designations={designations}
-          states={states}
-          teamLeaders={teamLeaders}
-          reportingOfficers={reportingOfficers}
-          teamLeaderSearch={teamLeaderSearch}
-          setTeamLeaderSearch={setTeamLeaderSearch}
-          reportingOfficerSearch={reportingOfficerSearch}
-          setReportingOfficerSearch={setReportingOfficerSearch}
-        />
+        <section className="hrms-section-content">
+          <EmployeeForm
+            title="Create Employee"
+            subtitle="Create a new active employee using the full employee form. Login user will be created automatically by the backend."
+            form={employeeForm}
+            setForm={setEmployeeForm}
+            onSubmit={handleCreateEmployee}
+            submitLabel="Create Employee"
+            loading={saving}
+            organisations={organisations}
+            departments={departments}
+            designations={designations}
+            states={states}
+            teamLeaders={teamLeaders}
+            reportingOfficers={reportingOfficers}
+            teamLeaderSearch={teamLeaderSearch}
+            setTeamLeaderSearch={setTeamLeaderSearch}
+            reportingOfficerSearch={reportingOfficerSearch}
+            setReportingOfficerSearch={setReportingOfficerSearch}
+            feedback={message.scope === 'create' ? message : null}
+            onFeedbackClose={clearMessage}
+          />
+        </section>
       ) : null}
 
       {activeTab === 'alumni' ? (
-        <div className="hrms-alumni-layout">
-          <div className="hrms-alumni-subtabs" role="tablist" aria-label="Alumni sections">
+        <section className="hrms-section-content hrms-alumni-layout">
+          <nav
+            className="hrms-alumni-subtabs"
+            role="tablist"
+            aria-label="Alumni sections"
+          >
             <button
               type="button"
-              className={`hrms-alumni-subtab-btn ${activeAlumniSection === 'employees' ? 'active' : ''}`}
+              className={`hrms-alumni-subtab-btn ${
+                activeAlumniSection === 'employees' ? 'active' : ''
+              }`}
               onClick={() => setActiveAlumniSection('employees')}
+              aria-pressed={activeAlumniSection === 'employees'}
             >
+              <History size={15} />
               Alumni Employees
             </button>
+
             <button
               type="button"
-              className={`hrms-alumni-subtab-btn ${activeAlumniSection === 'add' ? 'active' : ''}`}
+              className={`hrms-alumni-subtab-btn ${
+                activeAlumniSection === 'add' ? 'active' : ''
+              }`}
               onClick={() => setActiveAlumniSection('add')}
+              aria-pressed={activeAlumniSection === 'add'}
             >
+              <PlusCircle size={15} />
               Add Past Employee
             </button>
-          </div>
+          </nav>
 
           {activeAlumniSection === 'employees' ? (
             <div className="hrms-panel hrms-alumni-section">
               <div className="hrms-section-heading">
                 <div>
+                  <span className="hrms-section-kicker">
+                    <Archive size={12} />
+                    Alumni Records
+                  </span>
                   <h3>Alumni Employees</h3>
-                  <p>Employees who resigned, left, retired, or were manually added as past employees are listed here.</p>
+                  <p>
+                    Employees who resigned, left, retired, or were manually
+                    added as past employees are listed here.
+                  </p>
                 </div>
+
                 <div className="hrms-actions">
-                  <button type="button" className="hrms-secondary-btn" onClick={() => downloadAlumniCsv(filteredAlumni)}>Download Alumni CSV</button>
+                  <button
+                    type="button"
+                    className="hrms-secondary-btn"
+                    onClick={handleDownloadAlumniCsv}
+                  >
+                    <Download size={15} />
+                    Download Alumni CSV
+                  </button>
+
+                  {message.scope === 'alumni-actions' ? (
+                    <EmployeeInlineMessage
+                      message={message}
+                      onClose={clearMessage}
+                    />
+                  ) : null}
                 </div>
               </div>
 
               <div className="hrms-filter-grid">
-                <input name="q" value={alumniFilters.q} onChange={handleAlumniFilterChange} placeholder="Search alumni here" />
-                <select name="department" value={alumniFilters.department} onChange={handleAlumniFilterChange}>
+                <div className="hrms-filter-label">
+                  <Filter size={16} />
+                  <span>Filters</span>
+                </div>
+
+                <div className="hrms-search-wrap">
+                  <Search size={15} />
+                  <input
+                    name="q"
+                    type="search"
+                    value={alumniFilters.q}
+                    onChange={handleAlumniFilterChange}
+                    placeholder="Search alumni, code, email..."
+                    aria-label="Search alumni employees"
+                  />
+                </div>
+
+                <select
+                  name="department"
+                  value={alumniFilters.department}
+                  onChange={handleAlumniFilterChange}
+                >
                   <option value="">All Departments</option>
-                  {alumniDepartments.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {alumniDepartments.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
-                <select name="designation" value={alumniFilters.designation} onChange={handleAlumniFilterChange}>
+
+                <select
+                  name="designation"
+                  value={alumniFilters.designation}
+                  onChange={handleAlumniFilterChange}
+                >
                   <option value="">All Designations</option>
-                  {alumniDesignations.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {alumniDesignations.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
-                <select name="state" value={alumniFilters.state} onChange={handleAlumniFilterChange}>
+
+                <select
+                  name="state"
+                  value={alumniFilters.state}
+                  onChange={handleAlumniFilterChange}
+                >
                   <option value="">All States</option>
-                  {alumniStates.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {alumniStates.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
-                <select name="employment_status" value={alumniFilters.employment_status} onChange={handleAlumniFilterChange}>
+
+                <select
+                  name="employment_status"
+                  value={alumniFilters.employment_status}
+                  onChange={handleAlumniFilterChange}
+                >
                   <option value="">All Status</option>
                   <option value="Resigned">Resigned</option>
                   <option value="Terminated">Terminated</option>
                   <option value="Retired">Retired</option>
                   <option value="Left">Left</option>
                 </select>
-                <button type="button" className="hrms-secondary-btn" onClick={resetAlumniFilters}>Reset</button>
+
+                <button
+                  type="button"
+                  className="hrms-secondary-btn"
+                  onClick={resetAlumniFilters}
+                >
+                  Reset
+                </button>
               </div>
 
-              <AlumniTable rows={filteredAlumni} loading={loadingAlumni} />
+              <EmployeePagination
+                total={filteredAlumni.length}
+                page={Math.min(alumniPage, alumniPageCount)}
+                pageSize={alumniPageSize}
+                onPageChange={setAlumniPage}
+                onPageSizeChange={(value) => {
+                  setAlumniPage(1);
+                  setAlumniPageSize(value);
+                }}
+                label="alumni employees"
+              />
+
+              <AlumniTable
+                rows={pagedAlumni}
+                loading={loadingAlumni}
+              />
             </div>
           ) : null}
 
@@ -2067,16 +4171,34 @@ export default function Employees({ user = {}, setPage } = {}) {
                 setTeamLeaderSearch={setTeamLeaderSearch}
                 reportingOfficerSearch={reportingOfficerSearch}
                 setReportingOfficerSearch={setReportingOfficerSearch}
+                feedback={message.scope === 'alumni-create' ? message : null}
+                onFeedbackClose={clearMessage}
               />
             </div>
           ) : null}
-        </div>
+        </section>
       ) : null}
 
       {editingEmployee
         ? createPortal(
-            <div className="hrms-modal-backdrop">
-              <div className="hrms-modal">
+            <div
+              className="hrms-modal-backdrop"
+              role="presentation"
+              onMouseDown={(event) => {
+                if (
+                  event.target === event.currentTarget &&
+                  !saving
+                ) {
+                  closeEditModal();
+                }
+              }}
+            >
+              <div
+                className="hrms-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Edit employee"
+              >
                 <EmployeeForm
                   title="Edit Employee"
                   subtitle={`Update details for ${editingEmployee.name || editingEmployee.employee_name || 'employee'}.`}
@@ -2096,6 +4218,8 @@ export default function Employees({ user = {}, setPage } = {}) {
                   setTeamLeaderSearch={setEditTeamLeaderSearch}
                   reportingOfficerSearch={editReportingOfficerSearch}
                   setReportingOfficerSearch={setEditReportingOfficerSearch}
+                  feedback={message.scope === 'edit-modal' ? message : null}
+                  onFeedbackClose={clearMessage}
                 />
                 <div className="hrms-modal-actions">
                   <button
@@ -2114,9 +4238,26 @@ export default function Employees({ user = {}, setPage } = {}) {
 
       {resignEmployee
         ? createPortal(
-            <div className="hrms-modal-backdrop">
-              <form className="hrms-modal small" onSubmit={handleConfirmResignation}>
-                <h3>Mark Employee as Resigned</h3>
+            <div
+              className="hrms-modal-backdrop"
+              role="presentation"
+              onMouseDown={(event) => {
+                if (
+                  event.target === event.currentTarget &&
+                  !saving
+                ) {
+                  closeResignModal();
+                }
+              }}
+            >
+              <form
+                className="hrms-modal small"
+                onSubmit={handleConfirmResignation}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="hrms-resign-dialog-title"
+              >
+                <h3 id="hrms-resign-dialog-title">Mark Employee as Resigned</h3>
                 <p>
                   This will move{' '}
                   <strong>{resignEmployee.name || resignEmployee.employee_name}</strong>{' '}
@@ -2159,8 +4300,22 @@ export default function Employees({ user = {}, setPage } = {}) {
                     className="hrms-primary-btn"
                     disabled={saving}
                   >
-                    {saving ? 'Updating...' : 'Confirm Resignation'}
+                    {saving ? (
+                      <>
+                        <Loader2 size={15} className="hrms-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      'Confirm Resignation'
+                    )}
                   </button>
+
+                  {message.scope === 'resign-modal' ? (
+                    <EmployeeInlineMessage
+                      message={message}
+                      onClose={clearMessage}
+                    />
+                  ) : null}
                 </div>
               </form>
             </div>,

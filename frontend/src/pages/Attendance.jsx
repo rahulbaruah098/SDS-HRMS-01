@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowUpRight,
   Building2,
   CalendarDays,
   CheckCircle2,
@@ -16,6 +15,7 @@ import {
   Sparkles,
   UserRound,
   X,
+  XCircle,
 } from 'lucide-react';
 import { api } from '../api/client';
 import {
@@ -27,6 +27,8 @@ import {
 import AttendanceWidget from '../components/AttendanceWidget';
 import Table from '../components/Table';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
+
+const ATTENDANCE_NOTICE_HIDE_MS = 3600;
 
 const HOLIDAY_STATES = [
   'Assam(HO)',
@@ -441,6 +443,48 @@ function normalizeCompOffRows(rows = []) {
     _id: row._id,
     raw_status: row.status,
   }));
+}
+
+
+function AttendanceInlineMessage({
+  message,
+  onClose,
+  className = '',
+}) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`attendance-inline-feedback ${message.type || 'info'} ${className}`.trim()}
+      role="status"
+    >
+      <span className="attendance-inline-feedback-icon">
+        {message.loading ? (
+          <RefreshCcw size={15} className="attendance-inline-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="attendance-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="attendance-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
 }
 
 
@@ -865,6 +909,8 @@ function AttendanceBulkVerifyControls({
   onVerifySelected,
   onVerifyAll,
   bulkVerifying = false,
+  feedbackMessage = null,
+  onFeedbackClose = () => {},
 }) {
   const verifiableRows = rows.filter((row) => row?._id && !row.verified_by_ro);
   const verifiableIds = verifiableRows.map((row) => row._id);
@@ -874,39 +920,46 @@ function AttendanceBulkVerifyControls({
     verifiableIds.every((id) => selectedIds.includes(id));
 
   return (
-    <div className="attendance-bulk-verify-toolbar">
-      <label className="attendance-select-all-control">
-        <input
-          type="checkbox"
-          checked={allSelected}
-          disabled={!verifiableIds.length || bulkVerifying}
-          onChange={() => onToggleAll?.(verifiableIds, !allSelected)}
-        />
-        <span>
-          Select All
-          {selectedVerifiableCount > 0 ? ` (${selectedVerifiableCount})` : ''}
-        </span>
-      </label>
+    <div className="attendance-bulk-verify-stack">
+      <div className="attendance-bulk-verify-toolbar">
+        <label className="attendance-select-all-control">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            disabled={!verifiableIds.length || bulkVerifying}
+            onChange={() => onToggleAll?.(verifiableIds, !allSelected)}
+          />
+          <span>
+            Select All
+            {selectedVerifiableCount > 0 ? ` (${selectedVerifiableCount})` : ''}
+          </span>
+        </label>
 
-      <div className="attendance-bulk-verify-actions">
-        <button
-          type="button"
-          className="secondary"
-          onClick={onVerifySelected}
-          disabled={!selectedVerifiableCount || bulkVerifying}
-        >
-          {bulkVerifying ? 'Verifying...' : `Verify Selected${selectedVerifiableCount ? ` (${selectedVerifiableCount})` : ''}`}
-        </button>
+        <div className="attendance-bulk-verify-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={onVerifySelected}
+            disabled={!selectedVerifiableCount || bulkVerifying}
+          >
+            {bulkVerifying ? 'Verifying...' : `Verify Selected${selectedVerifiableCount ? ` (${selectedVerifiableCount})` : ''}`}
+          </button>
 
-        <button
-          type="button"
-          className="primary"
-          onClick={onVerifyAll}
-          disabled={!verifiableIds.length || bulkVerifying}
-        >
-          {bulkVerifying ? 'Verifying...' : `Verify All (${verifiableIds.length})`}
-        </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={onVerifyAll}
+            disabled={!verifiableIds.length || bulkVerifying}
+          >
+            {bulkVerifying ? 'Verifying...' : `Verify All (${verifiableIds.length})`}
+          </button>
+        </div>
       </div>
+
+      <AttendanceInlineMessage
+        message={feedbackMessage}
+        onClose={onFeedbackClose}
+      />
     </div>
   );
 }
@@ -1052,6 +1105,9 @@ export default function Attendance({ user = {}, setPage } = {}) {
     ...EMPTY_TEAM_FIELD_FILTERS,
   });
   const [compOffForm, setCompOffForm] = useState({ ...EMPTY_COMPOFF_FORM });
+  const [activeSection, setActiveSection] = useState('attendance');
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
 
   const userRoles = roles();
   const saasPlanType = getSaasPlanType(user);
@@ -1132,6 +1188,66 @@ export default function Attendance({ user = {}, setPage } = {}) {
     };
   }, [report]);
 
+  function clearInlineFeedback(scope) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scope)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scope];
+      return next;
+    });
+  }
+
+  function showInlineFeedback(
+    scope,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => ({
+      ...current,
+      [scope]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scope] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          const next = { ...current };
+          delete next[scope];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scope];
+      }, ATTENDANCE_NOTICE_HIDE_MS);
+    }
+  }
+
   async function loadMyAttendance() {
     if (!showEmployeeSelfAttendancePanel) {
       setMyAttendance([]);
@@ -1142,16 +1258,23 @@ export default function Attendance({ user = {}, setPage } = {}) {
     setMyAttendance(normalizeAttendanceRows(data.items || []));
   }
 
-  async function loadReport(nextFilters = filters) {
+  async function loadReport(
+    nextFilters = filters,
+    { showLoader = true } = {},
+  ) {
     if (!canViewReport) return;
 
-    setLoadingReport(true);
+    if (showLoader) {
+      setLoadingReport(true);
+    }
 
     try {
       const data = await api(`/attendance/report${buildQuery(nextFilters)}`);
       setReport(normalizeAttendanceRows(data.items || []));
     } finally {
-      setLoadingReport(false);
+      if (showLoader) {
+        setLoadingReport(false);
+      }
     }
   }
 
@@ -1172,16 +1295,23 @@ export default function Attendance({ user = {}, setPage } = {}) {
     setMyHolidayWorkRequests(normalizeHolidayWorkRequestRows(data.items || []));
   }
 
-  async function loadTeamFieldAttendance(nextFilters = teamFieldFilters) {
+  async function loadTeamFieldAttendance(
+    nextFilters = teamFieldFilters,
+    { showLoader = true } = {},
+  ) {
     if (!canViewReport) return;
 
-    setLoadingTeamField(true);
+    if (showLoader) {
+      setLoadingTeamField(true);
+    }
 
     try {
       const data = await api(`/attendance/team-field-attendance${buildQuery(nextFilters)}`);
       setTeamFieldAttendance(normalizeAttendanceRows(data.items || []));
     } finally {
-      setLoadingTeamField(false);
+      if (showLoader) {
+        setLoadingTeamField(false);
+      }
     }
   }
 
@@ -1202,29 +1332,98 @@ export default function Attendance({ user = {}, setPage } = {}) {
     setMyCompOffs(normalizeCompOffRows(data.items || []));
   }
 
-async function refreshAttendance() {
-  try {
-    setLoadingPage(true);
+async function refreshAttendance({
+  showLoader = true,
+  feedbackScope = '',
+} = {}) {
+  setLoadingPage(true);
 
-      await Promise.all([
-        loadMyAttendance(),
-        loadMyHolidayWorkRequests(),
-        loadMyCompOffs(),
-        canViewReport ? loadReport(filters) : Promise.resolve(),
-        canViewReport ? loadHolidayWorkRequests(holidayWorkFilters) : Promise.resolve(),
-        canViewReport ? loadTeamFieldAttendance(teamFieldFilters) : Promise.resolve(),
-        canManageHoliday ? loadHolidays() : Promise.resolve(),
-      ]);
-      } catch (error) {
-        alerts.error(error.message || 'Unable to refresh attendance data', 'Refresh Failed');
-      } finally {
-      setLoadingPage(false);
-    }
+  if (feedbackScope) {
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Refreshing attendance, holiday work and comp-off data...',
+      'Refreshing',
+      { loading: true },
+    );
   }
 
+  try {
+    await Promise.all([
+      loadMyAttendance(),
+      loadMyHolidayWorkRequests(),
+      loadMyCompOffs(),
+      canViewReport
+        ? loadReport(filters, { showLoader })
+        : Promise.resolve(),
+      canViewReport
+        ? loadHolidayWorkRequests(holidayWorkFilters)
+        : Promise.resolve(),
+      canViewReport
+        ? loadTeamFieldAttendance(teamFieldFilters, { showLoader })
+        : Promise.resolve(),
+      canManageHoliday ? loadHolidays() : Promise.resolve(),
+    ]);
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'Attendance data is up to date.',
+        'Refresh Complete',
+      );
+    }
+
+    return true;
+  } catch (error) {
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        error.message || 'Unable to refresh attendance data',
+        'Refresh Failed',
+      );
+    } else {
+      alerts.error(
+        error.message || 'Unable to refresh attendance data',
+        'Refresh Failed',
+      );
+    }
+
+    return false;
+  } finally {
+    setLoadingPage(false);
+  }
+}
+
   useEffect(() => {
-    refreshAttendance();
+    refreshAttendance({ showLoader: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    function dismissInlineFeedback(event) {
+      if (event.target?.closest?.('.attendance-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setInlineFeedback({});
+    }
+
+    document.addEventListener('pointerdown', dismissInlineFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissInlineFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
   }, []);
 
   useEffect(() => {
@@ -1299,29 +1498,77 @@ async function refreshAttendance() {
   async function searchReport(event) {
     event.preventDefault();
 
-      try {
-        await loadReport(filters);
-      } catch (error) {
-        alerts.error(error.message || 'Unable to load attendance report', 'Report Load Failed');
-      }
+    showInlineFeedback(
+      'report-filter',
+      'info',
+      'Searching attendance records with the selected filters...',
+      'Searching',
+      { loading: true },
+    );
+
+    try {
+      await loadReport(filters, { showLoader: false });
+
+      showInlineFeedback(
+        'report-filter',
+        'success',
+        'Attendance records updated for the selected filters.',
+        'Search Complete',
+      );
+    } catch (error) {
+      showInlineFeedback(
+        'report-filter',
+        'error',
+        error.message || 'Unable to load attendance report',
+        'Report Load Failed',
+      );
+    }
   }
 
-  async function clearReportFilters() {
+  async function clearReportFilters(
+    feedbackScope = 'report-filter',
+  ) {
     const cleared = { ...EMPTY_REPORT_FILTERS };
+
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Clearing attendance filters and restoring the default records...',
+      'Clearing Filters',
+      { loading: true },
+    );
 
     try {
       setFilters(cleared);
-      await loadReport(cleared);
+      await loadReport(cleared, { showLoader: false });
+
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        'Attendance filters have been cleared.',
+        'Filters Cleared',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to clear report filters', 'Clear Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        error.message || 'Unable to clear report filters',
+        'Clear Failed',
+      );
     }
   }
 
   async function verifyAttendance(row) {
     const attendanceId = row?._id;
+    const feedbackScope = `attendance-${attendanceId || 'missing'}`;
 
     if (!attendanceId) {
-      alerts.error('Attendance id not found', 'Missing Attendance ID');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        'Attendance id not found.',
+        'Missing Attendance ID',
+      );
       return;
     }
 
@@ -1356,20 +1603,61 @@ async function refreshAttendance() {
       window.scrollTo(0, verifyPopupScrollY);
     }
 
-    if (!ok) return;
+    if (!ok) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Attendance verification was cancelled.',
+        'No Changes Made',
+      );
+      return;
+    }
 
     try {
       setVerifyingId(attendanceId);
+
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Verifying this attendance record...',
+        'Verifying Attendance',
+        { loading: true },
+      );
 
       const data = await api(`/attendance/${attendanceId}/verify`, {
         method: 'PATCH',
         body: JSON.stringify({}),
       });
 
-      alerts.success(data.message || 'Attendance verified', 'Attendance Verified');
-      await loadReport(filters);
+      setReport((current) =>
+        current.map((item) =>
+          item._id === attendanceId
+            ? {
+                ...item,
+                verified_by_ro: true,
+                verified: 'Yes',
+              }
+            : item,
+        ),
+      );
+
+      showInlineFeedback(
+        feedbackScope,
+        'success',
+        data.message || 'Attendance verified successfully.',
+        'Attendance Verified',
+      );
+
+      loadReport(filters, { showLoader: false }).catch(() => {
+        // The verified state is already shown locally; a later refresh can resync.
+      });
     } catch (error) {
-      alerts.error(error.message || 'Unable to verify attendance', 'Verification Failed');
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        error.message || 'Unable to verify attendance',
+        'Verification Failed',
+      );
     } finally {
       setVerifyingId('');
     }
@@ -1396,11 +1684,17 @@ async function refreshAttendance() {
     });
   }
 
-  async function verifyAttendanceBatch(attendanceIds = [], mode = 'selected') {
+  async function verifyAttendanceBatch(
+    attendanceIds = [],
+    mode = 'selected',
+  ) {
+    const feedbackScope = 'bulk-verify';
     const uniqueIds = Array.from(new Set(attendanceIds.filter(Boolean)));
 
     if (!uniqueIds.length) {
-      alerts.warning(
+      showInlineFeedback(
+        feedbackScope,
+        'warning',
         mode === 'all'
           ? 'There are no unverified attendance records available to verify.'
           : 'Select at least one attendance record first.',
@@ -1430,8 +1724,14 @@ async function refreshAttendance() {
           ? `Verify all ${uniqueIds.length} available attendance records?`
           : `Verify ${uniqueIds.length} selected attendance record${uniqueIds.length === 1 ? '' : 's'}?`,
         {
-          title: mode === 'all' ? 'Verify All Attendance' : 'Verify Selected Attendance',
-          confirmText: mode === 'all' ? 'Yes, Verify All' : 'Yes, Verify Selected',
+          title:
+            mode === 'all'
+              ? 'Verify All Attendance'
+              : 'Verify Selected Attendance',
+          confirmText:
+            mode === 'all'
+              ? 'Yes, Verify All'
+              : 'Yes, Verify Selected',
           cancelText: 'Cancel',
           type: 'warning',
         },
@@ -1445,10 +1745,28 @@ async function refreshAttendance() {
       window.scrollTo(0, verifyPopupScrollY);
     }
 
-    if (!ok) return;
+    if (!ok) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Bulk attendance verification was cancelled.',
+        'No Changes Made',
+      );
+      return;
+    }
 
     try {
       setBulkVerifying(true);
+
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        `Verifying ${uniqueIds.length} attendance record${uniqueIds.length === 1 ? '' : 's'}...`,
+        mode === 'all'
+          ? 'Verifying All Attendance'
+          : 'Verifying Selected Attendance',
+        { loading: true },
+      );
 
       let verifiedCount = 0;
       const failedIds = [];
@@ -1465,22 +1783,52 @@ async function refreshAttendance() {
         }
       }
 
-      await loadReport(filters);
+      const failedSet = new Set(failedIds);
+
+      setReport((current) =>
+        current.map((item) =>
+          uniqueIds.includes(item._id) && !failedSet.has(item._id)
+            ? {
+                ...item,
+                verified_by_ro: true,
+                verified: 'Yes',
+              }
+            : item,
+        ),
+      );
+
       setSelectedAttendanceIds((current) =>
-        current.filter((id) => failedIds.includes(id)),
+        current.filter((id) => failedSet.has(id)),
       );
 
       if (failedIds.length) {
-        alerts.warning(
+        showInlineFeedback(
+          feedbackScope,
+          'warning',
           `${verifiedCount} attendance record${verifiedCount === 1 ? '' : 's'} verified. ${failedIds.length} could not be verified.`,
           'Verification Partially Completed',
         );
       } else {
-        alerts.success(
+        showInlineFeedback(
+          feedbackScope,
+          'success',
           `${verifiedCount} attendance record${verifiedCount === 1 ? '' : 's'} verified successfully.`,
-          mode === 'all' ? 'All Attendance Verified' : 'Selected Attendance Verified',
+          mode === 'all'
+            ? 'All Attendance Verified'
+            : 'Selected Attendance Verified',
         );
       }
+
+      loadReport(filters, { showLoader: false }).catch(() => {
+        // The verified rows are already shown locally; a later refresh can resync.
+      });
+    } catch (error) {
+      showInlineFeedback(
+        feedbackScope,
+        'error',
+        error.message || 'Unable to verify the selected attendance records.',
+        'Verification Failed',
+      );
     } finally {
       setBulkVerifying(false);
     }
@@ -1508,24 +1856,51 @@ async function refreshAttendance() {
 async function createHoliday(event) {
   event.preventDefault();
 
+  const feedbackScope = 'holiday-create';
+
   if (!holidayForm.date || !holidayForm.title.trim()) {
-    alerts.warning('Holiday date and title are required', 'Missing Holiday Details');
+    showInlineFeedback(
+      feedbackScope,
+      'warning',
+      'Holiday date and title are required.',
+      'Missing Holiday Details',
+    );
     return;
   }
 
   try {
     setSavingHoliday(true);
 
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Adding the holiday to the state-wise calendar...',
+      'Adding Holiday',
+      { loading: true },
+    );
+
     const data = await api('/attendance/holidays', {
       method: 'POST',
       body: JSON.stringify(holidayForm),
     });
 
-    alerts.success(data.message || 'Holiday added', 'Holiday Added');
     setHolidayForm({ ...EMPTY_HOLIDAY_FORM });
+
+    showInlineFeedback(
+      feedbackScope,
+      'success',
+      data.message || 'Holiday added successfully.',
+      'Holiday Added',
+    );
+
     await loadHolidays();
   } catch (error) {
-    alerts.error(error.message || 'Unable to add holiday', 'Holiday Save Failed');
+    showInlineFeedback(
+      feedbackScope,
+      'error',
+      error.message || 'Unable to add holiday',
+      'Holiday Save Failed',
+    );
   } finally {
     setSavingHoliday(false);
   }
@@ -1534,46 +1909,96 @@ async function createHoliday(event) {
 
 async function decideHolidayWorkRequest(row, status) {
   const requestId = row?._id;
+  const feedbackScope = `holiday-work-${requestId || 'missing'}`;
 
   if (!requestId) {
-    alerts.error('Request id not found', 'Missing Request ID');
+    showInlineFeedback(
+      feedbackScope,
+      'error',
+      'Request id not found.',
+      'Missing Request ID',
+    );
     return;
   }
 
   const decisionText = statusLabel(status);
   const isReject = String(status || '').toLowerCase() === 'rejected';
 
-  const ok = await alerts.confirm(`${decisionText} this holiday work request?`, {
-    title: `${decisionText} Holiday Work`,
-    confirmText: `Yes, ${decisionText}`,
-    cancelText: 'Cancel',
-    type: 'warning',
-    danger: isReject,
-  });
+  const ok = await alerts.confirm(
+    `${decisionText} this holiday work request?`,
+    {
+      title: `${decisionText} Holiday Work`,
+      confirmText: `Yes, ${decisionText}`,
+      cancelText: 'Cancel',
+      type: 'warning',
+      danger: isReject,
+    },
+  );
 
-  if (!ok) return;
+  if (!ok) {
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      `Holiday work ${decisionText.toLowerCase()} action was cancelled.`,
+      'No Changes Made',
+    );
+    return;
+  }
 
   try {
     setDecidingHolidayWorkId(requestId);
 
-    const data = await api(`/attendance/holiday-work-requests/${requestId}/decision`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    });
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      `${decisionText} holiday work request...`,
+      `${decisionText} Holiday Work`,
+      { loading: true },
+    );
 
-    alerts.success(
-      data.message || `Holiday work request ${status}`,
+    const data = await api(
+      `/attendance/holiday-work-requests/${requestId}/decision`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      },
+    );
+
+    setHolidayWorkRequests((current) =>
+      current.map((item) =>
+        item._id === requestId
+          ? {
+              ...item,
+              raw_status: status,
+              status: statusLabel(status),
+              current_stage: statusLabel(status),
+            }
+          : item,
+      ),
+    );
+
+    showInlineFeedback(
+      feedbackScope,
+      'success',
+      data.message || `Holiday work request ${status}.`,
       isReject ? 'Holiday Work Rejected' : 'Holiday Work Approved',
     );
 
-    await Promise.all([
+    Promise.all([
       loadHolidayWorkRequests(holidayWorkFilters),
       loadMyHolidayWorkRequests(),
-      loadReport(filters),
-      loadTeamFieldAttendance(teamFieldFilters),
-    ]);
+      loadReport(filters, { showLoader: false }),
+      loadTeamFieldAttendance(teamFieldFilters, { showLoader: false }),
+    ]).catch(() => {
+      // The decision is already shown locally; a later refresh can resync.
+    });
   } catch (error) {
-    alerts.error(error.message || 'Unable to update holiday work request', 'Update Failed');
+    showInlineFeedback(
+      feedbackScope,
+      'error',
+      error.message || 'Unable to update holiday work request',
+      'Update Failed',
+    );
   } finally {
     setDecidingHolidayWorkId('');
   }
@@ -1582,10 +2007,27 @@ async function decideHolidayWorkRequest(row, status) {
 async function searchHolidayWorkRequests(event) {
   event.preventDefault();
 
+  showInlineFeedback(
+    'holiday-filter',
+    'info',
+    'Searching holiday work requests...',
+    'Searching',
+    { loading: true },
+  );
+
   try {
     await loadHolidayWorkRequests(holidayWorkFilters);
+
+    showInlineFeedback(
+      'holiday-filter',
+      'success',
+      'Holiday work request results are up to date.',
+      'Search Complete',
+    );
   } catch (error) {
-    alerts.error(
+    showInlineFeedback(
+      'holiday-filter',
+      'error',
       error.message || 'Unable to load holiday work requests',
       'Holiday Requests Load Failed',
     );
@@ -1595,11 +2037,28 @@ async function searchHolidayWorkRequests(event) {
 async function clearHolidayWorkFilters() {
   const cleared = { ...EMPTY_HOLIDAY_WORK_FILTERS };
 
+  showInlineFeedback(
+    'holiday-filter',
+    'info',
+    'Clearing holiday work request filters...',
+    'Clearing Filters',
+    { loading: true },
+  );
+
   try {
     setHolidayWorkFilters(cleared);
     await loadHolidayWorkRequests(cleared);
+
+    showInlineFeedback(
+      'holiday-filter',
+      'success',
+      'Holiday work request filters have been cleared.',
+      'Filters Cleared',
+    );
   } catch (error) {
-    alerts.error(
+    showInlineFeedback(
+      'holiday-filter',
+      'error',
       error.message || 'Unable to clear holiday work request filters',
       'Clear Failed',
     );
@@ -1609,10 +2068,29 @@ async function clearHolidayWorkFilters() {
 async function searchTeamFieldAttendance(event) {
   event.preventDefault();
 
+  showInlineFeedback(
+    'field-filter',
+    'info',
+    'Searching team field attendance...',
+    'Searching',
+    { loading: true },
+  );
+
   try {
-    await loadTeamFieldAttendance(teamFieldFilters);
+    await loadTeamFieldAttendance(teamFieldFilters, {
+      showLoader: false,
+    });
+
+    showInlineFeedback(
+      'field-filter',
+      'success',
+      'Team field attendance results are up to date.',
+      'Search Complete',
+    );
   } catch (error) {
-    alerts.error(
+    showInlineFeedback(
+      'field-filter',
+      'error',
       error.message || 'Unable to load team field attendance',
       'Field Attendance Load Failed',
     );
@@ -1622,11 +2100,30 @@ async function searchTeamFieldAttendance(event) {
 async function clearTeamFieldFilters() {
   const cleared = { ...EMPTY_TEAM_FIELD_FILTERS };
 
+  showInlineFeedback(
+    'field-filter',
+    'info',
+    'Clearing team field attendance filters...',
+    'Clearing Filters',
+    { loading: true },
+  );
+
   try {
     setTeamFieldFilters(cleared);
-    await loadTeamFieldAttendance(cleared);
+    await loadTeamFieldAttendance(cleared, {
+      showLoader: false,
+    });
+
+    showInlineFeedback(
+      'field-filter',
+      'success',
+      'Team field attendance filters have been cleared.',
+      'Filters Cleared',
+    );
   } catch (error) {
-    alerts.error(
+    showInlineFeedback(
+      'field-filter',
+      'error',
       error.message || 'Unable to clear team field attendance filters',
       'Clear Failed',
     );
@@ -1636,94 +2133,163 @@ async function clearTeamFieldFilters() {
 async function claimCompOff(event) {
   event.preventDefault();
 
+  const feedbackScope = 'compoff-claim';
+
   if (!compOffForm.compoff_id || !compOffForm.claim_date) {
-    alerts.warning('Select comp-off and claim date', 'Missing Comp-Off Details');
+    showInlineFeedback(
+      feedbackScope,
+      'warning',
+      'Select comp-off and claim date.',
+      'Missing Comp-Off Details',
+    );
     return;
   }
 
   try {
     setClaimingCompOff(true);
 
-    const data = await api(`/attendance/compoffs/${compOffForm.compoff_id}/claim`, {
-      method: 'POST',
-      body: JSON.stringify({
-        claim_date: compOffForm.claim_date,
-        reason: compOffForm.reason,
-      }),
-    });
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Submitting the comp-off claim...',
+      'Submitting Claim',
+      { loading: true },
+    );
 
-    alerts.success(data.message || 'Comp-off claim submitted', 'Comp-Off Claim Submitted');
+    const data = await api(
+      `/attendance/compoffs/${compOffForm.compoff_id}/claim`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          claim_date: compOffForm.claim_date,
+          reason: compOffForm.reason,
+        }),
+      },
+    );
+
     setCompOffForm({ ...EMPTY_COMPOFF_FORM });
+
+    showInlineFeedback(
+      feedbackScope,
+      'success',
+      data.message || 'Comp-off claim submitted successfully.',
+      'Comp-Off Claim Submitted',
+    );
+
     await loadMyCompOffs();
   } catch (error) {
-    alerts.error(error.message || 'Unable to claim comp-off', 'Comp-Off Claim Failed');
+    showInlineFeedback(
+      feedbackScope,
+      'error',
+      error.message || 'Unable to claim comp-off',
+      'Comp-Off Claim Failed',
+    );
   } finally {
     setClaimingCompOff(false);
   }
 }
 
 
-  const reportRows = report.map((row) => ({
-    ...row,
-    action: row.verified_by_ro ? (
-      'Verified'
-    ) : (
-      <button
-        type="button"
-        className="secondary"
-        onClick={() => verifyAttendance(row)}
-        disabled={verifyingId === row._id || bulkVerifying || !row._id}
-      >
-        {verifyingId === row._id ? 'Verifying...' : 'Verify'}
-      </button>
-    ),
-  }));
+  const reportRows = report.map((row) => {
+    const feedbackScope = `attendance-${row._id || 'missing'}`;
+
+    return {
+      ...row,
+      action: (
+        <div className="attendance-row-action-stack">
+          {row.verified_by_ro ? (
+            <span className="attendance-verified-label">Verified</span>
+          ) : (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => verifyAttendance(row)}
+              disabled={
+                verifyingId === row._id ||
+                bulkVerifying ||
+                !row._id
+              }
+            >
+              {verifyingId === row._id ? 'Verifying...' : 'Verify'}
+            </button>
+          )}
+
+          <AttendanceInlineMessage
+            message={inlineFeedback[feedbackScope]}
+            onClose={() => clearInlineFeedback(feedbackScope)}
+            className="attendance-row-feedback"
+          />
+        </div>
+      ),
+    };
+  });
 
   const pendingHolidayWorkRequestCount = holidayWorkRequests.filter(
     (row) => row.raw_status === 'pending',
   ).length;
 
-  const holidayWorkRequestRows = holidayWorkRequests.map((row) => ({
-    ...row,
-    proof: row.proof_photo ? (
-      <a href={row.proof_photo} target="_blank" rel="noreferrer">
-        View photo
-      </a>
-    ) : (
-      '—'
-    ),
-    map: row.map_url ? (
-      <a href={row.map_url} target="_blank" rel="noreferrer">
-        Open map
-      </a>
-    ) : (
-      '—'
-    ),
-    action:
-      row.raw_status === 'pending' ? (
-        <div className="row-actions">
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => decideHolidayWorkRequest(row, 'approved')}
-            disabled={decidingHolidayWorkId === row._id}
-          >
-            {decidingHolidayWorkId === row._id ? 'Approving...' : 'Approve'}
-          </button>
+  const holidayWorkRequestRows = holidayWorkRequests.map((row) => {
+    const feedbackScope = `holiday-work-${row._id || 'missing'}`;
 
-          <button
-            type="button"
-            className="danger"
-            onClick={() => decideHolidayWorkRequest(row, 'rejected')}
-            disabled={decidingHolidayWorkId === row._id}
-          >
-            {decidingHolidayWorkId === row._id ? 'Rejecting...' : 'Reject'}
-          </button>
-        </div>
+    return {
+      ...row,
+      proof: row.proof_photo ? (
+        <a href={row.proof_photo} target="_blank" rel="noreferrer">
+          View photo
+        </a>
       ) : (
-        statusLabel(row.raw_status)
+        '—'
       ),
-  }));
+      map: row.map_url ? (
+        <a href={row.map_url} target="_blank" rel="noreferrer">
+          Open map
+        </a>
+      ) : (
+        '—'
+      ),
+      action: (
+        <div className="attendance-row-action-stack">
+          {row.raw_status === 'pending' ? (
+            <div className="row-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  decideHolidayWorkRequest(row, 'approved')
+                }
+                disabled={decidingHolidayWorkId === row._id}
+              >
+                {decidingHolidayWorkId === row._id
+                  ? 'Approving...'
+                  : 'Approve'}
+              </button>
+
+              <button
+                type="button"
+                className="danger"
+                onClick={() =>
+                  decideHolidayWorkRequest(row, 'rejected')
+                }
+                disabled={decidingHolidayWorkId === row._id}
+              >
+                {decidingHolidayWorkId === row._id
+                  ? 'Rejecting...'
+                  : 'Reject'}
+              </button>
+            </div>
+          ) : (
+            <span>{statusLabel(row.raw_status)}</span>
+          )}
+
+          <AttendanceInlineMessage
+            message={inlineFeedback[feedbackScope]}
+            onClose={() => clearInlineFeedback(feedbackScope)}
+            className="attendance-row-feedback"
+          />
+        </div>
+      ),
+    };
+  });
 
   const myHolidayWorkRequestRows = myHolidayWorkRequests.map((row) => ({
     ...row,
@@ -1765,11 +2331,11 @@ return (
       .attendance-page {
         --at-ink: #101a3a;
         --at-copy: #5d6d8d;
-        --at-violet: #6658dc;
-        --at-violet-deep: #40348d;
-        --at-blue: #3766db;
-        --at-cyan: #18b5c8;
-        --at-teal: #34c9c4;
+        --at-violet: #4d77dd;
+        --at-violet-deep: #4767b4;
+        --at-blue: #4d77dd;
+        --at-cyan: #2eb2b9;
+        --at-teal: #2eb2b9;
         --at-yellow: #d8ff43;
         --at-line: rgba(16, 26, 58, .14);
         display: grid;
@@ -1801,17 +2367,23 @@ return (
         isolation: isolate;
         overflow: hidden;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(390px, .82fr);
-        gap: clamp(22px, 3vw, 40px);
+        grid-template-columns: minmax(0, 1fr) minmax(360px, .78fr);
+        gap: clamp(20px, 3vw, 38px);
         align-items: start;
-        min-height: 320px;
-        padding: clamp(24px, 3vw, 42px);
+        min-height: 280px;
+        padding: clamp(24px, 3vw, 40px);
         border: 1px solid rgba(154, 164, 205, .58);
-        border-radius: clamp(28px, 2.6vw, 40px);
-        background: linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
-        box-shadow:
-          12px 14px 0 #c6d8f7,
-          0 28px 48px rgba(34, 38, 110, .13);
+        border-radius: clamp(28px, 2.7vw, 40px);
+        background:
+          linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+        box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
       }
 
       .attendance-page::before,
@@ -1839,7 +2411,7 @@ return (
         max-width: 100%;
         border-radius: 999px;
         color: #fff;
-        background: #342b78;
+        background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
         font-size: 9px;
         font-weight: 950;
         line-height: 1;
@@ -1887,65 +2459,46 @@ return (
       }
 
       .attendance-page .hero-actions .secondary {
-        min-height: 54px;
-        padding-inline: 18px;
-        border: 1px solid rgba(65,55,161,.18);
-        border-radius: 18px;
-        color: #342b78;
-        background: rgba(255,255,255,.88);
-        box-shadow:
-          6px 7px 0 #b9d7ff,
-          0 14px 25px rgba(44,75,116,.10);
-      }
-
-      .attendance-page .hero-actions .secondary svg:first-child {
-        animation: attendanceRefreshIdle 4.2s linear infinite;
+        min-height: 46px;
+        padding-inline: 16px;
+        border: 1px solid rgba(77,119,221,.20);
+        border-radius: 14px;
+        color: #4767b4;
+        background: rgba(255,255,255,.92);
+        box-shadow: 0 10px 22px rgba(70,92,140,.08);
       }
 
       .attendance-page .hero-actions .secondary:hover {
-        transform: translateY(-3px);
-        box-shadow:
-          8px 9px 0 #b9d7ff,
-          0 18px 30px rgba(44,75,116,.14);
-      }
-
-      .attendance-page .hero-actions .secondary:disabled svg:first-child {
-        animation: attendanceSpin 1s linear infinite;
+        transform: translateY(-1px);
+        border-color: rgba(46,178,185,.42);
+        box-shadow: 0 12px 24px rgba(70,92,140,.10);
       }
 
       .attendance-page .attendance-card,
       .attendance-page .attendance-pro-card {
         align-self: start;
-        border: 1px solid rgba(171,181,211,.72);
-        border-radius: 30px;
+        border: 1px solid rgba(171,181,211,.68);
+        border-radius: 28px;
         background:
-          linear-gradient(145deg, #f4fbff 0%, #f8f1ff 52%, #fff8e8 100%);
-        box-shadow:
-          12px 14px 0 #b9d7ff,
-          0 30px 50px rgba(34,38,110,.14);
+          linear-gradient(145deg, #f7fbff 0%, #faf7ff 52%, #fffaf0 100%);
+        box-shadow: 0 20px 38px rgba(34,38,110,.08);
       }
 
       .attendance-page .panel {
         min-width: 0;
         padding: clamp(20px, 2vw, 28px);
-        border: 1px solid rgba(171,181,211,.72);
-        border-radius: clamp(26px, 2.2vw, 36px);
-        background: linear-gradient(145deg, #ffffff, #f7fbff);
-        box-shadow:
-          9px 11px 0 #c4ccff,
-          0 26px 46px rgba(34,38,110,.11);
+        border: 1px solid rgba(171,181,211,.70);
+        border-radius: clamp(24px, 2.2vw, 34px);
+        background: #fff;
+        box-shadow: 0 20px 38px rgba(34,38,110,.08);
         transition:
-          transform 210ms cubic-bezier(.22,1,.36,1),
-          box-shadow 210ms ease,
-          border-color 210ms ease;
+          box-shadow 180ms ease,
+          border-color 180ms ease;
       }
 
       .attendance-page .panel:hover {
-        border-color: rgba(98,84,218,.28);
-        transform: translateY(-3px);
-        box-shadow:
-          11px 13px 0 #c4ccff,
-          0 31px 52px rgba(34,38,110,.14);
+        border-color: rgba(77,119,221,.28);
+        box-shadow: 0 22px 42px rgba(34,38,110,.10);
       }
 
       .attendance-page .panel h3,
@@ -1985,9 +2538,9 @@ return (
       .attendance-page .employee-role-pill {
         border: 1px solid rgba(65,55,161,.14);
         border-radius: 999px;
-        color: #342b78;
-        background: rgba(255,255,255,.82);
-        box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        color: #4767b4;
+        background: rgba(255,255,255,.92);
+        box-shadow: 0 8px 18px rgba(70,92,140,.07);
         font-size: 10px;
         font-weight: 900;
       }
@@ -1999,44 +2552,24 @@ return (
       }
 
       .attendance-page .attendance-summary-card {
-        position: relative;
-        overflow: hidden;
         min-height: 112px;
         padding: 17px;
-        border: 1px solid rgba(178,185,210,.72);
+        border: 1px solid rgba(171,181,211,.66);
         border-radius: 22px;
         background: #edf6ff;
-        box-shadow:
-          6px 8px 0 #b9d7ff,
-          0 16px 27px rgba(15,20,75,.10);
-        transition:
-          transform 210ms cubic-bezier(.22,1,.36,1),
-          box-shadow 210ms ease;
+        box-shadow: 0 16px 30px rgba(34,38,110,.07);
       }
 
       .attendance-page .attendance-summary-card:nth-child(2) {
         background: #eaf8f4;
-        box-shadow:
-          6px 8px 0 #aee6d9,
-          0 16px 27px rgba(15,20,75,.10);
       }
 
       .attendance-page .attendance-summary-card:nth-child(3) {
         background: #fff4d5;
-        box-shadow:
-          6px 8px 0 #ffe0a5,
-          0 16px 27px rgba(15,20,75,.10);
       }
 
       .attendance-page .attendance-summary-card:nth-child(4) {
         background: #f1efff;
-        box-shadow:
-          6px 8px 0 #c9c0ff,
-          0 16px 27px rgba(15,20,75,.10);
-      }
-
-      .attendance-page .attendance-summary-card:hover {
-        transform: translateY(-4px);
       }
 
       .attendance-page .attendance-summary-card span {
@@ -2056,14 +2589,216 @@ return (
         font-size: clamp(30px, 2.8vw, 44px);
       }
 
+      .attendance-section-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        width: 100%;
+        padding: 12px;
+        border: 1px solid rgba(171,181,211,.62);
+        border-radius: 22px;
+        background: #fff;
+        box-shadow: 0 16px 28px rgba(34,38,110,.08);
+      }
+
+      .attendance-section-tab {
+        min-width: 0;
+        min-height: 62px;
+        padding: 11px 14px;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        border: 1px solid rgba(77,119,221,.22);
+        border-radius: 16px;
+        color: #4767b4;
+        background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+        transition:
+          transform 180ms ease,
+          border-color 180ms ease,
+          background 180ms ease;
+      }
+
+      .attendance-section-tab:hover {
+        transform: translateY(-1px);
+        border-color: rgba(46,178,185,.42);
+      }
+
+      .attendance-section-tab.is-active {
+        border-color: transparent;
+        color: #fff;
+        background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        box-shadow: 0 8px 18px rgba(77,119,221,.17);
+      }
+
+      .attendance-section-tab-copy {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .attendance-section-tab-copy strong {
+        font-size: 12px;
+        font-weight: 950;
+        line-height: 1.2;
+      }
+
+      .attendance-section-tab-copy small {
+        color: currentColor;
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 1.35;
+        opacity: .78;
+      }
+
+      .attendance-section-tab-count {
+        min-width: 28px;
+        height: 28px;
+        padding: 0 7px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 999px;
+        color: #4767b4;
+        background: #fff;
+        font-size: 9px;
+        font-weight: 950;
+        white-space: nowrap;
+      }
+
+      .attendance-action-stack,
+      .attendance-widget-stack,
+      .attendance-bulk-verify-stack,
+      .attendance-row-action-stack {
+        display: grid;
+        gap: 9px;
+        min-width: 0;
+      }
+
+      .attendance-action-stack {
+        width: 100%;
+      }
+
+      .attendance-widget-stack {
+        width: 100%;
+        align-self: start;
+      }
+
+      .attendance-report-action-stack {
+        width: min(360px, 100%);
+      }
+
+      .attendance-row-action-stack {
+        min-width: 170px;
+        max-width: 280px;
+      }
+
+      .attendance-verified-label {
+        color: #047857;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .attendance-inline-feedback {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: start;
+        width: 100%;
+        min-width: 0;
+        padding: 10px 11px;
+        border: 1px solid rgba(102,88,220,.18);
+        border-radius: 12px;
+        color: #4767b4;
+        background: #f1efff;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .attendance-inline-feedback.success {
+        border-color: rgba(4,120,87,.18);
+        color: #047857;
+        background: #eaf8f4;
+      }
+
+      .attendance-inline-feedback.warning {
+        border-color: rgba(154,104,23,.18);
+        color: #9a6817;
+        background: #fff4d5;
+      }
+
+      .attendance-inline-feedback.error {
+        border-color: rgba(162,52,77,.18);
+        color: #a2344d;
+        background: #fff0f2;
+      }
+
+      .attendance-inline-feedback-icon {
+        width: 22px;
+        height: 22px;
+        display: inline-grid;
+        place-items: center;
+      }
+
+      .attendance-inline-feedback-copy {
+        min-width: 0;
+      }
+
+      .attendance-inline-feedback-copy strong,
+      .attendance-inline-feedback-copy span {
+        display: block;
+        overflow-wrap: anywhere;
+      }
+
+      .attendance-inline-feedback-copy strong {
+        margin-bottom: 2px;
+        font-weight: 950;
+      }
+
+      .attendance-inline-feedback-copy span {
+        font-weight: 750;
+      }
+
+      .attendance-inline-feedback-close {
+        width: 24px;
+        min-width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 0;
+        border-radius: 8px;
+        display: inline-grid;
+        place-items: center;
+        color: currentColor;
+        background: rgba(255,255,255,.58);
+        font: inherit;
+        font-size: 17px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .attendance-inline-feedback-close:hover {
+        background: #fff;
+      }
+
+      .attendance-row-feedback {
+        padding: 8px 9px;
+        font-size: 9px;
+      }
+
+      .attendance-inline-spin {
+        animation: attendanceSpin .82s linear infinite;
+      }
+
       .attendance-page .attendance-filter-card,
       .attendance-page .dynamic-form {
         margin-top: 18px;
         padding: 17px;
         border: 1px solid rgba(162,169,196,.50);
-        border-radius: 22px;
-        background: rgba(255,255,255,.80);
-        box-shadow: 5px 6px 0 rgba(52,43,120,.11);
+        border-radius: 20px;
+        background: rgba(255,255,255,.94);
+        box-shadow: 0 12px 26px rgba(34,38,110,.06);
       }
 
       .attendance-page .attendance-filter-title {
@@ -2109,9 +2844,7 @@ return (
       .attendance-page .dynamic-form select:focus,
       .attendance-page .dynamic-form textarea:focus {
         border-color: rgba(98,84,218,.65);
-        box-shadow:
-          4px 5px 0 rgba(102,88,220,.14),
-          0 0 0 4px rgba(102,88,220,.08);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
       }
 
       .attendance-page .primary,
@@ -2127,23 +2860,21 @@ return (
 
       .attendance-page .primary {
         color: #fff;
-        background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-        box-shadow:
-          5px 6px 0 #a9d6f5,
-          0 14px 25px rgba(36,74,128,.16);
+        background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        box-shadow: 0 10px 22px rgba(77,119,221,.18);
       }
 
       .attendance-page .secondary {
-        border-color: rgba(65,55,161,.18);
-        color: #342b78;
-        background: rgba(255,255,255,.88);
-        box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        border-color: rgba(77,119,221,.18);
+        color: #4767b4;
+        background: #fff;
+        box-shadow: 0 8px 18px rgba(70,92,140,.06);
       }
 
       .attendance-page .primary:hover,
       .attendance-page .secondary:hover,
       .attendance-page .danger:hover {
-        transform: translateY(-2px);
+        transform: translateY(-1px);
       }
 
       .attendance-report-display-toolbar {
@@ -2166,9 +2897,9 @@ return (
         padding: 9px 13px;
         border: 1px solid rgba(65,55,161,.18);
         border-radius: 13px;
-        color: #342b78;
+        color: #4767b4;
         background: rgba(255,255,255,.92);
-        box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
         font-size: 10px;
         font-weight: 900;
         cursor: pointer;
@@ -2196,7 +2927,7 @@ return (
         border: 1px solid rgba(151,161,197,.48);
         border-radius: 15px;
         background: rgba(255,255,255,.84);
-        box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
       }
 
       .attendance-report-view-toggle button {
@@ -2217,8 +2948,8 @@ return (
 
       .attendance-report-view-toggle button.is-active {
         color: #fff;
-        background: linear-gradient(135deg, #342b78, #5669d9);
-        box-shadow: 3px 4px 0 rgba(185,215,255,.86);
+        background: linear-gradient(135deg, #4767b4, #5669d9);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
       }
 
       .attendance-bulk-verify-toolbar {
@@ -2280,9 +3011,7 @@ return (
         border: 1px solid rgba(171,181,211,.60);
         border-radius: 20px;
         background: #fff;
-        box-shadow:
-          5px 6px 0 rgba(52,43,120,.08),
-          0 16px 28px rgba(34,38,110,.07);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
       }
 
       .attendance-report-table-scroll {
@@ -2389,7 +3118,7 @@ return (
         place-items: center;
         border-radius: 10px;
         color: #fff;
-        background: #342b78;
+        background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
       }
 
       .attendance-table-employee strong {
@@ -2659,7 +3388,7 @@ return (
         place-items: center;
         border-radius: 12px;
         color: #fff;
-        background: #342b78;
+        background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
       }
 
       .attendance-record-card h4 {
@@ -2719,7 +3448,7 @@ return (
         border: 1px solid rgba(171,181,211,.72);
         border-radius: 17px;
         background: #f8fafc;
-        box-shadow: 4px 5px 0 #c6d8f7;
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
         display: block;
       }
 
@@ -2745,7 +3474,7 @@ return (
         border: 1px solid rgba(171,181,211,.56);
         border-radius: 18px;
         background: #fff;
-        box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+        box-shadow: 0 10px 22px rgba(34,38,110,.07);
       }
 
       .attendance-page th {
@@ -2857,16 +3586,12 @@ return (
 
       .attendance-page .attendance-saas-panel {
         background: linear-gradient(145deg, #edf6ff, #f5f3ff);
-        box-shadow:
-          7px 8px 0 #b9d7ff,
-          0 18px 30px rgba(44,75,116,.10);
+        box-shadow: 0 18px 30px rgba(44,75,116,.10);
       }
 
       .attendance-page .attendance-saas-panel.expired {
         background: linear-gradient(145deg, #fff4d5, #fffaf0);
-        box-shadow:
-          7px 8px 0 #ffe0a5,
-          0 18px 30px rgba(116,75,44,.10);
+        box-shadow: 0 18px 30px rgba(116,75,44,.10);
       }
 
       .attendance-saas-layout {
@@ -2875,11 +3600,6 @@ return (
         justify-content: space-between;
         gap: 16px;
         flex-wrap: wrap;
-      }
-
-      @keyframes attendanceRefreshIdle {
-        0%, 84% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
       }
 
       @keyframes attendanceSpin {
@@ -2902,6 +3622,10 @@ return (
           grid-template-columns: 1fr;
         }
 
+        .attendance-section-tabs {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .attendance-page .attendance-summary-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -2920,9 +3644,7 @@ return (
           min-height: 0;
           padding: 20px;
           border-radius: 26px;
-          box-shadow:
-            6px 7px 0 #c6d8f7,
-            0 18px 30px rgba(34,38,110,.10);
+          box-shadow: 0 18px 30px rgba(34,38,110,.10);
         }
 
         .attendance-page .attendance-page-hero h1 {
@@ -2937,9 +3659,11 @@ return (
         .attendance-page .panel {
           padding: 18px;
           border-radius: 24px;
-          box-shadow:
-            6px 7px 0 #c4ccff,
-            0 18px 30px rgba(34,38,110,.10);
+          box-shadow: 0 18px 30px rgba(34,38,110,.10);
+        }
+
+        .attendance-section-tabs {
+          grid-template-columns: 1fr;
         }
 
         .attendance-page .attendance-filter-grid,
@@ -2955,11 +3679,20 @@ return (
           width: 100%;
         }
 
+        .attendance-report-action-stack,
         .attendance-report-actions {
           width: 100%;
+        }
+
+        .attendance-report-actions {
           display: flex;
           flex-wrap: wrap;
           gap: 9px;
+        }
+
+        .attendance-row-action-stack {
+          min-width: 150px;
+          max-width: 240px;
         }
 
         .attendance-report-display-toolbar {
@@ -3128,22 +3861,52 @@ return (
               : 'Mark Office, WFH, or Field attendance directly. Field attendance captures visit place, photo, and location. Holiday work requires approval before attendance and creates claimable comp-off after checkout.'}
           </p>
 
-          <div className="hero-actions">
+          <div className="hero-actions attendance-action-stack">
             <button
               type="button"
               className="secondary"
-              onClick={refreshAttendance}
+              onClick={() =>
+                refreshAttendance({
+                  showLoader: false,
+                  feedbackScope: 'refresh',
+                })
+              }
               disabled={loadingPage}
             >
-              <RefreshCcw size={16} />
+              <RefreshCcw
+                size={16}
+                className={loadingPage ? 'attendance-inline-spin' : ''}
+              />
               {loadingPage ? 'Refreshing...' : 'Refresh'}
-              <ArrowUpRight size={15} />
             </button>
+
+            <AttendanceInlineMessage
+              message={inlineFeedback.refresh}
+              onClose={() => clearInlineFeedback('refresh')}
+            />
           </div>
         </div>
 
-                {showEmployeeSelfAttendancePanel && (
-          <AttendanceWidget onSuccess={refreshAttendance} />
+        {showEmployeeSelfAttendancePanel && (
+          <div className="attendance-widget-stack">
+            <AttendanceWidget
+              onSuccess={() => {
+                showInlineFeedback(
+                  'attendance-widget',
+                  'success',
+                  'Attendance was updated successfully. Latest records are syncing in the background.',
+                  'Attendance Updated',
+                );
+
+                refreshAttendance({ showLoader: false });
+              }}
+            />
+
+            <AttendanceInlineMessage
+              message={inlineFeedback['attendance-widget']}
+              onClose={() => clearInlineFeedback('attendance-widget')}
+            />
+          </div>
         )}
       </section>
 
@@ -3182,8 +3945,70 @@ return (
         </section>
       ) : null}
 
+      <nav
+        className="attendance-section-tabs"
+        aria-label="Attendance sections"
+      >
+        <button
+          type="button"
+          className={`attendance-section-tab ${
+            activeSection === 'attendance' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('attendance')}
+          aria-pressed={activeSection === 'attendance'}
+        >
+          <CalendarDays size={18} />
+          <span className="attendance-section-tab-copy">
+            <strong>Attendance Records</strong>
+            <small>Personal records, reports and verification</small>
+          </span>
+          <span className="attendance-section-tab-count">
+            {canViewReport ? report.length : myAttendance.length}
+          </span>
+        </button>
 
-      {showEmployeeSelfAttendancePanel && (
+        <button
+          type="button"
+          className={`attendance-section-tab ${
+            activeSection === 'holiday' ? 'is-active' : ''
+          }`}
+          onClick={() => setActiveSection('holiday')}
+          aria-pressed={activeSection === 'holiday'}
+        >
+          <ShieldCheck size={18} />
+          <span className="attendance-section-tab-copy">
+            <strong>Holiday Work</strong>
+            <small>Requests, approvals, comp-off rules and holidays</small>
+          </span>
+          <span className="attendance-section-tab-count">
+            {myHolidayWorkRequests.length +
+              holidayWorkRequests.length +
+              holidays.length}
+          </span>
+        </button>
+
+        {canViewReport ? (
+          <button
+            type="button"
+            className={`attendance-section-tab ${
+              activeSection === 'field' ? 'is-active' : ''
+            }`}
+            onClick={() => setActiveSection('field')}
+            aria-pressed={activeSection === 'field'}
+          >
+            <MapPin size={18} />
+            <span className="attendance-section-tab-copy">
+              <strong>Field Attendance</strong>
+              <small>Team field records, locations and photos</small>
+            </span>
+            <span className="attendance-section-tab-count">
+              {teamFieldAttendance.length}
+            </span>
+          </button>
+        ) : null}
+      </nav>
+
+      {showEmployeeSelfAttendancePanel && activeSection === 'holiday' && (
         <section className="two-col attendance-page-dual">
           <div className="panel">
             <div className="toolbar">
@@ -3214,7 +4039,7 @@ return (
         </section>
       )}
 
-      {showEmployeeSelfAttendancePanel && (
+      {showEmployeeSelfAttendancePanel && activeSection === 'attendance' && (
       <section className="two-col attendance-page-dual">
         <div className="panel attendance-page-panel">
           <span className="attendance-section-kicker">Personal Records</span>
@@ -3282,13 +4107,20 @@ return (
               />
             </label>
 
-            <button
-              type="submit"
-              className="primary"
-              disabled={claimingCompOff || !availableCompOffs.length}
-            >
-              {claimingCompOff ? 'Claiming...' : 'Claim Comp-Off'}
-            </button>
+            <div className="attendance-action-stack">
+              <button
+                type="submit"
+                className="primary"
+                disabled={claimingCompOff || !availableCompOffs.length}
+              >
+                {claimingCompOff ? 'Claiming...' : 'Claim Comp-Off'}
+              </button>
+
+              <AttendanceInlineMessage
+                message={inlineFeedback['compoff-claim']}
+                onClose={() => clearInlineFeedback('compoff-claim')}
+              />
+            </div>
           </form>
 
           <Table rows={myCompOffs} maxColumns={10} />
@@ -3296,7 +4128,7 @@ return (
       </section>
       )}
 
-      {canViewReport && (
+      {canViewReport && activeSection === 'attendance' && (
         <section className="panel attendance-report-panel">
           <div className="attendance-report-header">
             <div>
@@ -3308,16 +4140,27 @@ return (
             </div>
 
             {hasActiveReportFilters && (
-              <div className="attendance-report-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={clearReportFilters}
-                  disabled={loadingReport}
-                >
-                  <X size={16} />
-                  Clear Filters
-                </button>
+              <div className="attendance-action-stack attendance-report-action-stack">
+                <div className="attendance-report-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      clearReportFilters('report-header-clear')
+                    }
+                    disabled={loadingReport}
+                  >
+                    <X size={16} />
+                    Clear Filters
+                  </button>
+                </div>
+
+                <AttendanceInlineMessage
+                  message={inlineFeedback['report-header-clear']}
+                  onClose={() =>
+                    clearInlineFeedback('report-header-clear')
+                  }
+                />
               </div>
             )}
           </div>
@@ -3464,20 +4307,27 @@ return (
               </label>
             </div>
 
-            <div className="attendance-filter-actions">
-              <button type="submit" className="primary" disabled={loadingReport}>
-                <Search size={16} />
-                {loadingReport ? 'Searching...' : 'Search Records'}
-              </button>
+            <div className="attendance-action-stack">
+              <div className="attendance-filter-actions">
+                <button type="submit" className="primary" disabled={loadingReport}>
+                  <Search size={16} />
+                  {loadingReport ? 'Searching...' : 'Search Records'}
+                </button>
 
-              <button
-                type="button"
-                className="secondary"
-                onClick={clearReportFilters}
-                disabled={loadingReport}
-              >
-                Clear
-              </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => clearReportFilters('report-filter')}
+                  disabled={loadingReport}
+                >
+                  Clear
+                </button>
+              </div>
+
+              <AttendanceInlineMessage
+                message={inlineFeedback['report-filter']}
+                onClose={() => clearInlineFeedback('report-filter')}
+              />
             </div>
           </form>
 
@@ -3527,6 +4377,8 @@ return (
             onVerifySelected={verifySelectedAttendance}
             onVerifyAll={verifyAllAttendance}
             bulkVerifying={bulkVerifying}
+            feedbackMessage={inlineFeedback['bulk-verify']}
+            onFeedbackClose={() => clearInlineFeedback('bulk-verify')}
           />
 
           {reportViewMode === 'table' ? (
@@ -3549,7 +4401,7 @@ return (
         </section>
       )}
 
-      {canViewReport && (
+      {canViewReport && activeSection === 'holiday' && (
         <section className="panel">
           <div className="toolbar">
             <div>
@@ -3604,18 +4456,25 @@ return (
               </label>
             </div>
 
-            <div className="attendance-filter-actions">
-              <button type="submit" className="primary">
-                Search Holiday Requests
-              </button>
+            <div className="attendance-action-stack">
+              <div className="attendance-filter-actions">
+                <button type="submit" className="primary">
+                  Search Holiday Requests
+                </button>
 
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={clearHolidayWorkFilters}
-                  >
-                    Clear
-                  </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={clearHolidayWorkFilters}
+                >
+                  Clear
+                </button>
+              </div>
+
+              <AttendanceInlineMessage
+                message={inlineFeedback['holiday-filter']}
+                onClose={() => clearInlineFeedback('holiday-filter')}
+              />
             </div>
           </form>
 
@@ -3623,7 +4482,7 @@ return (
         </section>
       )}
 
-      {canViewReport && (
+      {canViewReport && activeSection === 'field' && (
         <section className="panel">
           <div className="toolbar">
             <div>
@@ -3674,19 +4533,26 @@ return (
               </label>
             </div>
 
-            <div className="attendance-filter-actions">
-              <button type="submit" className="primary" disabled={loadingTeamField}>
-                {loadingTeamField ? 'Loading...' : 'Search Field Attendance'}
-              </button>
+            <div className="attendance-action-stack">
+              <div className="attendance-filter-actions">
+                <button type="submit" className="primary" disabled={loadingTeamField}>
+                  {loadingTeamField ? 'Loading...' : 'Search Field Attendance'}
+                </button>
 
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={loadingTeamField}
-                      onClick={clearTeamFieldFilters}
-                    >
-                      Clear
-                    </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={loadingTeamField}
+                  onClick={clearTeamFieldFilters}
+                >
+                  Clear
+                </button>
+              </div>
+
+              <AttendanceInlineMessage
+                message={inlineFeedback['field-filter']}
+                onClose={() => clearInlineFeedback('field-filter')}
+              />
             </div>
           </form>
 
@@ -3695,7 +4561,7 @@ return (
       )}
 
 
-      {canManageHoliday && (
+      {canManageHoliday && activeSection === 'holiday' && (
         <section className="panel">
           <div className="toolbar">
             <div>
@@ -3762,9 +4628,16 @@ return (
               />
             </label>
 
-            <button type="submit" className="primary" disabled={savingHoliday}>
-              {savingHoliday ? 'Adding...' : 'Add Holiday'}
-            </button>
+            <div className="attendance-action-stack">
+              <button type="submit" className="primary" disabled={savingHoliday}>
+                {savingHoliday ? 'Adding...' : 'Add Holiday'}
+              </button>
+
+              <AttendanceInlineMessage
+                message={inlineFeedback['holiday-create']}
+                onClose={() => clearInlineFeedback('holiday-create')}
+              />
+            </div>
           </form>
 
           <Table rows={holidays} maxColumns={8} />
@@ -3810,6 +4683,8 @@ return (
                 onVerifySelected={verifySelectedAttendance}
                 onVerifyAll={verifyAllAttendance}
                 bulkVerifying={bulkVerifying}
+                feedbackMessage={inlineFeedback['bulk-verify']}
+                onFeedbackClose={() => clearInlineFeedback('bulk-verify')}
               />
 
               <AttendanceReportTable

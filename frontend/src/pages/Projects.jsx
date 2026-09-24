@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight,
   BarChart3,
   BriefcaseBusiness,
   CheckCircle2,
-  Clock3,
+  ChevronLeft,
+  ChevronRight,
   RefreshCcw,
+  Search,
   Sparkles,
-  UsersRound,
+  XCircle,
 } from 'lucide-react';
 import {
   addProjectProgress,
@@ -27,6 +28,9 @@ import {
   updateProjectStatus,
 } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
+
+const PROJECT_NOTICE_HIDE_MS = 3600;
+const PROJECT_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function toArray(value) {
   if (Array.isArray(value)) return value;
@@ -831,28 +835,24 @@ function ProjectAnalyticsGraph({ projects = [] }) {
 
       <div className="project-graph-grid">
         <div className="project-graph-card">
-          <BriefcaseBusiness size={20} aria-hidden="true" />
           <span>Total Projects</span>
           <strong>{projects.length}</strong>
           <small>All scoped projects</small>
         </div>
 
         <div className="project-graph-card green">
-          <Clock3 size={20} aria-hidden="true" />
           <span>Active</span>
           <strong>{activeProjects.length}</strong>
           <small>Currently running</small>
         </div>
 
         <div className="project-graph-card amber">
-          <UsersRound size={20} aria-hidden="true" />
           <span>On Hold</span>
           <strong>{onHoldProjects.length}</strong>
           <small>Paused projects</small>
         </div>
 
         <div className="project-graph-card indigo">
-          <CheckCircle2 size={20} aria-hidden="true" />
           <span>Completed</span>
           <strong>{completedProjects.length}</strong>
           <small>Closed projects</small>
@@ -928,6 +928,200 @@ function ProjectAnalyticsGraph({ projects = [] }) {
   );
 }
 
+
+function projectMatchesSearch(project = {}, search = '') {
+  const term = String(search || '').trim().toLowerCase();
+
+  if (!term) return true;
+
+  const teamLeader = getProjectTeamLeader(project);
+  const reportingOfficer = getProjectReportingOfficer(project);
+  const people = normalizePeople([
+    ...getProjectAssignedMembers(project),
+    ...getProjectCollaborators(project),
+    ...getProjectDoingPeople(project),
+    teamLeader,
+    reportingOfficer,
+    project.latest_progress_person,
+  ].filter(Boolean));
+
+  const haystack = [
+    getName(project),
+    project.description,
+    project.department,
+    statusLabel(project.status),
+    project.latest_progress_by_name,
+    getName(teamLeader),
+    getName(reportingOfficer),
+    ...people.flatMap((person) => [
+      getName(person),
+      person.email,
+      person.department,
+      person.designation,
+    ]),
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .join(' ');
+
+  return haystack.includes(term);
+}
+
+function projectPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function ProjectInlineMessage({
+  message,
+  onClose,
+  className = '',
+}) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`project-inline-feedback ${message.type || 'info'} ${className}`.trim()}
+      role="status"
+    >
+      <span className="project-inline-feedback-icon">
+        {message.loading ? (
+          <RefreshCcw size={15} className="project-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="project-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="project-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function ProjectPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Number(pageSize || 10)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="project-pagination">
+      <div className="project-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>projects</span>
+      </div>
+
+      <div className="project-pagination-controls">
+        <label className="project-page-size-control">
+          <span>View</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            aria-label="Projects per page"
+          >
+            {PROJECT_PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="project-page-button project-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="project-page-numbers" aria-label="Pagination">
+          {projectPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`project-page-number ${item === safePage ? 'active' : ''}`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span key={item} className="project-page-ellipsis">
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="project-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="project-page-button project-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProjectCard({
   project,
   employees,
@@ -936,8 +1130,15 @@ function ProjectCard({
   onStatusChange,
   onAssign,
   onProgressSubmit,
+  feedbackMap = {},
+  onFeedbackClose = () => {},
 }) {
   const projectId = String(getId(project));
+  const assignmentFeedbackScope = `project-${projectId}-assignment`;
+  const quickAssignmentFeedbackScope = `project-${projectId}-quick-assignment`;
+  const quickCollaboratorFeedbackScope = `project-${projectId}-quick-collaborator`;
+  const statusFeedbackScope = `project-${projectId}-status`;
+  const progressFeedbackScope = `project-${projectId}-progress`;
   const status = normalizeStatus(project.status);
   const hasProjectManagementFlag = [
     'can_manage_project_team',
@@ -1010,13 +1211,18 @@ function ProjectCard({
     nextAssignedIds = assignedIds,
     nextCollaboratorIds = collaboratorIds,
     nextPrimaryAssigneeId = primaryAssigneeId,
+    feedbackScope = assignmentFeedbackScope,
   ) {
-    await onAssign(projectId, {
-      assigned_employee_ids: nextAssignedIds,
-      collaborator_ids: nextCollaboratorIds,
-      primary_assignee_id: nextPrimaryAssigneeId,
-      assignment_reason: assignmentReason.trim(),
-    });
+    await onAssign(
+      projectId,
+      {
+        assigned_employee_ids: nextAssignedIds,
+        collaborator_ids: nextCollaboratorIds,
+        primary_assignee_id: nextPrimaryAssigneeId,
+        assignment_reason: assignmentReason.trim(),
+      },
+      feedbackScope,
+    );
   }
 
   function changeAssignedMembers(nextAssignedIds) {
@@ -1033,10 +1239,14 @@ function ProjectCard({
   }
 
   function changeProjectStatus(nextStatus) {
-    return onStatusChange(projectId, {
-      status: nextStatus,
-      status_reason: statusReason.trim(),
-    });
+    return onStatusChange(
+      projectId,
+      {
+        status: nextStatus,
+        status_reason: statusReason.trim(),
+      },
+      statusFeedbackScope,
+    );
   }
 
   async function assignSelfAsMember() {
@@ -1054,6 +1264,7 @@ function ProjectCard({
       nextAssignedIds,
       collaboratorIds,
       nextPrimaryAssigneeId,
+      quickAssignmentFeedbackScope,
     );
   }
 
@@ -1066,15 +1277,24 @@ function ProjectCard({
 
     setCollaboratorIds(nextCollaboratorIds);
 
-    await saveAssignment(assignedIds, nextCollaboratorIds);
+    await saveAssignment(
+      assignedIds,
+      nextCollaboratorIds,
+      primaryAssigneeId,
+      quickCollaboratorFeedbackScope,
+    );
   }
 
   async function saveProgress() {
-    await onProgressSubmit(projectId, {
-      progress_percent: progressPercent,
-      note: progressNote,
-      date: new Date().toISOString().slice(0, 10),
-    });
+    await onProgressSubmit(
+      projectId,
+      {
+        progress_percent: progressPercent,
+        note: progressNote,
+        date: new Date().toISOString().slice(0, 10),
+      },
+      progressFeedbackScope,
+    );
 
     setProgressNote('');
   }
@@ -1154,24 +1374,38 @@ function ProjectCard({
               </small>
             </div>
 
-            <div>
-              <button
-                type="button"
-                className="project-btn project-btn-soft"
-                onClick={assignSelfAsMember}
-                disabled={!selfId || selfAssigned}
-              >
-                {selfAssigned ? 'You are Assigned' : 'Assign to Myself'}
-              </button>
+            <div className="project-self-action-grid">
+              <div className="project-inline-action-stack">
+                <button
+                  type="button"
+                  className="project-btn project-btn-soft"
+                  onClick={assignSelfAsMember}
+                  disabled={!selfId || selfAssigned}
+                >
+                  {selfAssigned ? 'You are Assigned' : 'Assign to Myself'}
+                </button>
 
-              <button
-                type="button"
-                className="project-btn project-btn-soft"
-                onClick={addSelfAsCollaborator}
-                disabled={!selfId || selfCollaborator}
-              >
-                {selfCollaborator ? 'You are Collaborator' : 'Add Me as Collaborator'}
-              </button>
+                <ProjectInlineMessage
+                  message={feedbackMap[quickAssignmentFeedbackScope]}
+                  onClose={() => onFeedbackClose(quickAssignmentFeedbackScope)}
+                />
+              </div>
+
+              <div className="project-inline-action-stack">
+                <button
+                  type="button"
+                  className="project-btn project-btn-soft"
+                  onClick={addSelfAsCollaborator}
+                  disabled={!selfId || selfCollaborator}
+                >
+                  {selfCollaborator ? 'You are Collaborator' : 'Add Me as Collaborator'}
+                </button>
+
+                <ProjectInlineMessage
+                  message={feedbackMap[quickCollaboratorFeedbackScope]}
+                  onClose={() => onFeedbackClose(quickCollaboratorFeedbackScope)}
+                />
+              </div>
             </div>
           </div>
 
@@ -1228,6 +1462,11 @@ function ProjectCard({
               Save Team and Responsibility Changes
             </button>
           </div>
+
+          <ProjectInlineMessage
+            message={feedbackMap[assignmentFeedbackScope]}
+            onClose={() => onFeedbackClose(assignmentFeedbackScope)}
+          />
         </>
       ) : (
         <div className="project-readonly-box">
@@ -1297,6 +1536,11 @@ function ProjectCard({
             )}
           </div>
 
+          <ProjectInlineMessage
+            message={feedbackMap[statusFeedbackScope]}
+            onClose={() => onFeedbackClose(statusFeedbackScope)}
+          />
+
           {status !== 'completed' && (
             <div className="project-progress-form">
               <div className="project-field">
@@ -1324,6 +1568,12 @@ function ProjectCard({
               <button type="button" className="project-btn project-btn-primary" onClick={saveProgress}>
                 Submit Daily Progress
               </button>
+
+              <ProjectInlineMessage
+                message={feedbackMap[progressFeedbackScope]}
+                onClose={() => onFeedbackClose(progressFeedbackScope)}
+                className="project-action-feedback"
+              />
             </div>
           )}
         </>
@@ -1501,6 +1751,12 @@ export default function Projects({ user: providedUser = {}, setPage } = {}) {
   });
   const [filter, setFilter] = useState('active');
   const [listDepartmentFilter, setListDepartmentFilter] = useState('');
+  const [activeSection, setActiveSection] = useState('projects');
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectPage, setProjectPage] = useState(1);
+  const [projectPageSize, setProjectPageSize] = useState(10);
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
 
 const [form, setForm] = useState({
   name: '',
@@ -1512,6 +1768,66 @@ const [form, setForm] = useState({
 });
 
   const user = providedUser?.email ? providedUser : currentUser();
+
+  function clearInlineFeedback(scope) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scope)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scope];
+      return next;
+    });
+  }
+
+  function showInlineFeedback(
+    scope,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scope) return;
+
+    const timer = feedbackTimersRef.current[scope];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => ({
+      ...current,
+      [scope]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scope] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          const next = { ...current };
+          delete next[scope];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scope];
+      }, PROJECT_NOTICE_HIDE_MS);
+    }
+  }
 
   const activeProjects = useMemo(
     () => projects.filter((project) => normalizeStatus(project.status) === 'active'),
@@ -1535,6 +1851,31 @@ const visibleProjects = useMemo(() => {
 
   return activeProjects;
 }, [activeProjects, completedProjects, filter, onHoldProjects, projects]);
+
+const searchedProjects = useMemo(
+  () =>
+    visibleProjects.filter((project) =>
+      projectMatchesSearch(project, projectSearch),
+    ),
+  [projectSearch, visibleProjects],
+);
+
+const projectPageCount = Math.max(
+  1,
+  Math.ceil(searchedProjects.length / projectPageSize),
+);
+
+const pagedProjects = useMemo(() => {
+  const safePage = Math.min(Math.max(1, projectPage), projectPageCount);
+  const start = (safePage - 1) * projectPageSize;
+
+  return searchedProjects.slice(start, start + projectPageSize);
+}, [
+  projectPage,
+  projectPageCount,
+  projectPageSize,
+  searchedProjects,
+]);
 
 const departments = useMemo(() => {
   const values = employees
@@ -1577,8 +1918,24 @@ const createFormEmployees = useMemo(() => {
   const saasCompanyName = getSaasCompanyName(user);
 
 
-  async function loadData() {
-    setLoading(true);
+  async function loadData({
+    feedbackScope = '',
+    showLoader = true,
+    errorFeedbackScope = '',
+  } = {}) {
+    if (showLoader) {
+      setLoading(true);
+    }
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing project, team and permission data...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
 
     try {
       const [
@@ -1631,10 +1988,36 @@ const createFormEmployees = useMemo(() => {
           projectOptionsResponse?.can_create_assign_collaborate,
         ),
       });
+
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'success',
+          'Project data is up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
     } catch (err) {
-      alerts.error(err.message || 'Unable to load project data.', 'Project Load Failed');
+      const feedbackTarget = feedbackScope || errorFeedbackScope;
+
+      if (feedbackTarget) {
+        showInlineFeedback(
+          feedbackTarget,
+          'error',
+          err.message || 'Unable to load project data.',
+          feedbackScope ? 'Refresh Failed' : 'Project Refresh Failed',
+        );
+      } else if (showLoader) {
+        alerts.error(err.message || 'Unable to load project data.', 'Project Load Failed');
+      }
+
+      return false;
     } finally {
-      setLoading(false);
+      if (showLoader) {
+        setLoading(false);
+      }
     }
   }
 
@@ -1642,6 +2025,39 @@ useEffect(() => {
   loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [listDepartmentFilter]);
+
+useEffect(() => {
+  setProjectPage(1);
+}, [filter, listDepartmentFilter, projectSearch]);
+
+useEffect(() => {
+  setProjectPage((current) => Math.min(current, projectPageCount));
+}, [projectPageCount]);
+
+useEffect(() => {
+  function dismissInlineFeedback(event) {
+    if (event.target?.closest?.('.project-inline-feedback')) return;
+
+    Object.values(feedbackTimersRef.current).forEach((timer) => {
+      window.clearTimeout(timer);
+    });
+
+    feedbackTimersRef.current = {};
+    setInlineFeedback({});
+  }
+
+  document.addEventListener('pointerdown', dismissInlineFeedback);
+
+  return () => {
+    document.removeEventListener('pointerdown', dismissInlineFeedback);
+
+    Object.values(feedbackTimersRef.current).forEach((timer) => {
+      window.clearTimeout(timer);
+    });
+
+    feedbackTimersRef.current = {};
+  };
+}, []);
 
   function updateForm(key, value) {
     setForm((previous) => {
@@ -1665,7 +2081,12 @@ if (key === 'department') {
     const selfId = currentEmployeeOption ? String(getId(currentEmployeeOption)) : '';
 
     if (!selfId) {
-      alerts.warning('Current employee profile was not found. Please refresh or login again.', 'Employee Profile Missing');
+      showInlineFeedback(
+        'create-self',
+        'warning',
+        'Current employee profile was not found. Please refresh or login again.',
+        'Employee Profile Missing',
+      );
       return;
     }
 
@@ -1680,34 +2101,65 @@ if (key === 'department') {
       };
     });
 
-    alerts.success('Your name has been added to the assigned team members list.', 'Added Successfully');
+    showInlineFeedback(
+      'create-self',
+      'success',
+      'Your name has been added to the assigned team members list.',
+      'Added Successfully',
+    );
   }
 
   async function handleCreateProject(event) {
     event.preventDefault();
+    clearInlineFeedback('create-project');
 
     if (isExpiredOrSuspendedTenant) {
-      alerts.warning('Your demo subscription is expired or suspended. Please upgrade to continue using Projects.', 'Subscription Required');
+      alerts.warning(
+        'Your demo subscription is expired or suspended. Please upgrade to continue using Projects.',
+        'Subscription Required',
+      );
       openSaasBillingPage(setPage);
       return;
     }
 
     if (!canManageProjectSetup) {
-      alerts.warning('Only Team Leaders and Reporting Officers can create projects.', 'Access Restricted');
+      showInlineFeedback(
+        'create-project',
+        'warning',
+        'Only Team Leaders and Reporting Officers can create projects.',
+        'Access Restricted',
+      );
       return;
     }
 
     if (!String(form.name || '').trim()) {
-      alerts.warning('Project name is required.', 'Missing Project Name');
+      showInlineFeedback(
+        'create-project',
+        'warning',
+        'Project name is required.',
+        'Missing Project Name',
+      );
       return;
     }
 
     if (!form.department) {
-      alerts.warning('Please select a department before creating a project.', 'Missing Department');
+      showInlineFeedback(
+        'create-project',
+        'warning',
+        'Please select a department before creating a project.',
+        'Missing Department',
+      );
       return;
     }
 
     setSaving(true);
+    showInlineFeedback(
+      'create-project',
+      'info',
+      'Creating the project and saving its initial team mapping...',
+      'Creating Project',
+      { loading: true },
+    );
 
     try {
       await createProject({
@@ -1718,7 +2170,12 @@ if (key === 'department') {
         status: 'active',
       });
 
-      alerts.success('Project created successfully.', 'Project Created');
+      showInlineFeedback(
+        'create-project',
+        'success',
+        'Project created successfully.',
+        'Project Created',
+      );
 
       setForm({
         name: '',
@@ -1729,17 +2186,34 @@ if (key === 'department') {
         collaborator_ids: [],
       });
 
-      await loadData();
+      await loadData({
+        showLoader: false,
+        errorFeedbackScope: 'create-project',
+      });
     } catch (err) {
-      alerts.error(err.message || 'Unable to create project.', 'Project Create Failed');
+      showInlineFeedback(
+        'create-project',
+        'error',
+        err.message || 'Unable to create project.',
+        'Project Create Failed',
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleStatusChange(projectId, statusOrPayload) {
+  async function handleStatusChange(projectId, statusOrPayload, feedbackScope = '') {
     if (!projectId) {
-      alerts.warning('Project id not found.', 'Invalid Project');
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'warning',
+          'Project id not found.',
+          'Invalid Project',
+        );
+      } else {
+        alerts.warning('Project id not found.', 'Invalid Project');
+      }
       return;
     }
 
@@ -1753,10 +2227,19 @@ if (key === 'department') {
     ).trim();
 
     if (status === 'on_hold' && !statusReason) {
-      alerts.warning(
-        'Please enter a reason before putting this project on hold.',
-        'Hold Reason Required',
-      );
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'warning',
+          'Please enter a reason before putting this project on hold.',
+          'Hold Reason Required',
+        );
+      } else {
+        alerts.warning(
+          'Please enter a reason before putting this project on hold.',
+          'Hold Reason Required',
+        );
+      }
       return;
     }
 
@@ -1786,7 +2269,16 @@ if (key === 'department') {
     const action = statusActions[status];
 
     if (!action) {
-      alerts.warning('Invalid project status selected.', 'Invalid Status');
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'warning',
+          'Invalid project status selected.',
+          'Invalid Status',
+        );
+      } else {
+        alerts.warning('Invalid project status selected.', 'Invalid Status');
+      }
       return;
     }
 
@@ -1801,10 +2293,28 @@ if (key === 'department') {
     );
 
     if (!confirmed) {
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'info',
+          'No project status changes were made.',
+          'Action Cancelled',
+        );
+      }
       return;
     }
 
     setSaving(true);
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Updating project status...',
+        action.title,
+        { loading: true },
+      );
+    }
 
     try {
       await updateProjectStatus(projectId, {
@@ -1812,18 +2322,66 @@ if (key === 'department') {
         status,
         status_reason: statusReason,
       });
-      alerts.success(action.success, 'Project Status Updated');
-      await loadData();
+
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'success',
+          action.success,
+          'Project Status Updated',
+        );
+      } else {
+        alerts.success(action.success, 'Project Status Updated');
+      }
+
+      await loadData({
+        showLoader: false,
+        errorFeedbackScope: feedbackScope,
+      });
     } catch (err) {
-      alerts.error(err.message || 'Unable to update project status.', 'Status Update Failed');
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'error',
+          err.message || 'Unable to update project status.',
+          'Status Update Failed',
+        );
+      } else {
+        alerts.error(err.message || 'Unable to update project status.', 'Status Update Failed');
+      }
     } finally {
       setSaving(false);
     }
   }
 
-async function handleAssign(projectId, payload) {
+async function handleAssign(projectId, payload, feedbackScope = '') {
+  const notifyAssignment = (type, text, title, options = {}) => {
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        type,
+        text,
+        title,
+        options,
+      );
+      return;
+    }
+
+    if (type === 'warning') {
+      alerts.warning(text, title);
+    } else if (type === 'error') {
+      alerts.error(text, title);
+    } else if (type === 'success') {
+      alerts.success(text, title);
+    }
+  };
+
   if (!projectId) {
-    alerts.warning('Project id not found.', 'Invalid Project');
+    notifyAssignment(
+      'warning',
+      'Project id not found.',
+      'Invalid Project',
+    );
     return;
   }
 
@@ -1846,7 +2404,8 @@ async function handleAssign(projectId, payload) {
     : canManageProjectSetup;
 
   if (!canManageSelectedProject) {
-    alerts.warning(
+    notifyAssignment(
+      'warning',
       "Only this project's Team Leader, Reporting Officer, or Admin can change its team.",
       'Access Restricted',
     );
@@ -1865,7 +2424,8 @@ async function handleAssign(projectId, payload) {
   ).trim();
 
   if (assignedEmployeeIds.length && !primaryAssigneeId) {
-    alerts.warning(
+    notifyAssignment(
+      'warning',
       'Select the primary responsible person from the assigned members.',
       'Responsible Person Required',
     );
@@ -1876,7 +2436,8 @@ async function handleAssign(projectId, payload) {
     primaryAssigneeId &&
     !assignedEmployeeIds.includes(primaryAssigneeId)
   ) {
-    alerts.warning(
+    notifyAssignment(
+      'warning',
       'The primary responsible person must also be an assigned team member.',
       'Invalid Responsible Person',
     );
@@ -1888,7 +2449,8 @@ async function handleAssign(projectId, payload) {
     primaryAssigneeId !== previousPrimaryAssigneeId &&
     !assignmentReason
   ) {
-    alerts.warning(
+    notifyAssignment(
+      'warning',
       'Please enter a reason before changing the primary responsible person.',
       'Reassignment Reason Required',
     );
@@ -1896,6 +2458,16 @@ async function handleAssign(projectId, payload) {
   }
 
   setSaving(true);
+
+  if (feedbackScope) {
+    showInlineFeedback(
+      feedbackScope,
+      'info',
+      'Saving team members, collaborators and responsibility mapping...',
+      'Updating Assignment',
+      { loading: true },
+    );
+  }
 
   try {
     const assignedPayload = {
@@ -1912,41 +2484,106 @@ async function handleAssign(projectId, payload) {
     await updateProjectMembers(projectId, assignedPayload);
     await updateProjectCollaborators(projectId, collaboratorPayload);
 
-    alerts.success('Project assignment and collaborators updated successfully.', 'Assignment Updated');
-    await loadData();
+    notifyAssignment(
+      'success',
+      'Project assignment and collaborators updated successfully.',
+      'Assignment Updated',
+    );
+
+    await loadData({
+      showLoader: false,
+      errorFeedbackScope: feedbackScope,
+    });
   } catch (err) {
-    alerts.error(err.message || 'Unable to update project assignment.', 'Assignment Update Failed');
+    notifyAssignment(
+      'error',
+      err.message || 'Unable to update project assignment.',
+      'Assignment Update Failed',
+    );
   } finally {
     setSaving(false);
   }
 }
 
-  async function handleProgressSubmit(projectId, payload) {
+  async function handleProgressSubmit(projectId, payload, feedbackScope = '') {
+    const notifyProgress = (type, text, title, options = {}) => {
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          type,
+          text,
+          title,
+          options,
+        );
+        return;
+      }
+
+      if (type === 'warning') {
+        alerts.warning(text, title);
+      } else if (type === 'error') {
+        alerts.error(text, title);
+      } else if (type === 'success') {
+        alerts.success(text, title);
+      }
+    };
+
     if (!projectId) {
-      alerts.warning('Project id not found.', 'Invalid Project');
+      notifyProgress(
+        'warning',
+        'Project id not found.',
+        'Invalid Project',
+      );
       return;
     }
 
     const progress = Number(payload.progress_percent);
 
     if (Number.isNaN(progress) || progress < 0 || progress > 100) {
-      alerts.warning('Progress must be between 0 and 100.', 'Invalid Progress');
+      notifyProgress(
+        'warning',
+        'Progress must be between 0 and 100.',
+        'Invalid Progress',
+      );
       return;
     }
 
     if (!String(payload.note || '').trim()) {
-      alerts.warning('Daily progress note is required.', 'Missing Progress Note');
+      notifyProgress(
+        'warning',
+        'Daily progress note is required.',
+        'Missing Progress Note',
+      );
       return;
     }
 
     setSaving(true);
 
+    notifyProgress(
+      'info',
+      'Submitting today\'s project progress...',
+      'Submitting Progress',
+      { loading: true },
+    );
+
     try {
       await addProjectProgress(projectId, payload);
-      alerts.success('Daily project progress submitted.', 'Progress Submitted');
-      await loadData();
+
+      notifyProgress(
+        'success',
+        'Daily project progress submitted.',
+        'Progress Submitted',
+      );
+
+      await loadData({
+        showLoader: false,
+        errorFeedbackScope: feedbackScope,
+      });
     } catch (err) {
-      alerts.error(err.message || 'Unable to submit daily progress.', 'Progress Submit Failed');
+      notifyProgress(
+        'error',
+        err.message || 'Unable to submit daily progress.',
+        'Progress Submit Failed',
+      );
     } finally {
       setSaving(false);
     }
@@ -1961,10 +2598,10 @@ async function handleAssign(projectId, payload) {
         .yourcomate-projects-page {
           --yp-ink: #101a3a;
           --yp-copy: #5d6d8d;
-          --yp-violet: #6658dc;
+          --yp-violet: #4d77dd;
           --yp-violet-deep: #40348d;
-          --yp-blue: #3766db;
-          --yp-cyan: #18b5c8;
+          --yp-blue: #4d77dd;
+          --yp-cyan: #2eb2b9;
           --yp-teal: #34c9c4;
           --yp-yellow: #d8ff43;
           --yp-paper: #fbfcff;
@@ -1979,17 +2616,41 @@ async function handleAssign(projectId, payload) {
           position: relative;
           isolation: isolate;
           overflow: hidden;
-          min-height: 280px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 310px);
+          gap: clamp(20px, 3vw, 38px);
+          align-items: center;
+          min-height: 240px;
           padding: clamp(25px, 3vw, 42px);
           border: 1px solid rgba(154, 164, 205, .58);
           border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
-          box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
+        }
+
+        .projects-hero-copy {
+          min-width: 0;
+          max-width: 900px;
+        }
+
+        .projects-hero-actions {
+          display: flex;
+          justify-content: flex-end;
+          width: 100%;
+        }
+
+        .project-action-stack {
+          width: min(320px, 100%);
+          display: grid;
+          gap: 9px;
         }
 
         .projects-hero h1 {
@@ -2027,7 +2688,8 @@ async function handleAssign(projectId, payload) {
           padding: 9px 13px;
           border-radius: 999px;
           color: #fff;
-          background: #342b78;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: none;
           font-size: 9px;
           font-weight: 950;
           line-height: 1;
@@ -2042,7 +2704,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 18px;
           color: #40348d;
           background: linear-gradient(145deg, #f1efff, #eef9ff);
-          box-shadow: 5px 6px 0 #c9c0ff;
+          box-shadow: none;
           font-size: 12px;
           font-weight: 850;
           line-height: 1.55;
@@ -2052,7 +2714,6 @@ async function handleAssign(projectId, payload) {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 15px;
-          margin-top: 22px;
         }
 
         .project-summary-card,
@@ -2062,11 +2723,9 @@ async function handleAssign(projectId, payload) {
           border: 1px solid rgba(171,181,211,.72);
           background: linear-gradient(145deg, #ffffff, #f7fbff);
           border-radius: clamp(24px, 2.1vw, 34px);
-          box-shadow:
-            8px 10px 0 #c4ccff,
-            0 24px 42px rgba(34,38,110,.10);
+          box-shadow: 0 20px 38px rgba(34,38,110,.08);
           transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
+            transform 180ms ease,
             box-shadow 210ms ease,
             border-color 210ms ease;
         }
@@ -2075,11 +2734,9 @@ async function handleAssign(projectId, payload) {
         .project-form:hover,
         .project-card:hover,
         .project-analytics-panel:hover {
-          border-color: rgba(98,84,218,.28);
-          transform: translateY(-3px);
-          box-shadow:
-            10px 12px 0 #c4ccff,
-            0 30px 50px rgba(34,38,110,.14);
+          border-color: rgba(77,119,221,.28);
+          transform: none;
+          box-shadow: 0 22px 42px rgba(34,38,110,.10);
         }
 
         .project-summary-card {
@@ -2091,35 +2748,29 @@ async function handleAssign(projectId, payload) {
 
         .project-summary-card:nth-child(1) {
           background: #edf6ff;
-          box-shadow:
-            7px 9px 0 #b9d7ff,
-            0 18px 30px rgba(15,20,75,.10);
+          box-shadow: 0 18px 30px rgba(15,20,75,.10);
         }
 
         .project-summary-card:nth-child(2) {
           background: #eaf8f4;
-          box-shadow:
-            7px 9px 0 #aee6d9,
-            0 18px 30px rgba(15,20,75,.10);
+          box-shadow: 0 18px 30px rgba(15,20,75,.10);
         }
 
         .project-summary-card:nth-child(3) {
           background: #fff4d5;
-          box-shadow:
-            7px 9px 0 #ffe0a5,
-            0 18px 30px rgba(15,20,75,.10);
+          box-shadow: 0 18px 30px rgba(15,20,75,.10);
         }
 
         .project-summary-card:nth-child(4) {
           background: #f1efff;
-          box-shadow:
-            7px 9px 0 #c9c0ff,
-            0 18px 30px rgba(15,20,75,.10);
+          box-shadow: 0 18px 30px rgba(15,20,75,.10);
         }
 
+        .project-summary-card::before,
         .project-summary-card::after {
           display: none;
           content: none;
+          background: none;
         }
 
         .project-summary-card span {
@@ -2144,10 +2795,7 @@ async function handleAssign(projectId, payload) {
           padding: clamp(20px, 2vw, 28px);
           display: grid;
           gap: 20px;
-          background:
-            radial-gradient(circle at 10% 0%, rgba(102,88,220,.10), transparent 29%),
-            radial-gradient(circle at 94% 4%, rgba(52,201,196,.10), transparent 28%),
-            linear-gradient(145deg, #ffffff, #f7fbff);
+          background: #fff;
         }
 
         .project-analytics-head {
@@ -2192,10 +2840,8 @@ async function handleAssign(projectId, payload) {
           border-radius: 999px;
           display: grid;
           place-items: center;
-          background: conic-gradient(#6658dc var(--ring-value), #e6e8f2 0);
-          box-shadow:
-            7px 8px 0 #c9c0ff,
-            0 18px 42px rgba(102,88,220,.16);
+          background: conic-gradient(#4d77dd var(--ring-value), #e6e8f2 0);
+          box-shadow: 0 18px 42px rgba(102,88,220,.16);
           flex: 0 0 auto;
         }
 
@@ -2238,50 +2884,25 @@ async function handleAssign(projectId, payload) {
           border: 1px solid rgba(178,185,210,.72);
           border-radius: 22px;
           background: #edf6ff;
-          box-shadow: 5px 6px 0 #b9d7ff;
+          box-shadow: none;
         }
 
         .project-graph-card.green {
           background: #eaf8f4;
-          box-shadow: 5px 6px 0 #aee6d9;
+          box-shadow: none;
         }
 
         .project-graph-card.amber {
           background: #fff4d5;
-          box-shadow: 5px 6px 0 #ffe0a5;
+          box-shadow: none;
         }
 
         .project-graph-card.indigo {
           background: #f1efff;
-          box-shadow: 5px 6px 0 #c9c0ff;
+          box-shadow: none;
         }
 
 
-        .project-graph-card > svg {
-          color: var(--yp-violet);
-          margin-bottom: 8px;
-          animation: projectMetricIconFloat 3.2s ease-in-out infinite;
-        }
-
-        .project-graph-card.green > svg {
-          color: #159f78;
-          animation-delay: -.7s;
-        }
-
-        .project-graph-card.amber > svg {
-          color: #d08a14;
-          animation-delay: -1.4s;
-        }
-
-        .project-graph-card.indigo > svg {
-          color: #6658dc;
-          animation-delay: -2.1s;
-        }
-
-        @keyframes projectMetricIconFloat {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-3px) rotate(-3deg); }
-        }
 
         .project-graph-card span {
           display: block;
@@ -2318,7 +2939,7 @@ async function handleAssign(projectId, payload) {
           padding: 17px;
           display: grid;
           gap: 13px;
-          box-shadow: 5px 6px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-modern-bar,
@@ -2327,7 +2948,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 17px;
           padding: 12px;
           background: rgba(255,255,255,.82);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-modern-bar {
@@ -2357,7 +2978,7 @@ async function handleAssign(projectId, payload) {
         .project-progress-fill {
           height: 100%;
           border-radius: 999px;
-          background: linear-gradient(90deg, #6658dc, #3766db, #34c9c4);
+          background: linear-gradient(90deg, #4d77dd, #2eb2b9);
         }
 
         .project-modern-bar small {
@@ -2398,10 +3019,7 @@ async function handleAssign(projectId, payload) {
 
         .project-form {
           padding: clamp(20px, 2vw, 28px);
-          background:
-            radial-gradient(circle at 0% 0%, rgba(105,217,208,.14), transparent 28%),
-            radial-gradient(circle at 100% 0%, rgba(102,88,220,.12), transparent 30%),
-            linear-gradient(145deg, #ffffff, #f7fbff);
+          background: #fff;
         }
 
         .project-section-title {
@@ -2451,11 +3069,8 @@ async function handleAssign(projectId, payload) {
         .project-field input:focus,
         .project-field select:focus,
         .project-field textarea:focus {
-          border-color: rgba(98,84,218,.65);
-          box-shadow:
-            4px 5px 0 rgba(102,88,220,.14),
-            0 0 0 4px rgba(102,88,220,.08);
-          transform: translateY(-1px);
+          border-color: rgba(77,119,221,.65);
+          box-shadow: 0 0 0 4px rgba(77,119,221,.09);
         }
 
         .project-field-full {
@@ -2468,6 +3083,334 @@ async function handleAssign(projectId, payload) {
           color: var(--yp-copy);
           font-size: 12px;
           line-height: 1.5;
+        }
+
+        .project-section-tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow: 0 16px 28px rgba(34,38,110,.08);
+        }
+
+        .project-section-tab {
+          min-width: 0;
+          min-height: 62px;
+          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          border: 1px solid rgba(77,119,221,.22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: none;
+          text-align: left;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            border-color 190ms ease,
+            box-shadow 190ms ease;
+        }
+
+        .project-section-tab:hover {
+          transform: translateY(-2px);
+          border-color: rgba(46,178,185,.46);
+        }
+
+        .project-section-tab.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: none;
+        }
+
+        .project-section-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .project-section-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .project-section-tab-copy small {
+          color: currentColor;
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.35;
+          opacity: .78;
+        }
+
+        .project-section-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: none;
+          font-size: 9px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .project-section-content {
+          animation: projectSectionReveal 220ms ease both;
+        }
+
+        @keyframes projectSectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .project-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: none;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .project-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: none;
+        }
+
+        .project-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: none;
+        }
+
+        .project-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: none;
+        }
+
+        .project-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .project-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .project-inline-feedback-copy strong,
+        .project-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .project-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .project-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .project-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          display: inline-grid;
+          place-items: center;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255,255,255,.58);
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .project-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .project-spin {
+          animation: projectSpin .8s linear infinite;
+        }
+
+        @keyframes projectSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        .project-action-feedback {
+          grid-column: 1 / -1;
+        }
+
+        .project-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          min-width: 0;
+          padding: 14px clamp(18px, 2vw, 24px);
+          border-top: 1px solid rgba(65,55,161,.10);
+          border-bottom: 1px solid rgba(65,55,161,.10);
+          background: rgba(255,255,255,.72);
+        }
+
+        .project-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          color: var(--yp-copy);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .project-pagination-copy strong {
+          color: var(--yp-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .project-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+          flex-wrap: wrap;
+        }
+
+        .project-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--yp-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .project-page-size-control select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          border: 1px solid rgba(98,84,218,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: none;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .project-page-button,
+        .project-page-number {
+          border: 1px solid rgba(98,84,218,.18);
+          color: #4767b4;
+          background: #fff;
+          box-shadow: none;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease,
+            filter 190ms ease;
+        }
+
+        .project-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 12px;
+          font-size: 10px;
+        }
+
+        .project-page-nav {
+          min-width: 78px;
+        }
+
+        .project-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .project-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 11px;
+          font-size: 10px;
+        }
+
+        .project-page-number.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: none;
+        }
+
+        .project-page-button:hover:not(:disabled),
+        .project-page-number:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .project-page-button:disabled,
+        .project-page-number:disabled {
+          opacity: .52;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .project-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .project-page-indicator {
+          min-width: 82px;
+          color: var(--yp-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
         }
 
         .project-toolbar {
@@ -2501,15 +3444,13 @@ async function handleAssign(projectId, payload) {
           padding: 10px 14px;
           color: #4f5c78;
           background: rgba(255,255,255,.88);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.09);
+          box-shadow: none;
         }
 
         .project-tab.is-active {
           color: #fff;
-          background: #342b78;
-          box-shadow:
-            5px 6px 0 #18b5c8,
-            0 14px 25px rgba(52,43,120,.16);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 14px 25px rgba(52,43,120,.16);
         }
 
         .project-btn {
@@ -2528,22 +3469,20 @@ async function handleAssign(projectId, payload) {
 
         .project-btn-primary {
           color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
-          box-shadow:
-            5px 6px 0 #a9d6f5,
-            0 14px 25px rgba(36,74,128,.16);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 14px 25px rgba(36,74,128,.16);
         }
 
         .project-btn-soft {
           color: #40348d;
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
+          box-shadow: none;
         }
 
         .project-btn-danger-soft {
           color: #a83b3b;
           background: #fff0ef;
-          box-shadow: 3px 4px 0 #f3c3bf;
+          box-shadow: none;
         }
 
         .project-btn:hover,
@@ -2557,7 +3496,7 @@ async function handleAssign(projectId, payload) {
           padding: 14px 16px;
           font-weight: 800;
           border: 1px solid;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-alert-error {
@@ -2573,8 +3512,104 @@ async function handleAssign(projectId, payload) {
         }
 
         .project-list {
+          width: 100%;
+          min-width: 0;
+          overflow: hidden;
+          border: 1px solid rgba(171,181,211,.72);
+          border-radius: clamp(24px, 2.1vw, 34px);
+          background: #fff;
+          box-shadow: 0 24px 42px rgba(34,38,110,.10);
+        }
+
+        .project-directory-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          padding: clamp(18px, 2vw, 26px);
+          border-bottom: 1px solid rgba(65,55,161,.08);
+        }
+
+        .project-directory-head h2 {
+          margin: 0;
+        }
+
+        .project-directory-head p {
+          margin: 8px 0 0;
+          color: var(--yp-copy);
+          font-size: 13px;
+          line-height: 1.58;
+        }
+
+        .project-department-filter {
+          width: min(270px, 100%);
+          min-height: 48px;
+          padding: 0 13px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--yp-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .project-directory-controls {
+          display: grid;
+          grid-template-columns: minmax(230px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          padding: 16px clamp(18px, 2vw, 26px);
+          background: linear-gradient(
+            145deg,
+            rgba(237,248,255,.44),
+            rgba(248,241,255,.34)
+          );
+        }
+
+        .project-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .project-search-wrap > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--yp-violet);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .project-search-wrap input {
+          width: 100%;
+          min-height: 48px;
+          padding: 0 14px 0 39px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--yp-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+          font-size: 13px;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
+        }
+
+        .project-search-wrap input:focus,
+        .project-department-filter:focus {
+          border-color: rgba(77,119,221,.65);
+          box-shadow:
+            0 0 0 4px rgba(102,88,220,.08);
+        }
+
+        .project-card-list {
           display: grid;
           gap: 20px;
+          padding: clamp(16px, 2vw, 24px);
         }
 
         .project-card {
@@ -2615,19 +3650,19 @@ async function handleAssign(projectId, payload) {
         .project-status-active {
           color: #047857;
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
+          box-shadow: none;
         }
 
         .project-status-completed {
           color: #40348d;
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
+          box-shadow: none;
         }
 
         .project-status-on_hold {
           color: #92400e;
           background: #fff4d5;
-          box-shadow: 3px 4px 0 #ffe0a5;
+          box-shadow: none;
         }
 
         .project-progress-wrap {
@@ -2637,7 +3672,7 @@ async function handleAssign(projectId, payload) {
           border: 1px solid rgba(162,169,196,.44);
           border-radius: 18px;
           background: rgba(255,255,255,.78);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-progress-meta {
@@ -2677,13 +3712,13 @@ async function handleAssign(projectId, payload) {
           gap: 10px;
           text-align: left;
           cursor: pointer;
-          box-shadow: 2px 3px 0 rgba(52,43,120,.07);
+          box-shadow: none;
         }
 
         .project-check.is-active {
           border-color: rgba(102,88,220,.55);
           background: #f1efff;
-          box-shadow: 3px 4px 0 #c9c0ff;
+          box-shadow: none;
         }
 
         .project-check.is-self {
@@ -2694,7 +3729,7 @@ async function handleAssign(projectId, payload) {
         .project-check.is-self.is-active {
           border-color: #34c9c4;
           background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
+          box-shadow: none;
         }
 
         .project-check-box {
@@ -2744,7 +3779,7 @@ async function handleAssign(projectId, payload) {
           align-items: center;
           gap: 12px;
           flex-wrap: wrap;
-          box-shadow: 4px 5px 0 #aee6d9;
+          box-shadow: none;
         }
 
         .project-self-actions strong {
@@ -2760,10 +3795,21 @@ async function handleAssign(projectId, payload) {
           font-weight: 750;
         }
 
-        .project-self-actions > div:last-child {
-          display: flex;
+        .project-self-action-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          flex: 1 1 360px;
+        }
+
+        .project-inline-action-stack {
+          display: grid;
           gap: 8px;
-          flex-wrap: wrap;
+          min-width: 0;
+        }
+
+        .project-inline-action-stack .project-btn {
+          width: 100%;
         }
 
         .project-actions {
@@ -2791,7 +3837,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 16px;
           font-weight: 800;
           font-size: 13px;
-          box-shadow: 4px 5px 0 #c9c0ff;
+          box-shadow: none;
         }
 
         .project-readonly-box {
@@ -2800,7 +3846,7 @@ async function handleAssign(projectId, payload) {
           color: #334155;
           background: #f8fafc;
           border-color: rgba(171,181,211,.55);
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-readonly-box strong {
@@ -2949,7 +3995,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 20px;
           padding: 14px;
           background: linear-gradient(145deg, #f8f8ff, #effbf8);
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-team-summary-head {
@@ -2990,7 +4036,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 15px;
           background: rgba(255,255,255,.84);
           padding: 10px;
-          box-shadow: 2px 3px 0 rgba(52,43,120,.07);
+          box-shadow: none;
         }
 
         .project-team-box p {
@@ -3010,7 +4056,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 18px;
           padding: 12px;
           background: rgba(248,250,252,.88);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+          box-shadow: none;
         }
 
         .project-people-strip > div {
@@ -3029,7 +4075,7 @@ async function handleAssign(projectId, payload) {
           padding: 18px;
           display: grid;
           gap: 13px;
-          box-shadow: 6px 8px 0 #c4ccff;
+          box-shadow: none;
         }
 
         .project-spider-bg {
@@ -3062,7 +4108,7 @@ async function handleAssign(projectId, payload) {
           font-weight: 950;
           text-transform: uppercase;
           letter-spacing: .08em;
-          box-shadow: 3px 4px 0 #c9c0ff;
+          box-shadow: none;
         }
 
         .project-spider-header strong {
@@ -3080,7 +4126,7 @@ async function handleAssign(projectId, payload) {
           border-radius: 20px;
           background: rgba(255,255,255,.94);
           padding: 12px;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-root-ro {
@@ -3112,7 +4158,7 @@ async function handleAssign(projectId, payload) {
           padding: 12px;
           display: grid;
           gap: 10px;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          box-shadow: none;
         }
 
         .project-root-branch-label {
@@ -3203,6 +4249,20 @@ async function handleAssign(projectId, payload) {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
+          .project-directory-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .project-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .project-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
+
           .project-analytics-two,
           .project-form-grid,
           .project-grid-two {
@@ -3232,12 +4292,19 @@ async function handleAssign(projectId, payload) {
           }
 
           .projects-hero {
+            grid-template-columns: 1fr;
             min-height: 0;
             padding: 20px;
             border-radius: 26px;
-            box-shadow:
-              6px 7px 0 #c6d8f7,
-              0 18px 30px rgba(34,38,110,.10);
+            box-shadow: 0 18px 30px rgba(34,38,110,.10);
+          }
+
+          .projects-hero-actions {
+            justify-content: flex-start;
+          }
+
+          .project-action-stack {
+            width: min(360px, 100%);
           }
 
           .projects-hero h1 {
@@ -3248,7 +4315,8 @@ async function handleAssign(projectId, payload) {
           .project-graph-grid,
           .project-team-grid,
           .project-people-strip,
-          .project-root-branches {
+          .project-root-branches,
+          .project-section-tabs {
             grid-template-columns: 1fr;
           }
 
@@ -3257,9 +4325,7 @@ async function handleAssign(projectId, payload) {
           .project-card,
           .project-analytics-panel {
             border-radius: 23px;
-            box-shadow:
-              6px 7px 0 #c4ccff,
-              0 18px 30px rgba(34,38,110,.10);
+            box-shadow: 0 18px 30px rgba(34,38,110,.10);
           }
 
           .project-analytics-head {
@@ -3287,9 +4353,44 @@ async function handleAssign(projectId, payload) {
 
           .project-toolbar,
           .project-card-head,
-          .project-self-actions {
+          .project-self-actions,
+          .project-directory-head {
             align-items: stretch;
             flex-direction: column;
+          }
+
+          .project-department-filter {
+            width: 100%;
+          }
+
+          .project-pagination-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .project-page-size-control,
+          .project-page-numbers,
+          .project-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .project-page-size-control {
+            justify-content: space-between;
+          }
+
+          .project-page-size-control select {
+            flex: 1 1 auto;
+          }
+
+          .project-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .project-page-nav {
+            width: 100%;
           }
 
           .project-tabs {
@@ -3305,6 +4406,7 @@ async function handleAssign(projectId, payload) {
             width: 100%;
           }
 
+          .project-self-action-grid,
           .project-self-actions > div:last-child,
           .project-actions {
             display: grid;
@@ -3329,6 +4431,15 @@ async function handleAssign(projectId, payload) {
           .project-summary-grid,
           .project-tabs {
             grid-template-columns: 1fr;
+          }
+
+          .project-card-list {
+            padding: 12px;
+          }
+
+          .project-page-number {
+            width: 34px;
+            height: 34px;
           }
 
           .project-summary-card,
@@ -3359,259 +4470,381 @@ async function handleAssign(projectId, payload) {
       `}</style>
 
       <section className="projects-hero">
-        <span className="project-kicker">Project Management</span>
-        <h1>Team Projects, Collaborators & Daily Progress</h1>
-        <p>
-          Team Leaders and Reporting Officers can create projects, assign team members,
-          assign projects to themselves, and add collaborators. Employees and team
-          members can view scoped projects and update only project status/progress.
-        </p>
+        <div className="projects-hero-copy">
+          <span className="project-kicker">Project Management</span>
+          <h1>Team Projects, Collaborators & Daily Progress</h1>
+          <p>
+            Team Leaders and Reporting Officers can create projects, assign team members,
+            assign projects to themselves, and add collaborators. Employees and team
+            members can view scoped projects and update only project status/progress.
+          </p>
 
-        <div className="project-permission-note">
-          Current access:{' '}
-          {canManageProjectSetup
-            ? 'You can create projects, assign team members, assign yourself, add collaborators, and update progress.'
-            : 'You can view scoped projects and update progress/status only when you are assigned or added as collaborator.'}
+          <div className="project-permission-note">
+            Current access:{' '}
+            {canManageProjectSetup
+              ? 'You can create projects, assign team members, assign yourself, add collaborators, and update progress.'
+              : 'You can view scoped projects and update progress/status only when you are assigned or added as collaborator.'}
+          </div>
         </div>
 
-        {isDemoTenant || isExpiredOrSuspendedTenant ? (
-          <div
-            className={`project-alert ${isExpiredOrSuspendedTenant ? 'project-alert-error' : 'project-alert-success'}`}
-            style={{
-              marginTop: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 14,
-              flexWrap: 'wrap',
-            }}
-          >
-            <div>
-              <strong>YourComate 15-Day Full Access Trial</strong>
-              <div style={{ marginTop: 4, lineHeight: 1.6 }}>
-                Company: {saasCompanyName}. Projects is included in your demo plan.
-              </div>
-              <div style={{ lineHeight: 1.6 }}>
-                Trial end date: {formatSaasDate(getTrialEndDate(user))}
-                {saasDaysLeft !== null ? ` · ${saasDaysLeft} day(s) left` : ''}
-              </div>
-              <div style={{ lineHeight: 1.6 }}>
-                Demo limit: {saasEmployeeLimit ? `${saasEmployeeLimit} employees` : 'full HRMS access'} · Allowed modules: Attendance, Apply Leave, Projects
-              </div>
-              {isExpiredOrSuspendedTenant ? (
-                <div style={{ marginTop: 4 }}>
-                  Your demo is expired or suspended. Please upgrade to continue using project actions.
-                </div>
-              ) : null}
-            </div>
-
+        <div className="projects-hero-actions">
+          <div className="project-action-stack">
             <button
               type="button"
               className="project-btn project-btn-primary"
-              onClick={() => openSaasBillingPage(setPage)}
+              onClick={() => loadData({ feedbackScope: 'refresh' })}
+              disabled={loading}
             >
-              Upgrade Plan
+              <RefreshCcw
+                size={17}
+                className={loading ? 'project-spin' : ''}
+              />
+              {loading ? 'Refreshing...' : 'Refresh'}
             </button>
-          </div>
-        ) : null}
 
-        <div className="project-summary-grid">
-          <div className="project-summary-card">
-            <span>Total Projects</span>
-            <strong>{projects.length}</strong>
-          </div>
-
-          <div className="project-summary-card">
-            <span>Active Projects</span>
-            <strong>{activeProjects.length}</strong>
-          </div>
-
-          <div className="project-summary-card">
-            <span>Completed Projects</span>
-            <strong>{completedProjects.length}</strong>
-          </div>
-
-          <div className="project-summary-card">
-            <span>Avg. Progress</span>
-            <strong>{avgProgress || 0}%</strong>
+            <ProjectInlineMessage
+              message={inlineFeedback.refresh}
+              onClose={() => clearInlineFeedback('refresh')}
+            />
           </div>
         </div>
       </section>
 
-      <ProjectAnalyticsGraph projects={projects} />
+      {isDemoTenant || isExpiredOrSuspendedTenant ? (
+        <section
+          className={`project-alert ${isExpiredOrSuspendedTenant ? 'project-alert-error' : 'project-alert-success'}`}
+        >
+          <div>
+            <strong>YourComate 15-Day Full Access Trial</strong>
+            <div style={{ marginTop: 4, lineHeight: 1.6 }}>
+              Company: {saasCompanyName}. Projects is included in your demo plan.
+            </div>
+            <div style={{ lineHeight: 1.6 }}>
+              Trial end date: {formatSaasDate(getTrialEndDate(user))}
+              {saasDaysLeft !== null ? ` · ${saasDaysLeft} day(s) left` : ''}
+            </div>
+            <div style={{ lineHeight: 1.6 }}>
+              Demo limit: {saasEmployeeLimit ? `${saasEmployeeLimit} employees` : 'full HRMS access'} · Allowed modules: Attendance, Apply Leave, Projects
+            </div>
+            {isExpiredOrSuspendedTenant ? (
+              <div style={{ marginTop: 4 }}>
+                Your demo is expired or suspended. Please upgrade to continue using project actions.
+              </div>
+            ) : null}
+          </div>
 
-      {canManageProjectSetup ? (
-        <form className="project-form" onSubmit={handleCreateProject} noValidate>
-           <h2 className="project-section-title">Create Department Project</h2>
+          <button
+            type="button"
+            className="project-btn project-btn-primary"
+            onClick={() => openSaasBillingPage(setPage)}
+          >
+            Upgrade Plan
+          </button>
+        </section>
+      ) : null}
 
-          <div className="project-form-grid">
-            <div className="project-field">
-              <label>Project Name</label>
-              <input
-                value={form.name}
-                onChange={(event) => updateForm('name', event.target.value)}
-                placeholder="Enter project name"
+      <section className="project-summary-grid" aria-label="Project summary">
+        <div className="project-summary-card">
+          <span>Total Projects</span>
+          <strong>{projects.length}</strong>
+        </div>
+
+        <div className="project-summary-card">
+          <span>Active Projects</span>
+          <strong>{activeProjects.length}</strong>
+        </div>
+
+        <div className="project-summary-card">
+          <span>Completed Projects</span>
+          <strong>{completedProjects.length}</strong>
+        </div>
+
+        <div className="project-summary-card">
+          <span>Avg. Progress</span>
+          <strong>{avgProgress || 0}%</strong>
+        </div>
+      </section>
+
+      <nav
+        className="project-section-tabs"
+        aria-label="Project management sections"
+      >
+        <button
+          type="button"
+          className={`project-section-tab ${activeSection === 'projects' ? 'is-active' : ''}`}
+          onClick={() => setActiveSection('projects')}
+          aria-pressed={activeSection === 'projects'}
+        >
+          <BriefcaseBusiness size={18} />
+          <span className="project-section-tab-copy">
+            <strong>Project Directory</strong>
+            <small>Search, filter, review and update scoped projects</small>
+          </span>
+          <span className="project-section-tab-count">{projects.length}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`project-section-tab ${activeSection === 'analytics' ? 'is-active' : ''}`}
+          onClick={() => setActiveSection('analytics')}
+          aria-pressed={activeSection === 'analytics'}
+        >
+          <BarChart3 size={18} />
+          <span className="project-section-tab-copy">
+            <strong>Project Analytics</strong>
+            <small>Review workload, status and delivery progress</small>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`project-section-tab ${activeSection === 'create' ? 'is-active' : ''}`}
+          onClick={() => setActiveSection('create')}
+          aria-pressed={activeSection === 'create'}
+        >
+          <Sparkles size={18} />
+          <span className="project-section-tab-copy">
+            <strong>Create Project</strong>
+            <small>
+              {canManageProjectSetup
+                ? 'Create and assign a department project'
+                : 'View project-creation access requirements'}
+            </small>
+          </span>
+        </button>
+      </nav>
+
+      {activeSection === 'analytics' ? (
+        <div className="project-section-content">
+          <ProjectAnalyticsGraph projects={projects} />
+        </div>
+      ) : null}
+
+      {activeSection === 'create' ? (
+        <div className="project-section-content">
+          {canManageProjectSetup ? (
+            <form className="project-form" onSubmit={handleCreateProject} noValidate>
+              <h2 className="project-section-title">Create Department Project</h2>
+
+              <div className="project-form-grid">
+                <div className="project-field">
+                  <label>Project Name</label>
+                  <input
+                    value={form.name}
+                    onChange={(event) => updateForm('name', event.target.value)}
+                    placeholder="Enter project name"
+                  />
+                </div>
+
+                <div className="project-field">
+                  <label>Department</label>
+                  <select
+                    value={form.department}
+                    onChange={(event) => updateForm('department', event.target.value)}
+                  >
+                    <option value="">Select department first</option>
+                    {departments.map((department) => (
+                      <option value={department} key={department}>
+                        {department}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="project-helper">
+                    After selecting a department, only employees from that department will appear below.
+                  </p>
+                </div>
+
+                <div className="project-self-actions project-field-full">
+                  <div>
+                    <strong>Assign this new project to yourself</strong>
+                    <small>
+                      Use this when you are also doing or leading the project directly.
+                    </small>
+                  </div>
+
+                  <div className="project-inline-action-stack">
+                    <button
+                      type="button"
+                      className="project-btn project-btn-soft"
+                      onClick={assignSelfInCreateForm}
+                      disabled={!currentEmployeeOption}
+                    >
+                      Add Myself
+                    </button>
+
+                    <ProjectInlineMessage
+                      message={inlineFeedback['create-self']}
+                      onClose={() => clearInlineFeedback('create-self')}
+                    />
+                  </div>
+                </div>
+
+                <MultiSelect
+                  label="Assign Team Members"
+                  value={form.assigned_employee_ids}
+                  options={createFormEmployees}
+                  onChange={(value) => updateForm('assigned_employee_ids', value)}
+                  disabled={!form.department}
+                  helper={
+                    form.department
+                      ? `Showing employees from ${form.department} only.`
+                      : 'Select a department first to show employees.'
+                  }
+                />
+
+                <MultiSelect
+                  label="Add Collaborators"
+                  value={form.collaborator_ids}
+                  options={createFormEmployees}
+                  onChange={(value) => updateForm('collaborator_ids', value)}
+                  disabled={!form.department}
+                  helper={
+                    form.department
+                      ? `Showing collaborators from ${form.department} only.`
+                      : 'Select a department first to show collaborators.'
+                  }
+                />
+              </div>
+
+              <div className="project-actions" style={{ marginTop: 16 }}>
+                <button
+                  type="submit"
+                  className="project-btn project-btn-primary"
+                  disabled={saving || isExpiredOrSuspendedTenant}
+                >
+                  {saving ? 'Saving...' : 'Create Active Project'}
+                </button>
+              </div>
+
+              <ProjectInlineMessage
+                message={inlineFeedback['create-project']}
+                onClose={() => clearInlineFeedback('create-project')}
               />
+            </form>
+          ) : (
+            <section className="project-form">
+              <h2 className="project-section-title">Project Creation Restricted</h2>
+              <p className="project-muted">
+                Project creation, team assignment, and collaborator updates are available only
+                for Admin, Team Leaders and Reporting Officers. You can still update progress/status
+                on projects where you are assigned or added as a collaborator.
+              </p>
+            </section>
+          )}
+        </div>
+      ) : null}
+
+      {activeSection === 'projects' ? (
+        <section className="project-section-content project-list">
+          <div className="project-directory-head">
+            <div>
+              <h2 className="project-section-title">Project Directory</h2>
+              <p>
+                Search and filter the projects already available in your current project scope.
+              </p>
             </div>
 
-            <div className="project-field">
-              <label>Department</label>
+            {adminFullAccess ? (
               <select
-                value={form.department}
-                onChange={(event) => updateForm('department', event.target.value)}
+                className="project-department-filter"
+                value={listDepartmentFilter}
+                onChange={(event) => setListDepartmentFilter(event.target.value)}
+                aria-label="Filter projects by department"
               >
-                <option value="">Select department first</option>
+                <option value="">All Departments</option>
                 {departments.map((department) => (
                   <option value={department} key={department}>
                     {department}
                   </option>
                 ))}
               </select>
-              <p className="project-helper">
-                After selecting a department, only employees from that department will appear below.
-              </p>
-            </div>
-
-            <div className="project-self-actions project-field-full">
-              <div>
-                <strong>Assign this new project to yourself</strong>
-                <small>
-                  Use this when you are also doing or leading the project directly.
-                </small>
-              </div>
-
-              <div>
-                <button
-                  type="button"
-                  className="project-btn project-btn-soft"
-                  onClick={assignSelfInCreateForm}
-                  disabled={!currentEmployeeOption}
-                >
-                  Add Myself
-                </button>
-              </div>
-            </div>
-
-            <MultiSelect
-              label="Assign Team Members"
-              value={form.assigned_employee_ids}
-              options={createFormEmployees}
-              onChange={(value) => updateForm('assigned_employee_ids', value)}
-              disabled={!form.department}
-              helper={
-                form.department
-                  ? `Showing employees from ${form.department} only.`
-                  : 'Select a department first to show employees.'
-              }
-            />
-
-            <MultiSelect
-              label="Add Collaborators"
-              value={form.collaborator_ids}
-              options={createFormEmployees}
-              onChange={(value) => updateForm('collaborator_ids', value)}
-              disabled={!form.department}
-              helper={
-                form.department
-                  ? `Showing collaborators from ${form.department} only.`
-                  : 'Select a department first to show collaborators.'
-              }
-            />
+            ) : null}
           </div>
 
-          <div className="project-actions" style={{ marginTop: 16 }}>
-            <button type="submit" className="project-btn project-btn-primary" disabled={saving || isExpiredOrSuspendedTenant}>
-              {saving ? 'Saving...' : 'Create Active Project'}
-            </button>
+          <div className="project-directory-controls">
+            <div className="project-search-wrap">
+              <Search size={17} />
+              <input
+                type="search"
+                value={projectSearch}
+                onChange={(event) => setProjectSearch(event.target.value)}
+                placeholder="Search project, department, owner, member..."
+                aria-label="Search projects"
+              />
+            </div>
+
+            <div className="project-tabs">
+              <button
+                type="button"
+                className={`project-tab ${filter === 'active' ? 'is-active' : ''}`}
+                onClick={() => setFilter('active')}
+              >
+                Active
+              </button>
+
+              <button
+                type="button"
+                className={`project-tab ${filter === 'on_hold' ? 'is-active' : ''}`}
+                onClick={() => setFilter('on_hold')}
+              >
+                On Hold
+              </button>
+
+              <button
+                type="button"
+                className={`project-tab ${filter === 'completed' ? 'is-active' : ''}`}
+                onClick={() => setFilter('completed')}
+              >
+                Completed
+              </button>
+
+              <button
+                type="button"
+                className={`project-tab ${filter === 'all' ? 'is-active' : ''}`}
+                onClick={() => setFilter('all')}
+              >
+                All
+              </button>
+            </div>
           </div>
-        </form>
-      ) : (
-        <section className="project-form">
-          <h2 className="project-section-title">Project Creation Restricted</h2>
-          <p className="project-muted">
-            Project creation, team assignment, and collaborator updates are available only
-            for Admin, Team Leaders and Reporting Officers. You can still update progress/status
-            on projects where you are assigned or added as a collaborator.
-          </p>
+
+          <ProjectPagination
+            total={searchedProjects.length}
+            page={Math.min(projectPage, projectPageCount)}
+            pageSize={projectPageSize}
+            onPageChange={setProjectPage}
+            onPageSizeChange={(value) => {
+              setProjectPage(1);
+              setProjectPageSize(value);
+            }}
+          />
+
+          {loading ? (
+            <div className="project-empty">Loading projects...</div>
+          ) : !searchedProjects.length ? (
+            <div className="project-empty">
+              No projects match the current section, department and search filters.
+            </div>
+          ) : (
+            <div className="project-card-list">
+              {pagedProjects.map((project) => (
+                <ProjectCard
+                  key={String(getId(project))}
+                  project={project}
+                  employees={employees}
+                  currentEmployeeOption={currentEmployeeOption}
+                  canManageProjectSetup={canManageProjectSetup}
+                  onStatusChange={handleStatusChange}
+                  onAssign={handleAssign}
+                  onProgressSubmit={handleProgressSubmit}
+                  feedbackMap={inlineFeedback}
+                  onFeedbackClose={clearInlineFeedback}
+                />
+              ))}
+            </div>
+          )}
         </section>
-      )}
-
-      <section className="project-list">
-<div className="project-toolbar">
-  <h2 className="project-section-title" style={{ margin: 0 }}>
-    Project List
-  </h2>
-
-  {adminFullAccess && (
-    <select
-      className="project-department-filter"
-      value={listDepartmentFilter}
-      onChange={(event) => setListDepartmentFilter(event.target.value)}
-    >
-      <option value="">All Departments</option>
-      {departments.map((department) => (
-        <option value={department} key={department}>
-          {department}
-        </option>
-      ))}
-    </select>
-  )}
-
-  <div className="project-tabs">
-            <button
-              type="button"
-              className={`project-tab ${filter === 'active' ? 'is-active' : ''}`}
-              onClick={() => setFilter('active')}
-            >
-              Active
-            </button>
-
-            <button
-              type="button"
-              className={`project-tab ${filter === 'on_hold' ? 'is-active' : ''}`}
-              onClick={() => setFilter('on_hold')}
-            >
-              On Hold
-            </button>
-
-            <button
-              type="button"
-              className={`project-tab ${filter === 'completed' ? 'is-active' : ''}`}
-              onClick={() => setFilter('completed')}
-            >
-              Completed
-            </button>
-
-            <button
-              type="button"
-              className={`project-tab ${filter === 'all' ? 'is-active' : ''}`}
-              onClick={() => setFilter('all')}
-            >
-              All
-            </button>
-          </div>
-        </div>
-
-        {loading && <div className="project-empty">Loading projects...</div>}
-
-        {!loading && !visibleProjects.length && (
-          <div className="project-empty">No projects found in this section.</div>
-        )}
-
-        {!loading &&
-          visibleProjects.map((project) => (
-            <ProjectCard
-              key={String(getId(project))}
-              project={project}
-              employees={employees}
-              currentEmployeeOption={currentEmployeeOption}
-              canManageProjectSetup={canManageProjectSetup}
-              onStatusChange={handleStatusChange}
-              onAssign={handleAssign}
-              onProgressSubmit={handleProgressSubmit}
-            />
-          ))}
-      </section>
+      ) : null}
     </div>
   );
 }

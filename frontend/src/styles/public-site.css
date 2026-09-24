@@ -5171,14 +5171,25 @@ body.yc-about-sayanant-active .public-desktop-nav {
 }
 
 .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+  width: 100%;
+  max-width: 100%;
   margin: 24px 0 0;
+
   display: grid;
+
   color: var(--yc-yc-ink);
   font-family: var(--yc-display);
-  font-size: clamp(32px, 3.45vw, 52px);
+
+  /* Responsive large editorial heading */
+  font-size: clamp(36px, 3.8vw, 58px);
   font-weight: 550;
-  line-height: 1;
-  letter-spacing: -0.03em;
+  line-height: 0.96;
+  letter-spacing: -0.035em;
+
+  /* CRITICAL: never split a word */
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
 }
 
 .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 span {
@@ -5221,8 +5232,9 @@ body.yc-about-sayanant-active .public-desktop-nav {
   }
 
   .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
-    font-size: clamp(32px, 3.45vw, 52px);
-  }
+  font-size: clamp(34px, 4.2vw, 50px);
+  line-height: 0.97;
+}
 }
 
 @media (max-width: 860px) {
@@ -5238,9 +5250,15 @@ body.yc-about-sayanant-active .public-desktop-nav {
     border-bottom: 1px solid rgba(21, 21, 47, 0.12);
   }
 
-  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
-    font-size: clamp(36px, 11vw, 50px);
-  }
+ .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+  font-size: clamp(38px, 8vw, 50px);
+  line-height: 0.96;
+  letter-spacing: -0.035em;
+
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+}
 
   .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark > p {
     max-width: 560px;
@@ -5257,6 +5275,12 @@ body.yc-about-sayanant-active .public-desktop-nav {
     border-radius: 18px;
     box-shadow: 3px 4px 0 var(--yc-team-card-shadow);
   }
+
+  .yc-profile-page-yourcomate .yc-ycprofile-team-wordmark h2 {
+  font-size: clamp(34px, 10vw, 44px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
 
   .yc-profile-page-yourcomate .yc-ycprofile-team-member-marker {
     padding: 0 0 14px;

@@ -1,5 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { RefreshCcw, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Loader2,
+  RefreshCcw,
+  Search,
+  Sparkles,
+  X,
+  XCircle,
+} from 'lucide-react';
 import {
   api,
   downloadAttendanceExceptionExcel,
@@ -9,8 +20,6 @@ import {
   getAttendanceExceptionReports,
 } from '../api/client';
 import Table from '../components/Table';
-import Stat from '../components/Stat';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const REPORT_TABS = [
   {
@@ -636,6 +645,353 @@ function normalizeBalanceSummary(summary = {}) {
   };
 }
 
+
+const REPORT_NOTICE_HIDE_MS = 3600;
+const REPORT_PAGE_SIZES = [10, 25, 50, 100];
+
+function reportPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function ReportInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`report-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="report-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="report-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="report-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="report-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function ReportKpi({ label, value }) {
+  return (
+    <article className="report-kpi">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function ReportPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="report-pagination">
+      <div className="report-pagination-controls">
+        <button
+          type="button"
+          className="report-page-button report-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="report-page-numbers" aria-label="Report pagination">
+          {reportPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`report-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span className="report-page-ellipsis" key={item}>
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="report-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="report-page-button report-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SwipeableReportTable({ children, className = '' }) {
+  const wrapperRef = useRef(null);
+  const swipeRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startScrollLeft: 0,
+    moved: false,
+    scrollTarget: null,
+    suppressClickUntil: 0,
+  });
+
+  function isHorizontalScroller(element) {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+
+    const overflowX = window.getComputedStyle(element).overflowX;
+    const allowsHorizontalScroll = [
+      'auto',
+      'scroll',
+      'overlay',
+    ].includes(overflowX);
+
+    return (
+      allowsHorizontalScroll &&
+      element.scrollWidth > element.clientWidth + 1
+    );
+  }
+
+  function findScrollTarget(origin = null) {
+    const wrapper = wrapperRef.current;
+
+    if (!wrapper) return null;
+
+    let current =
+      origin instanceof HTMLElement ? origin : origin?.parentElement;
+
+    while (current && wrapper.contains(current)) {
+      if (isHorizontalScroller(current)) {
+        return current;
+      }
+
+      if (current === wrapper) {
+        break;
+      }
+
+      current = current.parentElement;
+    }
+
+    if (isHorizontalScroller(wrapper)) {
+      return wrapper;
+    }
+
+    return (
+      Array.from(wrapper.querySelectorAll('*')).find(
+        isHorizontalScroller,
+      ) || null
+    );
+  }
+
+  function resetSwipeState() {
+    swipeRef.current.active = false;
+    swipeRef.current.pointerId = null;
+    swipeRef.current.scrollTarget = null;
+    wrapperRef.current?.classList.remove('is-swiping');
+  }
+
+  function handlePointerDown(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
+
+    const scrollTarget = findScrollTarget(event.target);
+
+    if (!scrollTarget) return;
+
+    if (event.pointerType === 'mouse') {
+      const rect = scrollTarget.getBoundingClientRect();
+
+      if (event.clientY >= rect.bottom - 14) {
+        return;
+      }
+    }
+
+    swipeRef.current = {
+      ...swipeRef.current,
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startScrollLeft: scrollTarget.scrollLeft,
+      moved: false,
+      scrollTarget,
+    };
+
+    // Capture starts only after real horizontal movement so normal clicks,
+    // links, selections, and native scrollbar dragging remain untouched.
+  }
+
+  function handlePointerMove(event) {
+    const swipe = swipeRef.current;
+
+    if (
+      !swipe.active ||
+      swipe.pointerId !== event.pointerId ||
+      !swipe.scrollTarget
+    ) {
+      return;
+    }
+
+    const deltaX = event.clientX - swipe.startX;
+    const deltaY = event.clientY - swipe.startY;
+
+    if (!swipe.moved) {
+      if (Math.abs(deltaX) < 6) return;
+
+      if (
+        event.pointerType !== 'mouse' &&
+        Math.abs(deltaY) > Math.abs(deltaX)
+      ) {
+        resetSwipeState();
+        return;
+      }
+
+      swipe.moved = true;
+      wrapperRef.current?.classList.add('is-swiping');
+
+      try {
+        wrapperRef.current?.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Pointer capture is optional. Native scrolling remains available.
+      }
+    }
+
+    swipe.scrollTarget.scrollLeft = swipe.startScrollLeft - deltaX;
+
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  }
+
+  function finishSwipe(event) {
+    const swipe = swipeRef.current;
+
+    if (!swipe.active || swipe.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (swipe.moved) {
+      swipe.suppressClickUntil =
+        typeof performance !== 'undefined'
+          ? performance.now() + 180
+          : Date.now() + 180;
+    }
+
+    resetSwipeState();
+
+    try {
+      wrapperRef.current?.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Browser may already have released the pointer.
+    }
+  }
+
+  function cancelSwipe(event) {
+    resetSwipeState();
+
+    try {
+      wrapperRef.current?.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Browser may already have released the pointer.
+    }
+  }
+
+  function suppressSwipeClick(event) {
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    if (now < swipeRef.current.suppressClickUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`report-table-swipe ${className}`.trim()}
+      onPointerDownCapture={handlePointerDown}
+      onPointerMoveCapture={handlePointerMove}
+      onPointerUpCapture={finishSwipe}
+      onPointerCancelCapture={cancelSwipe}
+      onLostPointerCapture={cancelSwipe}
+      onClickCapture={suppressSwipeClick}
+    >
+      {children}
+    </div>
+  );
+}
+
+
 export default function Reports() {
   const [summary, setSummary] = useState(null);
   const [activeTab, setActiveTab] = useState('attendance');
@@ -643,6 +999,8 @@ export default function Reports() {
   const [tabSummary, setTabSummary] = useState(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
+  const [refreshingSummary, setRefreshingSummary] = useState(false);
+  const [refreshingRows, setRefreshingRows] = useState(false);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [organisations, setOrganisations] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -657,8 +1015,12 @@ export default function Reports() {
   const [exceptionSummary, setExceptionSummary] = useState(null);
   const [loadingExceptions, setLoadingExceptions] = useState(false);
   const [downloadingExceptionExcel, setDownloadingExceptionExcel] = useState(false);
-
-  const alerts = useCustomAlert();
+  const [reportPage, setReportPage] = useState(1);
+  const [reportPageSize, setReportPageSize] = useState(10);
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
+  const hasLoadedSummaryRef = useRef(false);
+  const hasLoadedRowsRef = useRef(false);
 
   const currentTab = REPORT_TABS.find((tab) => tab.key === activeTab);
 
@@ -729,6 +1091,83 @@ export default function Reports() {
   const showLeaveFilters = LEAVE_RELATED_TABS.includes(activeTab);
   const showBalanceDeductionFilter = ['leave-requests', 'leave-records'].includes(activeTab);
 
+  const reportPageCount = Math.max(
+    1,
+    Math.ceil(
+      rows.length / Math.max(1, Number(reportPageSize || 10)),
+    ),
+  );
+  const safeReportPage = Math.min(
+    Math.max(1, reportPage),
+    reportPageCount,
+  );
+  const reportPageStart =
+    (safeReportPage - 1) * reportPageSize;
+  const pagedReportRows = rows.slice(
+    reportPageStart,
+    reportPageStart + reportPageSize,
+  );
+
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, REPORT_NOTICE_HIDE_MS);
+    }
+  }
+
   function activeTabFilters(tabKey = activeTab, nextFilters = filters) {
     const payload = { ...nextFilters };
 
@@ -779,12 +1218,18 @@ export default function Reports() {
     try {
       const data = await getActiveOrganisations({ limit: 500 });
       setOrganisations(data.items || []);
+      clearFeedback('organisations');
+      return true;
     } catch (error) {
       setOrganisations([]);
-      alerts.error(
-        error?.message || 'Unable to load organisations for attendance Excel export.',
+      showFeedback(
+        'organisations',
+        'error',
+        error?.message ||
+          'Unable to load organisations for attendance Excel export.',
         'Organisation Load Failed',
       );
+      return false;
     }
   }
 
@@ -796,19 +1241,32 @@ export default function Reports() {
       });
 
       setEmployees(data.items || []);
+      clearFeedback('employees');
+      return true;
     } catch (error) {
       setEmployees([]);
-      alerts.error(
-        error?.message || 'Unable to load employees for report filters.',
+      showFeedback(
+        'employees',
+        'error',
+        error?.message ||
+          'Unable to load employees for report filters.',
         'Employee Load Failed',
       );
+      return false;
     }
   }
 
-  async function loadSummary(nextFilters = filters) {
-    try {
+  async function loadSummary(
+    nextFilters = filters,
+    { showLoader = !hasLoadedSummaryRef.current } = {},
+  ) {
+    if (showLoader) {
       setLoadingSummary(true);
+    } else {
+      setRefreshingSummary(true);
+    }
 
+    try {
       const data = await api(
         `/reports/summary${buildQuery({
           tenant_id: nextFilters.tenant_id,
@@ -816,69 +1274,240 @@ export default function Reports() {
       );
 
       setSummary(data);
+      clearFeedback('page');
+      return true;
     } catch (error) {
-      alerts.error(error.message || 'Unable to load report summary', 'Report Summary Load Failed');
+      if (!hasLoadedSummaryRef.current) {
+        setSummary(null);
+      }
+
+      showFeedback(
+        'page',
+        'error',
+        error.message || 'Unable to load report summary',
+        'Report Summary Load Failed',
+      );
+      return false;
     } finally {
-      setLoadingSummary(false);
+      hasLoadedSummaryRef.current = true;
+
+      if (showLoader) {
+        setLoadingSummary(false);
+      } else {
+        setRefreshingSummary(false);
+      }
     }
   }
 
-  async function loadRows(tabKey = activeTab, nextFilters = filters) {
+  async function loadRows(
+    tabKey = activeTab,
+    nextFilters = filters,
+    {
+      showLoader = !hasLoadedRowsRef.current,
+      feedbackScope = '',
+      successText = 'Report records are up to date.',
+      successTitle = 'Report Updated',
+      errorTitle = 'Report Load Failed',
+    } = {},
+  ) {
     const selectedTab = REPORT_TABS.find((tab) => tab.key === tabKey);
 
     if (!selectedTab) {
-      return;
+      return false;
+    }
+
+    if (showLoader) {
+      setLoadingRows(true);
+    } else {
+      setRefreshingRows(true);
+    }
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        `Loading ${selectedTab.title.toLowerCase()}...`,
+        'Working',
+        { loading: true },
+      );
     }
 
     try {
-      setLoadingRows(true);
-      setTabSummary(null);
-
       const filteredPayload = activeTabFilters(tabKey, nextFilters);
-      const data = await api(`${selectedTab.endpoint}${buildQuery(filteredPayload)}`);
+      const data = await api(
+        `${selectedTab.endpoint}${buildQuery(filteredPayload)}`,
+      );
 
       setRows(normalizeRows(tabKey, data.items || []));
       setTabSummary(data.summary || null);
+      setReportPage(1);
+      clearFeedback('page');
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          successText,
+          successTitle,
+        );
+      }
+
+      return true;
     } catch (error) {
-      setRows([]);
-      setTabSummary(null);
-      alerts.error(error.message || 'Unable to load report', 'Report Load Failed');
+      if (!hasLoadedRowsRef.current) {
+        setRows([]);
+        setTabSummary(null);
+      }
+
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
+        error.message || 'Unable to load report',
+        errorTitle,
+      );
+      return false;
     } finally {
-      setLoadingRows(false);
+      hasLoadedRowsRef.current = true;
+
+      if (showLoader) {
+        setLoadingRows(false);
+      } else {
+        setRefreshingRows(false);
+      }
     }
   }
 
-  async function refreshAll(tabKey = activeTab, nextFilters = filters) {
-    await Promise.all([
-      loadSummary(nextFilters),
-      loadRows(tabKey, nextFilters),
+  async function refreshAll(
+    tabKey = activeTab,
+    nextFilters = filters,
+    {
+      showLoader = false,
+      feedbackScope = '',
+      successText = 'Report data is up to date.',
+      successTitle = 'Refresh Complete',
+      errorTitle = 'Refresh Failed',
+    } = {},
+  ) {
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing report data...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
+
+    const [summaryLoaded, rowsLoaded] = await Promise.all([
+      loadSummary(nextFilters, { showLoader }),
+      loadRows(tabKey, nextFilters, {
+        showLoader,
+        errorTitle,
+      }),
     ]);
+
+    if (!feedbackScope) {
+      return summaryLoaded && rowsLoaded;
+    }
+
+    if (summaryLoaded && rowsLoaded) {
+      showFeedback(
+        feedbackScope,
+        'success',
+        successText,
+        successTitle,
+      );
+      return true;
+    }
+
+    showFeedback(
+      feedbackScope,
+      'error',
+      'Some report data could not be updated. Existing results remain visible.',
+      errorTitle,
+    );
+    return false;
   }
 
   useEffect(() => {
-    refreshAll(activeTab, filters);
+    refreshAll(activeTab, filters, { showLoader: true });
     loadOrganisations();
     loadEmployees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    setReportPage((current) =>
+      Math.min(current, reportPageCount),
+    );
+  }, [reportPageCount]);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.report-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
   async function changeTab(tabKey) {
+    if (tabKey === activeTab) {
+      return;
+    }
+
     setActiveTab(tabKey);
-    setRows([]);
-    setTabSummary(null);
-    await loadRows(tabKey, filters);
+    setReportPage(1);
+    clearFeedback('report-tab');
+
+    await loadRows(tabKey, filters, {
+      showLoader: false,
+      errorTitle: 'Report Change Failed',
+    });
   }
 
   async function searchReport(event) {
     event.preventDefault();
-    await refreshAll(activeTab, filters);
+    setReportPage(1);
+
+    await refreshAll(activeTab, filters, {
+      showLoader: false,
+      feedbackScope: 'search-report',
+      successText: 'Report filters were applied successfully.',
+      successTitle: 'Search Complete',
+      errorTitle: 'Search Failed',
+    });
   }
 
   async function clearFilters() {
     const cleared = { ...EMPTY_FILTERS };
 
     setFilters(cleared);
-    await refreshAll(activeTab, cleared);
+    setReportPage(1);
+
+    await refreshAll(activeTab, cleared, {
+      showLoader: false,
+      feedbackScope: 'clear-filters',
+      successText: 'Report filters were cleared.',
+      successTitle: 'Filters Cleared',
+      errorTitle: 'Clear Filters Failed',
+    });
   }
 
   function updateFilter(key, value) {
@@ -1092,19 +1721,45 @@ export default function Reports() {
     return payload;
   }
 
-  function validateAttendanceExceptionFilters() {
-    if (exceptionFilters.period === 'month' && (!exceptionFilters.year || !exceptionFilters.month)) {
-      alerts.warning('Please select year and month.', 'Month Required');
+  function validateAttendanceExceptionFilters(
+    feedbackScope = 'exception-preview',
+  ) {
+    if (
+      exceptionFilters.period === 'month' &&
+      (!exceptionFilters.year || !exceptionFilters.month)
+    ) {
+      showFeedback(
+        feedbackScope,
+        'warning',
+        'Please select year and month.',
+        'Month Required',
+      );
       return false;
     }
 
-    if (exceptionFilters.period === 'week' && (!exceptionFilters.week_start || !exceptionFilters.week_end)) {
-      alerts.warning('Please select week start and week end.', 'Week Range Required');
+    if (
+      exceptionFilters.period === 'week' &&
+      (!exceptionFilters.week_start || !exceptionFilters.week_end)
+    ) {
+      showFeedback(
+        feedbackScope,
+        'warning',
+        'Please select week start and week end.',
+        'Week Range Required',
+      );
       return false;
     }
 
-    if (exceptionFilters.period === 'day' && !exceptionFilters.date) {
-      alerts.warning('Please select a date.', 'Date Required');
+    if (
+      exceptionFilters.period === 'day' &&
+      !exceptionFilters.date
+    ) {
+      showFeedback(
+        feedbackScope,
+        'warning',
+        'Please select a date.',
+        'Date Required',
+      );
       return false;
     }
 
@@ -1113,31 +1768,56 @@ export default function Reports() {
 
   async function handleAttendanceExceptionPreview(event) {
     event.preventDefault();
+    clearFeedback('exception-preview');
 
-    if (!validateAttendanceExceptionFilters()) {
+    if (
+      !validateAttendanceExceptionFilters('exception-preview')
+    ) {
       return;
     }
 
     setLoadingExceptions(true);
 
+    showFeedback(
+      'exception-preview',
+      'info',
+      'Loading attendance exception report...',
+      'Loading Preview',
+      { loading: true },
+    );
+
     try {
-      const data = await getAttendanceExceptionReports(attendanceExceptionPayload());
-      const nextRows = normaliseAttendanceExceptionRows(data.items || []);
+      const data = await getAttendanceExceptionReports(
+        attendanceExceptionPayload(),
+      );
+      const nextRows = normaliseAttendanceExceptionRows(
+        data.items || [],
+      );
 
       setExceptionRows(nextRows);
       setExceptionSummary(data.summary || null);
 
       if (!nextRows.length) {
-        alerts.info(
+        showFeedback(
+          'exception-preview',
+          'info',
           'No matching attendance exceptions were found for the selected filters.',
           'No Exceptions Found',
         );
+      } else {
+        showFeedback(
+          'exception-preview',
+          'success',
+          'Attendance exception preview is ready.',
+          'Preview Ready',
+        );
       }
     } catch (error) {
-      setExceptionRows([]);
-      setExceptionSummary(null);
-      alerts.error(
-        error.message || 'Unable to load attendance exception report.',
+      showFeedback(
+        'exception-preview',
+        'error',
+        error.message ||
+          'Unable to load attendance exception report.',
         'Report Load Failed',
       );
     } finally {
@@ -1146,21 +1826,41 @@ export default function Reports() {
   }
 
   async function handleAttendanceExceptionDownload() {
-    if (!validateAttendanceExceptionFilters()) {
+    clearFeedback('exception-download');
+
+    if (
+      !validateAttendanceExceptionFilters('exception-download')
+    ) {
       return;
     }
 
     setDownloadingExceptionExcel(true);
 
+    showFeedback(
+      'exception-download',
+      'info',
+      'Preparing attendance exception Excel...',
+      'Preparing Download',
+      { loading: true },
+    );
+
     try {
-      await downloadAttendanceExceptionExcel(attendanceExceptionPayload());
-      alerts.success(
+      await downloadAttendanceExceptionExcel(
+        attendanceExceptionPayload(),
+      );
+
+      showFeedback(
+        'exception-download',
+        'success',
         'Attendance exception Excel downloaded successfully.',
         'Download Complete',
       );
     } catch (error) {
-      alerts.error(
-        error.message || 'Unable to download attendance exception Excel report.',
+      showFeedback(
+        'exception-download',
+        'error',
+        error.message ||
+          'Unable to download attendance exception Excel report.',
         'Download Failed',
       );
     } finally {
@@ -1168,38 +1868,93 @@ export default function Reports() {
     }
   }
 
-  async function handleAttendanceExcelDownload(event) {
-    event.preventDefault();
-
-    if (!excelFilters.organisation_id && !excelFilters.organisation_code && !excelFilters.organisation) {
-      alerts.warning(
+  function validateAttendanceExcelFilters() {
+    if (
+      !excelFilters.organisation_id &&
+      !excelFilters.organisation_code &&
+      !excelFilters.organisation
+    ) {
+      showFeedback(
+        'attendance-excel',
+        'warning',
         'Please select Organisation / Entity before downloading the attendance Excel.',
         'Organisation Required',
       );
-      return;
+      return false;
     }
 
-    if (excelFilters.period === 'month' && (!excelFilters.year || !excelFilters.month)) {
-      alerts.warning('Please select year and month before downloading.', 'Month Required');
-      return;
+    if (
+      excelFilters.period === 'month' &&
+      (!excelFilters.year || !excelFilters.month)
+    ) {
+      showFeedback(
+        'attendance-excel',
+        'warning',
+        'Please select year and month before downloading.',
+        'Month Required',
+      );
+      return false;
     }
 
-    if (excelFilters.period === 'week' && (!excelFilters.week_start || !excelFilters.week_end)) {
-      alerts.warning('Please select week start and week end before downloading.', 'Week Range Required');
-      return;
+    if (
+      excelFilters.period === 'week' &&
+      (!excelFilters.week_start || !excelFilters.week_end)
+    ) {
+      showFeedback(
+        'attendance-excel',
+        'warning',
+        'Please select week start and week end before downloading.',
+        'Week Range Required',
+      );
+      return false;
     }
 
-    if (excelFilters.period === 'day' && !excelFilters.date) {
-      alerts.warning('Please select date before downloading.', 'Date Required');
-      return;
+    if (
+      excelFilters.period === 'day' &&
+      !excelFilters.date
+    ) {
+      showFeedback(
+        'attendance-excel',
+        'warning',
+        'Please select date before downloading.',
+        'Date Required',
+      );
+      return false;
     }
 
-    if (excelFilters.period === 'year' && !excelFilters.year) {
-      alerts.warning('Please enter year before downloading.', 'Year Required');
+    if (
+      excelFilters.period === 'year' &&
+      !excelFilters.year
+    ) {
+      showFeedback(
+        'attendance-excel',
+        'warning',
+        'Please enter year before downloading.',
+        'Year Required',
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  async function handleAttendanceExcelDownload(event) {
+    event.preventDefault();
+    clearFeedback('attendance-excel');
+
+    if (!validateAttendanceExcelFilters()) {
       return;
     }
 
     setDownloadingExcel(true);
+
+    showFeedback(
+      'attendance-excel',
+      'info',
+      'Preparing the styled attendance Excel...',
+      'Preparing Download',
+      { loading: true },
+    );
 
     try {
       const payload = {
@@ -1227,9 +1982,21 @@ export default function Reports() {
       }
 
       await downloadAttendanceRegisterExcel(payload);
-      alerts.success('Attendance Excel downloaded successfully.', 'Download Complete');
+
+      showFeedback(
+        'attendance-excel',
+        'success',
+        'Attendance Excel downloaded successfully.',
+        'Download Complete',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to download attendance Excel report.', 'Download Failed');
+      showFeedback(
+        'attendance-excel',
+        'error',
+        error.message ||
+          'Unable to download attendance Excel report.',
+        'Download Failed',
+      );
     } finally {
       setDownloadingExcel(false);
     }
@@ -1240,389 +2007,978 @@ export default function Reports() {
   const leaveSummary = normalizeLeaveSummary(tabSummary);
   const balanceSummary = normalizeBalanceSummary(tabSummary || extra?.leave?.balance_summary);
 
-  const statItems = [
+  const topKpis = [
     ['Employees', counts.employees || 0],
     ['Attendance Logs', counts.attendance_logs || 0],
+    ['Leave Requests', counts.leave_requests || 0],
+    ['Audit Logs', counts.audit_logs || 0],
+  ];
+
+  const coverageItems = [
     ['Holiday Work Requests', counts.holiday_work_requests || 0],
     ['Holiday Calendar', counts.holiday_calendar || 0],
     ['Comp-Off Credits', counts.compoff_credits || 0],
     ['Leave Balances', counts.leave_balances || 0],
-    ['Leave Requests', counts.leave_requests || 0],
     ['Tickets', counts.tickets || 0],
     ['Expenses', counts.expenses || 0],
-    ['Audit Logs', counts.audit_logs || 0],
   ];
 
   return (
     <div className="page-grid reports-center-page">
 
       <style>{`
-        .reports-center-page{
-          --report-ink:#101a3a;
-          --report-muted:#596483;
-          --report-primary:#6254da;
-          --report-deep:#342b78;
-          --report-blue:#3766db;
-          --report-teal:#18aaa8;
-          --report-flat-blue:#b9d7ff;
-          --report-flat-violet:#c9c0ff;
-          --report-flat-teal:#aee6d9;
-          --report-ease:cubic-bezier(.22,1,.36,1);
-          display:grid;
-          gap:22px;
-          width:100%;
-          min-width:0;
-          padding-bottom:max(34px,env(safe-area-inset-bottom));
-          color:var(--report-ink);
-          font-family:var(--yc-ui,var(--body),inherit);
+        .reports-center-page {
+          --report-ink: #101a3a;
+          --report-muted: #5d6d8d;
+          --report-primary: #4d77dd;
+          --report-deep: #40348d;
+          --report-blue: #4d77dd;
+          --report-teal: #2eb2b9;
+          display: grid;
+          gap: clamp(16px, 1.8vw, 24px);
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          padding-bottom: max(34px, env(safe-area-inset-bottom));
+          color: var(--report-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .reports-center-page>.hero{
-          position:relative;
-          isolation:isolate;
-          overflow:hidden;
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          gap:28px;
-          min-height:230px;
-          padding:clamp(25px,3vw,40px);
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(28px,2.5vw,40px);
+        .reports-center-page,
+        .reports-center-page * {
+          box-sizing: border-box;
+        }
+
+        .reports-center-page > *,
+        .reports-center-page section,
+        .reports-center-page form,
+        .reports-center-page label,
+        .reports-center-page nav {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .reports-center-page::before,
+        .reports-center-page::after,
+        .reports-center-page > .hero::before,
+        .reports-center-page > .hero::after,
+        .reports-center-page .report-kpi::before,
+        .reports-center-page .report-kpi::after {
+          content: none;
+          display: none;
+          background: none;
+        }
+
+        .reports-center-page > .hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(210px, 300px);
+          align-items: center;
+          gap: clamp(20px, 3vw, 38px);
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 8% 8%,rgba(121,219,238,.34),transparent 31%),
-            radial-gradient(circle at 92% 12%,rgba(191,190,249,.3),transparent 34%),
-            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
-          box-shadow:12px 14px 0 var(--report-flat-blue),0 28px 48px rgba(34,38,110,.13);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
         }
 
-        .reports-center-page>.hero>div{min-width:0;max-width:900px}
-        .reports-center-page .kicker{
-          display:inline-flex;
-          align-items:center;
-          width:fit-content;
-          padding:9px 13px;
-          border-radius:999px;
-          color:#fff;
-          background:var(--report-deep);
-          font-size:9px;
-          font-weight:950;
-          line-height:1;
-          letter-spacing:.12em;
-          text-transform:uppercase;
-        }
-        .reports-center-page>.hero h1{
-          margin:15px 0 10px;
-          color:var(--report-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(34px,4.4vw,66px);
-          font-weight:760;
-          line-height:.94;
-          letter-spacing:-.055em;
-        }
-        .reports-center-page>.hero p{
-          max-width:850px;
-          margin:0;
-          color:var(--report-muted);
-          font-size:clamp(13px,1vw,16px);
-          line-height:1.68;
+        .reports-center-page .report-hero-copy {
+          min-width: 0;
+          max-width: 900px;
         }
 
-        .reports-center-page button{
-          touch-action:manipulation;
-          font-weight:900;
-          transition:transform 240ms var(--report-ease),box-shadow 240ms var(--report-ease),filter 200ms ease;
+        .reports-center-page .kicker,
+        .reports-center-page .section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
         }
-        .reports-center-page button:hover:not(:disabled){transform:translateY(-2px);filter:saturate(1.04)}
-        .reports-center-page button:active:not(:disabled){transform:translateY(0) scale(.985)}
-        .reports-center-page button:disabled{opacity:.56;cursor:not-allowed;transform:none;filter:none}
+
+        .reports-center-page .kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
+        }
+
+        .reports-center-page .section-kicker {
+          margin-bottom: 9px;
+          padding: 7px 10px;
+          box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
+        }
+
+        .reports-center-page > .hero h1 {
+          max-width: 860px;
+          margin: 0;
+          color: var(--report-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 76px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
+        }
+
+        .reports-center-page > .hero h1 em {
+          color: var(--report-primary);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
+        }
+
+        .reports-center-page > .hero p {
+          max-width: 850px;
+          margin: 17px 0 0;
+          color: var(--report-muted);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .reports-center-page button {
+          touch-action: manipulation;
+          font-weight: 900;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
+        }
+
+        .reports-center-page button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: saturate(1.03);
+        }
+
+        .reports-center-page button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        .reports-center-page button:disabled {
+          opacity: .56;
+          cursor: not-allowed;
+          transform: none;
+          filter: none;
+        }
 
         .reports-center-page .primary,
-        .reports-center-page .secondary{
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
-          gap:8px;
-          min-height:46px;
-          padding:0 17px;
-          border-radius:14px;
-          line-height:1;
-          white-space:nowrap;
-        }
-        .reports-center-page .primary{
-          border:1px solid rgba(52,43,120,.16);
-          color:#fff;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5);
-          box-shadow:5px 6px 0 rgba(52,43,120,.8),0 12px 22px rgba(55,102,219,.16);
-        }
-        .reports-center-page .secondary{
-          border:1px solid rgba(98,84,218,.18);
-          color:var(--report-deep);
-          background:#f1efff;
-          box-shadow:4px 5px 0 rgba(98,84,218,.14);
+        .reports-center-page .secondary {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid transparent;
+          border-radius: 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1;
+          white-space: nowrap;
+          cursor: pointer;
         }
 
-        .reports-center-page>.stats-grid{
-          display:grid;
-          grid-template-columns:repeat(5,minmax(0,1fr));
-          gap:15px;
+        .reports-center-page .primary {
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 10px 22px rgba(77, 119, 221, .18);
         }
 
-        .reports-center-page>.stats-grid>*{
-          min-width:0;
-          border:1px solid rgba(171,181,211,.68)!important;
-          border-radius:21px!important;
-          background:#f8fbff!important;
-          box-shadow:7px 9px 0 var(--report-flat-blue),0 18px 30px rgba(15,20,75,.08)!important;
-          transition:transform 260ms var(--report-ease),border-color 220ms ease!important;
-        }
-        .reports-center-page>.stats-grid>*:nth-child(2n){background:#eaf8f4!important;box-shadow:7px 9px 0 var(--report-flat-teal),0 18px 30px rgba(15,20,75,.08)!important}
-        .reports-center-page>.stats-grid>*:nth-child(3n){background:#f1efff!important;box-shadow:7px 9px 0 var(--report-flat-violet),0 18px 30px rgba(15,20,75,.08)!important}
-        .reports-center-page>.stats-grid>*:nth-child(5n){background:#fff4d5!important;box-shadow:7px 9px 0 #ffe0a5,0 18px 30px rgba(15,20,75,.08)!important}
-        .reports-center-page>.stats-grid>*:hover{transform:translateY(-3px);border-color:rgba(98,84,218,.3)!important}
-
-        .reports-center-page .two-col{
-          display:grid;
-          grid-template-columns:repeat(2,minmax(0,1fr));
-          gap:18px;
+        .reports-center-page .secondary {
+          border-color: rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
         }
 
-        .reports-center-page .panel{
-          min-width:0;
-          overflow:hidden;
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(24px,2vw,32px);
-          background:linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
-          box-shadow:9px 11px 0 #d1dcfa,0 24px 42px rgba(34,38,110,.1);
+        .reports-center-page .hero-action-stack,
+        .reports-center-page .toolbar-action-stack,
+        .reports-center-page .form-action-stack {
+          display: grid;
+          gap: 9px;
+          min-width: 0;
         }
 
-        .reports-center-page .panel>h3{
-          margin:0;
-          padding:23px 25px 18px;
-          border-bottom:1px solid rgba(65,55,161,.08);
-          color:var(--report-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(21px,2vw,29px);
-          font-weight:760;
-          letter-spacing:-.03em;
-          background:rgba(255,255,255,.66);
+        .reports-center-page .hero-action-stack {
+          width: min(300px, 100%);
         }
 
-        .reports-center-page .toolbar{
-          display:flex;
-          align-items:flex-end;
-          justify-content:space-between;
-          gap:18px;
-          padding:23px 25px 18px;
-          border-bottom:1px solid rgba(65,55,161,.08);
-          background:rgba(255,255,255,.66);
-        }
-        .reports-center-page .toolbar>div{min-width:0}
-        .reports-center-page .toolbar h3{
-          margin:0;
-          color:var(--report-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(22px,2vw,30px);
-          font-weight:760;
-          line-height:1;
-          letter-spacing:-.03em;
-        }
-        .reports-center-page .toolbar p{
-          margin:6px 0 0;
-          color:var(--report-muted);
-          font-size:12px;
-          line-height:1.5;
+        .reports-center-page .hero-action-stack .secondary {
+          width: max-content;
+          min-width: 130px;
         }
 
-        .reports-center-page .mini-list{
-          display:grid;
-          grid-template-columns:repeat(2,minmax(0,1fr));
-          gap:12px;
-          padding:18px 25px 25px;
-        }
-        .reports-center-page .mini-list>span{
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          gap:12px;
-          min-width:0;
-          padding:14px;
-          border:1px solid rgba(98,84,218,.09);
-          border-radius:15px;
-          background:rgba(241,239,255,.48);
-        }
-        .reports-center-page .mini-list strong{
-          color:#334164;
-          font-size:12px;
-          line-height:1.4;
-        }
-        .reports-center-page .mini-list small{
-          flex:0 0 auto;
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
-          min-width:34px;
-          min-height:30px;
-          padding:0 10px;
-          border-radius:999px;
-          color:var(--report-deep);
-          background:#e5e9ff;
-          font-size:12px;
-          font-weight:950;
+        .reports-center-page .report-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
         }
 
-        .reports-center-page .dynamic-form{
-          display:grid;
-          grid-template-columns:repeat(4,minmax(0,1fr));
-          gap:14px;
-          padding:20px 25px 25px;
-          background:linear-gradient(145deg,rgba(237,248,255,.44),rgba(248,241,255,.34));
+        .reports-center-page .report-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
         }
-        .reports-center-page .dynamic-form label{
-          display:grid;
-          min-width:0;
-          gap:7px;
-          color:#334164;
-          font-size:12px;
-          font-weight:900;
+
+        .reports-center-page .report-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
         }
+
+        .reports-center-page .report-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .reports-center-page .report-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .reports-center-page .report-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .reports-center-page .report-inline-feedback-copy strong,
+        .reports-center-page .report-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .reports-center-page .report-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .reports-center-page .report-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .reports-center-page .report-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          font: inherit;
+          font-size: 17px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .reports-center-page .report-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .reports-center-page .page-feedback {
+          width: min(680px, 100%);
+        }
+
+        .reports-center-page .report-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .reports-center-page .report-kpi {
+          min-width: 0;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
+        }
+
+        .reports-center-page .report-kpi:nth-child(2) {
+          background: #eaf8f4;
+        }
+
+        .reports-center-page .report-kpi:nth-child(3) {
+          background: #fff4d5;
+        }
+
+        .reports-center-page .report-kpi:nth-child(4) {
+          background: #f1efff;
+        }
+
+        .reports-center-page .report-kpi span,
+        .reports-center-page .report-kpi strong,
+        .reports-center-page .report-kpi small {
+          display: block;
+        }
+
+        .reports-center-page .report-kpi span {
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .reports-center-page .report-kpi strong {
+          margin-top: 8px;
+          color: var(--report-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(28px, 3vw, 42px);
+          line-height: 1;
+        }
+
+        .reports-center-page .report-kpi small {
+          margin-top: 7px;
+          color: var(--report-muted);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .reports-center-page .three-col {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 18px;
+        }
+
+        .reports-center-page .two-col {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+        }
+
+        .reports-center-page .panel {
+          min-width: 0;
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(24px, 2.2vw, 34px);
+          background: #fff;
+          box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
+        }
+
+        .reports-center-page .panel > h3 {
+          margin: 0;
+          padding: 23px 25px 18px;
+          border-bottom: 1px solid rgba(65, 55, 161, .08);
+          color: var(--report-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(21px, 2vw, 29px);
+          font-weight: 760;
+          letter-spacing: -.03em;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(245, 248, 255, .82),
+              rgba(255, 255, 255, .32)
+            );
+        }
+
+        .reports-center-page .toolbar {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 23px 25px 18px;
+          border-bottom: 1px solid rgba(65, 55, 161, .08);
+          background:
+            linear-gradient(
+              180deg,
+              rgba(245, 248, 255, .82),
+              rgba(255, 255, 255, .32)
+            );
+        }
+
+        .reports-center-page .toolbar > div {
+          min-width: 0;
+        }
+
+        .reports-center-page .toolbar h3 {
+          margin: 0;
+          color: var(--report-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(24px, 2.4vw, 35px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+        }
+
+        .reports-center-page .toolbar p {
+          margin: 8px 0 0;
+          color: var(--report-muted);
+          font-size: 13px;
+          line-height: 1.55;
+        }
+
+        .reports-center-page .mini-list {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          padding: 18px 25px 25px;
+        }
+
+        .reports-center-page .mini-list > span,
+        .reports-center-page .detail-summary-grid > span {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          min-width: 0;
+          padding: 13px;
+          border: 1px solid rgba(162, 169, 196, .46);
+          border-radius: 15px;
+          background: #f8fbff;
+        }
+
+        .reports-center-page .mini-list > span:nth-child(2n),
+        .reports-center-page .detail-summary-grid > span:nth-child(2n) {
+          background: #f4fbf8;
+        }
+
+        .reports-center-page .mini-list strong,
+        .reports-center-page .detail-summary-grid strong {
+          color: #334164;
+          font-size: 12px;
+          line-height: 1.4;
+        }
+
+        .reports-center-page .mini-list small,
+        .reports-center-page .detail-summary-grid small {
+          flex: 0 0 auto;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 34px;
+          min-height: 30px;
+          padding: 0 10px;
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 12px;
+          font-weight: 950;
+        }
+
+        .reports-center-page .detail-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 10px;
+          padding: 14px 20px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 20px;
+          background: #fff;
+          box-shadow: 0 14px 28px rgba(34, 38, 110, .06);
+        }
+
+        .reports-center-page .dynamic-form {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          padding: 20px 25px 25px;
+          background:
+            linear-gradient(
+              145deg,
+              rgba(237, 248, 255, .44),
+              rgba(248, 241, 255, .34)
+            );
+        }
+
+        .reports-center-page .dynamic-form label {
+          display: grid;
+          min-width: 0;
+          gap: 7px;
+          color: #334164;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
         .reports-center-page .dynamic-form input,
-        .reports-center-page .dynamic-form select{
-          width:100%;
-          min-width:0;
-          min-height:46px;
-          border:1px solid rgba(159,169,205,.62);
-          border-radius:14px;
-          outline:none;
-          background:rgba(255,255,255,.9);
-          color:var(--report-ink);
-          padding:0 13px;
-          font:inherit;
-          font-weight:600;
-          transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease;
+        .reports-center-page .dynamic-form select {
+          width: 100%;
+          min-width: 0;
+          min-height: 46px;
+          border: 1px solid rgba(159, 169, 205, .62);
+          border-radius: 14px;
+          outline: none;
+          background: rgba(255, 255, 255, .96);
+          color: var(--report-ink);
+          padding: 0 13px;
+          font: inherit;
+          font-weight: 600;
+          transition:
+            border-color 180ms ease,
+            box-shadow 180ms ease,
+            background 180ms ease;
         }
+
         .reports-center-page .dynamic-form input:hover,
-        .reports-center-page .dynamic-form select:hover{border-color:rgba(98,84,218,.34)}
+        .reports-center-page .dynamic-form select:hover {
+          border-color: rgba(77, 119, 221, .34);
+        }
+
         .reports-center-page .dynamic-form input:focus,
-        .reports-center-page .dynamic-form select:focus{
-          border-color:var(--report-primary);
-          background:#fff;
-          box-shadow:0 0 0 4px rgba(98,84,218,.11);
-        }
-        .reports-center-page .dynamic-form>button{align-self:end}
-
-        .reports-center-page .report-tab-row{
-          display:flex;
-          gap:9px;
-          overflow-x:auto;
-          padding:16px 20px;
-          border-bottom:1px solid rgba(65,55,161,.09);
-          background:linear-gradient(145deg,rgba(237,248,255,.42),rgba(248,241,255,.4));
-          scrollbar-width:thin;
-          scrollbar-color:rgba(98,84,218,.35) transparent;
-          -webkit-overflow-scrolling:touch;
-        }
-        .reports-center-page .report-tab-row::-webkit-scrollbar{height:7px}
-        .reports-center-page .report-tab-row::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(98,84,218,.35)}
-        .reports-center-page .report-tab-row button{
-          flex:0 0 auto;
-          min-height:38px;
-          padding:0 13px;
-          border:1px solid rgba(98,84,218,.14);
-          border-radius:999px;
-          color:#4f5e7f;
-          background:#fff;
-          box-shadow:none;
-          font-size:11px;
-          white-space:nowrap;
-        }
-        .reports-center-page .report-tab-row button.selected{
-          color:#fff;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5);
-          box-shadow:3px 4px 0 rgba(52,43,120,.62);
+        .reports-center-page .dynamic-form select:focus {
+          border-color: var(--report-primary);
+          background: #fff;
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
         }
 
-        .reports-center-page .inline-message{
-          margin:20px 24px;
-          padding:15px 16px;
-          border:1px solid rgba(98,84,218,.14);
-          border-radius:15px;
-          color:var(--report-deep);
-          background:#f1efff;
-          font-size:12px;
-          font-weight:850;
+        .reports-center-page .form-action-stack {
+          align-self: end;
+          width: 100%;
         }
 
-        .reports-center-page .panel a{
-          color:var(--report-blue);
-          font-weight:850;
-          text-decoration:none;
-        }
-        .reports-center-page .panel a:hover{text-decoration:underline}
-
-        .reports-center-page .panel>:last-child{
-          border-bottom-left-radius:inherit;
-          border-bottom-right-radius:inherit;
+        .reports-center-page .form-action-stack .primary,
+        .reports-center-page .form-action-stack .secondary {
+          width: 100%;
         }
 
-        @media (min-width:1500px){
-          .reports-center-page>.stats-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
+        .reports-center-page .report-tab-row {
+          display: flex;
+          gap: 9px;
+          overflow-x: auto;
+          padding: 16px 20px;
+          border-bottom: 1px solid rgba(65, 55, 161, .09);
+          background:
+            linear-gradient(
+              145deg,
+              rgba(237, 248, 255, .42),
+              rgba(248, 241, 255, .4)
+            );
+          scrollbar-width: thin;
+          scrollbar-color: rgba(77, 119, 221, .35) transparent;
+          -webkit-overflow-scrolling: touch;
         }
-        @media (max-width:1180px){
-          .reports-center-page>.stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
-          .reports-center-page .dynamic-form{grid-template-columns:repeat(3,minmax(0,1fr))}
+
+        .reports-center-page .report-tab-row::-webkit-scrollbar {
+          height: 7px;
         }
-        @media (max-width:900px){
-          .reports-center-page .two-col{grid-template-columns:1fr}
-          .reports-center-page .dynamic-form{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+        .reports-center-page .report-tab-row::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(77, 119, 221, .35);
         }
-        @media (max-width:640px){
-          .reports-center-page{gap:16px}
-          .reports-center-page>.hero{
-            align-items:flex-start;
-            flex-direction:column;
-            min-height:auto;
-            padding:20px;
-            border-radius:24px;
-            box-shadow:7px 8px 0 var(--report-flat-blue),0 18px 30px rgba(34,38,110,.1);
+
+        .reports-center-page .report-tab-row button {
+          flex: 0 0 auto;
+          min-height: 38px;
+          padding: 0 13px;
+          border: 1px solid rgba(77, 119, 221, .14);
+          border-radius: 999px;
+          color: #4f5e7f;
+          background: #fff;
+          box-shadow: none;
+          font-size: 11px;
+          white-space: nowrap;
+        }
+
+        .reports-center-page .report-tab-row button.selected {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 7px 15px rgba(77, 119, 221, .16);
+        }
+
+        .reports-center-page .report-record-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 12px 20px;
+          border-bottom: 1px solid rgba(65, 55, 161, .08);
+          background: #fff;
+        }
+
+        .reports-center-page .report-record-toolbar > span {
+          color: var(--report-muted);
+          font-size: 11px;
+          font-weight: 850;
+        }
+
+        .reports-center-page .page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--report-muted);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .reports-center-page .page-size-control select {
+          width: auto;
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 12px;
+          outline: 0;
+          color: #40348d;
+          background: #f1efff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .reports-center-page .page-size-control select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+        }
+
+        .reports-center-page .report-table-swipe {
+          width: 100%;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          background: #fff;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(77, 119, 221, .35) transparent;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior-x: contain;
+          touch-action: pan-y pinch-zoom;
+          cursor: grab;
+        }
+
+        .reports-center-page .report-table-swipe.is-swiping {
+          cursor: grabbing;
+          user-select: none;
+        }
+
+        .reports-center-page .report-table-swipe.is-swiping * {
+          user-select: none;
+        }
+
+        .reports-center-page .report-table-swipe::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .reports-center-page .report-table-swipe::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(77, 119, 221, .30);
+        }
+
+        .reports-center-page .report-table-swipe table {
+          min-width: max-content;
+        }
+
+        .reports-center-page .report-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 14px;
+          padding: 13px 20px;
+          border-top: 1px solid rgba(65, 55, 161, .08);
+          background: #fff;
+        }
+
+        .reports-center-page .report-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .reports-center-page .report-page-button,
+        .reports-center-page .report-page-number {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #4767b4;
+          background: #fff;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .reports-center-page .report-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 11px;
+        }
+
+        .reports-center-page .report-page-nav {
+          min-width: 78px;
+        }
+
+        .reports-center-page .report-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .reports-center-page .report-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .reports-center-page .report-page-number.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        }
+
+        .reports-center-page .report-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .reports-center-page .report-page-indicator {
+          min-width: 82px;
+          color: var(--report-muted);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
+        .reports-center-page .inline-message {
+          margin: 18px 24px;
+          padding: 15px 16px;
+          border: 1px solid rgba(77, 119, 221, .14);
+          border-radius: 15px;
+          color: var(--report-deep);
+          background: #f1efff;
+          font-size: 12px;
+          font-weight: 850;
+        }
+
+        .reports-center-page .panel a {
+          color: var(--report-blue);
+          font-weight: 850;
+          text-decoration: none;
+        }
+
+        .reports-center-page .panel a:hover {
+          text-decoration: underline;
+        }
+
+        .reports-center-page .panel > :last-child {
+          border-bottom-left-radius: inherit;
+          border-bottom-right-radius: inherit;
+        }
+
+        .reports-center-page .report-spin {
+          animation: reportSpin .82s linear infinite;
+        }
+
+        @keyframes reportSpin {
+          to {
+            transform: rotate(360deg);
           }
-          .reports-center-page>.hero h1{font-size:clamp(31px,9.2vw,43px)}
-          .reports-center-page>.hero .secondary{width:100%}
-          .reports-center-page>.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-          .reports-center-page .panel{
-            border-radius:23px;
-            box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08);
-          }
-          .reports-center-page .toolbar{
-            align-items:flex-start;
-            flex-direction:column;
-            padding:20px 17px 15px;
-          }
-          .reports-center-page .toolbar .secondary{width:100%}
-          .reports-center-page .mini-list{grid-template-columns:1fr;padding:16px 17px 20px}
-          .reports-center-page .dynamic-form{grid-template-columns:1fr;padding:16px 17px 20px}
-          .reports-center-page .dynamic-form>button{width:100%}
-          .reports-center-page .report-tab-row{padding-left:14px;padding-right:14px}
         }
-        @media (max-width:430px){
-          .reports-center-page>.stats-grid{grid-template-columns:1fr}
+
+        @media (max-width: 1180px) {
+          .reports-center-page .report-kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .reports-center-page .three-col {
+            grid-template-columns: 1fr;
+          }
+
+          .reports-center-page .detail-summary-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .reports-center-page .dynamic-form {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
         }
-        @media (prefers-reduced-motion:reduce){
+
+        @media (max-width: 900px) {
+          .reports-center-page > .hero,
+          .reports-center-page .two-col {
+            grid-template-columns: 1fr;
+          }
+
+          .reports-center-page .hero-action-stack {
+            width: min(360px, 100%);
+          }
+
+          .reports-center-page .dynamic-form {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .reports-center-page .toolbar {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .reports-center-page .toolbar-action-stack {
+            width: min(360px, 100%);
+          }
+        }
+
+        @media (max-width: 640px) {
+          .reports-center-page {
+            gap: 15px;
+          }
+
+          .reports-center-page > .hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
+          }
+
+          .reports-center-page > .hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .reports-center-page .hero-action-stack,
+          .reports-center-page .hero-action-stack .secondary {
+            width: 100%;
+          }
+
+          .reports-center-page .report-kpi-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .reports-center-page .panel {
+            border-radius: 23px;
+          }
+
+          .reports-center-page .toolbar {
+            padding: 20px 17px 15px;
+          }
+
+          .reports-center-page .mini-list {
+            grid-template-columns: 1fr;
+            padding: 16px 17px 20px;
+          }
+
+          .reports-center-page .detail-summary-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .reports-center-page .dynamic-form {
+            grid-template-columns: 1fr;
+            padding: 16px 17px 20px;
+          }
+
+          .reports-center-page .form-action-stack {
+            width: 100%;
+          }
+
+          .reports-center-page .report-record-toolbar {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .reports-center-page .page-size-control {
+            justify-content: space-between;
+          }
+
+          .reports-center-page .report-pagination {
+            justify-content: stretch;
+            padding: 12px;
+          }
+
+          .reports-center-page .report-pagination-controls {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .reports-center-page .report-page-numbers,
+          .reports-center-page .report-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .reports-center-page .report-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .reports-center-page .report-page-nav {
+            width: 100%;
+          }
+
+          .reports-center-page .report-tab-row {
+            padding-left: 14px;
+            padding-right: 14px;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .reports-center-page > .hero {
+            padding: 16px;
+          }
+
+          .reports-center-page > .hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .reports-center-page .report-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
           .reports-center-page *,
           .reports-center-page *::before,
-          .reports-center-page *::after{
-            animation-duration:.01ms!important;
-            animation-iteration-count:1!important;
-            transition-duration:.01ms!important;
-            scroll-behavior:auto!important;
+          .reports-center-page *::after {
+            animation: none !important;
+            transition: none !important;
           }
         }
       `}</style>
 
       <section className="hero compact">
-        <div>
-          <span className="kicker">Reports</span>
-          <h1>HRMS Reports Center</h1>
+        <div className="report-hero-copy">
+          <span className="kicker">
+            <Sparkles size={13} />
+            Reports
+          </span>
+
+          <h1>
+            HRMS reports, <em>clearly.</em>
+          </h1>
+
           <p>
             View attendance, field attendance with location/photo, holiday work
             approvals, comp-off credits, comp-off claims, expired comp-off,
@@ -1631,25 +2987,81 @@ export default function Reports() {
           </p>
         </div>
 
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => refreshAll(activeTab, filters)}
-          disabled={loadingSummary || loadingRows}
-        >
-          <RefreshCcw size={16} />
-          {loadingSummary || loadingRows ? 'Refreshing...' : 'Refresh'}
-        </button>
+        <div className="hero-action-stack">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              refreshAll(activeTab, filters, {
+                showLoader: false,
+                feedbackScope: 'refresh',
+              })
+            }
+            disabled={
+              loadingSummary ||
+              loadingRows ||
+              refreshingSummary ||
+              refreshingRows
+            }
+          >
+            {refreshingSummary || refreshingRows ? (
+              <Loader2 size={16} className="report-spin" />
+            ) : (
+              <RefreshCcw size={16} />
+            )}
+            {refreshingSummary || refreshingRows
+              ? 'Refreshing...'
+              : 'Refresh'}
+          </button>
+
+          <ReportInlineMessage
+            message={feedbackMap.refresh}
+            onClose={() => clearFeedback('refresh')}
+          />
+        </div>
       </section>
 
-
-      <section className="stats-grid">
-        {statItems.map(([label, value]) => (
-          <Stat key={label} label={label} value={value} />
+      <section
+        className="report-kpi-grid"
+        aria-label="Reports center summary"
+      >
+        {topKpis.map(([label, value]) => (
+          <ReportKpi
+            key={label}
+            label={label}
+            value={value}
+          />
         ))}
       </section>
 
-      <section className="two-col">
+      {feedbackMap.page ? (
+        <div className="page-feedback">
+          <ReportInlineMessage
+            message={feedbackMap.page}
+            onClose={() => clearFeedback('page')}
+          />
+        </div>
+      ) : null}
+
+      {feedbackMap.organisations ? (
+        <div className="page-feedback">
+          <ReportInlineMessage
+            message={feedbackMap.organisations}
+            onClose={() => clearFeedback('organisations')}
+          />
+        </div>
+      ) : null}
+
+      {feedbackMap.employees ? (
+        <div className="page-feedback">
+          <ReportInlineMessage
+            message={feedbackMap.employees}
+            onClose={() => clearFeedback('employees')}
+          />
+        </div>
+      ) : null}
+
+      <section className="three-col">
         <div className="panel">
           <h3>Today&apos;s Attendance Summary</h3>
 
@@ -1701,35 +3113,68 @@ export default function Reports() {
             </span>
           </div>
         </div>
+
+        <div className="panel">
+          <h3>Additional Report Coverage</h3>
+
+          <div className="mini-list">
+            {coverageItems.map(([label, value]) => (
+              <span key={label}>
+                <strong>{label}</strong>
+                <small>{value}</small>
+              </span>
+            ))}
+          </div>
+        </div>
       </section>
 
-        {showLeaveAdvancedFilters && (
-          <section className="stats-grid">
-            <Stat label="Filtered Leaves" value={leaveSummary.total} />
-            <Stat label="Pending" value={leaveSummary.pending} />
-            <Stat label="Approved" value={leaveSummary.approved} />
-            <Stat label="Rejected" value={leaveSummary.rejected} />
-            <Stat label="Pending TL" value={leaveSummary.pending_with_team_leader} />
-            <Stat label="Pending RO" value={leaveSummary.pending_with_reporting_officer} />
-            <Stat label="Half Day" value={leaveSummary.half_day} />
-            <Stat label="LWP Days" value={leaveSummary.lwp} />
-            <Stat label="Deducted Days" value={leaveSummary.deducted_days} />
-            <Stat label="Total Leave Days" value={leaveSummary.total_days} />
-          </section>
-        )}
-
-      {activeTab === 'leave-balances' && (
-        <section className="stats-grid">
-          <Stat label="Employees" value={balanceSummary.employees} />
-          <Stat label="CL Credited" value={balanceSummary.casual_credited} />
-          <Stat label="CL Used" value={balanceSummary.casual_used} />
-          <Stat label="CL Available" value={balanceSummary.casual_available} />
-          <Stat label="EL Credited" value={balanceSummary.earned_credited} />
-          <Stat label="EL Used" value={balanceSummary.earned_used} />
-          <Stat label="EL Available" value={balanceSummary.earned_available} />
-          <Stat label="Total Available" value={balanceSummary.total_available} />
+      {showLeaveAdvancedFilters ? (
+        <section
+          className="detail-summary-grid"
+          aria-label="Filtered leave summary"
+        >
+          {[
+            ['Filtered Leaves', leaveSummary.total],
+            ['Pending', leaveSummary.pending],
+            ['Approved', leaveSummary.approved],
+            ['Rejected', leaveSummary.rejected],
+            ['Pending TL', leaveSummary.pending_with_team_leader],
+            ['Pending RO', leaveSummary.pending_with_reporting_officer],
+            ['Half Day', leaveSummary.half_day],
+            ['LWP Days', leaveSummary.lwp],
+            ['Deducted Days', leaveSummary.deducted_days],
+            ['Total Leave Days', leaveSummary.total_days],
+          ].map(([label, value]) => (
+            <span key={label}>
+              <strong>{label}</strong>
+              <small>{value}</small>
+            </span>
+          ))}
         </section>
-      )}
+      ) : null}
+
+      {activeTab === 'leave-balances' ? (
+        <section
+          className="detail-summary-grid"
+          aria-label="Leave balance summary"
+        >
+          {[
+            ['Employees', balanceSummary.employees],
+            ['CL Credited', balanceSummary.casual_credited],
+            ['CL Used', balanceSummary.casual_used],
+            ['CL Available', balanceSummary.casual_available],
+            ['EL Credited', balanceSummary.earned_credited],
+            ['EL Used', balanceSummary.earned_used],
+            ['EL Available', balanceSummary.earned_available],
+            ['Total Available', balanceSummary.total_available],
+          ].map(([label, value]) => (
+            <span key={label}>
+              <strong>{label}</strong>
+              <small>{value}</small>
+            </span>
+          ))}
+        </section>
+      ) : null}
 
       <section className="panel">
         <div className="toolbar">
@@ -1901,13 +3346,27 @@ export default function Reports() {
             </label>
           )}
 
-          <button
-            type="submit"
-            className="primary"
-            disabled={downloadingExcel}
-          >
-            {downloadingExcel ? 'Downloading...' : 'Download Styled Attendance Excel'}
-          </button>
+          <div className="form-action-stack">
+            <button
+              type="submit"
+              className="primary"
+              disabled={downloadingExcel}
+            >
+              {downloadingExcel ? (
+                <Loader2 size={16} className="report-spin" />
+              ) : (
+                <Download size={16} />
+              )}
+              {downloadingExcel
+                ? 'Downloading...'
+                : 'Download Styled Attendance Excel'}
+            </button>
+
+            <ReportInlineMessage
+              message={feedbackMap['attendance-excel']}
+              onClose={() => clearFeedback('attendance-excel')}
+            />
+          </div>
         </form>
       </section>
 
@@ -2077,43 +3536,86 @@ export default function Reports() {
             </label>
           )}
 
-          <button
-            type="submit"
-            className="primary"
-            disabled={loadingExceptions || downloadingExceptionExcel}
-          >
-            <Search size={16} />
-            {loadingExceptions ? 'Loading...' : 'Preview Report'}
-          </button>
+          <div className="form-action-stack">
+            <button
+              type="submit"
+              className="primary"
+              disabled={loadingExceptions || downloadingExceptionExcel}
+            >
+              {loadingExceptions ? (
+                <Loader2 size={16} className="report-spin" />
+              ) : (
+                <Search size={16} />
+              )}
+              {loadingExceptions ? 'Loading...' : 'Preview Report'}
+            </button>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleAttendanceExceptionDownload}
-            disabled={loadingExceptions || downloadingExceptionExcel}
-          >
-            {downloadingExceptionExcel ? 'Downloading...' : 'Download Excel'}
-          </button>
+            <ReportInlineMessage
+              message={feedbackMap['exception-preview']}
+              onClose={() => clearFeedback('exception-preview')}
+            />
+          </div>
+
+          <div className="form-action-stack">
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleAttendanceExceptionDownload}
+              disabled={loadingExceptions || downloadingExceptionExcel}
+            >
+              {downloadingExceptionExcel ? (
+                <Loader2 size={16} className="report-spin" />
+              ) : (
+                <Download size={16} />
+              )}
+              {downloadingExceptionExcel
+                ? 'Downloading...'
+                : 'Download Excel'}
+            </button>
+
+            <ReportInlineMessage
+              message={feedbackMap['exception-download']}
+              onClose={() => clearFeedback('exception-download')}
+            />
+          </div>
         </form>
 
-        {exceptionSummary && (
-          <section className="stats-grid" style={{ marginTop: 18 }}>
-            <Stat label="Absent Records" value={exceptionSummary.absent_records || 0} />
-            <Stat label="Absent Employees" value={exceptionSummary.absent_employees || 0} />
-            <Stat label="Missing Checkout Records" value={exceptionSummary.missing_checkout_records || 0} />
-            <Stat label="Missing Checkout Employees" value={exceptionSummary.missing_checkout_employees || 0} />
+        {exceptionSummary ? (
+          <section
+            className="detail-summary-grid"
+            aria-label="Attendance exception summary"
+          >
+            {[
+              ['Absent Records', exceptionSummary.absent_records || 0],
+              ['Absent Employees', exceptionSummary.absent_employees || 0],
+              [
+                'Missing Checkout Records',
+                exceptionSummary.missing_checkout_records || 0,
+              ],
+              [
+                'Missing Checkout Employees',
+                exceptionSummary.missing_checkout_employees || 0,
+              ],
+            ].map(([label, value]) => (
+              <span key={label}>
+                <strong>{label}</strong>
+                <small>{value}</small>
+              </span>
+            ))}
           </section>
-        )}
+        ) : null}
 
-        {loadingExceptions && (
-          <div className="inline-message">Loading attendance exception report...</div>
-        )}
-
-        {!loadingExceptions && exceptionSummary && (
-          <div style={{ marginTop: 18 }}>
-            <Table rows={exceptionRows} maxColumns={18} />
+        {loadingExceptions && !exceptionSummary ? (
+          <div className="inline-message">
+            Loading attendance exception report...
           </div>
-        )}
+        ) : null}
+
+        {exceptionSummary ? (
+          <SwipeableReportTable className="exception-table-swipe">
+            <Table rows={exceptionRows} maxColumns={18} />
+          </SwipeableReportTable>
+        ) : null}
       </section>
 
 
@@ -2128,17 +3630,35 @@ export default function Reports() {
             </p>
           </div>
 
-          {hasActiveFilters && (
-            <button
-              type="button"
-              className="secondary"
-              onClick={clearFilters}
-              disabled={loadingRows || loadingSummary}
-            >
-              <X size={16} />
-              Clear Filters
-            </button>
-          )}
+          {hasActiveFilters ? (
+            <div className="toolbar-action-stack">
+              <button
+                type="button"
+                className="secondary"
+                onClick={clearFilters}
+                disabled={
+                  loadingRows ||
+                  loadingSummary ||
+                  refreshingRows ||
+                  refreshingSummary
+                }
+              >
+                {feedbackMap['clear-filters']?.loading ? (
+                  <Loader2 size={16} className="report-spin" />
+                ) : (
+                  <X size={16} />
+                )}
+                {feedbackMap['clear-filters']?.loading
+                  ? 'Clearing...'
+                  : 'Clear Filters'}
+              </button>
+
+              <ReportInlineMessage
+                message={feedbackMap['clear-filters']}
+                onClose={() => clearFeedback('clear-filters')}
+              />
+            </div>
+          ) : null}
         </div>
 
         <form className="dynamic-form" onSubmit={searchReport} noValidate>
@@ -2357,29 +3877,69 @@ export default function Reports() {
             </>
           )}
 
-          <button
-            type="submit"
-            className="primary"
-            disabled={loadingRows || loadingSummary}
-          >
-            <Search size={16} />
-            {loadingRows ? 'Searching...' : 'Search Report'}
-          </button>
+          <div className="form-action-stack">
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                loadingRows ||
+                loadingSummary ||
+                refreshingRows ||
+                refreshingSummary
+              }
+            >
+              {feedbackMap['search-report']?.loading ? (
+                <Loader2 size={16} className="report-spin" />
+              ) : (
+                <Search size={16} />
+              )}
+              {feedbackMap['search-report']?.loading
+                ? 'Searching...'
+                : 'Search Report'}
+            </button>
 
-          <button
-            type="button"
-            className="secondary"
-            onClick={clearFilters}
-            disabled={loadingRows || loadingSummary}
-          >
-            Clear
-          </button>
+            <ReportInlineMessage
+              message={feedbackMap['search-report']}
+              onClose={() => clearFeedback('search-report')}
+            />
+          </div>
+
+          <div className="form-action-stack">
+            <button
+              type="button"
+              className="secondary"
+              onClick={clearFilters}
+              disabled={
+                loadingRows ||
+                loadingSummary ||
+                refreshingRows ||
+                refreshingSummary
+              }
+            >
+              {feedbackMap['clear-filters']?.loading ? (
+                <Loader2 size={16} className="report-spin" />
+              ) : (
+                <X size={16} />
+              )}
+              {feedbackMap['clear-filters']?.loading
+                ? 'Clearing...'
+                : 'Clear'}
+            </button>
+
+            <ReportInlineMessage
+              message={feedbackMap['clear-filters']}
+              onClose={() => clearFeedback('clear-filters')}
+            />
+          </div>
         </form>
       </section>
 
       <section className="panel">
         <div className="toolbar">
           <div>
+            <span className="section-kicker">
+              Report Directory
+            </span>
             <h3>{currentTab?.title || 'Report'}</h3>
             <p>
               Showing latest records based on selected report and filters.
@@ -2394,16 +3954,54 @@ export default function Reports() {
               type="button"
               className={activeTab === tab.key ? 'selected' : ''}
               onClick={() => changeTab(tab.key)}
-              disabled={loadingRows}
+              disabled={loadingRows || refreshingRows}
             >
               {tab.title}
             </button>
           ))}
         </div>
 
-        {loadingRows && <div className="inline-message">Loading report...</div>}
+        <div className="report-record-toolbar">
+          <span>
+            {rows.length.toLocaleString('en-IN')} record
+            {rows.length === 1 ? '' : 's'}
+          </span>
 
-        <Table rows={rows} maxColumns={16} />
+          <label className="page-size-control">
+            <span>View</span>
+            <select
+              value={reportPageSize}
+              onChange={(event) => {
+                setReportPage(1);
+                setReportPageSize(Number(event.target.value));
+              }}
+              aria-label="Report rows per page"
+            >
+              {REPORT_PAGE_SIZES.map((size) => (
+                <option value={size} key={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {loadingRows && !rows.length ? (
+          <div className="inline-message">
+            <Loader2 size={16} className="report-spin" /> Loading report...
+          </div>
+        ) : null}
+
+        <SwipeableReportTable>
+          <Table rows={pagedReportRows} maxColumns={16} />
+        </SwipeableReportTable>
+
+        <ReportPagination
+          total={rows.length}
+          page={safeReportPage}
+          pageSize={reportPageSize}
+          onPageChange={setReportPage}
+        />
       </section>
     </div>
   );

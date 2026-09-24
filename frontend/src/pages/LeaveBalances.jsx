@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
   Plus,
   RefreshCcw,
   Search,
+  Sparkles,
   UserRound,
-  UsersRound,
-  WalletCards,
+  XCircle,
 } from 'lucide-react';
 import {
   getInitials,
@@ -16,7 +19,6 @@ import {
   listCollection,
   saveCombinedLeaveBalance,
 } from '../api/client';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 import { canManageLeaveBalances } from '../data/modules';
 
 function toArray(value) {
@@ -266,10 +268,177 @@ function EmployeeAvatar({ employee = {}, size = 'md' }) {
   );
 }
 
+
+const LEAVE_BALANCE_NOTICE_HIDE_MS = 3600;
+const LEAVE_BALANCE_PAGE_SIZES = [10, 25, 50, 100];
+
+function leaveBalancePageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function LeaveBalanceInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`lb-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="lb-inline-feedback-icon">
+        {message.loading ? (
+          <Loader2 size={15} className="lb-spin" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="lb-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="lb-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function LeaveBalancePageSize({
+  total,
+  pageSize,
+  onPageSizeChange,
+}) {
+  if (!total) return null;
+
+  return (
+    <div className="lb-pagination-view">
+      <div className="lb-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>employees</span>
+      </div>
+
+      <label className="lb-page-size">
+        <span>View</span>
+        <select
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(Number(event.target.value))}
+          aria-label="Employees per page"
+        >
+          {LEAVE_BALANCE_PAGE_SIZES.map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function LeaveBalancePagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="lb-pagination">
+      <div className="lb-pagination-controls">
+        <button
+          type="button"
+          className="lb-page-button lb-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="lb-page-numbers" aria-label="Pagination">
+          {leaveBalancePageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                key={item}
+                className={`lb-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span key={item} className="lb-page-ellipsis">
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="lb-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="lb-page-button lb-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function LeaveBalances({ user = {} }) {
-  const alerts = useCustomAlert();
   const canManage = canManageLeaveBalances(user);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [balanceItems, setBalanceItems] = useState([]);
@@ -278,6 +447,10 @@ export default function LeaveBalances({ user = {} }) {
   const [tableQuery, setTableQuery] = useState('');
   const [casualLeaveToAdd, setCasualLeaveToAdd] = useState('');
   const [earnedLeaveToAdd, setEarnedLeaveToAdd] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
 
   const balanceRows = useMemo(
     () => buildBalanceRows(employees, balanceItems),
@@ -353,14 +526,100 @@ export default function LeaveBalances({ user = {} }) {
 
   const casualAddition = Math.max(toNumber(casualLeaveToAdd, 0), 0);
   const earnedAddition = Math.max(toNumber(earnedLeaveToAdd, 0), 0);
+  const totalLeaveAvailable = totals.casual + totals.earned;
 
-  async function loadData({ showLoader = true } = {}) {
-    if (!canManage) {
-      setLoading(false);
-      return;
+  const pageCount = Math.max(
+    1,
+    Math.ceil(visibleRows.length / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedRows = visibleRows.slice(pageStart, pageStart + pageSize);
+
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
     }
 
-    if (showLoader) setLoading(true);
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, LEAVE_BALANCE_NOTICE_HIDE_MS);
+    }
+  }
+
+  async function loadData({
+    showLoader = true,
+    feedbackScope = '',
+  } = {}) {
+    if (!canManage) {
+      setLoading(false);
+      return false;
+    }
+
+    if (showLoader) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing employee leave balances...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
 
     try {
       const [employeeResponse, balanceResponse] = await Promise.all([
@@ -384,13 +643,32 @@ export default function LeaveBalances({ user = {} }) {
           ? currentEmployeeId
           : '',
       );
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Employee leave balances are up to date.',
+          'Refresh Complete',
+        );
+      }
+
+      return true;
     } catch (error) {
-      alerts.error(
+      showFeedback(
+        feedbackScope || 'page',
+        'error',
         error.message || 'Unable to load employee leave balances.',
-        'Leave Balances Load Failed',
+        feedbackScope ? 'Refresh Failed' : 'Leave Balances Load Failed',
       );
+
+      return false;
     } finally {
-      if (showLoader) setLoading(false);
+      if (showLoader) {
+        setLoading(false);
+      } else {
+        setRefreshing(false);
+      }
     }
   }
 
@@ -399,17 +677,91 @@ export default function LeaveBalances({ user = {} }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
 
-  function selectEmployee(employeeId) {
-    setSelectedEmployeeId(String(employeeId || ''));
+  useEffect(() => {
+    setPage(1);
+  }, [tableQuery, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.lb-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  function selectEmployee(
+    employeeId,
+    {
+      showSelectionFeedback = false,
+      feedbackScope = '',
+    } = {},
+  ) {
+    const normalizedEmployeeId = String(employeeId || '');
+
+    setSelectedEmployeeId(normalizedEmployeeId);
     setCasualLeaveToAdd('');
     setEarnedLeaveToAdd('');
+
+    if (!showSelectionFeedback || !normalizedEmployeeId) {
+      return;
+    }
+
+    const employee = employees.find(
+      (item) => getEmployeeId(item) === normalizedEmployeeId,
+    );
+    const message = `${getEmployeeName(
+      employee || {},
+    )} is selected for leave allocation.`;
+
+    showFeedback(
+      'form-action',
+      'success',
+      message,
+      'Employee Selected',
+    );
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'success',
+        message,
+        'Employee Selected',
+      );
+    }
   }
 
   async function addLeave(event) {
     event.preventDefault();
+    clearFeedback('form-action');
 
     if (!selectedEmployeeId) {
-      alerts.warning('Please select an employee.', 'Employee Required');
+      showFeedback(
+        'form-action',
+        'warning',
+        'Please select an employee.',
+        'Employee Required',
+      );
       return;
     }
 
@@ -422,7 +774,9 @@ export default function LeaveBalances({ user = {} }) {
       rawCasualLeave < 0 ||
       rawEarnedLeave < 0
     ) {
-      alerts.warning(
+      showFeedback(
+        'form-action',
+        'warning',
         'Leave to add must be zero or a positive number.',
         'Invalid Leave Value',
       );
@@ -430,7 +784,9 @@ export default function LeaveBalances({ user = {} }) {
     }
 
     if (rawCasualLeave === 0 && rawEarnedLeave === 0) {
-      alerts.warning(
+      showFeedback(
+        'form-action',
+        'warning',
         'Enter Casual Leave or Earned Leave to add.',
         'Leave Value Required',
       );
@@ -438,6 +794,14 @@ export default function LeaveBalances({ user = {} }) {
     }
 
     setSaving(true);
+
+    showFeedback(
+      'form-action',
+      'info',
+      'Saving the employee leave balance...',
+      'Adding Leave',
+      { loading: true },
+    );
 
     try {
       const payload = {
@@ -464,7 +828,39 @@ export default function LeaveBalances({ user = {} }) {
       }
 
       await saveCombinedLeaveBalance(selectedEmployeeId, payload);
-      await loadData({ showLoader: false });
+
+      const optimisticRows = [];
+
+      if (rawCasualLeave > 0) {
+        optimisticRows.push({
+          employee_id: selectedEmployeeId,
+          leave_type: 'CL',
+          opening_balance: selectedBalance.cl.opening_balance,
+          credited: selectedBalance.cl.credited + rawCasualLeave,
+          used: selectedBalance.cl.used,
+          available: selectedBalance.cl.available + rawCasualLeave,
+          status: selectedBalance.cl.status || 'active',
+        });
+      }
+
+      if (rawEarnedLeave > 0) {
+        optimisticRows.push({
+          employee_id: selectedEmployeeId,
+          leave_type: 'EL',
+          opening_balance: selectedBalance.el.opening_balance,
+          credited: selectedBalance.el.credited + rawEarnedLeave,
+          used: selectedBalance.el.used,
+          available: selectedBalance.el.available + rawEarnedLeave,
+          status: selectedBalance.el.status || 'active',
+        });
+      }
+
+      if (optimisticRows.length) {
+        setBalanceItems((currentItems) => [
+          ...currentItems,
+          ...optimisticRows,
+        ]);
+      }
 
       setCasualLeaveToAdd('');
       setEarnedLeaveToAdd('');
@@ -472,19 +868,33 @@ export default function LeaveBalances({ user = {} }) {
       const additions = [];
 
       if (rawCasualLeave > 0) {
-        additions.push(`${formatLeaveDays(rawCasualLeave)} Casual Leave`);
+        additions.push(
+          `${formatLeaveDays(rawCasualLeave)} Casual Leave`,
+        );
       }
 
       if (rawEarnedLeave > 0) {
-        additions.push(`${formatLeaveDays(rawEarnedLeave)} Earned Leave`);
+        additions.push(
+          `${formatLeaveDays(rawEarnedLeave)} Earned Leave`,
+        );
       }
 
-      alerts.success(
-        `${additions.join(' and ')} added to ${getEmployeeName(selectedEmployee)}.`,
+      showFeedback(
+        'form-action',
+        'success',
+        `${additions.join(' and ')} added to ${getEmployeeName(
+          selectedEmployee,
+        )}.`,
         'Leave Added Successfully',
       );
+
+      void loadData({
+        showLoader: false,
+      });
     } catch (error) {
-      alerts.error(
+      showFeedback(
+        'form-action',
+        'error',
         error.message || 'Unable to add leave for this employee.',
         'Add Leave Failed',
       );
@@ -493,9 +903,1127 @@ export default function LeaveBalances({ user = {} }) {
     }
   }
 
-  if (!canManage) {
-    return (
-      <div className="leave-balances-page">
+  const pageStyles = `
+    .leave-balances-page {
+      --lb-ink: #101a3a;
+      --lb-copy: #5d6d8d;
+      --lb-blue: #4d77dd;
+      --lb-cyan: #2eb2b9;
+      --lb-violet: #575092;
+      --lb-line: rgba(16, 26, 58, .14);
+      width: 100%;
+      min-width: 0;
+      display: grid;
+      gap: clamp(16px, 1.8vw, 24px);
+      color: var(--lb-ink);
+    }
+
+    .leave-balances-page,
+    .leave-balances-page * {
+      box-sizing: border-box;
+    }
+
+    .leave-balances-page > *,
+    .leave-balances-page section,
+    .leave-balances-page article,
+    .leave-balances-page form,
+    .leave-balances-page label {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .leave-balances-page::before,
+    .leave-balances-page::after,
+    .lb-hero::before,
+    .lb-hero::after,
+    .lb-summary-card::before,
+    .lb-summary-card::after {
+      content: none;
+      display: none;
+      background: none;
+    }
+
+    .lb-hero {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(230px, 330px);
+      gap: clamp(20px, 3vw, 38px);
+      align-items: center;
+      min-height: 240px;
+      padding: clamp(24px, 3vw, 40px);
+      border: 1px solid rgba(154, 164, 205, .58);
+      border-radius: clamp(28px, 2.7vw, 40px);
+      background:
+        linear-gradient(
+          90deg,
+          #d3f4fb 0%,
+          #f7fcfb 34%,
+          #fffdf8 52%,
+          #fbf8fa 68%,
+          #f0edfb 100%
+        );
+      box-shadow: 0 22px 46px rgba(70, 92, 140, .10);
+    }
+
+    .lb-hero-copy {
+      min-width: 0;
+      max-width: 900px;
+    }
+
+    .lb-kicker,
+    .lb-section-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: max-content;
+      max-width: 100%;
+      border-radius: 999px;
+      color: #fff;
+      background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+      font-size: 9px;
+      font-weight: 950;
+      line-height: 1;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .lb-kicker {
+      margin-bottom: 15px;
+      padding: 9px 13px;
+      box-shadow: 0 8px 18px rgba(77, 119, 221, .18);
+    }
+
+    .lb-section-kicker {
+      margin-bottom: 10px;
+      padding: 7px 10px;
+      box-shadow: 0 7px 15px rgba(77, 119, 221, .14);
+    }
+
+    .lb-hero h1 {
+      max-width: 900px;
+      margin: 0;
+      color: var(--lb-ink);
+      font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+      font-size: clamp(44px, 5.2vw, 76px);
+      font-weight: 760;
+      line-height: .94;
+      letter-spacing: -.058em;
+    }
+
+    .lb-hero h1 em {
+      color: var(--lb-blue);
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+
+    .lb-hero p {
+      max-width: 780px;
+      margin: 17px 0 0;
+      color: var(--lb-copy);
+      font-size: clamp(13px, 1vw, 16px);
+      line-height: 1.68;
+    }
+
+    .lb-hero-note {
+      padding: 17px;
+      border: 1px solid rgba(77, 119, 221, .18);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .88);
+      box-shadow: 0 12px 26px rgba(70, 92, 140, .08);
+    }
+
+    .lb-hero-note strong,
+    .lb-hero-note span {
+      display: block;
+    }
+
+    .lb-hero-note strong {
+      color: var(--lb-ink);
+      font-size: 13px;
+    }
+
+    .lb-hero-note span {
+      margin-top: 7px;
+      color: var(--lb-copy);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .lb-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .lb-summary-card {
+      min-width: 0;
+      min-height: 120px;
+      padding: 18px;
+      border: 1px solid rgba(171, 181, 211, .66);
+      border-radius: 22px;
+      background: #edf6ff;
+      box-shadow: 0 16px 30px rgba(34, 38, 110, .07);
+    }
+
+    .lb-summary-card:nth-child(2) {
+      background: #eaf8f4;
+    }
+
+    .lb-summary-card:nth-child(3) {
+      background: #fff4d5;
+    }
+
+    .lb-summary-card:nth-child(4) {
+      background: #f1efff;
+    }
+
+    .lb-summary-card span,
+    .lb-summary-card strong,
+    .lb-summary-card small {
+      display: block;
+    }
+
+    .lb-summary-card span {
+      color: #5d6785;
+      font-size: 9px;
+      font-weight: 950;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    .lb-summary-card strong {
+      margin-top: 8px;
+      color: var(--lb-ink);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(28px, 3vw, 42px);
+      line-height: 1;
+    }
+
+    .lb-summary-card small {
+      margin-top: 7px;
+      color: var(--lb-copy);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .lb-page-feedback {
+      width: min(620px, 100%);
+    }
+
+    .lb-inline-feedback {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: start;
+      width: 100%;
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid rgba(102, 88, 220, .18);
+      border-radius: 12px;
+      color: #40348d;
+      background: #f1efff;
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .lb-inline-feedback.success {
+      border-color: rgba(4, 120, 87, .18);
+      color: #047857;
+      background: #eaf8f4;
+    }
+
+    .lb-inline-feedback.warning {
+      border-color: rgba(154, 104, 23, .18);
+      color: #9a6817;
+      background: #fff4d5;
+    }
+
+    .lb-inline-feedback.error {
+      border-color: rgba(162, 52, 77, .18);
+      color: #a2344d;
+      background: #fff0f2;
+    }
+
+    .lb-inline-feedback-icon {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+    }
+
+    .lb-inline-feedback-copy {
+      min-width: 0;
+    }
+
+    .lb-inline-feedback-copy strong,
+    .lb-inline-feedback-copy span {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .lb-inline-feedback-copy strong {
+      margin-bottom: 2px;
+      font-weight: 950;
+    }
+
+    .lb-inline-feedback-copy span {
+      font-weight: 750;
+    }
+
+    .lb-inline-feedback-close {
+      width: 24px;
+      min-width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 0;
+      border-radius: 8px;
+      display: inline-grid;
+      place-items: center;
+      color: currentColor;
+      background: rgba(255, 255, 255, .58);
+      font: inherit;
+      font-size: 17px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .lb-inline-feedback-close:hover {
+      background: #fff;
+    }
+
+    .lb-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(300px, .82fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .lb-card,
+    .lb-table-card {
+      min-width: 0;
+      border: 1px solid rgba(171, 181, 211, .70);
+      border-radius: clamp(24px, 2.2vw, 34px);
+      background: #fff;
+      box-shadow: 0 20px 38px rgba(34, 38, 110, .08);
+    }
+
+    .lb-card {
+      padding: clamp(20px, 2vw, 28px);
+    }
+
+    .lb-card:first-child {
+      background:
+        linear-gradient(
+          145deg,
+          rgba(239, 248, 255, .72),
+          rgba(248, 244, 255, .62) 52%,
+          rgba(255, 250, 238, .68)
+        );
+    }
+
+    .lb-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+
+    .lb-card-head h2,
+    .lb-table-head h2 {
+      margin: 0;
+      color: var(--lb-ink);
+      font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+      font-size: clamp(24px, 2.4vw, 35px);
+      font-weight: 760;
+      line-height: 1;
+      letter-spacing: -.045em;
+    }
+
+    .lb-card-head p,
+    .lb-table-head p {
+      margin: 8px 0 0;
+      color: var(--lb-copy);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .lb-card-head > svg {
+      color: var(--lb-blue);
+      flex: 0 0 auto;
+    }
+
+    .lb-form {
+      display: grid;
+      gap: 17px;
+    }
+
+    .lb-field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .lb-field label {
+      color: #303b5b;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .025em;
+    }
+
+    .lb-field input,
+    .lb-field select {
+      width: 100%;
+      min-width: 0;
+      min-height: 50px;
+      padding: 0 14px;
+      border: 1px solid rgba(151, 161, 197, .58);
+      border-radius: 14px;
+      outline: 0;
+      color: var(--lb-ink);
+      background: rgba(255, 255, 255, .96);
+      font: inherit;
+      font-size: 13px;
+      transition:
+        border-color 170ms ease,
+        box-shadow 170ms ease;
+    }
+
+    .lb-field input:focus,
+    .lb-field select:focus {
+      border-color: rgba(77, 119, 221, .65);
+      box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+    }
+
+    .lb-field small {
+      color: var(--lb-copy);
+      line-height: 1.4;
+    }
+
+    .lb-input-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .lb-leave-input {
+      padding: 15px;
+      border: 1px solid rgba(171, 181, 211, .52);
+      border-radius: 16px;
+      background: #f8fbff;
+    }
+
+    .lb-leave-input:nth-child(2) {
+      background: #f4fbf8;
+    }
+
+    .lb-leave-input strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .lb-preview-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 9px;
+      color: var(--lb-copy);
+      font-size: 12px;
+    }
+
+    .lb-preview-line b {
+      color: #40348d;
+    }
+
+    .lb-form-action-stack,
+    .lb-refresh-stack {
+      display: grid;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .lb-form-action-stack {
+      width: 100%;
+    }
+
+    .lb-refresh-stack {
+      width: 100%;
+      align-items: start;
+    }
+
+    .lb-primary-btn,
+    .lb-soft-btn {
+      min-height: 44px;
+      padding: 10px 15px;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: max-content;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+      transition:
+        transform 180ms ease,
+        border-color 180ms ease,
+        filter 180ms ease,
+        opacity 180ms ease;
+    }
+
+    .lb-primary-btn {
+      min-width: 160px;
+      color: #fff;
+      background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+      box-shadow: 0 10px 22px rgba(77, 119, 221, .18);
+    }
+
+    .lb-soft-btn {
+      color: #4767b4;
+      border-color: rgba(77, 119, 221, .18);
+      background: #fff;
+    }
+
+    .lb-primary-btn:hover:not(:disabled),
+    .lb-soft-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: rgba(46, 178, 185, .42);
+      filter: saturate(1.03);
+    }
+
+    .lb-primary-btn:disabled,
+    .lb-soft-btn:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+      transform: none;
+    }
+
+    .lb-spin {
+      animation: lbSpin .82s linear infinite;
+    }
+
+    @keyframes lbSpin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .lb-selected-empty {
+      min-height: 290px;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 8px;
+      color: var(--lb-copy);
+      text-align: center;
+    }
+
+    .lb-selected-empty svg {
+      color: var(--lb-blue);
+    }
+
+    .lb-person-head {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      margin-bottom: 18px;
+    }
+
+    .lb-person-head strong,
+    .lb-person-head span {
+      display: block;
+    }
+
+    .lb-person-head span {
+      margin-top: 3px;
+      color: var(--lb-copy);
+      font-size: 12px;
+    }
+
+    .lb-avatar {
+      overflow: hidden;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      color: #40348d;
+      background: linear-gradient(135deg, #edf6ff, #eaf8f4);
+      border: 3px solid #fff;
+      box-shadow: 0 8px 20px rgba(50, 57, 102, .12);
+    }
+
+    .lb-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .lb-avatar-sm {
+      width: 40px;
+      height: 40px;
+      font-size: 11px;
+    }
+
+    .lb-avatar-md {
+      width: 56px;
+      height: 56px;
+      font-size: 15px;
+    }
+
+    .lb-balance-pair {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .lb-balance-box {
+      padding: 16px;
+      border: 1px solid rgba(171, 181, 211, .52);
+      border-radius: 16px;
+      background: #edf6ff;
+    }
+
+    .lb-balance-box:nth-child(2) {
+      background: #eaf8f4;
+    }
+
+    .lb-balance-box > span,
+    .lb-balance-box > strong {
+      display: block;
+    }
+
+    .lb-balance-box > span {
+      color: var(--lb-copy);
+      font-size: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .lb-balance-box > strong {
+      margin: 5px 0 12px;
+      color: #40348d;
+      font-size: 30px;
+    }
+
+    .lb-balance-meta {
+      display: grid;
+      gap: 5px;
+      color: var(--lb-copy);
+      font-size: 11px;
+    }
+
+    .lb-balance-meta div {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .lb-table-card {
+      overflow: hidden;
+    }
+
+    .lb-table-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 22px 24px;
+      border-bottom: 1px solid rgba(65, 55, 161, .08);
+    }
+
+    .lb-table-tools {
+      display: grid;
+      grid-template-columns:
+        minmax(280px, 350px)
+        minmax(160px, 300px);
+      align-items: start;
+      justify-content: end;
+      gap: 14px;
+    }
+
+    .lb-search-box {
+      position: relative;
+      display: block;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .lb-search-box > svg {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      color: var(--lb-blue);
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .lb-search-box input {
+      width: 100%;
+      min-height: 44px;
+      padding: 0 13px 0 39px;
+      border: 1px solid rgba(151, 161, 197, .58);
+      border-radius: 14px;
+      outline: 0;
+      color: var(--lb-ink);
+      background: #fff;
+      font: inherit;
+      font-size: 13px;
+    }
+
+    .lb-search-box input:focus {
+      border-color: rgba(77, 119, 221, .65);
+      box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+    }
+
+    .lb-refresh-stack .lb-soft-btn {
+      width: max-content;
+      min-width: 145px;
+      justify-self: start;
+    }
+
+    .lb-refresh-stack .lb-inline-feedback {
+      width: 100%;
+    }
+
+    .lb-pagination-view {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 13px clamp(18px, 2vw, 24px);
+      border-bottom: 1px solid rgba(65, 55, 161, .08);
+      background: #fff;
+    }
+
+    .lb-pagination-copy {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      color: var(--lb-copy);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .lb-pagination-copy strong {
+      color: var(--lb-ink);
+      font-size: 13px;
+    }
+
+    .lb-page-size {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--lb-copy);
+      font-size: 10px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .lb-page-size select {
+      width: auto;
+      min-width: 78px;
+      min-height: 38px;
+      padding: 0 28px 0 10px;
+      border: 1px solid rgba(151, 161, 197, .58);
+      border-radius: 12px;
+      outline: 0;
+      color: #40348d;
+      background: #f1efff;
+      font: inherit;
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .lb-page-size select:focus {
+      border-color: rgba(77, 119, 221, .65);
+      box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
+    }
+
+    .lb-table-wrap {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      background: #fff;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      touch-action: pan-x pan-y;
+    }
+
+    .lb-table {
+      width: 100%;
+      min-width: 850px;
+      border-collapse: collapse;
+    }
+
+    .lb-table th,
+    .lb-table td {
+      padding: 14px 16px;
+      border-bottom: 1px solid #edf0f5;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .lb-table th {
+      color: #526079;
+      background: linear-gradient(180deg, #f8f8ff, #f4f8fb);
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .lb-table td {
+      color: #334155;
+      font-size: 13px;
+    }
+
+    .lb-table tr:hover td {
+      background: #fafcff;
+    }
+
+    .lb-name-cell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 210px;
+    }
+
+    .lb-name-cell strong {
+      display: block;
+    }
+
+    .lb-number-pill {
+      display: inline-flex;
+      min-width: 42px;
+      justify-content: center;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: #40348d;
+      background: #f1efff;
+      font-weight: 900;
+    }
+
+    .lb-number-pill.is-earned {
+      color: #047857;
+      background: #eaf8f4;
+    }
+
+    .lb-row-action-stack {
+      display: grid;
+      gap: 7px;
+      width: min(220px, 100%);
+    }
+
+    .lb-row-action-stack .lb-soft-btn {
+      justify-self: start;
+    }
+
+    .lb-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      padding: 13px clamp(18px, 2vw, 24px);
+      border-top: 1px solid rgba(65, 55, 161, .08);
+      background: #fff;
+    }
+
+    .lb-pagination-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .lb-page-button,
+    .lb-page-number {
+      border: 1px solid rgba(77, 119, 221, .18);
+      color: #4767b4;
+      background: #fff;
+      font: inherit;
+      font-size: 10px;
+      font-weight: 900;
+      cursor: pointer;
+      transition:
+        transform 180ms ease,
+        border-color 180ms ease,
+        background 180ms ease;
+    }
+
+    .lb-page-button {
+      min-width: 38px;
+      height: 38px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border-radius: 11px;
+    }
+
+    .lb-page-nav {
+      min-width: 78px;
+    }
+
+    .lb-page-numbers {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .lb-page-number {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+    }
+
+    .lb-page-number.is-active {
+      border-color: transparent;
+      color: #fff;
+      background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+    }
+
+    .lb-page-button:hover:not(:disabled),
+    .lb-page-number:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: rgba(46, 178, 185, .42);
+    }
+
+    .lb-page-button:disabled,
+    .lb-page-number:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .lb-page-ellipsis {
+      width: 18px;
+      text-align: center;
+      color: #7b88a5;
+      font-weight: 900;
+    }
+
+    .lb-page-indicator {
+      min-width: 82px;
+      color: var(--lb-copy);
+      font-size: 10px;
+      font-weight: 900;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .lb-empty {
+      padding: 38px 20px;
+      color: var(--lb-copy);
+      text-align: center;
+    }
+
+    .lb-restricted {
+      min-height: 360px;
+      padding: 30px;
+      border: 1px solid rgba(171, 181, 211, .70);
+      border-radius: 28px;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 10px;
+      color: var(--lb-copy);
+      background: linear-gradient(145deg, #f8fbff, #f8f7ff);
+      text-align: center;
+      box-shadow: 0 18px 34px rgba(34, 38, 110, .07);
+    }
+
+    .lb-restricted h1,
+    .lb-restricted p {
+      margin: 0;
+    }
+
+    .lb-restricted svg {
+      color: var(--lb-blue);
+    }
+
+    @media (max-width: 1180px) {
+      .lb-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .lb-pagination-controls {
+        width: 100%;
+        justify-content: flex-end;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .lb-hero,
+      .lb-workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .lb-hero-note {
+        width: min(520px, 100%);
+      }
+
+      .lb-table-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .lb-table-tools {
+        width: 100%;
+        grid-template-columns:
+          minmax(260px, 350px)
+          minmax(160px, 300px);
+        justify-content: start;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .leave-balances-page {
+        gap: 15px;
+      }
+
+      .lb-hero {
+        min-height: 0;
+        padding: 20px;
+        border-radius: 26px;
+        box-shadow: 0 18px 30px rgba(34, 38, 110, .09);
+      }
+
+      .lb-hero h1 {
+        font-size: clamp(36px, 10vw, 52px);
+      }
+
+      .lb-input-grid,
+      .lb-balance-pair {
+        grid-template-columns: 1fr;
+      }
+
+      .lb-table-tools {
+        width: 100%;
+        grid-template-columns: minmax(0, 1fr);
+        justify-content: start;
+        gap: 12px;
+      }
+
+      .lb-search-box {
+        width: min(360px, 100%);
+      }
+
+      .lb-refresh-stack {
+        width: min(320px, 100%);
+      }
+
+      .lb-refresh-stack .lb-soft-btn {
+        width: max-content;
+        min-width: 145px;
+      }
+
+      .lb-pagination-view,
+      .lb-pagination {
+        padding: 12px;
+      }
+
+      .lb-pagination-view {
+        align-items: center;
+      }
+
+      .lb-pagination-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: stretch;
+      }
+
+      .lb-page-numbers,
+      .lb-page-indicator {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+      }
+
+      .lb-page-numbers {
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .lb-page-size {
+        justify-content: flex-end;
+      }
+
+      .lb-page-nav {
+        width: 100%;
+      }
+
+      .lb-card {
+        padding: 18px;
+        border-radius: 24px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .lb-summary-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .lb-pagination-view {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .lb-page-size {
+        justify-content: space-between;
+      }
+
+      .lb-page-size select {
+        flex: 1 1 auto;
+      }
+
+      .lb-primary-btn,
+      .lb-form-action-stack,
+      .lb-search-box,
+      .lb-refresh-stack,
+      .lb-refresh-stack .lb-soft-btn {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .lb-hero {
+        padding: 16px;
+      }
+
+      .lb-hero h1 {
+        font-size: clamp(32px, 11vw, 44px);
+      }
+
+      .lb-page-number {
+        width: 34px;
+        height: 34px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .leave-balances-page *,
+      .leave-balances-page *::before,
+      .leave-balances-page *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  `;
+
+  return (
+    <div className="leave-balances-page">
+      <style>{pageStyles}</style>
+
+      {!canManage ? (
         <section className="lb-restricted">
           <CalendarDays size={34} />
           <h1>Leave Balances</h1>
@@ -503,853 +2031,480 @@ export default function LeaveBalances({ user = {} }) {
             This page can only be accessed by HR, Admin, and Super Admin.
           </p>
         </section>
-      </div>
-    );
-  }
-
-  return (
-    <div className="leave-balances-page">
-      <style>{`
-        .leave-balances-page {
-          --lb-ink: #14213d;
-          --lb-copy: #64748b;
-          --lb-line: rgba(100, 116, 139, .20);
-          --lb-purple: #6255d9;
-          --lb-purple-dark: #3f348e;
-          --lb-teal: #18a7a0;
-          display: grid;
-          gap: 22px;
-          color: var(--lb-ink);
-        }
-
-        .lb-hero {
-          position: relative;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: minmax(0, 1.5fr) minmax(260px, .7fr);
-          gap: 24px;
-          align-items: end;
-          padding: clamp(26px, 4vw, 46px);
-          border: 1px solid rgba(135, 146, 196, .34);
-          border-radius: 34px;
-          background:
-            radial-gradient(circle at 90% 10%, rgba(106, 213, 196, .28), transparent 30%),
-            radial-gradient(circle at 8% 4%, rgba(133, 119, 234, .24), transparent 32%),
-            linear-gradient(135deg, #f3f1ff, #f4fbff 52%, #effbf7);
-          box-shadow: 10px 12px 0 #d4ddf7, 0 24px 46px rgba(41, 52, 109, .10);
-        }
-
-        .lb-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: 7px;
-          width: max-content;
-          margin-bottom: 14px;
-          padding: 8px 12px;
-          border-radius: 999px;
-          color: #fff;
-          background: var(--lb-purple-dark);
-          font-size: 10px;
-          font-weight: 900;
-          letter-spacing: .10em;
-          text-transform: uppercase;
-        }
-
-        .lb-hero h1 {
-          margin: 0;
-          font-family: Georgia, 'Times New Roman', serif;
-          font-size: clamp(40px, 5vw, 70px);
-          line-height: .96;
-          letter-spacing: -.05em;
-        }
-
-        .lb-hero h1 em {
-          color: var(--lb-purple);
-          font-weight: 500;
-        }
-
-        .lb-hero p {
-          max-width: 760px;
-          margin: 16px 0 0;
-          color: var(--lb-copy);
-          line-height: 1.7;
-        }
-
-        .lb-hero-note {
-          padding: 18px;
-          border: 1px solid rgba(98, 85, 217, .20);
-          border-radius: 22px;
-          background: rgba(255, 255, 255, .74);
-          box-shadow: 6px 7px 0 rgba(98, 85, 217, .16);
-        }
-
-        .lb-hero-note strong,
-        .lb-hero-note span {
-          display: block;
-        }
-
-        .lb-hero-note span {
-          margin-top: 6px;
-          color: var(--lb-copy);
-          font-size: 13px;
-          line-height: 1.5;
-        }
-
-        .lb-summary-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
-        }
-
-        .lb-summary-card,
-        .lb-card,
-        .lb-table-card {
-          border: 1px solid var(--lb-line);
-          border-radius: 26px;
-          background: linear-gradient(145deg, #fff, #f8fbff);
-          box-shadow: 7px 8px 0 #d8def7, 0 20px 34px rgba(38, 48, 94, .08);
-        }
-
-        .lb-summary-card {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          min-width: 0;
-          padding: 20px;
-        }
-
-        .lb-summary-icon {
-          display: grid;
-          place-items: center;
-          width: 48px;
-          height: 48px;
-          flex: 0 0 auto;
-          border-radius: 16px;
-          color: var(--lb-purple);
-          background: #eeecff;
-        }
-
-        .lb-summary-card:nth-child(2) .lb-summary-icon {
-          color: #127a76;
-          background: #e4faf6;
-        }
-
-        .lb-summary-card:nth-child(3) .lb-summary-icon {
-          color: #a05e09;
-          background: #fff4d8;
-        }
-
-        .lb-summary-card span,
-        .lb-summary-card strong {
-          display: block;
-        }
-
-        .lb-summary-card span {
-          color: var(--lb-copy);
-          font-size: 12px;
-          font-weight: 800;
-        }
-
-        .lb-summary-card strong {
-          margin-top: 3px;
-          font-size: clamp(23px, 3vw, 32px);
-          line-height: 1;
-        }
-
-        .lb-workspace {
-          display: grid;
-          grid-template-columns: minmax(0, 1.18fr) minmax(300px, .82fr);
-          gap: 18px;
-          align-items: stretch;
-        }
-
-        .lb-card {
-          padding: clamp(20px, 3vw, 30px);
-        }
-
-        .lb-card-head {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 14px;
-          margin-bottom: 22px;
-        }
-
-        .lb-card-head h2,
-        .lb-table-head h2 {
-          margin: 0;
-          font-size: clamp(22px, 2.4vw, 30px);
-        }
-
-        .lb-card-head p,
-        .lb-table-head p {
-          margin: 7px 0 0;
-          color: var(--lb-copy);
-          font-size: 13px;
-          line-height: 1.5;
-        }
-
-        .lb-form {
-          display: grid;
-          gap: 17px;
-        }
-
-        .lb-field {
-          display: grid;
-          gap: 7px;
-        }
-
-        .lb-field label {
-          color: #334155;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .lb-field input,
-        .lb-field select {
-          width: 100%;
-          min-height: 48px;
-          box-sizing: border-box;
-          border: 1px solid #d7dce9;
-          border-radius: 15px;
-          outline: none;
-          color: var(--lb-ink);
-          background: #fff;
-          padding: 11px 13px;
-          font: inherit;
-          transition: border-color .18s ease, box-shadow .18s ease;
-        }
-
-        .lb-field input:focus,
-        .lb-field select:focus {
-          border-color: rgba(98, 85, 217, .62);
-          box-shadow: 0 0 0 4px rgba(98, 85, 217, .10);
-        }
-
-        .lb-field small {
-          color: var(--lb-copy);
-          line-height: 1.4;
-        }
-
-        .lb-input-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 14px;
-        }
-
-        .lb-leave-input {
-          padding: 15px;
-          border: 1px solid #e0e4ef;
-          border-radius: 18px;
-          background: #fafbff;
-        }
-
-        .lb-leave-input strong {
-          display: block;
-          margin-bottom: 8px;
-        }
-
-        .lb-preview-line {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          margin-top: 9px;
-          color: var(--lb-copy);
-          font-size: 12px;
-        }
-
-        .lb-preview-line b {
-          color: var(--lb-purple-dark);
-        }
-
-        .lb-primary-btn,
-        .lb-soft-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          width: max-content;
-          border: 0;
-          border-radius: 999px;
-          cursor: pointer;
-          font: inherit;
-          font-weight: 900;
-          transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
-        }
-
-        .lb-primary-btn {
-          min-width: 160px;
-          padding: 13px 19px;
-          color: #fff;
-          background: linear-gradient(135deg, var(--lb-purple-dark), var(--lb-purple));
-          box-shadow: 0 12px 22px rgba(77, 66, 174, .24);
-        }
-
-        .lb-soft-btn {
-          padding: 9px 13px;
-          color: var(--lb-purple-dark);
-          background: #eeecff;
-        }
-
-        .lb-primary-btn:hover:not(:disabled),
-        .lb-soft-btn:hover:not(:disabled) {
-          transform: translateY(-2px);
-        }
-
-        .lb-primary-btn:disabled,
-        .lb-soft-btn:disabled {
-          cursor: not-allowed;
-          opacity: .55;
-        }
-
-        .lb-selected-empty {
-          min-height: 290px;
-          display: grid;
-          place-items: center;
-          align-content: center;
-          gap: 8px;
-          color: var(--lb-copy);
-          text-align: center;
-        }
-
-        .lb-selected-empty svg {
-          color: #9b93e8;
-        }
-
-        .lb-person-head {
-          display: flex;
-          align-items: center;
-          gap: 13px;
-          margin-bottom: 18px;
-        }
-
-        .lb-person-head strong,
-        .lb-person-head span {
-          display: block;
-        }
-
-        .lb-person-head span {
-          margin-top: 3px;
-          color: var(--lb-copy);
-          font-size: 12px;
-        }
-
-        .lb-avatar {
-          overflow: hidden;
-          display: inline-grid;
-          place-items: center;
-          flex: 0 0 auto;
-          border-radius: 999px;
-          color: var(--lb-purple-dark);
-          background: linear-gradient(135deg, #e9e6ff, #e6faf6);
-          border: 3px solid #fff;
-          box-shadow: 0 8px 20px rgba(50, 57, 102, .14);
-        }
-
-        .lb-avatar img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-
-        .lb-avatar-sm {
-          width: 40px;
-          height: 40px;
-          font-size: 11px;
-        }
-
-        .lb-avatar-md {
-          width: 56px;
-          height: 56px;
-          font-size: 15px;
-        }
-
-        .lb-balance-pair {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .lb-balance-box {
-          padding: 16px;
-          border: 1px solid #e0e4ef;
-          border-radius: 19px;
-          background: #fafbff;
-        }
-
-        .lb-balance-box > span,
-        .lb-balance-box > strong {
-          display: block;
-        }
-
-        .lb-balance-box > span {
-          color: var(--lb-copy);
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-        }
-
-        .lb-balance-box > strong {
-          margin: 5px 0 12px;
-          color: var(--lb-purple-dark);
-          font-size: 30px;
-        }
-
-        .lb-balance-meta {
-          display: grid;
-          gap: 5px;
-          color: var(--lb-copy);
-          font-size: 11px;
-        }
-
-        .lb-balance-meta div {
-          display: flex;
-          justify-content: space-between;
-          gap: 8px;
-        }
-
-        .lb-table-card {
-          overflow: hidden;
-        }
-
-        .lb-table-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-          padding: 22px 24px;
-          border-bottom: 1px solid var(--lb-line);
-        }
-
-        .lb-table-tools {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          flex-wrap: wrap;
-        }
-
-        .lb-search-box {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: min(280px, 100%);
-          padding: 9px 12px;
-          border: 1px solid #dce1ec;
-          border-radius: 999px;
-          background: #fff;
-        }
-
-        .lb-search-box input {
-          width: 100%;
-          border: 0;
-          outline: none;
-          background: transparent;
-          font: inherit;
-        }
-
-        .lb-table-wrap {
-          overflow-x: auto;
-        }
-
-        .lb-table {
-          width: 100%;
-          min-width: 850px;
-          border-collapse: collapse;
-        }
-
-        .lb-table th,
-        .lb-table td {
-          padding: 14px 16px;
-          border-bottom: 1px solid #edf0f5;
-          text-align: left;
-          vertical-align: middle;
-        }
-
-        .lb-table th {
-          color: #526079;
-          background: #f8faff;
-          font-size: 10px;
-          font-weight: 950;
-          letter-spacing: .07em;
-          text-transform: uppercase;
-        }
-
-        .lb-table td {
-          color: #334155;
-          font-size: 13px;
-        }
-
-        .lb-name-cell {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          min-width: 210px;
-        }
-
-        .lb-name-cell strong {
-          display: block;
-        }
-
-        .lb-number-pill {
-          display: inline-flex;
-          min-width: 42px;
-          justify-content: center;
-          padding: 6px 9px;
-          border-radius: 999px;
-          color: #3f348e;
-          background: #eeecff;
-          font-weight: 900;
-        }
-
-        .lb-number-pill.is-earned {
-          color: #0f766e;
-          background: #e5faf6;
-        }
-
-        .lb-empty {
-          padding: 38px 20px;
-          color: var(--lb-copy);
-          text-align: center;
-        }
-
-        .lb-restricted {
-          min-height: 360px;
-          display: grid;
-          place-items: center;
-          align-content: center;
-          gap: 10px;
-          padding: 30px;
-          border: 1px solid var(--lb-line);
-          border-radius: 28px;
-          background: #fff;
-          color: var(--lb-copy);
-          text-align: center;
-        }
-
-        .lb-restricted h1,
-        .lb-restricted p {
-          margin: 0;
-        }
-
-        @media (max-width: 980px) {
-          .lb-hero,
-          .lb-workspace {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 720px) {
-          .lb-summary-grid,
-          .lb-input-grid,
-          .lb-balance-pair {
-            grid-template-columns: 1fr;
-          }
-
-          .lb-hero {
-            border-radius: 27px;
-          }
-
-          .lb-table-head {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .lb-table-tools,
-          .lb-search-box,
-          .lb-primary-btn {
-            width: 100%;
-          }
-        }
-      `}</style>
-
-      <section className="lb-hero">
-        <div>
-          <span className="lb-kicker">
-            <CalendarDays size={14} /> Leave Administration
-          </span>
-          <h1>
-            Leave <em>Balances</em>
-          </h1>
-          <p>
-            Select an employee, enter Casual Leave and Earned Leave to add,
-            and save both together with one click.
-          </p>
-        </div>
-
-        <div className="lb-hero-note">
-          <strong>Safe balance addition</strong>
-          <span>
-            New leave is added to the employee&apos;s existing credit. Used leave
-            and previous balance history are not reset.
-          </span>
-        </div>
-      </section>
-
-      <section className="lb-summary-grid" aria-label="Leave balance summary">
-        <article className="lb-summary-card">
-          <span className="lb-summary-icon"><UsersRound size={22} /></span>
-          <div>
-            <span>Active Employees</span>
-            <strong>{totals.employees}</strong>
-          </div>
-        </article>
-
-        <article className="lb-summary-card">
-          <span className="lb-summary-icon"><WalletCards size={22} /></span>
-          <div>
-            <span>Total CL Available</span>
-            <strong>{formatLeaveDays(totals.casual)}</strong>
-          </div>
-        </article>
-
-        <article className="lb-summary-card">
-          <span className="lb-summary-icon"><CheckCircle2 size={22} /></span>
-          <div>
-            <span>Total EL Available</span>
-            <strong>{formatLeaveDays(totals.earned)}</strong>
-          </div>
-        </article>
-      </section>
-
-      <section className="lb-workspace">
-        <article className="lb-card">
-          <div className="lb-card-head">
-            <div>
-              <h2>Add Leave</h2>
-              <p>Choose the employee and enter only the leave you want to add.</p>
+      ) : (
+        <>
+          <section className="lb-hero">
+            <div className="lb-hero-copy">
+              <span className="lb-kicker">
+                <CalendarDays size={14} />
+                Leave Administration
+              </span>
+
+              <h1>
+                Leave <em>Balances</em>
+              </h1>
+
+              <p>
+                Select an employee, enter Casual Leave and Earned Leave to
+                add, and save both together with one click.
+              </p>
             </div>
-            <Plus size={24} />
-          </div>
 
-          <form className="lb-form" onSubmit={addLeave}>
-            <div className="lb-field">
-              <label htmlFor="leave-employee-search">Search Employee</label>
-              <input
-                id="leave-employee-search"
-                value={employeeQuery}
-                onChange={(event) => setEmployeeQuery(event.target.value)}
-                placeholder="Search by name, employee ID, department or designation"
+            <div className="lb-hero-note">
+              <strong>Safe balance addition</strong>
+              <span>
+                New leave is added to the employee&apos;s existing credit.
+                Used leave and previous balance history are not reset.
+              </span>
+            </div>
+          </section>
+
+          <section
+            className="lb-summary-grid"
+            aria-label="Leave balance summary"
+          >
+            <article className="lb-summary-card">
+              <span>Active Employees</span>
+              <strong>{totals.employees}</strong>
+              <small>Employees currently available for leave allocation</small>
+            </article>
+
+            <article className="lb-summary-card">
+              <span>Total CL Available</span>
+              <strong>{formatLeaveDays(totals.casual)}</strong>
+              <small>Total Casual Leave currently available</small>
+            </article>
+
+            <article className="lb-summary-card">
+              <span>Total EL Available</span>
+              <strong>{formatLeaveDays(totals.earned)}</strong>
+              <small>Total Earned Leave currently available</small>
+            </article>
+
+            <article className="lb-summary-card">
+              <span>Total Leave Available</span>
+              <strong>{formatLeaveDays(totalLeaveAvailable)}</strong>
+              <small>Combined Casual Leave and Earned Leave availability</small>
+            </article>
+          </section>
+
+          {feedbackMap.page ? (
+            <div className="lb-page-feedback">
+              <LeaveBalanceInlineMessage
+                message={feedbackMap.page}
+                onClose={() => clearFeedback('page')}
               />
             </div>
+          ) : null}
 
-            <div className="lb-field">
-              <label htmlFor="leave-employee-select">Select Employee</label>
-              <select
-                id="leave-employee-select"
-                value={selectedEmployeeId}
-                onChange={(event) => selectEmployee(event.target.value)}
-                disabled={loading || saving}
-              >
-                <option value="">Select employee</option>
-                {employeeOptions.map((employee) => (
-                  <option
-                    key={getEmployeeId(employee)}
-                    value={getEmployeeId(employee)}
-                  >
-                    {getEmployeeName(employee)}
-                    {getEmployeeCode(employee)
-                      ? ` — ${getEmployeeCode(employee)}`
-                      : ''}
-                    {employee.department ? ` — ${employee.department}` : ''}
-                  </option>
-                ))}
-              </select>
-              <small>{employeeOptions.length} matching active employee(s)</small>
-            </div>
-
-            <div className="lb-input-grid">
-              <div className="lb-leave-input">
-                <strong>Casual Leave to Add</strong>
-                <div className="lb-field">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={casualLeaveToAdd}
-                    onChange={(event) => setCasualLeaveToAdd(event.target.value)}
-                    placeholder="Example: 8"
-                    disabled={!selectedEmployeeId || saving}
-                  />
-                </div>
-                <div className="lb-preview-line">
-                  <span>After addition</span>
-                  <b>
-                    {formatLeaveDays(
-                      selectedBalance.cl.available + casualAddition,
-                    )} days
-                  </b>
-                </div>
-              </div>
-
-              <div className="lb-leave-input">
-                <strong>Earned Leave to Add</strong>
-                <div className="lb-field">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={earnedLeaveToAdd}
-                    onChange={(event) => setEarnedLeaveToAdd(event.target.value)}
-                    placeholder="Example: 15"
-                    disabled={!selectedEmployeeId || saving}
-                  />
-                </div>
-                <div className="lb-preview-line">
-                  <span>After addition</span>
-                  <b>
-                    {formatLeaveDays(
-                      selectedBalance.el.available + earnedAddition,
-                    )} days
-                  </b>
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="lb-primary-btn"
-              disabled={saving || loading || !selectedEmployeeId}
-            >
-              <Plus size={17} /> {saving ? 'Adding Leave...' : 'Add Leave'}
-            </button>
-          </form>
-        </article>
-
-        <article className="lb-card">
-          {!selectedEmployeeId ? (
-            <div className="lb-selected-empty">
-              <UserRound size={42} />
-              <strong>No employee selected</strong>
-              <span>Select an employee to see the current leave balance.</span>
-            </div>
-          ) : (
-            <>
-              <div className="lb-person-head">
-                <EmployeeAvatar employee={selectedEmployee || selectedBalance.employee} />
+          <section className="lb-workspace" id="leave-allocation">
+            <article className="lb-card">
+              <div className="lb-card-head">
                 <div>
-                  <strong>{selectedBalance.employee_name}</strong>
+                  <span className="lb-section-kicker">
+                    Leave Allocation
+                  </span>
+                  <h2>Add Leave</h2>
+                  <p>
+                    Choose the employee and enter only the leave you want to
+                    add.
+                  </p>
+                </div>
+
+                <Plus size={24} />
+              </div>
+
+              <form className="lb-form" onSubmit={addLeave}>
+                <div className="lb-field">
+                  <label htmlFor="leave-employee-search">
+                    Search Employee
+                  </label>
+                  <input
+                    id="leave-employee-search"
+                    value={employeeQuery}
+                    onChange={(event) =>
+                      setEmployeeQuery(event.target.value)
+                    }
+                    placeholder="Search by name, employee ID, department or designation"
+                  />
+                </div>
+
+                <div className="lb-field">
+                  <label htmlFor="leave-employee-select">
+                    Select Employee
+                  </label>
+                  <select
+                    id="leave-employee-select"
+                    value={selectedEmployeeId}
+                    onChange={(event) =>
+                      selectEmployee(event.target.value)
+                    }
+                    disabled={loading || saving}
+                  >
+                    <option value="">Select employee</option>
+                    {employeeOptions.map((employee) => (
+                      <option
+                        key={getEmployeeId(employee)}
+                        value={getEmployeeId(employee)}
+                      >
+                        {getEmployeeName(employee)}
+                        {getEmployeeCode(employee)
+                          ? ` — ${getEmployeeCode(employee)}`
+                          : ''}
+                        {employee.department
+                          ? ` — ${employee.department}`
+                          : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    {employeeOptions.length} matching active employee(s)
+                  </small>
+                </div>
+
+                <div className="lb-input-grid">
+                  <div className="lb-leave-input">
+                    <strong>Casual Leave to Add</strong>
+                    <div className="lb-field">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={casualLeaveToAdd}
+                        onChange={(event) =>
+                          setCasualLeaveToAdd(event.target.value)
+                        }
+                        placeholder="Example: 8"
+                        disabled={!selectedEmployeeId || saving}
+                      />
+                    </div>
+                    <div className="lb-preview-line">
+                      <span>After addition</span>
+                      <b>
+                        {formatLeaveDays(
+                          selectedBalance.cl.available + casualAddition,
+                        )}{' '}
+                        days
+                      </b>
+                    </div>
+                  </div>
+
+                  <div className="lb-leave-input">
+                    <strong>Earned Leave to Add</strong>
+                    <div className="lb-field">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={earnedLeaveToAdd}
+                        onChange={(event) =>
+                          setEarnedLeaveToAdd(event.target.value)
+                        }
+                        placeholder="Example: 15"
+                        disabled={!selectedEmployeeId || saving}
+                      />
+                    </div>
+                    <div className="lb-preview-line">
+                      <span>After addition</span>
+                      <b>
+                        {formatLeaveDays(
+                          selectedBalance.el.available + earnedAddition,
+                        )}{' '}
+                        days
+                      </b>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lb-form-action-stack">
+                  <button
+                    type="submit"
+                    className="lb-primary-btn"
+                    disabled={saving || loading || !selectedEmployeeId}
+                  >
+                    {saving ? (
+                      <Loader2 size={17} className="lb-spin" />
+                    ) : (
+                      <Plus size={17} />
+                    )}
+                    {saving ? 'Adding Leave...' : 'Add Leave'}
+                  </button>
+
+                  <LeaveBalanceInlineMessage
+                    message={feedbackMap['form-action']}
+                    onClose={() => clearFeedback('form-action')}
+                  />
+                </div>
+              </form>
+            </article>
+
+            <article className="lb-card">
+              {!selectedEmployeeId ? (
+                <div className="lb-selected-empty">
+                  <UserRound size={42} />
+                  <strong>No employee selected</strong>
                   <span>
-                    {selectedBalance.employee_code || 'No employee ID'}
-                    {selectedBalance.department
-                      ? ` • ${selectedBalance.department}`
-                      : ''}
-                    {selectedBalance.designation
-                      ? ` • ${selectedBalance.designation}`
-                      : ''}
+                    Select an employee to see the current leave balance.
                   </span>
                 </div>
-              </div>
-
-              <div className="lb-balance-pair">
-                <div className="lb-balance-box">
-                  <span>Casual Leave Available</span>
-                  <strong>{formatLeaveDays(selectedBalance.cl.available)}</strong>
-                  <div className="lb-balance-meta">
-                    <div><span>Opening</span><b>{formatLeaveDays(selectedBalance.cl.opening_balance)}</b></div>
-                    <div><span>Credited</span><b>{formatLeaveDays(selectedBalance.cl.credited)}</b></div>
-                    <div><span>Used</span><b>{formatLeaveDays(selectedBalance.cl.used)}</b></div>
+              ) : (
+                <>
+                  <div className="lb-person-head">
+                    <EmployeeAvatar
+                      employee={
+                        selectedEmployee || selectedBalance.employee
+                      }
+                    />
+                    <div>
+                      <strong>{selectedBalance.employee_name}</strong>
+                      <span>
+                        {selectedBalance.employee_code ||
+                          'No employee ID'}
+                        {selectedBalance.department
+                          ? ` • ${selectedBalance.department}`
+                          : ''}
+                        {selectedBalance.designation
+                          ? ` • ${selectedBalance.designation}`
+                          : ''}
+                      </span>
+                    </div>
                   </div>
-                </div>
 
-                <div className="lb-balance-box">
-                  <span>Earned Leave Available</span>
-                  <strong>{formatLeaveDays(selectedBalance.el.available)}</strong>
-                  <div className="lb-balance-meta">
-                    <div><span>Opening</span><b>{formatLeaveDays(selectedBalance.el.opening_balance)}</b></div>
-                    <div><span>Credited</span><b>{formatLeaveDays(selectedBalance.el.credited)}</b></div>
-                    <div><span>Used</span><b>{formatLeaveDays(selectedBalance.el.used)}</b></div>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </article>
-      </section>
-
-      <section className="lb-table-card">
-        <div className="lb-table-head">
-          <div>
-            <h2>Employee Leave Balances</h2>
-            <p>View the latest Casual Leave and Earned Leave for every active employee.</p>
-          </div>
-
-          <div className="lb-table-tools">
-            <label className="lb-search-box">
-              <Search size={16} />
-              <input
-                value={tableQuery}
-                onChange={(event) => setTableQuery(event.target.value)}
-                placeholder="Search balances..."
-              />
-            </label>
-
-            <button
-              type="button"
-              className="lb-soft-btn"
-              onClick={() => loadData()}
-              disabled={loading || saving}
-            >
-              <RefreshCcw size={15} /> {loading ? 'Loading...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-
-        <div className="lb-table-wrap">
-          <table className="lb-table">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Department</th>
-                <th>CL Available</th>
-                <th>CL Used</th>
-                <th>EL Available</th>
-                <th>EL Used</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {visibleRows.map((row) => (
-                <tr key={row.employee_id}>
-                  <td>
-                    <div className="lb-name-cell">
-                      <EmployeeAvatar employee={row.employee} size="sm" />
-                      <div>
-                        <strong>{row.employee_name}</strong>
+                  <div className="lb-balance-pair">
+                    <div className="lb-balance-box">
+                      <span>Casual Leave Available</span>
+                      <strong>
+                        {formatLeaveDays(
+                          selectedBalance.cl.available,
+                        )}
+                      </strong>
+                      <div className="lb-balance-meta">
+                        <div>
+                          <span>Opening</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.cl.opening_balance,
+                            )}
+                          </b>
+                        </div>
+                        <div>
+                          <span>Credited</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.cl.credited,
+                            )}
+                          </b>
+                        </div>
+                        <div>
+                          <span>Used</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.cl.used,
+                            )}
+                          </b>
+                        </div>
                       </div>
                     </div>
-                  </td>
-                  <td>{row.department || '—'}</td>
-                  <td><span className="lb-number-pill">{formatLeaveDays(row.cl.available)}</span></td>
-                  <td>{formatLeaveDays(row.cl.used)}</td>
-                  <td><span className="lb-number-pill is-earned">{formatLeaveDays(row.el.available)}</span></td>
-                  <td>{formatLeaveDays(row.el.used)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="lb-soft-btn"
-                      onClick={() => {
-                        selectEmployee(row.employee_id);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      disabled={saving}
-                    >
-                      Add Leave
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
 
-        {!visibleRows.length && (
-          <div className="lb-empty">
-            {loading ? 'Loading leave balances...' : 'No employee leave balances found.'}
-          </div>
-        )}
-      </section>
+                    <div className="lb-balance-box">
+                      <span>Earned Leave Available</span>
+                      <strong>
+                        {formatLeaveDays(
+                          selectedBalance.el.available,
+                        )}
+                      </strong>
+                      <div className="lb-balance-meta">
+                        <div>
+                          <span>Opening</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.el.opening_balance,
+                            )}
+                          </b>
+                        </div>
+                        <div>
+                          <span>Credited</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.el.credited,
+                            )}
+                          </b>
+                        </div>
+                        <div>
+                          <span>Used</span>
+                          <b>
+                            {formatLeaveDays(
+                              selectedBalance.el.used,
+                            )}
+                          </b>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </article>
+          </section>
+
+          <section className="lb-table-card">
+            <div className="lb-table-head">
+              <div>
+                <span className="lb-section-kicker">
+                  Balance Directory
+                </span>
+                <h2>Employee Leave Balances</h2>
+                <p>
+                  View the latest Casual Leave and Earned Leave for every
+                  active employee.
+                </p>
+              </div>
+
+              <div className="lb-table-tools">
+                <label className="lb-search-box">
+                  <Search size={16} />
+                  <input
+                    value={tableQuery}
+                    onChange={(event) =>
+                      setTableQuery(event.target.value)
+                    }
+                    placeholder="Search balances..."
+                  />
+                </label>
+
+                <div className="lb-refresh-stack">
+                  <button
+                    type="button"
+                    className="lb-soft-btn"
+                    onClick={() =>
+                      loadData({
+                        showLoader: false,
+                        feedbackScope: 'refresh',
+                      })
+                    }
+                    disabled={loading || saving || refreshing}
+                  >
+                    {refreshing ? (
+                      <Loader2 size={15} className="lb-spin" />
+                    ) : (
+                      <RefreshCcw size={15} />
+                    )}
+                    {refreshing ? 'Refreshing...' : 'Refresh'}
+                  </button>
+
+                  <LeaveBalanceInlineMessage
+                    message={feedbackMap.refresh}
+                    onClose={() => clearFeedback('refresh')}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <LeaveBalancePageSize
+              total={visibleRows.length}
+              pageSize={pageSize}
+              onPageSizeChange={(value) => {
+                setPage(1);
+                setPageSize(value);
+              }}
+            />
+
+            <div className="lb-table-wrap">
+              <table className="lb-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Department</th>
+                    <th>CL Available</th>
+                    <th>CL Used</th>
+                    <th>EL Available</th>
+                    <th>EL Used</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {pagedRows.map((row) => (
+                    <tr key={row.employee_id}>
+                      <td>
+                        <div className="lb-name-cell">
+                          <EmployeeAvatar
+                            employee={row.employee}
+                            size="sm"
+                          />
+                          <div>
+                            <strong>{row.employee_name}</strong>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{row.department || '—'}</td>
+                      <td>
+                        <span className="lb-number-pill">
+                          {formatLeaveDays(row.cl.available)}
+                        </span>
+                      </td>
+                      <td>{formatLeaveDays(row.cl.used)}</td>
+                      <td>
+                        <span className="lb-number-pill is-earned">
+                          {formatLeaveDays(row.el.available)}
+                        </span>
+                      </td>
+                      <td>{formatLeaveDays(row.el.used)}</td>
+                      <td>
+                        <div className="lb-row-action-stack">
+                          <button
+                            type="button"
+                            className="lb-soft-btn"
+                            onClick={() => {
+                              selectEmployee(row.employee_id, {
+                                showSelectionFeedback: true,
+                                feedbackScope: `row-${row.employee_id}`,
+                              });
+
+                              document
+                                .getElementById('leave-allocation')
+                                ?.scrollIntoView({
+                                  behavior: 'smooth',
+                                  block: 'start',
+                                });
+                            }}
+                            disabled={saving}
+                          >
+                            Add Leave
+                          </button>
+
+                          <LeaveBalanceInlineMessage
+                            message={
+                              feedbackMap[`row-${row.employee_id}`]
+                            }
+                            onClose={() =>
+                              clearFeedback(`row-${row.employee_id}`)
+                            }
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <LeaveBalancePagination
+              total={visibleRows.length}
+              page={safePage}
+              pageSize={pageSize}
+              onPageChange={setPage}
+            />
+
+            {!visibleRows.length ? (
+              <div className="lb-empty">
+                {loading
+                  ? 'Loading leave balances...'
+                  : 'No employee leave balances found.'}
+              </div>
+            ) : null}
+          </section>
+        </>
+      )}
     </div>
   );
 }

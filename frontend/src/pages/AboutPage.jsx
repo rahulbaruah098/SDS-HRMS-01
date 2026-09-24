@@ -106,43 +106,46 @@ const trustDisciplines = [
 
 const teamMembers = [
   {
-    name: "Aarav Sharma",
-    role: "Full Stack Developer · Team Lead",
+    name: "Rahul Baruah",
+    role: "IT Head & Team Leader, Sayanant Group · Senior Lead Developer",
     summary:
-      "Leads architecture, delivery quality and cross-functional implementation.",
+      "Built YourComate from scratch, leading the entire project from system architecture and development to deployment and ongoing improvements.",
     handled: [
-      "Frontend architecture",
-      "Backend APIs",
-      "Code reviews",
-      "Release coordination",
+      "Project leadership",
+      "System architecture",
+      "Full-stack development",
+      "Web & mobile integration",
+      "Deployment & maintenance",
     ],
-    focus: "End-to-end product delivery",
+    focus: "End-to-end project leadership",
   },
   {
-    name: "Meera Das",
-    role: "UI/UX & Frontend Developer",
+    name: "Shantanu Phukan",
+    role: "Web Designer & Frontend UI/UX Developer",
     summary:
-      "Shapes responsive interfaces, interaction systems and accessible product flows.",
+      "Designed and developed YourComate’s web experience, focusing on responsive interfaces, intuitive user flows and a consistent visual experience across different screen sizes and devices.",
     handled: [
-      "UI systems",
+      "Web design",
+      "Frontend development",
+      "UI/UX design",
       "Responsive layouts",
-      "Interaction states",
-      "Accessibility checks",
+      "Interface optimization",
     ],
-    focus: "Product experience and interface quality",
+    focus: "Web design & frontend experience",
   },
   {
-    name: "Rohan Ali",
-    role: "Backend & API Developer",
+    name: "Atlanta Gogoi",
+    role: "Mobile App Developer",
     summary:
-      "Builds reliable APIs, data flows, authentication and service integrations.",
+      "Developed the mobile app version of YourComate, bringing core HRMS features to mobile with responsive app interfaces, smooth user flows and reliable integration with the YourComate backend.",
     handled: [
-      "API design",
-      "Database flows",
-      "Authentication",
-      "System integrations",
+      "Mobile app development",
+      "App UI implementation",
+      "API integration",
+      "Responsive app interfaces",
+      "Testing & optimization",
     ],
-    focus: "Reliable application services",
+    focus: "Mobile app development & integration",
   },
 ];
 
@@ -704,12 +707,12 @@ export default function AboutPage() {
               className="yc-ycprofile-team-wordmark"
               aria-label="Meet our developing team"
             >
-              <small>MEET OUR DEVELOPING TEAM</small>
+              <small>MEET THE DEVELOPERS BEHIND YOURCOMATE</small>
 
               <h2 aria-label="Meet Our Team">
-                <span>Meet</span>
-                <span>Our</span>
-                <span>Team</span>
+                <span>THE</span>
+                <span>MINDS</span>
+                <span>BEHIND</span>
               </h2>
 
               <p>
@@ -720,8 +723,7 @@ export default function AboutPage() {
           </div>
 
           <p className="yc-ycprofile-team-note">
-            Team details are presented as text-only profiles and can be replaced
-            with final member information when ready.
+            Team details are presented as text-only profiles.
           </p>
         </div>
       </section>
