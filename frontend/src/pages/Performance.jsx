@@ -2727,10 +2727,13 @@ export default function Performance({ setPage }) {
           transition: transform 190ms ease, box-shadow 190ms ease, filter 190ms ease;
         }
 
-        .performance-btn:hover:not(:disabled) {
-          transform: translateY(-2px);
-          filter: saturate(1.04);
-        }
+       .performance-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: saturate(1.04);
+  color: #fff;
+  background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+  border-color: rgba(77,119,221,.18);
+}
 
         .performance-btn:disabled {
           opacity: .58;
