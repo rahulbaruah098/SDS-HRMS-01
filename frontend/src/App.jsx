@@ -53,6 +53,7 @@ import ApplyLeave from './pages/ApplyLeave';
 import LeaveBalances from './pages/LeaveBalances.jsx';
 import CompOffCredits from './pages/CompOffCredits.jsx';
 import Projects from './pages/Projects';
+import SprintPlanning from './pages/SprintPlanning.jsx';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
@@ -1290,6 +1291,18 @@ if (normalizedPage === 'companies') {
 
   if (normalizedPage === 'states') {
     return <States setPage={setPage} user={safeUser} />;
+  }
+
+
+  // YourComate Sprint Planning
+  // Access is checked by the existing canAccessModule guard.
+  if (normalizedPage === 'sprint_planning') {
+    return (
+      <SprintPlanning
+        setPage={setPage}
+        user={safeUser}
+      />
+    );
   }
 
   if (normalizedPage === 'projects') {

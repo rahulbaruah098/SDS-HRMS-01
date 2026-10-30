@@ -2988,6 +2988,46 @@ def check_out():
             "attendance": clean_doc(rec),
         }), 409
 
+    # YOURCOMATE SPRINT CHECKOUT GATE - STEP 8
+    # Preserve existing attendance rules and duplicate-checkout handling.
+    # Enforcement applies only when approved weekly plans exist for today.
+    from app.services.sprint_planning_service import checkout_readiness
+
+    approved_daily_plans = list(
+        db.sprint_weekly_plans.find({
+            "tenant_id": tenant_id,
+            "employee_id": str(e["_id"]),
+            "status": "approved",
+            "is_deleted": {"$ne": True},
+            "week_start": {"$lte": today},
+            "week_end": {"$gte": today},
+        })
+    )
+
+    if approved_daily_plans:
+        scheduled_activities = [
+            activity
+            for plan in approved_daily_plans
+            for activity in plan.get("activities", [])
+            if activity.get("planned_date") == today
+        ]
+
+        daily_readiness = checkout_readiness(scheduled_activities)
+
+        if not daily_readiness["ready"]:
+            return jsonify({
+                "message": (
+                    "Please update all day-wise planned activities before "
+                    "checking out. Add evidence for completed work and "
+                    "a reason for unfinished work."
+                ),
+                "code": "DAILY_WORK_REPORT_REQUIRED",
+                "checkout_allowed": False,
+                "work_date": today,
+                "activity_count": len(scheduled_activities),
+                "problems": daily_readiness["problems"],
+            }), 409
+
     holiday_info = holiday_info_for_employee(db, e, today_date)
     attendance_schedule = attendance_schedule_for_tenant(db, tenant_id)
     attendance_schedule_times = attendance_schedule_time_objects(

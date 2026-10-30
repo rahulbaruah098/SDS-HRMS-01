@@ -24,6 +24,7 @@ import {
   normalizeLeaveApprovalList,
 } from '../api/client';
 import AttendanceWidget from '../components/AttendanceWidget';
+import SprintDashboardSummary from '../components/SprintDashboardSummary';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 
@@ -6061,6 +6062,14 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
             )}
           </section>
         )}
+      </section>
+
+      {/* Sprint Planning: employee performance summary */}
+      <section
+        className="employee-dashboard-single-panel"
+        aria-label="My Sprint Planning Progress"
+      >
+        <SprintDashboardSummary setPage={setPage} />
       </section>
 
       <section className="employee-dashboard-single-panel">

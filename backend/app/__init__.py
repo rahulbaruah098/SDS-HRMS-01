@@ -27,6 +27,7 @@ from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
 from app.routes.ai_assistant import ai_assistant_bp
 from .routes.recruitment import recruitment_bp
+from .routes.sprint_planning import sprint_planning_bp
 from .routes.account_access import account_access_bp
 from .services.recruitment_service import ensure_recruitment_indexes
 from .utils.auth import request_has_super_admin_role
@@ -334,6 +335,11 @@ def create_app():
     # companies, users, full employee profile creation/update,
     # employee capability mapping and password reset.
     app.register_blueprint(superadmin_bp, url_prefix="/api/v1/superadmin")
+
+    # YourComate Sprint Planning API
+    # Monthly, weekly and day-wise planning
+    # Route paths already include /api/v1/sprint-planning
+    app.register_blueprint(sprint_planning_bp)
 
     @app.get("/")
     def root():

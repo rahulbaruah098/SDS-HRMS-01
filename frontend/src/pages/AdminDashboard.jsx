@@ -18,6 +18,7 @@ import {
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 import AttendanceWidget from '../components/AttendanceWidget';
+import SprintTeamDashboard from './SprintTeamDashboard';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function formatDate(value) {
@@ -3396,6 +3397,15 @@ export default function AdminDashboard({ setPage }) {
           ))}
         </section>
       )}
+
+      {/* Sprint Planning: organisation-wide monitoring */}
+      <section
+        className="admin-sprint-analytics"
+        aria-label="Organisation Sprint Planning Analytics"
+        style={{ minWidth: 0 }}
+      >
+        <SprintTeamDashboard />
+      </section>
 
       <section className="admin-project-hero">
         <div>
