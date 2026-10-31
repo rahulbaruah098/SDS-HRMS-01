@@ -8,6 +8,9 @@ import {
   submitWeeklyPlan, reportDailyActivity,
   createDailyChangeRequest
 } from '../api/sprintPlanning';
+import { getMySprintTemplate } from '../api/sprintPlanning';
+import SprintWeeklyCustomFields from '../components/SprintWeeklyCustomFields';
+import SprintDailyCustomFields from '../components/SprintDailyCustomFields';
 import { useCustomAlert } from '../components/CustomAlertProvider';
 
 const emptyActivity = () => ({
@@ -49,6 +52,32 @@ const statusLabel = (status) => ({
   in_progress: 'In Progress'
 }[status] || status || 'Unknown');
 
+// STEP 44B.53E.14R - Restore previously saved evidence
+const savedEvidenceReference = (evidence) => {
+  if (typeof evidence === 'string') {
+    return evidence;
+  }
+
+  if (Array.isArray(evidence)) {
+    const first = evidence.find(item =>
+      typeof item === 'string' ||
+      (item && typeof item.reference === 'string')
+    );
+
+    if (typeof first === 'string') {
+      return first;
+    }
+
+    return first?.reference || '';
+  }
+
+  if (evidence && typeof evidence.reference === 'string') {
+    return evidence.reference;
+  }
+
+  return '';
+};
+
 const parseEvidence = (value) => {
   const reference = value.trim();
   if (!reference) return [];
@@ -67,9 +96,20 @@ export default function SprintWeeklyPlanning() {
   const [weekStart, setWeekStart] = useState('');
   const [weekEnd, setWeekEnd] = useState('');
   const [activities, setActivities] = useState([emptyActivity()]);
+  // STEP 44B.53E.3 - Weekly department template
+  const [weeklyTemplate, setWeeklyTemplate] = useState(null);
+  const [weeklyTemplateLoading, setWeeklyTemplateLoading] = useState(true);
+  const [weeklyTemplateError, setWeeklyTemplateError] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState({});
+  // STEP 44B.53E.6R - Daily department reporting fields
+  const [dailyTemplate, setDailyTemplate] = useState(null);
+  const [dailyEnabled, setDailyEnabled] = useState(false);
+  const [dailyLoading, setDailyLoading] = useState(true);
+  const [dailyError, setDailyError] = useState('');
+
   const [changes, setChanges] = useState({});
 
   const alert = useCallback((type, title, message) => {
@@ -94,11 +134,85 @@ export default function SprintWeeklyPlanning() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setWeeklyTemplateLoading(true);
+        setWeeklyTemplateError('');
+        const response = await getMySprintTemplate('weekly');
+        if (!active) return;
+        setWeeklyTemplate(
+          response?.sprint_enabled === true &&
+          response?.template_configured === true
+            ? response.template
+            : null
+        );
+      } catch (error) {
+        if (active) {
+          setWeeklyTemplateError(
+            error?.message || 'Unable to verify department template.'
+          );
+        }
+      } finally {
+        if (active) setWeeklyTemplateLoading(false);
+      }
+    })();
+
+    return () => { active = false; };
+  }, []);
+
+  const updateWeeklyCustomField = (index, field, value) => {
+    setActivities(previous => previous.map((activity, i) =>
+      i === index ? {
+        ...activity,
+        custom_values: {
+          ...(activity.custom_values || {}),
+          [field]: value,
+        },
+      } : activity
+    ));
+  };
+
   const updateActivity = (index, field, value) => {
     setActivities(items => items.map((item, i) =>
       i === index ? { ...item, [field]: value } : item
     ));
   };
+
+
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        setDailyLoading(true);
+        setDailyError('');
+
+        const response = await getMySprintTemplate('daily');
+        if (!mounted) return;
+
+        const enabled = response?.sprint_enabled === true;
+
+        setDailyEnabled(enabled);
+        setDailyTemplate(
+          enabled && response?.template_configured === true
+            ? response.template
+            : null
+        );
+      } catch (error) {
+        if (mounted) {
+          setDailyError(
+            error?.message || 'Unable to load daily reporting template.'
+          );
+        }
+      } finally {
+        if (mounted) setDailyLoading(false);
+      }
+    })();
+
+    return () => { mounted = false; };
+  }, []);
 
   const updateReport = (id, patch) => {
     setReports(prev => ({
@@ -122,8 +236,41 @@ export default function SprintWeeklyPlanning() {
       return;
     }
 
+    if (weeklyTemplateLoading || weeklyTemplateError) {
+      alert(
+        'error',
+        'Department template unavailable',
+        weeklyTemplateError || 'Weekly template is still loading.'
+      );
+      return;
+    }
+
+    if (weeklyTemplate?.columns?.length) {
+      for (const [index, activity] of activities.entries()) {
+        for (const column of weeklyTemplate.columns) {
+          const value = activity.custom_values?.[column.key];
+          const missing = value === null || value === undefined ||
+            (typeof value === 'string' && !value.trim());
+          if (column.required && missing) {
+            alert(
+              'warning',
+              'Incomplete department planning fields',
+              `Activity ${index + 1}: ${column.label} is required.`
+            );
+            return;
+          }
+        }
+      }
+    }
+
     const days = activities.map(a => ({
       ...a,
+      ...(weeklyTemplate?.columns?.length
+        ? { custom_values: a.custom_values || {} }
+        : {}),
+      ...(!weeklyTemplate?.columns?.length
+        ? { custom_values: undefined }
+        : {}),
       title: a.title.trim(),
       description: a.description.trim(),
       expected_deliverable: a.expected_deliverable.trim()
@@ -176,8 +323,10 @@ export default function SprintWeeklyPlanning() {
     const id = activity.activity_id;
     const data = reports[id] || {};
     const status = data.status || activity.status;
-    const reason = (data.incomplete_reason || '').trim();
-    const evidence = parseEvidence(data.evidence || '');
+    const reason = (data.incomplete_reason ?? activity.incomplete_reason ?? '').trim();
+    const evidence = parseEvidence(
+      data.evidence ?? savedEvidenceReference(activity.evidence)
+    );
 
     if (status === 'completed' && !evidence.length) {
       alert('warning', 'Evidence required', 'Provide a valid work evidence reference or link.');
@@ -194,13 +343,55 @@ export default function SprintWeeklyPlanning() {
       return;
     }
 
+    // STEP 44B.53E.9 - Validate before entering saving state
+// STEP 44B.53E.6R - Per-activity daily values
+    if (dailyLoading || dailyError) {
+      alert(
+        'error',
+        'Daily reporting template unavailable',
+        dailyError || 'Daily reporting fields are still loading.'
+      );
+      return;
+    }
+
+    const template = dailyEnabled
+      ? (activity.daily_template_snapshot || dailyTemplate)
+      : null;
+
+    const values = reports[activity.activity_id]?.daily_custom_values
+      || activity.daily_custom_values
+      || {};
+
+    if (template?.columns?.length) {
+      for (const column of template.columns) {
+        const value = values[column.key];
+        const missing = value === null || value === undefined ||
+          (typeof value === 'string' && !value.trim());
+
+        if (column.required && missing) {
+          alert(
+            'warning',
+            'Daily fields required',
+            `${column.label} is required for ${activity.title}.`
+          );
+          return;
+        }
+      }
+    }
+
+    const dailyCustomPayload = template?.columns?.length
+      ? { daily_custom_values: values }
+      : {};
+
     setBusy(true);
     try {
-      await reportDailyActivity(getId(plan), id, {
+
+    await reportDailyActivity(getId(plan), id, {
         status,
         evidence,
         incomplete_reason: reason,
-        remarks: data.remarks || ''
+        remarks: data.remarks ?? activity.remarks ?? '',
+        ...dailyCustomPayload
       });
       alert('success', 'Daily activity updated', 'Your work status was saved.');
       await load();
@@ -344,7 +535,23 @@ export default function SprintWeeklyPlanning() {
           <button type="submit" className="btn btn-primary" disabled={busy}>
             <Save size={16} /> {busy ? 'Saving...' : 'Save Weekly Plan'}
           </button>
-        </form>
+
+          {/* STEP 44B.53E.3 - Per-activity weekly fields */}
+          {weeklyTemplateLoading && (
+            <p>Loading department weekly fields...</p>
+          )}
+          {weeklyTemplateError && (
+            <p role="alert" style={{ color: '#b91c1c' }}>
+              {weeklyTemplateError}
+            </p>
+          )}
+          <SprintWeeklyCustomFields
+            template={weeklyTemplate}
+            activities={activities}
+            onChange={updateWeeklyCustomField}
+            disabled={busy || weeklyTemplateLoading}
+          />
+</form>
       </section>
 
       <section className="card" style={card}>
@@ -397,7 +604,10 @@ export default function SprintWeeklyPlanning() {
                           {currentStatus === 'completed' ? (
                             <input style={field} placeholder="Evidence URL or document reference (required)"
                               aria-label="Work evidence"
-                              value={report.evidence || ''}
+                              value={
+                                report.evidence ??
+                                savedEvidenceReference(activity.evidence)
+                              }
                               onChange={e => updateReport(id, { evidence: e.target.value })} />
                           ) : ['in_progress', 'not_completed'].includes(currentStatus) ? (
                             <textarea style={field} rows={2}
@@ -406,9 +616,39 @@ export default function SprintWeeklyPlanning() {
                               onChange={e => updateReport(id, { incomplete_reason: e.target.value })} />
                           ) : null}
                           <textarea style={field} rows={2} placeholder="Additional work remarks (optional)"
-                            value={report.remarks || ''}
+                            value={report.remarks ?? activity.remarks ?? ''}
                             onChange={e => updateReport(id, { remarks: e.target.value })} />
-                          <button type="button" className="btn btn-primary" disabled={busy}
+
+                          {/* STEP 44B.53E.6R - Daily custom fields */}
+                          {dailyLoading && (
+                            <p>Loading daily department fields...</p>
+                          )}
+                          {dailyError && (
+                            <p role="alert">{dailyError}</p>
+                          )}
+                          <SprintDailyCustomFields
+                            template={
+                              dailyEnabled
+                                ? (activity.daily_template_snapshot || dailyTemplate)
+                                : null
+                            }
+                            values={
+                              report.daily_custom_values ||
+                              activity.daily_custom_values ||
+                              {}
+                            }
+                            disabled={busy || dailyLoading}
+                            onChange={(key, value) => {
+                              updateReport(id, {
+                                daily_custom_values: {
+                                  ...(report.daily_custom_values ||
+                                     activity.daily_custom_values || {}),
+                                  [key]: value,
+                                },
+                              });
+                            }}
+                          />
+<button type="button" className="btn btn-primary" disabled={busy}
                             onClick={() => saveReport(plan, activity)}>
                             <Save size={15} /> Save Daily Work Update
                           </button>

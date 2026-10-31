@@ -101,6 +101,7 @@ export default function SprintTeamDashboard() {
   const [department, setDepartment] = useState('all');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -200,7 +201,6 @@ export default function SprintTeamDashboard() {
           }
         }
       `}</style>
-
       {selectedEmployee ? (
         <>
           <button type="button" className="btn btn-secondary"

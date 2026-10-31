@@ -69,7 +69,7 @@ export default function SprintPlanning({ user }) {
   );
 
   const managementRoles = [
-    'super_admin', 'admin', 'hr', 'hr_admin', 'hr_manager',
+    'admin', 'hr', 'hr_admin', 'hr_manager',
     'manager', 'team_leader', 'reporting_officer', 'ro'
   ];
 
@@ -84,6 +84,15 @@ export default function SprintPlanning({ user }) {
     return true;
   });
 
+
+  if (roles.has('super_admin')) {
+    return (
+      <section className="panel" role="alert">
+        <h2>Access Restricted</h2>
+        <p>Sprint Planning is not available to administrators.</p>
+      </section>
+    );
+  }
 
   return (
     <div

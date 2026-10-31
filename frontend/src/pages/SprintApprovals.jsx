@@ -1,3 +1,5 @@
+import SprintMonthlyApprovalQueue from './SprintMonthlyApprovalQueue';
+import SprintMonthlyTeamCompilation from './SprintMonthlyTeamCompilation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ClipboardCheck, RefreshCw, CheckCircle2, XCircle,
@@ -14,6 +16,7 @@ import {
 } from '../api/sprintPlanning';
 
 import { useCustomAlert } from '../components/CustomAlertProvider';
+import SprintReviewActivityFields from '../components/SprintReviewActivityFields';
 
 const getId = (item) => String(item?._id || item?.id || '');
 
@@ -98,6 +101,16 @@ function RequestDetails({ item }) {
                 {activity.planned_date}
               </div>
               <strong>{activity.title}</strong>
+              {/* STEP 44B.53E.12 - Reviewer field visibility */}
+              <SprintReviewActivityFields
+                activity={activity}
+                weeklyTemplate={
+                  item.sprint_template_snapshot ||
+                  item.plan?.sprint_template_snapshot ||
+                  null
+                }
+              />
+
               <div style={{ fontSize: 13 }}>
                 {activity.expected_deliverable || activity.description}
               </div>
@@ -134,7 +147,7 @@ function RequestDetails({ item }) {
   );
 }
 
-export default function SprintApprovals() {
+function SprintApprovalsBody() {
   const { notify, confirm: customConfirm } = useCustomAlert();
 
   const [items, setItems] = useState([]);
@@ -423,5 +436,23 @@ export default function SprintApprovals() {
         do not independently grant permission to approve employee records.
       </p>
     </main>
+  );
+}
+
+/**
+ * Centralised Sprint Approvals:
+ * - Existing weekly and day-wise approval interfaces stay intact.
+ * - Monthly individual approvals use their own reporting-line checks.
+ * - Compiled team plans require separate Reporting Officer approval.
+ */
+export default function SprintApprovals(props) {
+  return (
+    <>
+      <div style={{ padding: '0 clamp(12px, 2vw, 25px)' }}>
+        <SprintMonthlyApprovalQueue month="" />
+        <SprintMonthlyTeamCompilation month="" />
+      </div>
+      <SprintApprovalsBody {...props} />
+    </>
   );
 }

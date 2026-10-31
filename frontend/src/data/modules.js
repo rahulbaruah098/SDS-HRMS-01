@@ -603,7 +603,7 @@ export const coreModules = [
   'Sprint Planning',
   ClipboardList,
   'Monthly, weekly and day-wise planning, work evidence, approvals and performance monitoring.',
-  ALL_COMMON_ROLES,
+  ALL_COMMON_ROLES.filter(role => role !== 'super_admin'),
 ],
 [
   'projects',
@@ -860,7 +860,6 @@ export const SUPERADMIN_PLATFORM_MODULE_KEYS = [
   'payslip_designer',
   'employees',
   'profile',
-  'sprint_planning',
 ];
 
 export function normalizeRoleValue(role) {

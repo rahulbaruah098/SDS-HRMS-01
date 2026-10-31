@@ -1297,6 +1297,15 @@ if (normalizedPage === 'companies') {
   // YourComate Sprint Planning
   // Access is checked by the existing canAccessModule guard.
   if (normalizedPage === 'sprint_planning') {
+    const sprintRoles = normalizeRoles(safeUser);
+    if (sprintRoles.some(role =>
+      ['super_admin'].includes(role)
+    )) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+    if (!canAccessModule(safeUser, 'sprint_planning')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
     return (
       <SprintPlanning
         setPage={setPage}

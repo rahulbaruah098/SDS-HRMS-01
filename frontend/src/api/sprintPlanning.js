@@ -51,11 +51,22 @@ export function getMonthlyPlans(params = {}) {
   return api(`${BASE}/monthly${buildQuery(params)}`);
 }
 
+export function updateMonthlyPlan(planId, payload) {
+  return api(`${BASE}/monthly/${safeId(planId)}`, {
+    method: 'PUT',
+    ...jsonBody(payload),
+  });
+}
+
 export function submitMonthlyPlan(planId) {
   return api(
     `${BASE}/monthly/${safeId(planId)}/submit`,
     { method: 'POST' },
   );
+}
+
+export function getMonthlyReviewInbox(month) {
+  return api(`${BASE}/monthly/review-inbox${buildQuery({ month })}`);
 }
 
 export function reviewMonthlyPlan(planId, decision, remarks = '') {
@@ -66,6 +77,48 @@ export function reviewMonthlyPlan(planId, decision, remarks = '') {
       ...jsonBody({ decision, remarks }),
     },
   );
+}
+
+export function getMonthlyTeamCoverage(month) {
+  return api(`${BASE}/monthly/team-compilations/coverage${buildQuery({ month })}`);
+}
+
+export function getMonthlyTeamCompilations(month) {
+  return api(`${BASE}/monthly/team-compilations${buildQuery({ month })}`);
+}
+
+export function createMonthlyTeamCompilation(month, missingEmployeeIds = []) {
+  return api(`${BASE}/monthly/team-compilations`, {
+    method: 'POST',
+    ...jsonBody({ month, missing_employee_ids: missingEmployeeIds }),
+  });
+}
+
+export function createApprovedMonthlyTeamRevision(id, missingEmployeeIds = []) {
+  return api(`${BASE}/monthly/team-compilations/${safeId(id)}/new-revision`, {
+    method: 'POST',
+    ...jsonBody({ missing_employee_ids: missingEmployeeIds }),
+  });
+}
+
+export function reviseMonthlyTeamCompilation(id, missingEmployeeIds = []) {
+  return api(`${BASE}/monthly/team-compilations/${safeId(id)}/revise`, {
+    method: 'POST',
+    ...jsonBody({ missing_employee_ids: missingEmployeeIds }),
+  });
+}
+
+export function submitMonthlyTeamCompilation(id) {
+  return api(`${BASE}/monthly/team-compilations/${safeId(id)}/submit`, {
+    method: 'POST',
+  });
+}
+
+export function reviewMonthlyTeamCompilation(id, decision, remarks = '') {
+  return api(`${BASE}/monthly/team-compilations/${safeId(id)}/review`, {
+    method: 'POST',
+    ...jsonBody({ decision, remarks }),
+  });
 }
 
 // =====================================================
@@ -291,4 +344,40 @@ export function getSprintTeamMetrics({ month } = {}) {
   return api(
     `${BASE}/metrics/team${buildQuery(query)}`
   );
+}
+
+
+// STEP 44B.52G - SPRINT PLANNING SETTINGS
+export function getSprintPlanningSettings() {
+  return api(`${BASE}/settings`);
+}
+
+export function updateSprintPlanningSettings(enabled) {
+  if (typeof enabled !== 'boolean') {
+    throw new Error('Sprint Planning enabled must be a boolean.');
+  }
+
+  return api(`${BASE}/settings`, {
+    method: 'PATCH',
+    ...jsonBody({ enabled }),
+  });
+}
+
+
+// STEP 44B.53B.1 - Department planning templates
+export function getSprintSheetTemplates(params = {}) {
+  return api(`${BASE}/settings/templates${buildQuery(params)}`);
+}
+
+export function saveSprintSheetTemplate(payload) {
+  return api(`${BASE}/settings/templates`, {
+    method: 'POST',
+    ...jsonBody(payload),
+  });
+}
+
+
+// STEP 44B.53C.6 - Authenticated employee department template
+export function getMySprintTemplate(planType = 'monthly') {
+  return api(`${BASE}/my-template${buildQuery({ plan_type: planType })}`);
 }

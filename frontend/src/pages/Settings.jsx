@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 
 import { api, normalizeProfilePhotoUrl } from '../api/client';
+import SprintTemplateBuilder from '../components/SprintTemplateBuilder';
+import { getSprintPlanningSettings, updateSprintPlanningSettings } from '../api/sprintPlanning';
 import { normalizeRoleList } from '../data/modules';
 
 const SETTINGS_POPUP_AUTO_HIDE_MS = 3600;
@@ -663,6 +665,14 @@ export default function Settings({ user, setPage }) {
   const [payrollBrandingMessage, setPayrollBrandingMessage] = useState('');
   const [payrollBrandingError, setPayrollBrandingError] = useState('');
 
+  // STEP 44B.52G - SPRINT PLANNING SETTINGS
+  const [sprintEnabled, setSprintEnabled] = useState(false);
+  const [sprintLoading, setSprintLoading] = useState(true);
+  const [sprintSaving, setSprintSaving] = useState(false);
+  const [sprintError, setSprintError] = useState('');
+  const [sprintMessage, setSprintMessage] = useState('');
+  const [sprintCanManage, setSprintCanManage] = useState(false);
+
   const [confirmPopup, setConfirmPopup] = useState(null);
   const confirmResolverRef = useRef(null);
 
@@ -737,6 +747,46 @@ export default function Settings({ user, setPage }) {
   const attendanceScheduleBusy =
     attendanceScheduleLoading || attendanceScheduleSaving;
 
+  const hasSprintSettingsManagerRole =
+    isPlatformSuperadmin ||
+    userRoles.some((role) => ATTENDANCE_REASON_MANAGER_ROLES.has(role));
+
+  useEffect(() => {
+    if (!hasSprintSettingsManagerRole) {
+      setSprintLoading(false);
+      setSprintCanManage(false);
+      return;
+    }
+
+    let active = true;
+
+    async function loadSprintSettings() {
+      try {
+        setSprintLoading(true);
+        setSprintError('');
+        const data = await getSprintPlanningSettings();
+
+        if (!active) return;
+
+        setSprintEnabled(data?.enabled === true);
+        setSprintCanManage(data?.can_manage === true);
+      } catch (error) {
+        if (!active) return;
+        setSprintError(
+          error?.message || 'Unable to load Sprint Planning settings.',
+        );
+      } finally {
+        if (active) setSprintLoading(false);
+      }
+    }
+
+    loadSprintSettings();
+
+    return () => {
+      active = false;
+    };
+  }, [hasSprintSettingsManagerRole]);
+
   const hasPayrollBrandingManagerRole =
     isPlatformSuperadmin ||
     userRoles.some((role) => PAYROLL_BRANDING_MANAGER_ROLES.has(role));
@@ -804,6 +854,51 @@ export default function Settings({ user, setPage }) {
         busy: false,
       });
     });
+  }
+
+  async function handleSprintSettingChange() {
+    if (
+      !hasSprintSettingsManagerRole ||
+      !sprintCanManage ||
+      sprintLoading ||
+      sprintSaving
+    ) {
+      return;
+    }
+
+    const nextEnabled = !sprintEnabled;
+
+    const confirmed = await showConfirm(
+      nextEnabled
+        ? 'Enable Sprint Planning for this organisation? Employees with approved weekly activities must complete their daily work reports before checking out.'
+        : 'Disable Sprint Planning for this organisation? Existing plans and approvals will remain stored, but Sprint checkout reporting restrictions will stop.',
+      nextEnabled ? 'Enable Sprint Planning' : 'Disable Sprint Planning',
+      {
+        danger: false,
+        confirmLabel: nextEnabled ? 'Enable Sprint Planning' : 'Disable Sprint Planning',
+      },
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setSprintSaving(true);
+      setSprintError('');
+      setSprintMessage('');
+
+      const data = await updateSprintPlanningSettings(nextEnabled);
+
+      setSprintEnabled(data?.enabled === true);
+      setSprintMessage(
+        data?.message || 'Sprint Planning setting updated successfully.',
+      );
+    } catch (error) {
+      setSprintError(
+        error?.message || 'Unable to update Sprint Planning settings.',
+      );
+    } finally {
+      setSprintSaving(false);
+    }
   }
 
   function clearLocalPreview() {
@@ -3997,6 +4092,102 @@ export default function Settings({ user, setPage }) {
         </section>
 
       )}
+
+      {hasSprintSettingsManagerRole && (
+        <section
+          className="payroll-branding-panel"
+          aria-label="Sprint Planning Settings"
+          style={{ marginBottom: 24 }}
+        >
+          <div className="payroll-branding-heading">
+            <div>
+              <span className="payroll-branding-kicker">
+                <ShieldCheck size={15} /> Sprint Planning Settings
+              </span>
+              <h1>Sprint Planning Module</h1>
+              <p>
+                Enable or disable Sprint Planning for this organisation.
+                When disabled, normal attendance and checkout continue
+                without Sprint reporting restrictions.
+              </p>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 20,
+              flexWrap: 'wrap',
+              padding: '20px 0',
+            }}
+          >
+            <div>
+              <strong style={{ fontSize: 17 }}>
+                {sprintLoading
+                  ? 'Loading Sprint Planning status...'
+                  : sprintEnabled
+                    ? 'Sprint Planning is ON'
+                    : 'Sprint Planning is OFF'}
+              </strong>
+              <p style={{ marginTop: 6 }}>
+                {sprintEnabled
+                  ? 'Daily work reporting is required before checkout when approved weekly activities are scheduled.'
+                  : 'Existing HRMS attendance and checkout behaviour remains unchanged.'}
+              </p>
+              <small>
+                Settings are saved separately for each organisation.
+                Existing approved plans and histories are preserved.
+              </small>
+            </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={sprintEnabled}
+              aria-label="Enable Sprint Planning"
+              onClick={handleSprintSettingChange}
+              disabled={
+                sprintLoading ||
+                sprintSaving ||
+                !sprintCanManage
+              }
+              style={{
+                border: 0,
+                borderRadius: 999,
+                padding: '12px 22px',
+                minWidth: 115,
+                cursor: sprintLoading || sprintSaving ? 'wait' : 'pointer',
+                fontWeight: 700,
+                background: sprintEnabled ? '#0f766e' : '#64748b',
+                color: '#fff',
+              }}
+            >
+              {sprintSaving
+                ? 'Saving...'
+                : sprintEnabled
+                  ? 'ON'
+                  : 'OFF'}
+            </button>
+          </div>
+
+          {sprintError && (
+            <div role="alert" style={{ color: '#b91c1c', marginTop: 8 }}>
+              {sprintError}
+            </div>
+          )}
+
+          {sprintMessage && (
+            <div role="status" style={{ color: '#047857', marginTop: 8 }}>
+              {sprintMessage}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* STEP 44B.53B.1 - Dynamic department planning templates */}
+      {hasSprintSettingsManagerRole && <SprintTemplateBuilder />}
 
       <section className="payroll-branding-panel">
         <div className="payroll-branding-heading">

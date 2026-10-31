@@ -1617,45 +1617,6 @@ const [loading, setLoading] = useState(false);
         </>
       ) : null}
 
-      {/* Sprint Planning: platform-level navigation */}
-      <section
-        className="panel"
-        aria-label="Sprint Planning Management"
-        style={{ marginTop: 20, marginBottom: 20 }}
-      >
-        <div
-          className="toolbar"
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 16
-          }}
-        >
-          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-            <h3 style={{ marginTop: 0 }}>
-              Sprint Planning Management
-            </h3>
-            <p style={{ marginBottom: 0 }}>
-              Access monthly, weekly and day-wise planning,
-              reporting approvals and performance analytics.
-              Employee performance reporting is scoped to
-              the authorised organisation.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => goTo('sprint_planning')}
-            aria-label="Open Sprint Planning Management"
-          >
-            Open Sprint Planning
-          </button>
-        </div>
-      </section>
-
       <div className="sa-module-shell">
         <ModuleGrid modules={dashboardModules} setPage={setPage} />
       </div>
