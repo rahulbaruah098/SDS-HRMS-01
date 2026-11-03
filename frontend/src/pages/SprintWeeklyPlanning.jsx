@@ -9,7 +9,10 @@ import {
   createDailyChangeRequest
 } from '../api/sprintPlanning';
 import { getMySprintTemplate } from '../api/sprintPlanning';
+import { prepareDailyActivityTemplate } from '../api/sprintPlanning';
 import SprintWeeklyCustomFields from '../components/SprintWeeklyCustomFields';
+import SprintAttachmentField from '../components/SprintAttachmentField';
+import { updateWeeklyActivityCustomFields } from '../api/sprintPlanning';
 import SprintDailyCustomFields from '../components/SprintDailyCustomFields';
 import { useCustomAlert } from '../components/CustomAlertProvider';
 
@@ -251,7 +254,8 @@ export default function SprintWeeklyPlanning() {
           const value = activity.custom_values?.[column.key];
           const missing = value === null || value === undefined ||
             (typeof value === 'string' && !value.trim());
-          if (column.required && missing) {
+          // Files are uploaded only after the draft has an activity ID.
+          if (column.required && missing && column.type !== 'file') {
             alert(
               'warning',
               'Incomplete department planning fields',
@@ -390,11 +394,16 @@ export default function SprintWeeklyPlanning() {
         status,
         evidence,
         incomplete_reason: reason,
-        remarks: data.remarks ?? activity.remarks ?? '',
+        remarks: data.remarks ?? activity.employee_remarks ?? activity.remarks ?? '',
         ...dailyCustomPayload
       });
       alert('success', 'Daily activity updated', 'Your work status was saved.');
       await load();
+      setReports(previous => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
     } catch (error) {
       alert('error', 'Unable to update activity', messageOf(error));
     } finally {
@@ -406,8 +415,11 @@ export default function SprintWeeklyPlanning() {
     const key = activity?.activity_id || `add-${getId(plan)}`;
     const data = changes[key] || {};
     const reason = (data.reason || '').trim();
+    // Keep submitted defaults consistent with the visible prefilled fields.
+    const changedTitle = (data.title ?? activity?.title ?? '').trim();
+    const changedDate = data.planned_date || activity?.planned_date || '';
 
-    if (!data.title?.trim() || !data.planned_date || reason.length < 10) {
+    if (!changedTitle || !changedDate || reason.length < 10) {
       alert('warning', 'Change details required', 'Provide the date, activity title and a reason of at least 10 characters.');
       return;
     }
@@ -418,10 +430,10 @@ export default function SprintWeeklyPlanning() {
         weekly_plan_id: getId(plan),
         change_type: activity ? 'modify_activity' : 'add_activity',
         ...(activity ? { activity_id: activity.activity_id } : {}),
-        planned_date: data.planned_date,
-        title: data.title.trim(),
-        description: data.description || '',
-        expected_deliverable: data.expected_deliverable || '',
+        planned_date: changedDate,
+        title: changedTitle,
+        description: data.description ?? activity?.description ?? '',
+        expected_deliverable: data.expected_deliverable ?? activity?.expected_deliverable ?? '',
         reason
       });
       alert('success', 'Change request submitted', 'This change requires both Team Leader and Reporting Officer approval.');
@@ -436,7 +448,7 @@ export default function SprintWeeklyPlanning() {
   const field = { width: '100%', padding: '10px 12px', borderRadius: 8,
     border: '1px solid var(--border, #dbe1e8)', background: 'var(--surface, #fff)',
     color: 'inherit', boxSizing: 'border-box' };
-  const card = { padding: 22, borderRadius: 14, marginBottom: 18 };
+  const card = { padding: 'clamp(14px, 2vw, 24px)', borderRadius: 14, marginBottom: 18 };
   const label = { display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 600 };
   const stack = { display: 'grid', gap: 13 };
 
@@ -444,7 +456,7 @@ export default function SprintWeeklyPlanning() {
     const key = activity?.activity_id || `add-${getId(plan)}`;
     const data = changes[key] || {};
     return (
-      <div style={{ ...stack, padding: 14, border: '1px dashed var(--border, #dbe1e8)', borderRadius: 10, marginTop: 12 }}>
+      <div className="swp-change-form" style={{ ...stack, padding: 14, border: '1px dashed var(--border, #dbe1e8)', borderRadius: 10, marginTop: 12 }}>
         <strong>{activity ? 'Request Activity Modification' : 'Request Additional Activity'}</strong>
         <input type="date" style={field} aria-label="Changed activity date"
           min={plan.week_start} max={plan.week_end}
@@ -470,12 +482,55 @@ export default function SprintWeeklyPlanning() {
   };
 
   return (
-    <main style={{ padding: 'clamp(12px,2vw,28px)', maxWidth: 1360, margin: 'auto' }}>
-      <header style={{ marginBottom: 24 }}>
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+    <main className="swp-page" style={{ padding: 'clamp(12px,2vw,28px)', maxWidth: 1360, margin: 'auto' }}>
+      <style>{`
+        .swp-page { min-width:0; color:var(--text, inherit); }
+        .swp-page .swp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+        .swp-page .swp-heading { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:clamp(22px, 3vw, 30px); line-height:1.25; }
+        .swp-page .swp-subtitle { margin:10px 0 0; line-height:1.65; max-width:780px; color:var(--text-muted, #64748b); }
+        .swp-page .card { min-width:0; border:1px solid var(--border, #dbe1e8); border-radius:16px; background:var(--surface, var(--card-bg, #fff)); }
+        .swp-page .swp-section-heading { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 16px; font-size:clamp(17px, 2vw, 20px); }
+        .swp-page .swp-form-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; }
+        .swp-page .swp-activity-card { min-width:0; padding:clamp(14px,2vw,18px); background:var(--surface-secondary, var(--surface, #fff)); border:1px solid var(--border,#dbe1e8); border-radius:14px; }
+        .swp-page .swp-activity-top { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+        .swp-page .swp-plan-card { min-width:0; padding:clamp(14px,2vw,20px); margin-bottom:16px; border:1px solid var(--border,#dbe1e8); border-radius:14px; background:var(--surface,#fff); }
+        .swp-page .swp-plan-top { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; }
+        .swp-page .swp-plan-dates { display:block; font-weight:700; overflow-wrap:anywhere; }
+        .swp-page .swp-plan-status { font-size:12px; font-weight:700; padding:5px 10px; border:1px solid currentColor; border-radius:999px; }
+        .swp-page .swp-plan-activity { padding:16px 0; border-top:1px solid var(--border,#dbe1e8); margin-top:12px; min-width:0; }
+        .swp-page .swp-activity-name { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+        .swp-page .swp-activity-name strong { overflow-wrap:anywhere; }
+        .swp-page .swp-muted { color:var(--text-muted,#64748b); line-height:1.55; }
+        .swp-page .swp-attachment { margin:12px 0; padding:clamp(12px,2vw,16px); border:1px solid var(--border,#dbe1e8); border-radius:12px; }
+        .swp-page .swp-daily-fields { min-width:0; padding:14px; border:1px solid var(--border,#dbe1e8); border-radius:12px; background:var(--surface-secondary,var(--surface,#fff)); }
+        .swp-page .swp-daily-fields > * { min-width:0; }
+        .swp-page .swp-page-actions { display:flex; gap:10px; flex-wrap:wrap; }
+        .swp-page input, .swp-page select, .swp-page textarea { max-width:100%; font-size:16px; }
+        .swp-page input:focus-visible, .swp-page select:focus-visible, .swp-page textarea:focus-visible, .swp-page button:focus-visible { outline:2px solid var(--primary,#5142ce); outline-offset:2px; }
+        .swp-page .btn { min-height:42px; display:inline-flex; justify-content:center; align-items:center; gap:8px; white-space:normal; text-align:center; }
+        .swp-page summary { padding:10px 0; cursor:pointer; font-weight:650; }
+        .swp-page .swp-empty { padding:16px; border:1px dashed var(--border,#dbe1e8); border-radius:12px; color:var(--text-muted,#64748b); }
+        @media(max-width:700px) {
+          .swp-page .swp-form-grid { grid-template-columns:minmax(0,1fr); }
+          .swp-page .swp-header > .btn { width:100%; }
+          .swp-page .swp-page-actions > .btn { flex:1 1 180px; }
+          .swp-page .swp-plan-card > .btn { width:100%; }
+        }
+        @media(max-width:480px) {
+          .swp-page { padding:12px !important; }
+          .swp-page .swp-header { margin-bottom:16px !important; }
+          .swp-page .swp-plan-top { align-items:flex-start; }
+          .swp-page .swp-plan-status { align-self:flex-start; }
+          .swp-page .swp-activity-top .btn { min-width:44px; }
+          .swp-page .swp-daily-fields .btn, .swp-page .swp-change-form .btn { width:100%; }
+        }
+        @media(prefers-reduced-motion:reduce) { .swp-page * { scroll-behavior:auto !important; } }
+      `}</style>
+      <header className="swp-header" style={{ marginBottom: 24 }}>
+        <h1 className="swp-heading" style={{ margin: 0 }}>
           <CalendarDays size={27} /> Weekly & Day-Wise Planning
         </h1>
-        <p style={{ color: 'var(--text-muted, #64748b)' }}>
+        <p className="swp-subtitle">
           Plan each day's activities, report work honestly and request approval for unexpected assignments.
         </p>
         <button type="button" className="btn btn-secondary" onClick={load} disabled={loading}>
@@ -484,32 +539,35 @@ export default function SprintWeeklyPlanning() {
       </header>
 
       <section className="card" style={card}>
-        <h2 style={{ fontSize: 19, marginTop: 0 }}>Create Weekly Planning Sheet</h2>
+        <h2 className="swp-section-heading">Create Weekly Planning Sheet</h2>
         <form onSubmit={createPlan} style={stack}>
           <div>
-            <label style={label}>Approved Monthly Plan</label>
-            <select style={field} required value={monthId} onChange={e => setMonthId(e.target.value)}>
+            <label style={label} htmlFor="swp-monthly-plan">Approved Monthly Plan</label>
+            <select id="swp-monthly-plan" style={field} required value={monthId} onChange={e => setMonthId(e.target.value)}>
               <option value="">Select approved monthly plan</option>
               {monthly.filter(x => x.status === 'approved').map(x => (
                 <option key={getId(x)} value={getId(x)}>{x.title} — {x.month}</option>
               ))}
             </select>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
-            <div><label style={label}>Week Start</label>
-              <input type="date" style={field} required value={weekStart}
+          {monthly.filter(x => x.status === 'approved').length === 0 && !loading && (
+            <p className="swp-empty" role="status">No approved monthly plan is available yet. Create and obtain approval for a monthly plan before saving a weekly plan.</p>
+          )}
+          <div className="swp-form-grid">
+            <div><label htmlFor="swp-week-start" style={label}>Week Start</label>
+              <input id="swp-week-start" type="date" style={field} required value={weekStart}
                 onChange={e => setWeekStart(e.target.value)} /></div>
-            <div><label style={label}>Week End</label>
-              <input type="date" style={field} required value={weekEnd}
+            <div><label htmlFor="swp-week-end" style={label}>Week End</label>
+              <input id="swp-week-end" type="date" style={field} required value={weekEnd}
                 onChange={e => setWeekEnd(e.target.value)} /></div>
           </div>
 
           <h3 style={{ fontSize: 16, marginBottom: 0 }}>Day-Wise Planned Activities</h3>
           {activities.map((activity, index) => (
-            <div key={index} style={{ ...stack, padding: 16, border: '1px solid var(--border, #dbe1e8)', borderRadius: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div key={index} className="swp-activity-card" style={stack}>
+              <div className="swp-activity-top">
                 <strong>Activity {index + 1}</strong>
-                <button type="button" className="btn btn-secondary" title="Remove activity"
+                <button type="button" className="btn btn-secondary" title="Remove activity" aria-label={`Remove activity ${index + 1}`}
                   disabled={activities.length === 1}
                   onClick={() => setActivities(items => items.filter((_, i) => i !== index))}>
                   <Trash2 size={15} />
@@ -527,14 +585,16 @@ export default function SprintWeeklyPlanning() {
                 onChange={e => updateActivity(index, 'expected_deliverable', e.target.value)} />
             </div>
           ))}
+          <div className="swp-page-actions">
           <button type="button" className="btn btn-secondary"
             disabled={activities.length >= 200}
             onClick={() => setActivities(items => [...items, emptyActivity()])}>
             <Plus size={16} /> Add Day-Wise Activity
           </button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || weeklyTemplateLoading || Boolean(weeklyTemplateError) || monthly.filter(x => x.status === 'approved').length === 0}>
             <Save size={16} /> {busy ? 'Saving...' : 'Save Weekly Plan'}
           </button>
+          </div>
 
           {/* STEP 44B.53E.3 - Per-activity weekly fields */}
           {weeklyTemplateLoading && (
@@ -555,16 +615,16 @@ export default function SprintWeeklyPlanning() {
       </section>
 
       <section className="card" style={card}>
-        <h2 style={{ fontSize: 19, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <h2 className="swp-section-heading">
           <ClipboardCheck size={20} /> My Weekly Planning Sheets
         </h2>
         {loading ? <p>Loading planning sheets...</p> : weekly.length === 0
-          ? <p>No weekly plans created yet.</p>
+          ? <p className="swp-empty">No weekly plans created yet.</p>
           : weekly.map(plan => (
-            <article key={getId(plan)} style={{ padding: 16, marginBottom: 16, border: '1px solid var(--border, #dbe1e8)', borderRadius: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <strong>{plan.week_start} to {plan.week_end}</strong>
-                <span style={{ color: statusColor(plan.status), fontWeight: 700 }}>
+            <article key={getId(plan)} className="swp-plan-card">
+              <div className="swp-plan-top">
+                <strong className="swp-plan-dates">{plan.week_start} to {plan.week_end}</strong>
+                <span className="swp-plan-status" style={{ color: statusColor(plan.status) }}>
                   {statusLabel(plan.status)}
                 </span>
               </div>
@@ -580,21 +640,58 @@ export default function SprintWeeklyPlanning() {
                 const report = reports[id] || {};
                 const currentStatus = report.status || activity.status || 'planned';
                 return (
-                  <div key={id} style={{ padding: '14px 0', borderTop: '1px solid var(--border, #dbe1e8)', marginTop: 12 }}>
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div key={id} className="swp-plan-activity">
+                    <div className="swp-activity-name">
                       <FileText size={17} />
                       <strong>{activity.title}</strong>
                       <span style={{ fontSize: 13, color: statusColor(currentStatus) }}>{statusLabel(currentStatus)}</span>
                     </div>
-                    <p style={{ fontSize: 13, color: '#64748b', margin: '7px 0' }}>
+                    <p className="swp-muted" style={{ fontSize: 13, margin: '7px 0' }}>
                       {cleanDate(activity.planned_date)} — {activity.description || activity.expected_deliverable || 'No description'}
                     </p>
 
-                    {plan.status === 'approved' && (
+                                        {/* STEP 44B.53G.8F.8-R3 */}
+                    {['draft', 'rejected'].includes(plan.status) &&
+                      (plan.sprint_template_snapshot?.columns || [])
+                        .filter(column => column.type === 'file')
+                        .map(column => (
+                          <div
+                            key={`${id}-${column.key}`}
+                            className="swp-attachment"
+                          >
+                            <SprintAttachmentField
+                              label={column.label}
+                              planType="weekly"
+                              planId={getId(plan)}
+                              activityId={id}
+                              fieldKey={column.key}
+                              value={activity.custom_values?.[column.key] || ''}
+                              disabled={busy}
+                              onChange={async (reference) => {
+                                await updateWeeklyActivityCustomFields(
+                                  getId(plan),
+                                  id,
+                                  {
+                                    ...(activity.custom_values || {}),
+                                    [column.key]: reference,
+                                  },
+                                );
+                                await load();
+                                alert(
+                                  'success',
+                                  'Attachment saved',
+                                  'Weekly activity attachment saved successfully.',
+                                );
+                              }}
+                            />
+                          </div>
+                        ))}
+
+{plan.status === 'approved' && (
                       <>
-                        <div style={{ ...stack, marginTop: 12 }}>
-                          <label style={label}>Actual Work Status</label>
-                          <select style={field} value={currentStatus}
+                        <div className="swp-daily-fields" style={{ ...stack, marginTop: 12 }}>
+                          <label style={label} htmlFor={`swp-status-${id}`}>Actual Work Status</label>
+                          <select id={`swp-status-${id}`} style={field} value={currentStatus}
                             onChange={e => updateReport(id, { status: e.target.value })}>
                             <option value="planned">Not Updated</option>
                             <option value="completed">Completed</option>
@@ -615,8 +712,9 @@ export default function SprintWeeklyPlanning() {
                               value={report.incomplete_reason ?? activity.incomplete_reason ?? ''}
                               onChange={e => updateReport(id, { incomplete_reason: e.target.value })} />
                           ) : null}
-                          <textarea style={field} rows={2} placeholder="Additional work remarks (optional)"
-                            value={report.remarks ?? activity.remarks ?? ''}
+                          <label style={label} htmlFor={`swp-remarks-${id}`}>Additional work remarks <span className="swp-muted">(optional)</span></label>
+                          <textarea id={`swp-remarks-${id}`} style={field} rows={3} maxLength={2000} placeholder="Add context about the work completed, challenges, or follow-up actions"
+                            value={report.remarks ?? activity.employee_remarks ?? activity.remarks ?? ''}
                             onChange={e => updateReport(id, { remarks: e.target.value })} />
 
                           {/* STEP 44B.53E.6R - Daily custom fields */}
@@ -626,6 +724,45 @@ export default function SprintWeeklyPlanning() {
                           {dailyError && (
                             <p role="alert">{dailyError}</p>
                           )}
+                          {/* STEP 44B.53G.8F.18 */}
+                          {dailyEnabled &&
+                            !activity.daily_template_snapshot &&
+                            !dailyLoading &&
+                            !dailyError &&
+                            dailyTemplate?.columns?.some(
+                              column => column.type === 'file'
+                            ) && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                disabled={busy}
+                                onClick={async () => {
+                                  setBusy(true);
+                                  try {
+                                    await prepareDailyActivityTemplate(
+                                      getId(plan),
+                                      id,
+                                    );
+                                    await load();
+                                    alert(
+                                      'success',
+                                      'File uploads ready',
+                                      'The daily reporting template is prepared. You can now upload the required files.',
+                                    );
+                                  } catch (error) {
+                                    alert(
+                                      'error',
+                                      'Unable to prepare file uploads',
+                                      messageOf(error),
+                                    );
+                                  } finally {
+                                    setBusy(false);
+                                  }
+                                }}
+                              >
+                                Prepare File Uploads
+                              </button>
+                            )}
                           <SprintDailyCustomFields
                             template={
                               dailyEnabled
@@ -637,6 +774,9 @@ export default function SprintWeeklyPlanning() {
                               activity.daily_custom_values ||
                               {}
                             }
+                            planId={getId(plan)}
+                            activityId={id}
+                            uploadReady={Boolean(activity.daily_template_snapshot)}
                             disabled={busy || dailyLoading}
                             onChange={(key, value) => {
                               updateReport(id, {
@@ -670,7 +810,7 @@ export default function SprintWeeklyPlanning() {
                   <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
                     <Plus size={15} style={{ verticalAlign: 'middle' }} /> Add Unplanned Activity (Approval Required)
                   </summary>
-                  <p style={{ fontSize: 13, color: '#64748b' }}>
+                  <p className="swp-muted" style={{ fontSize: 13 }}>
                     <AlertCircle size={14} style={{ verticalAlign: 'middle' }} />
                     {' '}The new activity is not added until approved by both reporting authorities.
                   </p>

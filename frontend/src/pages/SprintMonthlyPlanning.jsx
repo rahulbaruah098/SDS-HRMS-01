@@ -12,6 +12,27 @@ import SprintMonthlySavedFields from '../components/SprintMonthlySavedFields';
 import { useCustomAlert } from '../components/CustomAlertProvider';
 import SprintMonthlyTeamCompilation from './SprintMonthlyTeamCompilation';
 import SprintMonthlyApprovalQueue from './SprintMonthlyApprovalQueue';
+import { getEmployeeDirectory } from '../api/client';
+
+
+// Employee names are resolved from the existing tenant-scoped directory.
+// Missing or inaccessible profiles fall back to a neutral label, never a guessed name.
+const directoryItems = response => {
+  const data = response?.data || response;
+  return Array.isArray(data?.items) ? data.items : [];
+};
+const employeeById = people => new Map(people.map(person => [
+  String(person?._id || person?.id || '').trim(), person
+]).filter(([id]) => id));
+const employeeName = (people, id) => {
+  const person = people.get(String(id || '').trim());
+  return person?.name || person?.employee_name || 'Employee profile unavailable';
+};
+const employeeMeta = (people, id) => {
+  const person = people.get(String(id || '').trim());
+  return [person?.employee_code || person?.employee_id, person?.department || person?.department_name]
+    .filter(Boolean).join(' · ') || (person ? 'Employee' : 'Identity unavailable');
+};
 
 const currentMonth = () => {
   const now = new Date();
@@ -66,13 +87,15 @@ const csvEscape = value => {
   return `"${str.replace(/"/g, '""')}"`;
 };
 
-function exportCsv(plan, rows) {
+function exportCsv(plan, rows, people = new Map()) {
   const headers = ['Sl. No.', ...columns.map(c => c[1]), 'Weeks'];
   const data = rows.map((row, index) => [
     index + 1,
     ...columns.map(([key]) =>
       key === 'responsible_employee'
-        ? plan.employee_id || ''
+        ? (employeeName(people, row.responsible_employee || plan.employee_id) !== 'Employee profile unavailable'
+          ? employeeName(people, row.responsible_employee || plan.employee_id)
+          : row.responsible_employee || plan.employee_id || '')
         : row[key] ?? ''
     ),
     (row.weeks || []).join(', ')
@@ -92,11 +115,17 @@ function exportCsv(plan, rows) {
   setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
-function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employeeId = '', template = null }) {
-  const [selectedKey, setSelectedKey] = useState(null);
+function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employeeId = '', template = null, employeeLabel = 'Current employee' }) {
+  const [selectedKey, setSelectedKey] = useState(() => readOnly ? null : rows[0]?.key || null);
+  useEffect(() => {
+    if (!readOnly && selectedKey !== null && rows.length && !rows.some(row => row.key === selectedKey)) {
+      setSelectedKey(rows[0].key);
+    }
+  }, [readOnly, rows, selectedKey]);
   const selected = rows.find(row => row.key === selectedKey);
   return (
     <>
+    {!readOnly && <div className="mws-summary-hint">Activity overview · Use <strong>Edit</strong> beside any row to enter or change its details in the clearly labeled form below. Scroll horizontally to review every column.</div>}
     <div className="mws-scroll" role="region" aria-label="Monthly work plan table" tabIndex={0}>
       <table className="mws-table">
         <thead><tr>
@@ -113,41 +142,24 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
               <td className="mws-sticky mws-number">
                 {String(index + 1).padStart(2, '0')}
                 {!readOnly && <button type="button" className="mws-row-edit"
-                  onClick={() => setSelectedKey(selectedKey === row.key ? null : row.key)}>
-                  {selectedKey === row.key ? 'Close' : 'Edit'}
+                  onClick={() => setSelectedKey(row.key)}>
+                  {selectedKey === row.key ? 'Editing' : 'Edit'}
                 </button>}
               </td>
               {columns.map(([key]) => (
                 <td key={key}>
                   {key === 'responsible_employee' ? (
-                    <span className="mws-readonly">{employeeId || 'Current employee'}</span>
-                  ) : readOnly ? (
-                    <span className="mws-readonly">{row[key] || '?'}</span>
-                  ) : key === 'priority' ? (
-                    <select aria-label={`Priority row ${index + 1}`} value={row.priority}
-                      onChange={e => onChange(row.key, key, e.target.value)}>
-                      {['critical', 'high', 'medium', 'low'].map(priority => (
-                        <option key={priority} value={priority}>{priority[0].toUpperCase() + priority.slice(1)}</option>
-                      ))}
-                    </select>
+                    <span className="mws-readonly">{employeeLabel || 'Current employee'}</span>
                   ) : (
-                    <input
-                      aria-label={`${key} row ${index + 1}`}
-                      type={key === 'start_date' || key === 'end_date' ? 'date' : key === 'weightage' || key === 'target_quantity' ? 'number' : 'text'}
-                      min={key.includes('date') ? `${month}-01` : key === 'weightage' || key === 'target_quantity' ? '0' : undefined}
-                      max={key.includes('date') ? monthLastDate(month) : key === 'weightage' ? '100' : undefined}
-                      step={key === 'weightage' || key === 'target_quantity' ? '0.01' : undefined}
-                      maxLength={key === 'activity' || key === 'deliverable' || key === 'dependencies' || key === 'remarks' ? 500 : key === 'kpi' ? 300 : 200}
-                      value={row[key] ?? ''}
-                      onChange={e => onChange(row.key, key, e.target.value)}
-                      placeholder={key.replaceAll('_', ' ')}
-                    />
+                    <span className="mws-readonly">{key === 'priority'
+                      ? (row[key] || 'medium').replace(/^./, letter => letter.toUpperCase())
+                      : (row[key] === '' || row[key] == null ? '—' : String(row[key]))}</span>
                   )}
                 </td>
               ))}
               <td>
                 {readOnly ? (
-                  <span className="mws-readonly">{(row.weeks || []).map(w => `W${w}`).join(', ') || '?'}</span>
+                  <span className="mws-readonly">{(row.weeks || []).map(w => `W${w}`).join(', ') || '—'}</span>
                 ) : (
                   <div className="mws-weeks">
                     {[1, 2, 3, 4, 5].map(w => (
@@ -169,6 +181,39 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
         </tbody>
       </table>
     </div>
+    <div className="mws-mobile-cards" aria-label="Monthly activities, mobile view">
+      {rows.map((row, index) => (
+        <article className="mws-mobile-activity" key={row.key || row.row_id || index}>
+          <div className="mws-mobile-activity-head">
+            <div className="mws-mobile-activity-title">
+              <span className="mws-row-index">Activity {String(index + 1).padStart(2, '0')}</span>
+              <strong>{row.activity || 'New activity'}</strong>
+              <span className="mws-muted">{row.objective || 'Objective not entered'}</span>
+            </div>
+            <span className="mws-status">{row.priority || 'medium'}</span>
+          </div>
+          <dl className="mws-mobile-facts">
+            <div><dt>Deliverable</dt><dd>{row.deliverable || 'Not entered'}</dd></div>
+            <div><dt>Target date</dt><dd>{row.end_date || 'Not set'}</dd></div>
+            <div><dt>Weekly milestones</dt><dd>{(row.weeks || []).map(w => `W${w}`).join(', ') || 'Not set'}</dd></div>
+            <div><dt>Weightage</dt><dd>{row.weightage === '' || row.weightage == null ? 'Not set' : `${row.weightage}%`}</dd></div>
+          </dl>
+          {!readOnly && (
+            <div className="mws-mobile-actions">
+              <button type="button" className="mws-button mws-primary"
+                aria-expanded={selectedKey === row.key}
+                onClick={() => setSelectedKey(row.key)}>
+                {selectedKey === row.key ? 'Editing Activity' : 'Edit Activity Details'}
+              </button>
+              <button type="button" className="mws-delete" disabled={rows.length === 1}
+                aria-label={`Remove activity ${index + 1}`} onClick={() => onRemove(row.key)}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
     {/* STEP 44B.53D.1 - Historical custom fields */}
     {readOnly && template?.columns?.length > 0 && (
       <SprintMonthlySavedFields template={template} rows={rows} />
@@ -177,8 +222,9 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
       <section className="mws-editor">
         <div className="mws-section-head">
           <div>
-            <h3 style={{margin:'0 0 5px'}}>Complete Activity Details</h3>
-            <span className="mws-muted">Edit all fields without horizontal scrolling. Changes sync with the planning sheet.</span>
+                         <h3 style={{margin:'0 0 5px'}}>Edit Activity Details</h3>
+            <span className="mws-row-index">{selected.activity || 'New activity'}</span>
+                         <span className="mws-muted">Complete each labeled field below. The activity summary above updates automatically as you type.</span>
           </div>
           <button type="button" className="mws-button"
             onClick={() => setSelectedKey(null)}>Close Editor</button>
@@ -205,7 +251,7 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
                   step={key === 'weightage' || key === 'target_quantity' ? '0.01' : undefined}
                   value={selected[key] ?? ''}
                   onChange={e => onChange(selected.key, key, e.target.value)}
-                  placeholder={label}
+                                     placeholder={key === 'objective' ? 'e.g. Improve IT response times' : key === 'activity' ? 'What will you do?' : key === 'kpi' ? 'How will success be measured?' : label}
                 />
               )}
             </div>
@@ -251,7 +297,9 @@ export default function SprintMonthlyPlanning() {
   const [latestMonthlyTemplate, setLatestMonthlyTemplate] = useState(null);
   const [activeMonthlyTemplate, setActiveMonthlyTemplate] = useState(null);
   const [monthlyTemplateLoading, setMonthlyTemplateLoading] = useState(true);
-  const [monthlyTemplateError, setMonthlyTemplateError] = useState('');
+     const [monthlyTemplateError, setMonthlyTemplateError] = useState('');
+   const [employeeLookup, setEmployeeLookup] = useState(() => new Map());
+   const [directoryWarning, setDirectoryWarning] = useState(false);
 
   const [editingStatus, setEditingStatus] = useState('');
 
@@ -266,7 +314,23 @@ export default function SprintMonthlyPlanning() {
     }
   }, [notify]);
 
-  useEffect(() => { load(); }, [load]);
+     useEffect(() => { load(); }, [load]);
+
+   useEffect(() => {
+     let active = true;
+     (async () => {
+       try {
+         const response = await getEmployeeDirectory({limit: 500});
+         if (active) {
+           setEmployeeLookup(employeeById(directoryItems(response)));
+           setDirectoryWarning(false);
+         }
+       } catch {
+         if (active) setDirectoryWarning(true);
+       }
+     })();
+     return () => { active = false; };
+   }, []);
 
   useEffect(() => {
     let active = true;
@@ -416,7 +480,9 @@ export default function SprintMonthlyPlanning() {
           const value = row.custom_values?.[column.key];
           const missing = value === undefined || value === null ||
             (typeof value === 'string' && !value.trim());
-          if (column.required && missing) {
+          // STEP 44B.53G.8F.24
+          // Required file uploads happen after draft creation.
+          if (column.required && missing && column.type !== 'file') {
             notify({
               type: 'warning',
               title: 'Incomplete department planning fields',
@@ -555,13 +621,134 @@ export default function SprintMonthlyPlanning() {
           .mws-table th,.mws-table td {padding:4px;}
           @page {size:A3 landscape;margin:12mm;}
         }
+        /* Responsive refinements: reuse shared HRMS theme tokens without changing form logic. */
+        .mws-page {
+          --mws-accent: var(--primary, var(--primary-color, #5142ce));
+          --mws-surface: var(--surface, var(--card-bg, #ffffff));
+          --mws-surface-soft: var(--surface-secondary, #f8fafc);
+          --mws-border: var(--border, #e2e8f0);
+          --mws-text: var(--text, #202846);
+          --mws-muted: var(--text-muted, #64748b);
+          width:100%;min-width:0;box-sizing:border-box;
+          color:var(--mws-text);
+        }
+        .mws-page * { box-sizing:border-box; }
+        .mws-card,.mws-history,.mws-mobile-activity,.mws-editor {
+          background:var(--mws-surface);border-color:var(--mws-border);
+          color:var(--mws-text);
+        }
+        .mws-card { box-shadow:0 4px 20px rgba(15,23,42,.045); }
+        .mws-head h1 { display:flex;align-items:center;gap:10px;line-height:1.25; }
+        .mws-muted,.mws-field label { color:var(--mws-muted); }
+        .mws-eyebrow { color:var(--mws-accent); }
+        .mws-title-field { grid-column:span 2; }
+        .mws-button { justify-content:center;min-height:42px;white-space:normal;text-align:center; }
+        .mws-primary { background:var(--mws-accent);border-color:var(--mws-accent);color:#fff; }
+        .mws-button:focus-visible,.mws-delete:focus-visible,.mws-row-edit:focus-visible {
+          outline:3px solid var(--mws-accent);outline-offset:3px;
+        }
+        .mws-field input,.mws-editor-grid select,.mws-table input,.mws-table select {
+          background:var(--mws-surface);color:var(--mws-text);border-color:var(--mws-border);
+          min-height:42px;font-size:14px;
+        }
+        .mws-stat { background:var(--mws-surface-soft);border-color:var(--mws-border);flex:1 1 155px; }
+        .mws-stat strong { color:var(--mws-accent); }
+        .mws-status { background:var(--mws-surface-soft);color:var(--mws-accent);border:1px solid var(--mws-border); }
+        .mws-approval { background:var(--mws-surface-soft);color:var(--mws-text); }
+        .mws-scroll { max-width:100%;overscroll-behavior-x:contain; }
+        .mws-mobile-cards,.mws-mobile-hint { display:none; }
+        .mws-row-index { display:block;font-size:12px;font-weight:750;color:var(--mws-accent); }
+        .mws-file-help { margin:14px 0 6px;padding:11px 13px;background:var(--mws-surface-soft);border:1px solid var(--mws-border);border-radius:10px; }
+        .mws-history { overflow-wrap:anywhere; }
+        .mws-history .mws-section-head > div { min-width:0; }
+        @media (max-width:760px) {
+          .mws-page { padding:12px 8px; }
+          .mws-head { align-items:flex-start; }
+          .mws-head h1 { font-size:clamp(20px,5vw,26px); }
+          .mws-card { padding:16px 12px;border-radius:14px; }
+          .mws-title-field { grid-column:auto; }
+          .mws-meta { grid-template-columns:repeat(2,minmax(0,1fr)); }
+          .mws-editor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+          .mws-desktop-hint,.mws-scroll { display:none; }
+          .mws-mobile-hint,.mws-mobile-cards { display:block; }
+          .mws-mobile-cards { margin-top:14px; }
+          .mws-mobile-activity { border:1px solid var(--mws-border);border-radius:13px;padding:14px;margin-bottom:10px; }
+          .mws-mobile-activity-head { display:flex;justify-content:space-between;gap:10px;align-items:flex-start; }
+          .mws-mobile-activity-title { display:flex;flex-direction:column;gap:5px;min-width:0;overflow-wrap:anywhere; }
+          .mws-mobile-activity-title strong { font-size:14px;line-height:1.45; }
+          .mws-mobile-facts { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0; }
+          .mws-mobile-facts > div { min-width:0; }
+          .mws-mobile-facts dt { color:var(--mws-muted);font-size:11px;font-weight:650; }
+          .mws-mobile-facts dd { margin:4px 0 0;font-size:13px;overflow-wrap:anywhere; }
+          .mws-mobile-actions { display:flex;gap:8px;align-items:center; }
+          .mws-mobile-actions .mws-button { flex:1; }
+          .mws-mobile-actions .mws-delete { min-height:42px;min-width:42px;display:grid;place-items:center; }
+          .mws-editor { padding:14px; }
+          .mws-toolbar { align-items:stretch; }
+          .mws-history .mws-toolbar { gap:8px; }
+        }
+        @media (max-width:480px) {
+          .mws-page { padding:10px 4px; }
+          .mws-meta,.mws-editor-grid { grid-template-columns:1fr; }
+          .mws-title-field { grid-column:auto; }
+          .mws-field input,.mws-editor-grid select { width:100%;min-width:0; }
+          .mws-stats { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }
+          .mws-stat { min-width:0;padding:12px; }
+          .mws-stat strong { font-size:18px; }
+          .mws-toolbar > div { width:100%; }
+          .mws-toolbar > div .mws-button { flex:1 1 130px; }
+          .mws-section-head { align-items:flex-start; }
+          .mws-mobile-facts { grid-template-columns:repeat(2,minmax(0,1fr)); }
+          .mws-editor-weeks { gap:12px; }
+        }
+                /* Cleaner desktop planning experience: a readable summary plus one focused editor. */
+        .mws-page { --mws-accent:var(--primary,#5142ce); }
+        .mws-card { border-radius:20px; box-shadow:0 10px 30px rgba(20,30,60,.04); }
+        .mws-head { align-items:flex-start; padding-bottom:9px; }
+        .mws-eyebrow { font-size:11px; letter-spacing:.14em; }
+        .mws-meta { margin:22px 0; }
+        .mws-field input,.mws-editor-grid select { border-radius:11px; padding:11px 13px; }
+        .mws-field label { font-size:13px; letter-spacing:.005em; }
+        .mws-scroll { border-radius:13px; border:1px solid var(--mws-border); }
+        .mws-table { min-width:1950px; }
+        .mws-table td { padding:13px 12px; line-height:1.5; }
+        .mws-table th { font-size:12px; padding:14px 12px; }
+        .mws-row-edit { border-radius:8px; padding:7px 12px; font-size:11px; }
+        .mws-readonly { font-size:12px; }
+        .mws-editor { background:var(--mws-surface-soft); border:1px solid var(--mws-border); border-radius:17px; padding:22px; }
+        .mws-editor-grid { gap:18px; }
+        .mws-editor-grid .mws-field { background:var(--mws-surface); padding:12px; border:1px solid var(--mws-border); border-radius:12px; }
+        .mws-editor-grid .mws-field label { margin:0 0 10px; color:var(--mws-text); font-weight:750; }
+        .mws-editor-grid .mws-field input,.mws-editor-grid .mws-field select { width:100%; }
+        .mws-editor-weeks label { border:1px solid var(--mws-border); background:var(--mws-surface); padding:9px 12px; border-radius:10px; cursor:pointer; }
+        .mws-stats { gap:12px; }
+        .mws-stat { padding:17px 20px; border-radius:13px; }
+        .mws-stat strong { margin-top:8px; font-size:23px; }
+        .mws-button { border-radius:10px; font-size:13px; font-weight:750; padding:11px 16px; transition:transform .12s ease,box-shadow .12s ease; }
+        .mws-button:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 12px rgba(25,35,70,.09); }
+        .mws-primary { box-shadow:0 3px 10px rgba(82,66,206,.15); }
+        .mws-history { padding:20px; border-radius:15px; margin-top:14px; }
+        .mws-history .mws-section-head strong { font-size:15px; }
+        .mws-history .mws-toolbar { margin-top:16px!important; }
+        .mws-status { padding:7px 12px; }
+        .mws-approval { padding:16px; border:1px solid var(--mws-border); border-radius:12px; line-height:1.7; }
+        .mws-guidance { background:var(--mws-surface-soft); border:1px solid var(--mws-border); padding:12px 15px; border-radius:12px; font-size:13px; }
+        .mws-summary-hint { background:var(--mws-surface-soft); border:1px solid var(--mws-border); border-radius:10px; padding:11px 13px; margin-top:12px; font-size:12px; color:var(--mws-muted); }
+        @media(max-width:760px) { .mws-editor-grid .mws-field { padding:10px; } }
+        @media(prefers-reduced-motion:reduce) { .mws-button { transition:none; } .mws-button:hover:not(:disabled) {transform:none;} }
+        @media print {
+           .mws-mobile-cards,.mws-mobile-hint,.mws-file-help { display:none!important; }
+          .mws-scroll { display:block!important; }
+          .mws-table { display:table; }
+          .mws-card,.mws-history { background:#fff; }
+        }
       `}</style>
 
       <div className="mws-head">
         <div>
-          <div className="mws-eyebrow">YourComate ? Workforce Performance</div>
+          <div className="mws-eyebrow">YourComate · Workforce Performance</div>
           <h1><CalendarDays size={25} style={{verticalAlign:'middle'}}/> Monthly Work Plan & Target Sheet</h1>
-          <p className="mws-muted">Plan measurable objectives, deliverables, deadlines and weekly milestones for Team Leader approval.</p>
+          <p className="mws-muted">Set clear monthly priorities, track measurable results and submit your plan to your assigned reviewer.</p>
         </div>
         <button type="button" className="mws-button mws-no-print" onClick={load} disabled={loading}><RefreshCw size={15}/> Refresh</button>
       </div>
@@ -571,7 +758,7 @@ export default function SprintMonthlyPlanning() {
           <div><h2 style={{margin:'0 0 5px',fontSize:19}}>
               {editingId ? 'Edit Monthly Work Plan' : 'New Monthly Work Plan'}
             </h2>
-            <span className="mws-muted">Corporate planning sheet ? Draft</span></div>
+            <span className="mws-muted">Build your plan, save a draft, then submit when ready.</span></div>
           <span className="mws-status">
             {editingId ? editingStatus.toUpperCase() : 'DRAFT'}
           </span>
@@ -581,19 +768,21 @@ export default function SprintMonthlyPlanning() {
           <div className="mws-field"><label htmlFor="mws-month">Planning Month</label>
             <input id="mws-month" type="month" value={month} required
               disabled={Boolean(editingId)} onChange={e => switchMonth(e.target.value)}/></div>
-          <div className="mws-field" style={{gridColumn:'span 2'}}><label htmlFor="mws-title">Plan Title</label>
+          <div className="mws-field mws-title-field"><label htmlFor="mws-title">Plan Title</label>
             <input id="mws-title" value={title} onChange={e => setTitle(e.target.value)} required maxLength={200}
               placeholder="Monthly Department Work Plan"/></div>
-          <div className="mws-field"><label>Approval Authority</label><div className="mws-approval">Assigned Reporting Team Leader</div></div>
+          <div className="mws-field"><label>Approval Authority</label><div className="mws-approval">Your assigned Team Leader or Reporting Officer</div></div>
         </div>
 
         <div className="mws-section-head">
           <h3 style={{margin:0,fontSize:16}}><ClipboardList size={17} style={{verticalAlign:'middle'}}/> Monthly Objectives & Deliverables</h3>
-          <span className="mws-muted">Scroll horizontally to complete all columns</span>
+          <span className="mws-muted mws-desktop-hint">Review activities in the table and use Edit to complete each field below</span>
+          <span className="mws-muted mws-mobile-hint">Tap Edit Activity Details on a card to complete all fields</span>
         </div>
 
-        <SheetTable rows={rows} month={month} onChange={update}
-          onRemove={key => setRows(old => old.filter(row => row.key !== key))}/>
+                 <SheetTable rows={rows} month={month} onChange={update}
+           employeeLabel="Current employee"
+           onRemove={key => setRows(old => old.filter(row => row.key !== key))}/>
 
         {monthlyTemplateLoading && (
           <p className="mws-muted">Loading department planning columns...</p>
@@ -603,9 +792,13 @@ export default function SprintMonthlyPlanning() {
             {monthlyTemplateError}
           </p>
         )}
+        <p className="mws-muted mws-file-help">
+                     Attachments (when configured for your department): save the draft first, open Edit Sheet, upload the required files, and then submit for approval.
+        </p>
         <SprintMonthlyCustomFields
           template={activeMonthlyTemplate}
           rows={rows}
+          planId={editingId}
           onChange={updateCustomMonthlyField}
           disabled={saving || monthlyTemplateLoading}
         />
@@ -613,7 +806,7 @@ export default function SprintMonthlyPlanning() {
         <div className="mws-toolbar mws-no-print" style={{marginTop:12}}>
           <button type="button" className="mws-button" disabled={rows.length >= 100}
             onClick={() => setRows(old => [...old, makeRow(month)])}><Plus size={15}/> Add Activity Row</button>
-          <span className="mws-muted">Weekly milestone selections prepare the monthly work breakdown.</span>
+                     <span className="mws-muted">Add one row per measurable activity. Choose its milestone weeks using the editor.</span>
         </div>
 
         <div className="mws-stats">
@@ -623,7 +816,7 @@ export default function SprintMonthlyPlanning() {
         </div>
 
         <div className="mws-toolbar mws-no-print">
-          <span className="mws-muted">Drafts are created on Save. Submission is a separate action below.</span>
+                     <span className="mws-muted mws-guidance">Saving creates a draft only. Use Submit for Approval on the saved plan when everything is ready.</span>
           <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
             <button type="button" className="mws-button" onClick={() => window.print()}><Printer size={15}/> Print</button>
             {editingId && (
@@ -640,12 +833,13 @@ export default function SprintMonthlyPlanning() {
       <SprintMonthlyApprovalQueue month={month} />
       <SprintMonthlyTeamCompilation month={month} />
 
-      <section className="mws-card">
-        <div className="mws-section-head">
-          <h2 style={{fontSize:19,margin:0}}>My Monthly Planning Sheets</h2>
+             {directoryWarning && <p className="mws-muted" role="status">Employee directory is unavailable. Employee names will appear when access is restored.</p>}
+       <section className="mws-card">
+                 <div className="mws-section-head">
+           <h2 style={{fontSize:19,margin:0}}>My Monthly Planning Sheets</h2>
           <span className="mws-muted">Drafts, approvals and existing records</span>
         </div>
-        {loading ? <p className="mws-muted">Loading monthly planning sheets?</p> :
+        {loading ? <p className="mws-muted" role="status">Loading monthly planning sheets…</p> :
           plans.length === 0 ? <p className="mws-muted">No monthly plans have been created yet.</p> :
           plans.map(plan => {
             const id = String(plan._id || plan.id || '');
@@ -661,7 +855,7 @@ export default function SprintMonthlyPlanning() {
               <article key={id} className="mws-history">
                 <div className="mws-section-head">
                   <div><strong>{plan.title || 'Monthly Plan'}</strong>
-                    <div className="mws-muted">{plan.month} ? {sheetRows.length} activities</div></div>
+                    <div className="mws-muted">{plan.month} · {sheetRows.length} activities</div></div>
                   <span className="mws-status">{labels[status] || status}</span>
                 </div>
                 <div className="mws-toolbar mws-no-print" style={{justifyContent:'flex-start',marginTop:12}}>
@@ -669,7 +863,7 @@ export default function SprintMonthlyPlanning() {
                     onClick={() => setExpandedId(expanded ? '' : id)}>
                     <ChevronDown size={14}/>{expanded ? 'Hide Sheet' : 'View Sheet'}
                   </button>
-                  <button type="button" className="mws-button" onClick={() => exportCsv(plan, sheetRows)}>
+                  <button type="button" className="mws-button" onClick={() => exportCsv(plan, sheetRows, employeeLookup)}>
                     <Download size={14}/> Export CSV
                   </button>
                   {['draft', 'rejected'].includes(status) && (
@@ -686,14 +880,18 @@ export default function SprintMonthlyPlanning() {
                   )}
                 </div>
                 {expanded && <div style={{marginTop:15}}>
-                  <SheetTable rows={sheetRows} month={plan.month} readOnly employeeId={plan.employee_id} template={plan.sprint_template_snapshot || null} />
+                  <SheetTable rows={sheetRows} month={plan.month} readOnly employeeId={plan.employee_id}
+                    employeeLabel={employeeName(employeeLookup, plan.employee_id) === 'Employee profile unavailable'
+                      ? 'Employee profile unavailable'
+                      : [employeeName(employeeLookup, plan.employee_id), employeeMeta(employeeLookup, plan.employee_id)].filter(Boolean).join(' · ')}
+                    template={plan.sprint_template_snapshot || null} />
                   <div className="mws-approval">
                     <strong>Approval History</strong>
                     {(plan.approval_history || []).length === 0
                       ? <p>No approval actions recorded.</p>
                       : (plan.approval_history || []).map((entry,index) => (
-                        <p key={index}>{entry.action || 'Action'} ? {entry.at ? new Date(entry.at).toLocaleString() : 'Date unavailable'}
-                          {entry.remarks ? ` ? ${entry.remarks}` : ''}</p>
+                        <p key={index}>{entry.action || 'Action'} · {entry.at ? new Date(entry.at).toLocaleString() : 'Date unavailable'}
+                          {entry.remarks ? ` · ${entry.remarks}` : ''}</p>
                       ))}
                   </div>
                 </div>}

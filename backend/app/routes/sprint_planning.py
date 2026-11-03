@@ -1344,6 +1344,39 @@ def _monthly_plan_reviewer_kind(db, plan):
     return _monthly_approval_kind(db, plan['employee_id'])
 
 
+def _weekly_plan_reviewer_kind(db, plan):
+    """Determine the approver for new and legacy weekly plans.
+
+    New submissions pin approval_kind and approver_employee_id. Older
+    pending weekly records did not save either field. Their linked,
+    previously approved monthly plan supplies the historical reviewer
+    kind where available; otherwise resolve the server-side owner roles.
+    Never trust a role or reviewer supplied by the request client.
+    """
+    saved_kind = str(plan.get('approval_kind') or '').strip().lower()
+    if saved_kind in ('tl', 'ro'):
+        return saved_kind
+
+    owner_id = str(plan.get('employee_id') or '')
+    linked_monthly_id = _oid(plan.get('monthly_plan_id'))
+    if linked_monthly_id is not None and owner_id:
+        monthly_plan = db.sprint_monthly_plans.find_one({
+            '_id': linked_monthly_id,
+            'tenant_id': _tenant(),
+            'employee_id': owner_id,
+            'status': 'approved',
+            'is_deleted': {'$ne': True},
+        })
+        if monthly_plan:
+            monthly_kind = str(
+                monthly_plan.get('approval_kind') or ''
+            ).strip().lower()
+            if monthly_kind in ('tl', 'ro'):
+                return monthly_kind
+
+    return _monthly_approval_kind(db, owner_id)
+
+
 @sprint_planning_bp.route('/api/v1/sprint-planning/monthly', methods=['POST'])
 @current_user_required
 def create_monthly_plan():
@@ -1355,6 +1388,12 @@ def create_monthly_plan():
         _sprint_apply_monthly_template(
             db, body, document, employee=_employee(db)
         )
+        # STEP 44B.53G.8C.2
+        from app.services.sprint_monthly_row_identity import (
+            assign_monthly_row_ids,
+        )
+        assign_monthly_row_ids(document)
+
         if db.sprint_monthly_plans.find_one({'tenant_id': _tenant(), 'employee_id': employee_id,
                                             'month': document['month'], 'is_deleted': {'$ne': True}}):
             return _error('Monthly plan already exists', 409)
@@ -1398,6 +1437,40 @@ def update_monthly_plan(plan_id):
             db, body, replacement, employee=_employee(db),
             existing=existing,
         )
+
+        # STEP 44B.53G.8C.2
+        from app.services.sprint_monthly_row_identity import (
+            assign_monthly_row_ids,
+        )
+        assign_monthly_row_ids(replacement, existing)
+
+        # STEP 44B.53G.8D.2
+        # Verify every nonempty monthly file reference before saving.
+        from app.services.sprint_attachment_references import (
+            validate_file_custom_values,
+        )
+        from app.services.sprint_attachment_binding import (
+            SprintAttachmentBindingError,
+        )
+
+        candidate = {
+            **replacement,
+            '_id': existing['_id'],
+        }
+
+        try:
+            for row in candidate.get('sheet_rows') or []:
+                validate_file_custom_values(
+                    attachments=db.sprint_attachments,
+                    plan=candidate,
+                    tenant_id=_tenant(),
+                    employee_id=employee_id,
+                    plan_type='monthly',
+                    row_id=row.get('row_id'),
+                    values=row.get('custom_values') or {},
+                )
+        except SprintAttachmentBindingError as error:
+            return _error(str(error), 400)
 
         from pymongo import ReturnDocument
 
@@ -1469,6 +1542,139 @@ def create_weekly_plan():
     return _safe_call(action)
 
 
+# STEP 44B.53G.8E.2
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/weekly/<plan_id>/activities/'
+    '<activity_id>/custom-fields',
+    methods=['PUT'],
+)
+@current_user_required
+def update_weekly_activity_custom_fields(plan_id, activity_id):
+    """Update only one saved weekly draft activity's custom values."""
+    def action():
+        from pymongo import ReturnDocument
+        from app.services.sprint_feature_settings import (
+            sprint_planning_enabled,
+        )
+        from app.services.sprint_template_values import (
+            validate_template_values,
+        )
+        from app.services.sprint_template_service import (
+            SprintTemplateError,
+        )
+        from app.services.sprint_attachment_references import (
+            validate_file_custom_values,
+        )
+        from app.services.sprint_attachment_binding import (
+            SprintAttachmentBindingError,
+        )
+
+        db = get_db()
+        tenant = _tenant()
+        employee_id = _own_id(db)
+
+        if not sprint_planning_enabled(db, tenant):
+            return _error('Sprint Planning is disabled', 403)
+
+        plan = _document(db, 'sprint_weekly_plans', plan_id)
+        if not plan:
+            return _error('Weekly plan not found', 404)
+
+        if str(plan.get('employee_id')) != employee_id:
+            return _error('Only the plan owner may edit fields', 403)
+
+        if plan.get('status') not in ('draft', 'rejected'):
+            return _error('Only draft or rejected plans may be edited', 409)
+
+        template = plan.get('sprint_template_snapshot') or {}
+        columns = template.get('columns')
+        if not isinstance(columns, list) or not columns:
+            return _error('Saved weekly template is required', 409)
+
+        activity = next(
+            (
+                item for item in plan.get('activities', [])
+                if isinstance(item, dict)
+                and str(item.get('activity_id')) == activity_id
+            ),
+            None,
+        )
+        if activity is None:
+            return _error('Weekly activity not found', 404)
+
+        body = _payload()
+        if not isinstance(body, dict):
+            return _error('JSON object required', 400)
+
+        if set(body) != {'custom_values'}:
+            return _error('Only custom_values may be changed', 400)
+
+        try:
+            validated = validate_template_values(
+                columns, body['custom_values'],
+                allow_missing_required_files=True,
+            )
+            validated = validate_file_custom_values(
+                attachments=db.sprint_attachments,
+                plan=plan,
+                tenant_id=tenant,
+                employee_id=employee_id,
+                plan_type='weekly',
+                activity_id=activity_id,
+                values=validated,
+            )
+        except (
+            SprintTemplateError,
+            SprintAttachmentBindingError,
+        ) as error:
+            return _error(str(error), 400)
+
+        # Atomic condition protects status and source version.
+        # Update just the specified activity's custom values.
+        updated = db.sprint_weekly_plans.find_one_and_update(
+            {
+                '_id': plan['_id'],
+                'tenant_id': tenant,
+                'employee_id': employee_id,
+                'status': plan['status'],
+                'is_deleted': {'$ne': True},
+                'updated_at': plan['updated_at'],
+                'activities.activity_id': activity_id,
+            },
+            {
+                '$set': {
+                    'activities.$.custom_values': validated,
+                    'updated_at': utc_now(),
+                },
+                '$push': {
+                    'approval_history': {
+                        'action': 'draft_custom_fields_updated',
+                        'actor_id': _actor(),
+                        'activity_id': activity_id,
+                        'at': utc_now(),
+                    },
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+        if updated is None:
+            return _error(
+                'Plan changed; refresh and retry', 409,
+            )
+
+        audit(
+            'update_custom_fields',
+            'sprint_weekly_activity',
+            activity_id,
+            {'weekly_plan_id': plan_id},
+        )
+        return _serialize(updated)
+
+    return _safe_call(action)
+
+
+
 @sprint_planning_bp.route('/api/v1/sprint-planning/<kind>/<plan_id>/submit', methods=['POST'])
 @current_user_required
 def submit_plan(kind, plan_id):
@@ -1482,11 +1688,58 @@ def submit_plan(kind, plan_id):
             return _error('Forbidden', 403)
         if doc['status'] not in ('draft', 'rejected'):
             return _error('Only draft or rejected plans may be submitted', 409)
-        fields = {'status': 'pending_approval', 'updated_at': utc_now()}
+        # STEP 44B.53G.8F.24
+        # Drafts may omit required files, but submission may not.
         if kind == 'monthly':
+            from app.services.sprint_template_values import (
+                validate_template_values,
+            )
+            from app.services.sprint_template_service import (
+                SprintTemplateError,
+            )
+
+            snapshot = doc.get('sprint_template_snapshot')
+            if snapshot:
+                columns = snapshot.get('columns') or []
+
+                for index, row in enumerate(
+                    doc.get('sheet_rows') or [], start=1
+                ):
+                    try:
+                        validate_template_values(
+                            columns,
+                            row.get('custom_values') or {},
+                        )
+                    except SprintTemplateError as error:
+                        return _error(
+                            f'Monthly row {index}: {error}', 409
+                        )
+
+        # Reject incomplete weekly file fields before requesting approval.
+        # Saved drafts may omit them until the employee uploads each file.
+        if kind == 'weekly':
+            from app.services.sprint_template_values import validate_template_values
+            from app.services.sprint_template_service import SprintTemplateError
+
+            snapshot = doc.get('sprint_template_snapshot')
+            if snapshot:
+                for index, activity in enumerate(doc.get('activities') or [], start=1):
+                    try:
+                        validate_template_values(
+                            snapshot.get('columns') or [],
+                            activity.get('custom_values') or {},
+                        )
+                    except SprintTemplateError as error:
+                        return _error(f'Weekly activity {index}: {error}', 409)
+
+        fields = {'status': 'pending_approval', 'updated_at': utc_now()}
+        # Both individual plan types require a distinct, server-resolved
+        # reviewer. Previous weekly submissions did not pin an approver,
+        # causing Team Leaders' weekly plans to route back to a TL.
+        if kind in ('monthly', 'weekly'):
             owner = _employee(db)
             if owner is None or str(owner['_id']) != str(doc['employee_id']):
-                return _error('Monthly plan owner mismatch', 403)
+                return _error(f'{kind.capitalize()} plan owner mismatch', 403)
 
             roles = {
                 str(role).strip().lower().replace('-', '_').replace(' ', '_')
@@ -1556,14 +1809,19 @@ def review_plan(kind, plan_id):
             return _error('Plan not found', 404)
         approval_kind = (
             _monthly_plan_reviewer_kind(db, doc)
-            if kind == 'monthly' else 'tl'
+            if kind == 'monthly'
+            else _weekly_plan_reviewer_kind(db, doc)
         )
-        if kind == 'monthly' and doc.get('approver_employee_id'):
+        if doc.get('approver_employee_id'):
+            # Pinned reviewers are checked against their authenticated,
+            # same-tenant employee identity; never permit self-approval.
             try:
                 authorised = _monthly_can_review_pinned(db, doc)
             except (PlanningError, ValueError, TypeError):
                 authorised = False
         else:
+            # Legacy pending weekly plans without a pinned reviewer:
+            # resolve the reviewer kind from their approved monthly plan.
             authorised = _manager_for(
                 db, doc['employee_id'], approval_kind
             )
@@ -1609,6 +1867,137 @@ def list_plans(kind):
     return _safe_call(action)
 
 
+# STEP 44B.53G.8F.16-R1
+# Prepare the immutable daily template before first work reporting.
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/weekly/<plan_id>/activities/'
+    '<activity_id>/prepare-daily-template',
+    methods=['POST'],
+)
+@current_user_required
+def prepare_daily_activity_template(plan_id, activity_id):
+    def action():
+        from app.services.sprint_feature_settings import (
+            sprint_planning_enabled,
+        )
+        from app.services.sprint_template_service import (
+            SprintTemplateError,
+        )
+        from app.services.sprint_template_values import (
+            snapshot_template,
+        )
+
+        db = get_db()
+        tenant = _tenant()
+
+        if not sprint_planning_enabled(db, tenant):
+            return _error('Sprint Planning is disabled', 403)
+
+        employee = _employee(db)
+        if employee is None:
+            return _error('Employee profile required', 403)
+
+        doc = _document(db, 'sprint_weekly_plans', plan_id)
+        if doc is None:
+            return _error('Weekly plan not found', 404)
+
+        if str(doc.get('tenant_id')) != str(tenant):
+            return _error('Forbidden', 403)
+
+        if str(doc.get('employee_id')) != str(_own_id(db)):
+            return _error('Forbidden', 403)
+
+        if doc.get('status') != 'approved':
+            return _error('Weekly plan must be approved', 409)
+
+        activity = next(
+            (
+                item for item in (doc.get('activities') or [])
+                if item.get('activity_id') == activity_id
+            ),
+            None,
+        )
+        if activity is None:
+            return _error('Activity not found', 404)
+
+        # An existing snapshot must never be overwritten.
+        if activity.get('daily_template_snapshot'):
+            return _serialize(doc)
+
+        try:
+            department = _sprint_employee_department(employee)
+            latest = _sprint_latest_department_template(
+                db, tenant, department, 'daily',
+            )
+            if latest is None:
+                return _error(
+                    'No daily reporting template is assigned', 409,
+                )
+
+            frozen = snapshot_template(latest)
+            if frozen.get('plan_type') != 'daily':
+                return _error('Daily template type mismatch', 409)
+
+            if (
+                str(frozen.get('department') or '').casefold()
+                != department.casefold()
+            ):
+                return _error(
+                    'Daily template does not match department', 409,
+                )
+        except SprintTemplateError as error:
+            return _error(str(error), 400)
+
+        result = db.sprint_weekly_plans.update_one(
+            {
+                '_id': doc['_id'],
+                'tenant_id': tenant,
+                'employee_id': _own_id(db),
+                'status': 'approved',
+                'is_deleted': {'$ne': True},
+                'activities': {
+                    '$elemMatch': {
+                        'activity_id': activity_id,
+                        'daily_template_snapshot': None,
+                    },
+                },
+            },
+            {
+                '$set': {
+                    'activities.$.daily_template_snapshot': frozen,
+                    'updated_at': utc_now(),
+                },
+            },
+        )
+
+        updated = _document(
+            db, 'sprint_weekly_plans', plan_id,
+        )
+        if updated is None:
+            return _error('Weekly plan not found', 404)
+
+        if not result.matched_count:
+            current = next(
+                (
+                    item for item in (
+                        updated.get('activities') or []
+                    )
+                    if item.get('activity_id') == activity_id
+                ),
+                None,
+            )
+            if not current or not current.get(
+                'daily_template_snapshot'
+            ):
+                return _error(
+                    'Activity changed; reload and try again', 409,
+                )
+
+        return _serialize(updated)
+
+    return _safe_call(action)
+
+
 @sprint_planning_bp.route('/api/v1/sprint-planning/weekly/<plan_id>/activities/<activity_id>/report', methods=['PATCH'])
 @current_user_required
 def report_activity(plan_id, activity_id):
@@ -1633,6 +2022,40 @@ def report_activity(plan_id, activity_id):
         daily_fields = _sprint_validate_daily_template(
             db, body, activity, employee=_employee(db)
         )
+        # STEP 44B.53G.8D.4
+        # Verify saved daily file references against the current
+        # tenant, owner, plan, activity and configured file columns.
+        from app.services.sprint_attachment_references import (
+            validate_file_custom_values,
+        )
+        from app.services.sprint_attachment_binding import (
+            SprintAttachmentBindingError,
+        )
+
+        if 'daily_custom_values' in daily_fields:
+            # Daily templates may be frozen for the first time by
+            # this report; validate against the resulting snapshot.
+            candidate = dict(doc)
+            candidate['activities'] = [
+                {**item, **daily_fields}
+                if item.get('activity_id') == activity_id
+                else item
+                for item in doc['activities']
+            ]
+
+            try:
+                validate_file_custom_values(
+                    attachments=db.sprint_attachments,
+                    plan=candidate,
+                    tenant_id=_tenant(),
+                    employee_id=_own_id(db),
+                    plan_type='daily',
+                    activity_id=activity_id,
+                    values=daily_fields['daily_custom_values'],
+                )
+            except SprintAttachmentBindingError as error:
+                return _error(str(error), 400)
+
         changes = {f'activities.$.{key}': value for key, value in patch.items()}
         changes.update({
             f'activities.$.{key}': value
@@ -2381,9 +2804,32 @@ def get_sprint_approval_inbox():
                     # permission and approval checks.
                     allowed_actions.append('apply_change')
 
-                if kind in ('monthly', 'weekly'):
+                if kind == 'monthly':
+                    # Preserve the existing monthly inbox behavior.
                     if can_tl:
                         allowed_actions.append('tl_review')
+                elif kind == 'weekly':
+                    try:
+                        reviewer_kind = _weekly_plan_reviewer_kind(
+                            db, document
+                        )
+                        if document.get('approver_employee_id'):
+                            weekly_authorised = _monthly_can_review_pinned(
+                                db, document
+                            )
+                        else:
+                            weekly_authorised = _manager_for(
+                                db, employee_id, reviewer_kind
+                            )
+                    except (PlanningError, ValueError, TypeError):
+                        weekly_authorised = False
+                        reviewer_kind = None
+
+                    if weekly_authorised and document.get('status') == 'pending_approval':
+                        allowed_actions.append(
+                            'ro_review' if reviewer_kind == 'ro'
+                            else 'tl_review'
+                        )
                 else:
                     if (
                         can_tl
@@ -3546,6 +3992,7 @@ def _sprint_apply_monthly_template(
             cleaned_row["custom_values"] = validate_template_values(
                 frozen_snapshot["columns"],
                 raw_row.get("custom_values", {}),
+                allow_missing_required_files=True,
             )
         except SprintTemplateError as exc:
             raise PlanningError(
@@ -3620,6 +4067,7 @@ def _sprint_apply_weekly_template(
             cleaned["custom_values"] = validate_template_values(
                 snapshot["columns"],
                 raw.get("custom_values", {}),
+                allow_missing_required_files=True,
             )
         except SprintTemplateError as exc:
             raise PlanningError(
@@ -3703,3 +4151,391 @@ def _sprint_validate_daily_template(db, body, activity, *, employee):
         "daily_custom_values": values,
         "daily_template_snapshot": frozen,
     }
+
+
+# STEP 44B.53G.6A-R3 - Tenant-scoped Sprint attachment upload
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/attachments/<plan_type>/<plan_id>',
+    methods=['POST']
+)
+@current_user_required
+def upload_sprint_attachment(plan_type, plan_id):
+    from pathlib import Path
+    from flask import current_app, jsonify, request
+    from app.services.sprint_attachment_service import (
+        SprintAttachmentError,
+        MAX_SPRINT_ATTACHMENT_BYTES,
+        safe_attachment_filename,
+        safe_tenant_segment,
+        validate_attachment_content,
+    )
+    from app.services.sprint_attachment_storage import (
+        save_sprint_attachment,
+    )
+    from app.services.sprint_attachment_field_policy import (
+        SprintAttachmentFieldError,
+        validate_attachment_field,
+    )
+    from app.services.sprint_attachment_metadata import (
+        PLAN_COLLECTIONS,
+        SprintAttachmentOwnershipError,
+        validate_upload_ownership,
+        build_sprint_attachment_metadata,
+    )
+    from app.services.sprint_feature_settings import (
+        sprint_planning_enabled,
+    )
+
+    def action():
+        db = get_db()
+        tenant = _tenant()
+
+        if not sprint_planning_enabled(db, tenant):
+            return jsonify({
+                'message': 'Sprint Planning is disabled'
+            }), 403
+
+        employee = _employee(db)
+
+        if employee is None:
+            return jsonify({
+                'message': 'Employee profile is required'
+            }), 403
+
+        if plan_type not in PLAN_COLLECTIONS:
+            return jsonify({
+                'message': 'Unsupported plan type'
+            }), 400
+
+        activity_id = str(
+            request.form.get('activity_id') or ''
+        ).strip()
+
+        field_key = str(
+            request.form.get('field_key') or ''
+        ).strip()
+
+        # STEP 44B.53G.8C.3
+        row_id = str(
+            request.form.get('row_id') or ''
+        ).strip()
+
+        if plan_type == 'monthly':
+            if not row_id or activity_id:
+                return jsonify({
+                    'message': 'Monthly upload requires row_id only'
+                }), 400
+        elif row_id or not activity_id:
+            return jsonify({
+                'message': 'Activity upload requires activity_id only'
+            }), 400
+
+        plan = _document(
+            db,
+            PLAN_COLLECTIONS[plan_type],
+            plan_id,
+        )
+
+        try:
+            validate_upload_ownership(
+                plan,
+                employee,
+                tenant,
+                plan_type,
+                activity_id=activity_id or None,
+            )
+        except SprintAttachmentOwnershipError as error:
+            return jsonify({
+                'message': str(error)
+            }), 403
+
+        # STEP 44B.53G.6C - Validate server-saved file field
+        try:
+            validate_attachment_field(
+                plan,
+                plan_type,
+                field_key,
+                activity_id=activity_id or None,
+                row_id=row_id or None,
+            )
+        except SprintAttachmentFieldError as error:
+            return jsonify({
+                'message': str(error)
+            }), 400
+
+        upload = request.files.get('file')
+
+        if not upload or not upload.filename:
+            return jsonify({
+                'message': 'Attachment file required'
+            }), 400
+
+        try:
+            filename = safe_attachment_filename(
+                upload.filename
+            )
+
+            content = upload.stream.read(
+                MAX_SPRINT_ATTACHMENT_BYTES + 1
+            )
+
+            validate_attachment_content(
+                filename, content
+            )
+
+        except SprintAttachmentError as error:
+            return jsonify({
+                'message': str(error)
+            }), 400
+
+        storage_root = (
+            current_app.config.get(
+                'SPRINT_ATTACHMENT_UPLOAD_FOLDER'
+            )
+            or str(
+                Path(current_app.instance_path)
+                / 'sprint_attachments'
+            )
+        )
+
+        root = Path(storage_root)
+        storage = None
+
+        try:
+            root.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            storage = save_sprint_attachment(
+                root,
+                tenant,
+                filename,
+                content,
+            )
+
+            metadata = build_sprint_attachment_metadata(
+                tenant_id=tenant,
+                employee_id=str(employee['_id']),
+                plan_id=str(plan['_id']),
+                plan_type=plan_type,
+                activity_id=activity_id or None,
+                field_key=field_key or None,
+                row_id=row_id or None,
+                storage_metadata=storage,
+            )
+
+            db.sprint_attachments.insert_one(metadata)
+
+        except Exception:
+            if storage:
+                stored_path = (
+                    root
+                    / safe_tenant_segment(tenant)
+                    / storage['storage_id']
+                )
+                stored_path.unlink(missing_ok=True)
+            raise
+
+        return jsonify({
+            'attachment_id': metadata['attachment_id'],
+            'plan_id': metadata['plan_id'],
+            'plan_type': metadata['plan_type'],
+            'activity_id': metadata['activity_id'],
+            'row_id': metadata['row_id'],
+            'field_key': metadata['field_key'],
+            'original_filename': metadata['original_filename'],
+            'size_bytes': metadata['size_bytes'],
+        }), 201
+
+    return _safe_call(action)
+
+
+# STEP 44B.53G.7A - Authenticated Sprint attachment download
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/attachments/<attachment_id>/download',
+    methods=['GET']
+)
+@current_user_required
+def download_sprint_attachment(attachment_id):
+    from pathlib import Path
+    from io import BytesIO
+    from flask import current_app, jsonify, send_file
+    from app.services.sprint_attachment_access import (
+        can_access_sprint_attachment,
+        validate_sprint_attachment_scope,
+    )
+    from app.services.sprint_attachment_metadata import (
+        PLAN_COLLECTIONS,
+    )
+    from app.services.sprint_attachment_storage import (
+        read_sprint_attachment,
+    )
+    from app.services.sprint_attachment_service import (
+        SprintAttachmentError,
+    )
+
+    def action():
+        db = get_db()
+        tenant = _tenant()
+
+        attachment = db.sprint_attachments.find_one({
+            'attachment_id': attachment_id,
+            'tenant_id': tenant,
+            'is_deleted': {'$ne': True},
+        })
+
+        if not attachment:
+            return jsonify({
+                'message': 'Attachment not found'
+            }), 404
+
+        plan_type = attachment.get('plan_type')
+        plan_id = attachment.get('plan_id')
+
+        if plan_type not in PLAN_COLLECTIONS:
+            return jsonify({
+                'message': 'Invalid attachment scope'
+            }), 404
+
+        plan = _document(
+            db,
+            PLAN_COLLECTIONS[plan_type],
+            plan_id,
+        )
+
+        if not plan:
+            return jsonify({
+                'message': 'Planning record not found'
+            }), 404
+
+        # STEP 44B.53G.7C - Verify the real parent plan
+        # belongs to the same tenant and attachment owner.
+        if (
+            str(plan.get('tenant_id') or '') != str(tenant)
+            or str(plan.get('employee_id') or '')
+               != str(attachment.get('employee_id') or '')
+            or plan.get('is_deleted') is True
+        ):
+            return jsonify({
+                'message': 'Planning record not found'
+            }), 404
+
+        if not validate_sprint_attachment_scope(
+            attachment,
+            tenant,
+            plan_type,
+            str(plan['_id']),
+        ):
+            return jsonify({
+                'message': 'Attachment scope mismatch'
+            }), 403
+
+        employee = _employee(db)
+
+        actor_roles = _roles()
+
+        # STEP 44B.53G.7D.3
+        # Resolve the actual attachment owner within this tenant.
+        # Never trust supervisor IDs supplied in planning records.
+        from app.services.sprint_attachment_hierarchy import (
+            attachment_hierarchy_decision,
+        )
+
+        owner_oid = _oid(attachment.get('employee_id'))
+
+        if owner_oid is None:
+            return jsonify({
+                'message': 'Attachment owner not found'
+            }), 404
+
+        owner_employee = db.employees.find_one({
+            '_id': owner_oid,
+            'tenant_id': tenant,
+            'is_deleted': {'$ne': True},
+        })
+
+        if not owner_employee:
+            return jsonify({
+                'message': 'Attachment owner not found'
+            }), 404
+
+        if str(owner_employee.get('_id')) != str(
+            attachment.get('employee_id')
+        ):
+            return jsonify({
+                'message': 'Attachment owner mismatch'
+            }), 404
+
+        hierarchy_result = attachment_hierarchy_decision(
+            owner_employee,
+            employee,
+            tenant,
+        )
+
+        # Use only relationships verified from HRMS records.
+        access_record = dict(attachment)
+        access_record.pop(
+            'team_leader_employee_id', None
+        )
+        access_record.pop(
+            'reporting_officer_employee_id', None
+        )
+
+        if hierarchy_result == 'team_leader':
+            access_record['team_leader_employee_id'] = str(
+                employee['_id']
+            )
+
+        if hierarchy_result == 'reporting_officer':
+            access_record['reporting_officer_employee_id'] = str(
+                employee['_id']
+            )
+
+        if not can_access_sprint_attachment(
+            access_record,
+            employee,
+            tenant,
+            roles=actor_roles,
+        ):
+            return jsonify({
+                'message': 'You are not permitted to download this file'
+            }), 403
+
+        storage_root = (
+            current_app.config.get(
+                'SPRINT_ATTACHMENT_UPLOAD_FOLDER'
+            )
+            or str(
+                Path(current_app.instance_path)
+                / 'sprint_attachments'
+            )
+        )
+
+        try:
+            contents = read_sprint_attachment(
+                storage_root,
+                tenant,
+                attachment['storage_id'],
+            )
+        except SprintAttachmentError:
+            return jsonify({
+                'message': 'Attachment cannot be retrieved'
+            }), 404
+
+        from werkzeug.utils import secure_filename
+
+        filename = secure_filename(
+            attachment.get('original_filename')
+            or 'attachment'
+        )
+
+        return send_file(
+            BytesIO(contents),
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/octet-stream',
+            max_age=0,
+        )
+
+    return _safe_call(action)

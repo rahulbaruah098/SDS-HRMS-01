@@ -1902,7 +1902,7 @@ export async function api(
   let response;
 
   try {
-    const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+    const { timeoutMs: _timeoutMs, responseType: _responseType, ...fetchOptions } = options;
 
     response = await fetch(buildUrl(path), {
       ...fetchOptions,
@@ -1919,7 +1919,13 @@ export async function api(
     clearTimeout(timeout);
   }
 
-  const data = normalizeApiPayload(await parseResponse(response));
+  // STEP 44B.53G.8F.5-R3
+  // Do not consume successful binary responses as JSON or text.
+  // Error responses retain the established HTTP error pipeline.
+  const wantsBlob = options.responseType === 'blob';
+  const data = wantsBlob && response.ok
+    ? {}
+    : normalizeApiPayload(await parseResponse(response));
 
 if (response.status === 401) {
   const refreshToken = getRefreshToken();
@@ -1980,7 +1986,7 @@ if (response.status === 401) {
     );
   }
 
-  return data;
+  return wantsBlob ? response.blob() : data;
 }
 
 export function getApiBase() {

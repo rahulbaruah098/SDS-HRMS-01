@@ -22,7 +22,9 @@ def _value_is_missing(value):
     return value is None or value == ""
 
 
-def validate_template_values(columns, values):
+def validate_template_values(
+    columns, values, *, allow_missing_required_files=False
+):
     """Return validated values or reject unknown/invalid fields."""
     definitions = normalise_columns(columns)
 
@@ -49,6 +51,14 @@ def validate_template_values(columns, values):
         value = values.get(key)
 
         if _value_is_missing(value):
+            # STEP 44B.53G.8F.24
+            # Draft creation needs a saved plan/row ID first.
+            if (
+                allow_missing_required_files
+                and field_type == "file"
+            ):
+                validated[key] = None
+                continue
             if column["required"]:
                 raise SprintTemplateError(
                     f"{label} is required"

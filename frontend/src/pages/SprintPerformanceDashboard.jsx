@@ -1,172 +1,162 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, BarChart3, CalendarDays, CheckCircle2,
-  Clock3, AlertCircle, FileCheck2, RefreshCw,
-  ListTodo, TrendingUp
+  Activity, BarChart3, CheckCircle2, Clock3, AlertCircle,
+  FileCheck2, RefreshCw, ListTodo, TrendingUp, CalendarDays,
+  ArrowUpRight, Info, Target, CircleDot, Sparkles
 } from 'lucide-react';
 import { getSprintEmployeeMetrics } from '../api/sprintPlanning';
 
+// The API is the single source of truth. Animations only present returned values:
+// there are no invented activities, live updates, or simulated performance figures.
 const currentMonth = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 };
-
-const number = (value) => {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : 0;
+const num = value => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 };
-
-const percentage = (value) => Math.min(100, Math.max(0, number(value)));
-
-const unwrap = (response) => {
-  const first = response?.data ?? response;
-  return first?.data && !first?.counts ? first.data : first;
+const pct = value => Math.min(100, Math.max(0, num(value)));
+const unwrap = response => {
+  const result = response?.data ?? response;
+  return result?.data && !result?.counts ? result.data : result;
 };
-
-const formatDate = (date) => {
-  if (!date) return '';
-  const parts = String(date).split('-');
-  return parts.length === 3 ? `${parts[2]}/${parts[1]}` : String(date);
+const shortDate = value => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
+  return match ? `${match[3]}/${match[2]}` : String(value || '');
 };
-
-const theme = {
-  completed: '#16a34a',
-  progress: '#f59e0b',
-  incomplete: '#ef4444',
-  unreported: '#94a3b8',
-  primary: '#2563eb'
+const colors = {
+  purple: '#6354d9', blue: '#5069d7', green: '#15976a',
+  amber: '#d48d2e', red: '#d65a65', slate: '#8a96b0'
 };
+const workItems = [
+  ['planned', 'Planned', ListTodo, 'purple', 'Assigned approved activities'],
+  ['completed', 'Completed', CheckCircle2, 'green', 'Activities marked completed'],
+  ['in_progress', 'In progress', Clock3, 'amber', 'Work still underway'],
+  ['not_completed', 'Not completed', AlertCircle, 'red', 'Reported unfinished work'],
+  ['unreported', 'Not reported', Activity, 'slate', 'Awaiting daily reporting'],
+  ['completed_with_evidence', 'With evidence', FileCheck2, 'blue', 'Completed with a reference']
+];
 
-function MetricCard({ label, value, icon: Icon, color, detail }) {
+function Metric({ item, count, index }) {
+  const [key, label, Icon, tone, help] = item;
   return (
-    <div className="card" style={{
-      padding: 19, borderRadius: 14, minWidth: 0,
-      animation: 'sprintFade .45s ease both'
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{
-          width: 38, height: 38, display: 'grid', placeItems: 'center',
-          background: `${color}16`, color, borderRadius: 11
-        }}>
-          <Icon size={20} />
-        </span>
-        <span style={{ fontSize: 13, color: 'var(--text-muted, #64748b)' }}>
-          {label}
-        </span>
+    <article className="ycp-metric" style={{ '--ycp-delay': `${index * 70}ms` }}>
+      <div className="ycp-metric-top">
+        <span className={`ycp-icon ycp-tone-${tone}`}><Icon size={20} aria-hidden="true" /></span>
+        <span className="ycp-metric-caption">{label}</span>
       </div>
-      <div style={{ fontSize: 30, fontWeight: 750, marginTop: 13 }}>
-        {value}
-      </div>
-      {detail && <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>{detail}</div>}
-    </div>
+      <strong className="ycp-number">{num(count).toLocaleString('en-IN')}</strong>
+      <span className="ycp-metric-help">{help}</span>
+    </article>
   );
 }
 
-function Ring({ value, label, color }) {
-  const rate = percentage(value);
-  const radius = 53;
+function ProgressRing({ label, value, tone, detail, available = true, index = 0 }) {
+  const [animated, setAnimated] = useState(false);
+  useEffect(() => {
+    setAnimated(false);
+    const frame = requestAnimationFrame(() => setAnimated(true));
+    return () => cancelAnimationFrame(frame);
+  }, [value, available]);
+  const rate = pct(value);
+  const radius = 50;
   const circumference = 2 * Math.PI * radius;
-
   return (
-    <div style={{ textAlign: 'center', flex: '1 1 150px' }}>
-      <svg viewBox="0 0 150 150" style={{ width: '100%', maxWidth: 175 }}
-        role="img" aria-label={`${label}: ${rate.toFixed(1)} percent`}>
-        <circle cx="75" cy="75" r={radius} fill="none"
-          stroke="currentColor" strokeOpacity=".09" strokeWidth="14" />
-        <circle cx="75" cy="75" r={radius} fill="none"
-          stroke={color} strokeWidth="14" strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - rate / 100)}
-          transform="rotate(-90 75 75)"
-          style={{ transition: 'stroke-dashoffset 900ms ease' }} />
-        <text x="75" y="76" fontSize="24" fontWeight="750"
-          fill="currentColor" textAnchor="middle" dominantBaseline="middle">
-          {rate.toFixed(1)}%
-        </text>
-      </svg>
-      <div style={{ fontSize: 13, fontWeight: 650, marginTop: 4 }}>{label}</div>
+    <div className="ycp-ring-block" style={{ '--ycp-delay': `${index * 110}ms` }}>
+      <div className="ycp-ring-wrapper">
+        <svg viewBox="0 0 136 136" className="ycp-ring-svg" role="img"
+          aria-label={`${label}: ${available ? `${rate.toFixed(1)} percent` : 'Not applicable'}`}>
+          <circle cx="68" cy="68" r={radius} stroke="var(--ycp-track)" strokeWidth="11" fill="none" />
+          <circle cx="68" cy="68" r={radius} stroke={available ? colors[tone] : colors.slate}
+            strokeWidth="11" strokeLinecap="round" fill="none"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - (animated && available ? rate : 0) / 100)}
+            transform="rotate(-90 68 68)" className="ycp-ring-progress" />
+          <text x="68" y="71" className="ycp-ring-value" textAnchor="middle">
+            {available ? `${rate.toFixed(1)}%` : 'N/A'}
+          </text>
+          <text x="68" y="88" className="ycp-ring-caption" textAnchor="middle">
+            {available ? 'of eligible work' : 'no activity'}
+          </text>
+        </svg>
+      </div>
+      <strong>{label}</strong>
+      <p>{detail}</p>
     </div>
   );
 }
 
-function DailyChart({ points }) {
-  const days = Array.isArray(points) ? points : [];
-  const width = 640;
-  const height = 230;
-  const left = 42;
-  const right = 20;
-  const top = 18;
-  const bottom = 37;
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-  const maximum = Math.max(
-    1, ...days.map(d => Math.max(number(d.planned), number(d.completed)))
-  );
-
-  const x = (i) => left + (days.length <= 1
-    ? plotWidth / 2
-    : i * plotWidth / (days.length - 1));
-  const y = (value) => top + plotHeight * (1 - number(value) / maximum);
-
-  const line = (key) => days.map((d, i) =>
-    `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(d[key]).toFixed(1)}`
-  ).join(' ');
-
-  if (!days.length) {
-    return <p style={{ color: '#64748b' }}>No daily activities recorded for this month.</p>;
+function DailyTrend({ points }) {
+  const rows = useMemo(() => (
+    (Array.isArray(points) ? points : [])
+      .filter(item => item && typeof item === 'object')
+      .map((item, index) => ({
+        key: String(item.date || item.work_date || index),
+        date: String(item.date || item.work_date || ''),
+        planned: num(item.planned),
+        completed: num(item.completed)
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+  ), [points]);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [metric, setMetric] = useState('both');
+  const selectedIndex = rows.findIndex(row => row.date === selectedDate);
+  const focus = rows[selectedIndex >= 0 ? selectedIndex : rows.length - 1];
+  const ceiling = Math.max(1, ...rows.flatMap(row => [row.planned, row.completed]));
+  if (!rows.length) {
+    return <div className="ycp-empty-chart"><BarChart3 size={28} /><strong>No daily trend yet</strong>
+      <span>Approved weekly activities will appear here as they are scheduled and reported.</span></div>;
   }
-
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%"
-        style={{ minWidth: 320, maxHeight: 340 }}
-        role="img" aria-label="Daily planned and completed activity trend">
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const yy = top + plotHeight * (1 - ratio);
-          return (
-            <g key={ratio}>
-              <line x1={left} x2={width - right} y1={yy} y2={yy}
-                stroke="currentColor" strokeOpacity=".10" />
-              <text x={left - 9} y={yy + 4} fontSize="11" fill="currentColor"
-                opacity=".6" textAnchor="end">
-                {(maximum * ratio).toFixed(maximum < 4 ? 1 : 0)}
-              </text>
-            </g>
-          );
-        })}
-        <path d={line('planned')} stroke={theme.primary}
-          strokeWidth="3" fill="none" strokeLinecap="round"
-          strokeLinejoin="round" style={{ animation: 'sprintFade .7s ease both' }} />
-        <path d={line('completed')} stroke={theme.completed}
-          strokeWidth="3" fill="none" strokeLinecap="round"
-          strokeLinejoin="round" style={{ animation: 'sprintFade 1s ease both' }} />
-        {days.map((d, i) => (
-          <g key={`${d.date}-${i}`}>
-            <circle cx={x(i)} cy={y(d.planned)} r="3.5" fill={theme.primary}>
-              <title>{`${d.date}: ${number(d.planned)} planned`}</title>
-            </circle>
-            <circle cx={x(i)} cy={y(d.completed)} r="3.5" fill={theme.completed}>
-              <title>{`${d.date}: ${number(d.completed)} completed`}</title>
-            </circle>
-          </g>
-        ))}
-        {days.filter((_, i) => (
-          i === 0 || i === days.length - 1 ||
-          i % Math.max(1, Math.ceil(days.length / 7)) === 0
-        )).map(d => {
-          const index = days.indexOf(d);
-          return (
-            <text key={`label-${index}`} x={x(index)} y={height - 12}
-              fontSize="11" fill="currentColor" opacity=".7" textAnchor="middle">
-              {formatDate(d.date)}
-            </text>
-          );
-        })}
-      </svg>
-      <div style={{ display: 'flex', justifyContent: 'center', gap: 20, fontSize: 12 }}>
-        <span style={{ color: theme.primary }}>● Planned</span>
-        <span style={{ color: theme.completed }}>● Completed</span>
+    <div className="ycp-chart-wrap">
+      <div className="ycp-chart-toolbar">
+        <div className="ycp-chart-metric-switch" role="group" aria-label="Show daily activity series">
+          {[
+            ['both', 'Both'], ['planned', 'Planned'], ['completed', 'Completed']
+          ].map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={metric === value}
+              className={`ycp-chart-toggle ${metric === value ? 'is-active' : ''}`}
+              onClick={() => setMetric(value)}>{label}</button>
+          ))}
+        </div>
+        <span className="ycp-chart-caption">Select a date below to inspect recorded values</span>
       </div>
+      <div className="ycp-chart-scroll" role="region" tabIndex={0}
+        aria-label="Scrollable daily activity chart with selectable dates">
+        <div className="ycp-bar-chart" style={{ minWidth: `${Math.max(360, rows.length * 88)}px` }}>
+          <div className="ycp-bar-plot" role="group" aria-label="Daily planned and completed activity bars">
+            <div className="ycp-gridlines" aria-hidden="true">
+              {[1, .75, .5, .25, 0].map(tick => <span key={tick}
+                className="ycp-gridline" data-value={(ceiling * tick).toFixed(ceiling < 4 ? 1 : 0)} />)}
+            </div>
+            {rows.map(row => {
+              const active = focus.date === row.date;
+              return <button type="button" key={row.key} className={`ycp-bar-day ${active ? 'is-active' : ''}`}
+                aria-pressed={active} aria-label={`${row.date}: ${row.planned} planned; ${row.completed} completed`}
+                title={`${row.date}: ${row.planned} planned, ${row.completed} completed`}
+                onClick={() => setSelectedDate(row.date)}>
+                <span className="ycp-bar-pair">
+                  {(metric === 'both' || metric === 'planned') &&
+                    <span className="ycp-bar ycp-bar-planned" style={{height:`${Math.max(0, row.planned / ceiling * 100)}%`}}>
+                      <span className="ycp-bar-number">{row.planned}</span>
+                    </span>}
+                  {(metric === 'both' || metric === 'completed') &&
+                    <span className="ycp-bar ycp-bar-completed" style={{height:`${Math.max(0, row.completed / ceiling * 100)}%`}}>
+                      <span className="ycp-bar-number">{row.completed}</span>
+                    </span>}
+                </span>
+                <span className="ycp-bar-date">{shortDate(row.date)}</span>
+              </button>;
+            })}
+          </div>
+        </div>
+      </div>
+      <div className="ycp-legend" aria-hidden="true"><span><i className="ycp-dot purple"/> Planned</span>
+        <span><i className="ycp-dot green"/> Completed</span></div>
+      <div className="ycp-insight" aria-live="polite"><span className="ycp-insight-date"><CalendarDays size={15}/>{focus.date || 'Selected date'}</span>
+        <span><strong>{focus.planned}</strong> planned</span><span><strong>{focus.completed}</strong> completed</span>
+        <span className="ycp-insight-muted">{focus.planned ? `${(focus.completed / focus.planned * 100).toFixed(1)}% completion` : 'No planned tasks'}</span></div>
     </div>
   );
 }
@@ -175,174 +165,154 @@ export default function SprintPerformanceDashboard({ employeeId }) {
   const [month, setMonth] = useState(currentMonth);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (soft = false) => {
+    if (soft) setRefreshing(true); else setLoading(true);
     setError('');
     try {
       const response = await getSprintEmployeeMetrics({ month, employeeId });
       const payload = unwrap(response);
-      if (!payload || !payload.counts) {
-        throw new Error('Performance metrics response is incomplete.');
-      }
+      if (!payload || !payload.counts) throw new Error('The performance metrics response is incomplete.');
       setData(payload);
     } catch (err) {
-      setData(null);
-      setError(err?.message || 'Unable to load Sprint Planning performance.');
+      if (!soft) setData(null);
+      setError(err?.message || 'Unable to load performance data.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [month, employeeId]);
-
   useEffect(() => { load(); }, [load]);
-
   const counts = data?.counts || {};
-  const summary = useMemo(() => [
-    { label: 'Planned', value: number(counts.planned), icon: ListTodo, color: theme.primary },
-    { label: 'Completed', value: number(counts.completed), icon: CheckCircle2, color: theme.completed },
-    { label: 'In Progress', value: number(counts.in_progress), icon: Clock3, color: theme.progress },
-    { label: 'Not Completed', value: number(counts.not_completed), icon: AlertCircle, color: theme.incomplete },
-    { label: 'Unreported', value: number(counts.unreported), icon: Activity, color: theme.unreported },
-    { label: 'With Evidence', value: number(counts.completed_with_evidence), icon: FileCheck2, color: theme.completed }
-  ], [counts.planned, counts.completed, counts.in_progress,
-    counts.not_completed, counts.unreported, counts.completed_with_evidence]);
-
-  const total = number(counts.planned);
-  const statusSegments = [
-    { label: 'Completed', count: number(counts.completed), color: theme.completed },
-    { label: 'In Progress', count: number(counts.in_progress), color: theme.progress },
-    { label: 'Not Completed', count: number(counts.not_completed), color: theme.incomplete },
-    { label: 'Unreported', count: number(counts.unreported), color: theme.unreported }
+  const planned = num(counts.planned);
+  const completed = num(counts.completed);
+  const evidenced = num(counts.completed_with_evidence);
+  const summaries = useMemo(() => workItems.map(item => ({item, value: num(counts[item[0]])})), [
+    counts.planned, counts.completed, counts.in_progress, counts.not_completed,
+    counts.unreported, counts.completed_with_evidence
+  ]);
+  const segments = [
+    { label: 'Completed', count: completed, tone: 'green' },
+    { label: 'In progress', count: num(counts.in_progress), tone: 'amber' },
+    { label: 'Not completed', count: num(counts.not_completed), tone: 'red' },
+    { label: 'Not reported', count: num(counts.unreported), tone: 'slate' }
   ];
-
+  const tracked = segments.reduce((sum, segment) => sum + segment.count, 0);
+  const available = planned > 0;
+  const rates = [
+    { label: 'Completion', value: data?.completion_rate, tone: 'green',
+      detail: `${completed} of ${planned} planned activities completed`, eligible: available },
+    { label: 'Daily reporting', value: data?.reporting_rate, tone: 'purple',
+      detail: `${Math.max(0, planned - num(counts.unreported))} activities reported`, eligible: available },
+    { label: 'Evidence coverage', value: data?.evidence_coverage_rate, tone: 'blue',
+      detail: `${evidenced} of ${completed} completed with evidence`, eligible: completed > 0 }
+  ];
   return (
-    <section className="sprint-performance-dashboard"
-      style={{ padding: 'clamp(12px, 2vw, 24px)', maxWidth: 1350, margin: '0 auto' }}>
+    <section className="ycp-page" aria-label="Sprint performance dashboard">
       <style>{`
-        @keyframes sprintFade {
-          from { opacity: 0; transform: translateY(7px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .sprint-performance-dashboard * { animation: none !important; transition: none !important; }
-        }
+        .ycp-page{--ycp-accent:var(--primary,var(--primary-color,#6354d9));--ycp-surface:var(--surface,var(--card-bg,#fff));--ycp-soft:var(--surface-secondary,#f7f8ff);--ycp-track:#ebedf5;--ycp-border:var(--border,#e2e6f2);--ycp-ink:var(--text,#1c2744);--ycp-subtle:var(--text-muted,#78849d);--ycp-grid:#e5e9f2;width:100%;max-width:1390px;margin:0 auto;padding:clamp(14px,2.2vw,28px);color:var(--ycp-ink);box-sizing:border-box;min-width:0}
+        .ycp-page *{box-sizing:border-box}.ycp-page button,.ycp-page input{font:inherit}
+        .ycp-header{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:23px}
+        .ycp-eyebrow{font-size:11px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:var(--ycp-accent);margin-bottom:6px}
+        .ycp-title{display:flex;align-items:center;gap:12px;margin:0;font-size:clamp(22px,2.6vw,30px);letter-spacing:-.025em;line-height:1.25;font-weight:800}
+        .ycp-title-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;color:var(--ycp-accent);background:var(--ycp-soft);border:1px solid var(--ycp-border)}
+        .ycp-description{font-size:13px;line-height:1.6;color:var(--ycp-subtle);margin:9px 0 0}
+        .ycp-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.ycp-control{display:grid;gap:6px;font-size:12px;color:var(--ycp-subtle);font-weight:750}
+        .ycp-month{height:43px;padding:8px 12px;color:var(--ycp-ink);background:var(--ycp-surface);border:1px solid var(--ycp-border);border-radius:11px;min-width:170px;outline:none}
+        .ycp-month:focus-visible,.ycp-btn:focus-visible,.ycp-chart-scroll:focus-visible{outline:3px solid var(--ycp-accent);outline-offset:3px}
+        .ycp-btn{height:43px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--ycp-border);background:var(--ycp-surface);color:var(--ycp-ink);border-radius:11px;padding:0 16px;font-size:13px;font-weight:750;cursor:pointer;transition:background .2s,transform .2s}
+        .ycp-btn:hover:not(:disabled){background:var(--ycp-soft);transform:translateY(-1px)}.ycp-btn:disabled{opacity:.55;cursor:not-allowed}
+        .ycp-spinning{animation:ycp-spin .8s linear infinite}@keyframes ycp-spin{to{transform:rotate(360deg)}}
+        .ycp-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin:0 0 16px}
+        .ycp-metric,.ycp-panel,.ycp-banner,.ycp-message{background:var(--ycp-surface);border:1px solid var(--ycp-border);border-radius:17px;box-shadow:0 6px 20px rgba(28,39,68,.035)}
+        .ycp-metric{min-width:0;padding:19px 20px;display:flex;flex-direction:column;gap:8px;animation:ycp-rise .55s ease both;animation-delay:var(--ycp-delay,0ms);transition:transform .2s,box-shadow .2s}
+        .ycp-metric:hover{transform:translateY(-3px);box-shadow:0 10px 23px rgba(28,39,68,.08)}
+        .ycp-metric-top{display:flex;align-items:center;gap:10px}.ycp-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;border:1px solid var(--ycp-border);background:var(--ycp-soft)}
+        .ycp-tone-purple{color:${colors.purple}}.ycp-tone-green{color:${colors.green}}.ycp-tone-amber{color:${colors.amber}}.ycp-tone-red{color:${colors.red}}.ycp-tone-slate{color:${colors.slate}}.ycp-tone-blue{color:${colors.blue}}
+        .ycp-metric-caption{font-size:13px;font-weight:750;color:var(--ycp-subtle)}.ycp-number{font-size:clamp(25px,2.9vw,34px);line-height:1.1;font-weight:850;font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+        .ycp-metric-help{font-size:11px;line-height:1.4;color:var(--ycp-subtle)}
+        .ycp-contents{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px;margin-bottom:16px}
+        .ycp-panel{padding:20px;min-width:0}.ycp-panel-title{font-size:16px;font-weight:800;display:flex;align-items:center;gap:9px;margin:0 0 7px}
+        .ycp-panel-description{font-size:12px;color:var(--ycp-subtle);line-height:1.6;margin:0 0 14px}
+        .ycp-rates{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.ycp-ring-block{display:flex;align-items:center;flex-direction:column;text-align:center;animation:ycp-rise .55s ease both;animation-delay:var(--ycp-delay,0ms);min-width:0}
+        .ycp-ring-wrapper{width:100%;max-width:155px}.ycp-ring-svg{display:block;width:100%;height:auto}.ycp-ring-progress{transition:stroke-dashoffset 1100ms cubic-bezier(.16,1,.3,1)}
+        .ycp-ring-value{font-size:20px;font-weight:850;fill:var(--ycp-ink);font-variant-numeric:tabular-nums}.ycp-ring-caption{font-size:10px;fill:var(--ycp-subtle)}
+        .ycp-ring-block>strong{font-size:12px;font-weight:800}.ycp-ring-block>p{font-size:11px;color:var(--ycp-subtle);line-height:1.45;margin:6px 0 0;max-width:150px}
+        .ycp-track{height:15px;background:var(--ycp-track);overflow:hidden;border-radius:999px;display:flex;margin:23px 0 22px}
+        .ycp-segment{height:100%;transition:width 1100ms cubic-bezier(.16,1,.3,1)}
+        .ycp-distribution-list{display:grid;gap:13px}.ycp-distribution-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+        .ycp-distribution-label{display:flex;align-items:center;gap:9px}.ycp-dot{display:inline-block;width:9px;height:9px;border-radius:4px;flex-shrink:0}
+        .ycp-dot.purple{background:${colors.purple}}.ycp-dot.green{background:${colors.green}}.ycp-dot.amber{background:${colors.amber}}.ycp-dot.red{background:${colors.red}}.ycp-dot.slate{background:${colors.slate}}
+        .ycp-distribution-row strong{font-variant-numeric:tabular-nums}.ycp-chart-panel{padding:20px}
+        .ycp-chart-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+        .ycp-legend{display:flex;align-items:center;gap:17px}.ycp-legend>span{display:flex;align-items:center;gap:7px;font-weight:750;font-size:12px}
+        .ycp-chart-caption{font-size:11px;color:var(--ycp-subtle)}.ycp-chart-scroll{overflow-x:auto;width:100%;scrollbar-width:thin;overscroll-behavior-x:contain;padding-top:14px}
+        .ycp-chart-metric-switch{display:flex;flex-wrap:wrap;gap:6px}.ycp-chart-toggle{border:1px solid var(--ycp-border);background:var(--ycp-surface);color:var(--ycp-ink);font:inherit;font-size:12px;font-weight:700;border-radius:9px;min-height:34px;padding:6px 11px;cursor:pointer}
+        .ycp-chart-toggle.is-active{color:var(--ycp-accent);border-color:var(--ycp-accent);background:var(--ycp-soft)}.ycp-chart-toggle:focus-visible,.ycp-bar-day:focus-visible{outline:3px solid var(--ycp-accent);outline-offset:2px}
+        .ycp-bar-chart{width:100%;padding:0 14px 3px}.ycp-bar-plot{position:relative;display:flex;align-items:stretch;gap:12px;height:244px;border-bottom:1px solid var(--ycp-border);padding:0 0 0 37px}
+        .ycp-gridlines{position:absolute;left:36px;right:0;top:0;bottom:32px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none}.ycp-gridline{border-top:1px dashed var(--ycp-border);height:0;position:relative}.ycp-gridline:before{content:attr(data-value);position:absolute;right:calc(100% + 10px);top:-9px;font-size:10px;color:var(--ycp-subtle)}
+        .ycp-bar-day{position:relative;z-index:1;appearance:none;display:flex;flex:1 1 75px;min-width:66px;max-width:140px;align-items:center;flex-direction:column;justify-content:flex-end;border:1px solid transparent;background:transparent;border-radius:9px 9px 0 0;cursor:pointer;padding:0 7px 0;color:var(--ycp-ink);font:inherit}
+        .ycp-bar-day:hover,.ycp-bar-day.is-active{background:var(--ycp-soft);border-color:var(--ycp-border)}.ycp-bar-pair{height:210px;width:100%;display:flex;align-items:flex-end;justify-content:center;gap:7px;position:relative}.ycp-bar{width:min(35%,37px);min-width:14px;position:relative;display:flex;align-items:flex-start;justify-content:center;border-radius:6px 6px 0 0;min-height:0;animation:ycp-bar-rise .9s cubic-bezier(.16,1,.3,1) both;transform-origin:bottom}
+        .ycp-bar-planned{background:${colors.purple}}.ycp-bar-completed{background:${colors.green}}.ycp-bar-number{position:absolute;bottom:calc(100% + 5px);font-size:11px;font-weight:800;color:var(--ycp-ink)}.ycp-bar-date{font-size:11px;font-weight:700;margin:10px 0 7px;white-space:nowrap;color:var(--ycp-subtle)}.ycp-bar-day.is-active .ycp-bar-date{color:var(--ycp-accent)}.ycp-chart-wrap>.ycp-legend{margin:12px 0 6px;justify-content:flex-start}
+        @keyframes ycp-bar-rise{from{transform:scaleY(.03);opacity:.5}to{transform:scaleY(1);opacity:1}}
+        .ycp-chart-svg{max-width:none;display:block}.ycp-chart-point{transition:r .25s}.ycp-draw-line{stroke-dasharray:1800;stroke-dashoffset:1800;animation:ycp-draw 1.25s ease forwards}@keyframes ycp-draw{to{stroke-dashoffset:0}}
+        .ycp-insight{background:var(--ycp-soft);border:1px solid var(--ycp-border);border-radius:11px;padding:12px 14px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:8px}
+        .ycp-insight-date{display:inline-flex;align-items:center;gap:7px;font-weight:800;color:var(--ycp-accent)}.ycp-insight strong{font-weight:850;font-size:14px}.ycp-insight-muted{margin-left:auto;color:var(--ycp-subtle)}
+        .ycp-empty-chart{min-height:210px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;text-align:center;color:var(--ycp-subtle);padding:20px}
+        .ycp-empty-chart strong{color:var(--ycp-ink)}.ycp-empty-chart span{max-width:390px;font-size:12px;line-height:1.6}
+        .ycp-banner{margin-bottom:16px;padding:14px 17px;display:flex;align-items:center;gap:10px;font-size:12px;line-height:1.5;color:var(--ycp-subtle)}.ycp-message{padding:22px;margin-bottom:18px}.ycp-message strong{display:block;margin-bottom:5px}
+        .ycp-footnote{display:flex;align-items:flex-start;gap:8px;color:var(--ycp-subtle);font-size:11px;line-height:1.6;margin:16px 0 0}
+        @keyframes ycp-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @media(max-width:1000px){.ycp-contents{grid-template-columns:1fr}.ycp-rates{gap:12px}}
+        @media(max-width:800px){.ycp-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(max-width:550px){.ycp-header{align-items:stretch}.ycp-controls{display:grid;grid-template-columns:1fr auto;width:100%}.ycp-control{min-width:0}.ycp-month{width:100%;min-width:0}.ycp-stats{gap:9px}.ycp-metric{padding:14px}.ycp-metric-help{font-size:10px}.ycp-panel{padding:15px}.ycp-rates{grid-template-columns:1fr;gap:18px}.ycp-ring-wrapper{max-width:125px}.ycp-ring-block>p{max-width:250px}.ycp-insight{gap:10px}.ycp-insight-muted{margin-left:0}}
+        @media(max-width:355px){.ycp-stats{grid-template-columns:1fr}.ycp-controls{grid-template-columns:1fr}.ycp-btn{width:100%}}
+        @media(prefers-reduced-motion:reduce){.ycp-page *{animation:none!important;transition:none!important}.ycp-draw-line{stroke-dasharray:none;stroke-dashoffset:0}}
       `}</style>
-
-      <header style={{
-        display: 'flex', justifyContent: 'space-between',
-        alignItems: 'center', flexWrap: 'wrap', gap: 14, marginBottom: 22
-      }}>
+      <header className="ycp-header">
         <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0 }}>
-            <TrendingUp size={24} /> {employeeId ? 'Employee Sprint Performance' : 'My Sprint Performance'}
-          </h2>
-          <p style={{ color: 'var(--text-muted, #64748b)', marginBottom: 0 }}>
-            Performance from approved weekly plans and recorded daily activities.
-          </p>
+          <div className="ycp-eyebrow">YourComate · Workforce performance</div>
+          <h2 className="ycp-title"><span className="ycp-title-icon"><TrendingUp size={23}/></span>
+            {employeeId ? 'Employee Sprint Performance' : 'My Sprint Performance'}</h2>
+          <p className="ycp-description">A clear view of planned work, daily reporting and documented outcomes.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-          <CalendarDays size={18} />
-          <input type="month" value={month} aria-label="Performance month"
-            onChange={e => setMonth(e.target.value)}
-            style={{ border: '1px solid var(--border, #dbe1e8)',
-              background: 'var(--surface, #fff)', color: 'inherit',
-              borderRadius: 8, padding: '9px 11px' }} />
-          <button type="button" className="btn btn-secondary" onClick={load}
-            disabled={loading}><RefreshCw size={16} /> Refresh</button>
+        <div className="ycp-controls">
+          <label className="ycp-control"><span>Performance month</span><input className="ycp-month" type="month" aria-label="Performance month"
+            value={month} onChange={e => setMonth(e.target.value)} /></label>
+          <button type="button" className="ycp-btn" disabled={loading || refreshing} onClick={() => load(true)}>
+            <RefreshCw size={15} className={loading || refreshing ? 'ycp-spinning' : ''}/>{refreshing ? 'Updating…' : 'Refresh data'}
+          </button>
         </div>
       </header>
-
-      {loading && <div className="card" style={{ padding: 24 }}>Loading performance metrics...</div>}
-
-      {!loading && error && (
-        <div className="card" role="alert" style={{ padding: 22 }}>
-          <strong>Unable to load performance data</strong>
-          <p>{error}</p>
-          <button type="button" className="btn btn-secondary" onClick={load}>Try Again</button>
+      {loading && <div className="ycp-message" role="status" aria-live="polite"><span className="ycp-spinning"><RefreshCw size={17}/></span> Loading performance data…</div>}
+      {error && <div className="ycp-message" role="alert"><strong>Could not refresh performance data</strong><p>{error}</p><button type="button" className="ycp-btn" onClick={() => load(Boolean(data))}>Try again</button></div>}
+      {!loading && data && <>
+        <div className="ycp-stats">{summaries.map(({item,value}, index) => <Metric key={item[0]} item={item} count={value} index={index}/>)}</div>
+        {!available && <div className="ycp-banner" role="status"><Info size={18}/>
+          No activities in approved weekly plans for this month. Rates are shown as N/A rather than 0% because there is no eligible work to measure.</div>}
+        <div className="ycp-contents">
+          <section className="ycp-panel"><h3 className="ycp-panel-title"><Target size={19}/> Performance rates</h3>
+            <p className="ycp-panel-description">Calculated only from approved weekly activities. Rings animate when new data loads.</p>
+            <div className="ycp-rates">{rates.map((rate, index) => <ProgressRing key={rate.label} {...rate} available={rate.eligible} index={index}/>)}</div>
+          </section>
+          <section className="ycp-panel"><h3 className="ycp-panel-title"><CircleDot size={19}/> Work status breakdown</h3>
+            <p className="ycp-panel-description">How activities are distributed across their latest recorded statuses.</p>
+            <div className="ycp-track" role="img" aria-label={`Work status distribution across ${planned} planned activities`}>
+              {segments.map(segment => <div key={segment.label} className="ycp-segment" title={`${segment.label}: ${segment.count}`}
+                style={{width:`${tracked ? segment.count / tracked * 100 : 0}%`,background:colors[segment.tone]}}/>)}
+            </div>
+            <div className="ycp-distribution-list">{segments.map(segment =>
+              <div className="ycp-distribution-row" key={segment.label}><span className="ycp-distribution-label"><i className={`ycp-dot ${segment.tone}`}/>{segment.label}</span>
+                <strong>{segment.count.toLocaleString('en-IN')}</strong></div>)}</div>
+          </section>
         </div>
-      )}
-
-      {!loading && !error && data && (
-        <>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))',
-            gap: 12, marginBottom: 18
-          }}>
-            {summary.map(item => <MetricCard key={item.label} {...item} />)}
-          </div>
-
-          {total === 0 && (
-            <div className="card" style={{ padding: 17, marginBottom: 18 }}>
-              No activities found in approved weekly plans for this month.
-              Draft and pending plans are not included in these completion figures.
-            </div>
-          )}
-
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,340px),1fr))',
-            gap: 16, marginBottom: 18
-          }}>
-            <div className="card" style={{ padding: 20, borderRadius: 14 }}>
-              <h3 style={{ marginTop: 0, fontSize: 17 }}>Performance Rates</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }}>
-                <Ring label="Completion" value={data.completion_rate} color={theme.completed} />
-                <Ring label="Daily Reporting" value={data.reporting_rate} color={theme.primary} />
-                <Ring label="Evidence Coverage" value={data.evidence_coverage_rate} color={theme.progress} />
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 20, borderRadius: 14 }}>
-              <h3 style={{ marginTop: 0, fontSize: 17 }}>Work Status Distribution</h3>
-              <div style={{
-                display: 'flex', height: 18, overflow: 'hidden',
-                borderRadius: 999, background: '#e2e8f0', marginTop: 25
-              }}>
-                {statusSegments.map(segment => (
-                  <div key={segment.label}
-                    title={`${segment.label}: ${segment.count}`}
-                    style={{
-                      width: `${total ? segment.count / total * 100 : 0}%`,
-                      background: segment.color,
-                      transition: 'width 900ms ease'
-                    }} />
-                ))}
-              </div>
-              <div style={{ display: 'grid', gap: 12, marginTop: 22 }}>
-                {statusSegments.map(segment => (
-                  <div key={segment.label} style={{
-                    display: 'flex', alignItems: 'center',
-                    justifyContent: 'space-between', gap: 10
-                  }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                      <span style={{
-                        width: 10, height: 10, borderRadius: 4,
-                        background: segment.color, display: 'inline-block'
-                      }} />
-                      {segment.label}
-                    </span>
-                    <strong>{segment.count}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: 20, borderRadius: 14 }}>
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 0, fontSize: 17 }}>
-              <BarChart3 size={20} /> Daily Activity Trend
-            </h3>
-            <DailyChart points={data.daily_trend} />
-          </div>
-
-          <p style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginTop: 14 }}>
-            Data covers approved weekly plans only. Evidence coverage indicates a submitted
-            evidence reference, not independent verification of work quality.
-            {data.evidence_note ? ` ${data.evidence_note}` : ''}
-          </p>
-        </>
-      )}
+        <section className="ycp-panel ycp-chart-panel"><h3 className="ycp-panel-title"><BarChart3 size={19}/> Daily activity trend</h3>
+          <p className="ycp-panel-description">Interactive daily trend from actual planning records—not a simulated live feed.</p>
+          <DailyTrend points={data.daily_trend}/>
+        </section>
+        <p className="ycp-footnote"><Info size={15}/><span>Only approved weekly plans contribute to these figures. Evidence coverage counts submitted references and does not independently verify work quality.{data.evidence_note && !/evidence coverage|submitted references|independent.*verif/i.test(String(data.evidence_note)) ? ` ${data.evidence_note}` : ''}</span></p>
+      </>}
     </section>
   );
 }

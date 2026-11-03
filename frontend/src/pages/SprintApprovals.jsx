@@ -17,6 +17,27 @@ import {
 
 import { useCustomAlert } from '../components/CustomAlertProvider';
 import SprintReviewActivityFields from '../components/SprintReviewActivityFields';
+import { getEmployeeDirectory } from '../api/client';
+
+
+// Employee names are resolved from the existing tenant-scoped directory.
+// Missing or inaccessible profiles fall back to a neutral label, never a guessed name.
+const directoryItems = response => {
+  const data = response?.data || response;
+  return Array.isArray(data?.items) ? data.items : [];
+};
+const employeeById = people => new Map(people.map(person => [
+  String(person?._id || person?.id || '').trim(), person
+]).filter(([id]) => id));
+const employeeName = (people, id) => {
+  const person = people.get(String(id || '').trim());
+  return person?.name || person?.employee_name || 'Employee profile unavailable';
+};
+const employeeMeta = (people, id) => {
+  const person = people.get(String(id || '').trim());
+  return [person?.employee_code || person?.employee_id, person?.department || person?.department_name]
+    .filter(Boolean).join(' · ') || (person ? 'Employee' : 'Identity unavailable');
+};
 
 const getId = (item) => String(item?._id || item?.id || '');
 
@@ -55,8 +76,8 @@ function StatusTag({ value }) {
     .replaceAll('_', ' ');
 
   return (
-    <span style={{
-      color: colors[value] || '#64748b',
+    <span className="sra-status" style={{
+      color: colors[value] || 'var(--text-muted, #64748b)',
       fontSize: 12,
       fontWeight: 700,
       textTransform: 'capitalize'
@@ -68,7 +89,7 @@ function StatusTag({ value }) {
 
 function RequestDetails({ item }) {
   return (
-    <div style={{
+    <div className="sra-request-details" style={{
       display: 'grid',
       gap: 12,
       marginTop: 14,
@@ -123,8 +144,8 @@ function RequestDetails({ item }) {
         <>
           <strong>Proposed Change</strong>
           <div>Type: {String(item.change_type || '').replaceAll('_', ' ')}</div>
-          <div>Date: {item.planned_date}</div>
-          <div>Activity: {item.title}</div>
+                      <div><strong>Planned date:</strong> {item.planned_date}</div>
+                      <div><strong>Activity:</strong> {item.title}</div>
           {item.description && <div>{item.description}</div>}
           <div>
             <strong>Reason:</strong> {item.reason}
@@ -156,6 +177,8 @@ function SprintApprovalsBody() {
   const [filter, setFilter] = useState('all');
   const [detailsOpen, setDetailsOpen] = useState({});
   const [remarks, setRemarks] = useState({});
+  const [employeeLookup, setEmployeeLookup] = useState(() => new Map());
+  const [directoryWarning, setDirectoryWarning] = useState(false);
 
   const alert = useCallback((type, title, message) => {
     notify({ type, title, message });
@@ -176,6 +199,24 @@ function SprintApprovalsBody() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    const loadDirectory = async () => {
+      try {
+        // The server enforces the logged-in user's organisation scope.
+        const response = await getEmployeeDirectory({ limit: 500 });
+        if (active) {
+          setEmployeeLookup(employeeById(directoryItems(response)));
+          setDirectoryWarning(false);
+        }
+      } catch {
+        if (active) setDirectoryWarning(true);
+      }
+    };
+    loadDirectory();
+    return () => { active = false; };
+  }, []);
 
   const visible = useMemo(() => (
     filter === 'all'
@@ -251,7 +292,59 @@ function SprintApprovalsBody() {
   };
 
   return (
-    <main style={{ maxWidth: 1350, margin: '0 auto', padding: 'clamp(12px,2vw,24px)' }}>
+    <main className="sra-page" style={{ maxWidth: 1350, margin: '0 auto', padding: 'clamp(12px,2vw,24px)' }}>
+      <style>{`
+        .sra-page { color: var(--text, inherit); min-width: 0; }
+        .sra-page .sra-summary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:20px; }
+        .sra-page .sra-stat { min-width:0; background:var(--surface, var(--card, #fff)); border:1px solid var(--border, #e2e8f0); }
+        .sra-page .sra-filter-bar { display:flex; gap:8px; margin-bottom:18px; overflow-x:auto; max-width:100%; padding:3px 2px 8px; scrollbar-width:thin; }
+        .sra-page .sra-filter-bar button { flex:0 0 auto; white-space:nowrap; }
+        .sra-page .sra-request { min-width:0; border:1px solid var(--border, #e2e8f0); background:var(--surface, var(--card, #fff)); overflow-wrap:anywhere; }
+        .sra-page .sra-request-details { border:1px solid var(--border, #e2e8f0); color:var(--text, inherit); min-width:0; overflow-wrap:anywhere; }
+        .sra-page .sra-status { display:inline-flex; align-items:center; border:1px solid currentColor; border-radius:999px; padding:6px 12px; max-width:100%; background:var(--surface-secondary,#f8fafc); letter-spacing:.01em; }
+        .sra-page .sra-actions { display:flex; flex-wrap:wrap; gap:10px; }
+        .sra-page .sra-review-box { padding:14px; margin-top:16px; border:1px solid var(--border, #e2e8f0); border-radius:12px; }
+        .sra-page textarea.form-control { box-sizing:border-box; min-width:0; max-width:100%; background:var(--surface, #fff); color:var(--text, inherit); border-color:var(--border, #e2e8f0); }
+        .sra-page button { min-height:42px; display:inline-flex; justify-content:center; align-items:center; gap:7px; }
+        .sra-page button:focus-visible, .sra-page textarea:focus-visible { outline:2px solid var(--primary, #6355d8); outline-offset:3px; }
+        .sra-page .sra-muted { color:var(--text-muted, #64748b); }
+        .sra-page .sra-title { font-size:clamp(20px,2.5vw,27px); line-height:1.3; }
+        /* Professional review workspace */
+        .sra-page { --sra-accent:var(--primary,#5142ce); --sra-border:var(--border,#e1e5ee); }
+        .sra-page .sra-summary-grid { gap:16px; }
+        .sra-page .sra-stat { border-radius:16px!important; padding:20px!important; box-shadow:0 5px 22px rgba(25,35,75,.035); }
+        .sra-page .sra-request { border-radius:18px!important; padding:24px!important; box-shadow:0 8px 26px rgba(20,30,60,.04); }
+        .sra-page .sra-request-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+        .sra-page .sra-person { display:flex; align-items:center; gap:10px; margin-top:16px; padding:11px 13px; border-radius:12px; background:var(--surface-secondary,#f7f8fc); border:1px solid var(--sra-border); }
+        .sra-page .sra-person-avatar { display:grid; place-items:center; height:38px; width:38px; flex:none; border-radius:11px; background:#ece9ff; color:#5142ce; font-weight:800; }
+        .sra-page .sra-person-name { font-weight:750; font-size:14px; line-height:1.4; }
+        .sra-page .sra-person-meta { font-size:12px; color:var(--text-muted,#64748b); margin-top:2px; }
+        .sra-page .sra-request-title { font-size:17px; line-height:1.45; margin-top:8px; font-weight:750; }
+        .sra-page .sra-review-box { background:var(--surface-secondary,#f8fafc); padding:18px; border-radius:14px; }
+        .sra-page .sra-review-box textarea { display:block; width:100%; min-height:96px; border:1px solid var(--sra-border); border-radius:11px; padding:12px 14px; margin-top:9px; resize:vertical; font-size:14px; line-height:1.5; }
+        .sra-page .sra-actions { margin-top:13px; }
+        .sra-page .sra-actions button, .sra-page .sra-filter-bar button, .sra-page .sra-refresh { border-radius:10px; padding:10px 16px; font-weight:700; }
+        .sra-page .sra-approve { background:#168048!important; color:white!important; border-color:#168048!important; }
+        .sra-page .sra-reject { border:1px solid #f1c3c3!important; color:#ad3434!important; background:var(--surface,#fff)!important; }
+        .sra-page .sra-apply { background:var(--sra-accent)!important; color:white!important; border-radius:11px; font-weight:700; padding:11px 17px; }
+        .sra-page .sra-review-help { font-size:12px; line-height:1.5; color:var(--text-muted,#64748b); margin:8px 0 0; }
+        .sra-page .sra-quiet { font-size:13px; background:var(--surface-secondary,#f8fafc); border:1px solid var(--sra-border); padding:11px 13px; border-radius:10px; margin-top:14px; color:var(--text-muted,#64748b); }
+        .sra-page button:disabled { opacity:.62; cursor:wait; }
+        @media(max-width:640px) {
+          .sra-page { padding:12px !important; }
+          .sra-page .sra-summary-grid { gap:9px; }
+          .sra-page .sra-stat { padding:13px !important; }
+          .sra-page .sra-request { padding:14px !important; }
+          .sra-page .sra-review-box { padding:12px; }
+          .sra-page .sra-actions button { flex:1 1 135px; }
+          .sra-page .sra-refresh { width:100%; }
+          .sra-page .sra-request-details { padding:12px !important; }
+        }
+        @media(max-width:360px) {
+          .sra-page .sra-summary-grid { grid-template-columns:1fr; }
+        }
+        @media(prefers-reduced-motion:reduce) { .sra-page * { scroll-behavior:auto !important; } }
+      `}</style>
       <header style={{
         display: 'flex',
         alignItems: 'center',
@@ -261,30 +354,25 @@ function SprintApprovalsBody() {
         marginBottom: 22
       }}>
         <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h2 className="sra-title" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
             <ShieldCheck size={24} /> Sprint Planning Approvals
           </h2>
-          <p style={{ color: 'var(--text-muted, #64748b)' }}>
+          <p className="sra-muted" style={{ color: 'var(--text-muted, #64748b)' }}>
             Review planning sheets and authorised day-wise changes.
           </p>
         </div>
-        <button type="button" className="btn btn-secondary"
-          onClick={load} disabled={loading}>
+        <button type="button" className="btn btn-secondary sra-refresh"
+          onClick={load} disabled={loading} aria-label="Refresh approval requests">
           <RefreshCw size={16} /> Refresh
         </button>
       </header>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))',
-        gap: 12,
-        marginBottom: 20
-      }}>
+      <div className="sra-summary-grid" aria-label="Approval request summary">
         {[
           ['Visible Requests', items.length, ClipboardCheck],
           ['Awaiting My Action', actionable, Clock3]
         ].map(([label, value, Icon]) => (
-          <div className="card" key={label} style={{ padding: 18, borderRadius: 12 }}>
+          <div className="card sra-stat" key={label} style={{ padding: 18, borderRadius: 12 }}>
             <Icon size={20} />
             <div style={{ fontSize: 28, fontWeight: 700, marginTop: 8 }}>
               {value}
@@ -296,12 +384,7 @@ function SprintApprovalsBody() {
         ))}
       </div>
 
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 18
-      }}>
+      <div className="sra-filter-bar" role="group" aria-label="Filter approval requests">
         {[
           ['all', 'All Requests'],
           ['monthly', 'Monthly'],
@@ -310,6 +393,7 @@ function SprintApprovalsBody() {
         ].map(([value, label]) => (
           <button key={value} type="button"
             className={filter === value ? 'btn btn-primary' : 'btn btn-secondary'}
+            aria-pressed={filter === value}
             onClick={() => setFilter(value)}>
             {label}
           </button>
@@ -317,16 +401,18 @@ function SprintApprovalsBody() {
       </div>
 
       {loading ? (
-        <div className="card" style={{ padding: 22 }}>Loading approval requests...</div>
+        <div className="card" style={{ padding: 22 }} role="status">Loading approval requests...</div>
       ) : visible.length === 0 ? (
         <div className="card" style={{ padding: 28, textAlign: 'center' }}>
           <CheckCircle2 size={30} style={{ marginBottom: 12 }} />
-          <p>No pending requests for this view.</p>
+          <h3 style={{margin:'3px 0 6px',fontSize:17}}>You're all caught up</h3>
+          <p className="sra-muted" style={{margin:0}}>No requests match this view. Check another category or refresh to see new submissions.</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 14 }}>
           {visible.map(item => {
             const id = getId(item);
+            const detailKey = `${item.planning_type}:${id}`;
             const Icon = kindIcon[item.planning_type] || ClipboardCheck;
             const actions = Array.isArray(item.allowed_actions)
               ? item.allowed_actions
@@ -342,41 +428,45 @@ function SprintApprovalsBody() {
               actions.includes('apply_change');
 
             return (
-              <article className="card" key={`${item.planning_type}-${id}`}
+              <article className="card sra-request" key={`${item.planning_type}-${id}`}
                 style={{ padding: 20, borderRadius: 14 }}>
-                <div style={{
-                  display: 'flex', justifyContent: 'space-between',
-                  gap: 12, flexWrap: 'wrap'
-                }}>
+                                 <div className="sra-request-head">
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <Icon size={19} />
                       <strong>{kindLabel[item.planning_type] || 'Planning Request'}</strong>
                     </div>
-                    <div style={{ marginTop: 8, fontWeight: 600 }}>
-                      {item.title || item.month ||
-                        `${item.week_start || ''} - ${item.week_end || ''}`}
-                    </div>
-                    <div style={{ color: '#64748b', fontSize: 13, marginTop: 5 }}>
-                      Employee ID: {item.employee_id}
-                    </div>
+                                         <div className="sra-request-title">
+                       {item.title || item.month ||
+                         `${item.week_start || ''} — ${item.week_end || ''}`}
+                     </div>
+                     <div className="sra-person">
+                       <span className="sra-person-avatar" aria-hidden="true">
+                         {employeeName(employeeLookup, item.employee_id).slice(0, 1).toUpperCase()}
+                       </span>
+                       <div>
+                         <div className="sra-person-name">{employeeName(employeeLookup, item.employee_id)}</div>
+                         <div className="sra-person-meta">{employeeMeta(employeeLookup, item.employee_id)}</div>
+                       </div>
+                     </div>
                   </div>
                   <StatusTag value={item.status} />
                 </div>
 
                 <button type="button" className="btn btn-secondary"
                   style={{ marginTop: 14 }}
+                  aria-expanded={Boolean(detailsOpen[detailKey])}
                   onClick={() => setDetailsOpen(previous => ({
-                    ...previous, [id]: !previous[id]
+                    ...previous, [detailKey]: !previous[detailKey]
                   }))}>
                   <Eye size={15} />
-                  {detailsOpen[id] ? 'Hide Details' : 'View Details'}
+                  {detailsOpen[detailKey] ? 'Hide Details' : 'View Details'}
                 </button>
 
-                {detailsOpen[id] && <RequestDetails item={item} />}
+                {detailsOpen[detailKey] && <RequestDetails item={item} />}
 
-                {reviewActions.length === 0 && !canApply && (
-                  <p style={{ fontSize: 13, color: '#64748b' }}>
+                                  {reviewActions.length === 0 && !canApply && item.status === 'pending_approval' && (
+                  <p className="sra-quiet">
                     <AlertTriangle size={14} style={{ verticalAlign: 'middle' }} />
                     {' '}Monitoring only — no approval action assigned to this login.
                   </p>
@@ -386,31 +476,31 @@ function SprintApprovalsBody() {
                   const role = action === 'ro_review' ? 'ro' : 'tl';
                   const key = `${id}:${role}`;
                   return (
-                    <div key={action} style={{
-                      marginTop: 16,
-                      paddingTop: 14,
-                      borderTop: '1px solid var(--border, #e2e8f0)'
-                    }}>
-                      <strong style={{ fontSize: 13 }}>
-                        {role === 'tl' ? 'Team Leader Review' : 'Reporting Officer Review'}
-                      </strong>
-                      <textarea className="form-control" rows={2}
+                    <div className="sra-review-box" key={action}>
+                                             <strong style={{ fontSize: 15 }}>
+                         {role === 'tl' ? 'Team Leader Decision' : 'Reporting Officer Decision'}
+                       </strong>
+                       <p className="sra-review-help">Review the work details before deciding. Add a reason if returning this request for revision.</p>
+                       <label htmlFor={`sra-remarks-${id}-${role}`} style={{display:'block',fontSize:13,fontWeight:700,marginTop:12}}>Review remarks <span className="sra-muted" style={{fontWeight:400}}>(optional for approval)</span></label>
+                       <textarea id={`sra-remarks-${id}-${role}`} className="form-control" rows={3}
+                        aria-label={`${role === 'tl' ? 'Team Leader' : 'Reporting Officer'} review remarks`}
                         style={{ width: '100%', marginTop: 9, marginBottom: 10 }}
-                        placeholder="Review remarks (required when rejecting)"
+                                                 maxLength={1000}
+                         placeholder="Write constructive feedback, or explain what needs to change…"
                         value={remarks[key] || ''}
                         onChange={event => setRemarks(previous => ({
                           ...previous, [key]: event.target.value
                         }))} />
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                        <button type="button" className="btn btn-primary"
-                          disabled={processing === id}
-                          onClick={() => review(item, role, 'approved')}>
-                          <CheckCircle2 size={16} /> Approve
+                      <div className="sra-actions">
+                        <button type="button" className="btn btn-primary sra-approve"
+                           disabled={processing === id}
+                           onClick={() => review(item, role, 'approved')}>
+                                                     <CheckCircle2 size={16} /> {processing === id ? 'Processing…' : 'Approve Request'}
                         </button>
-                        <button type="button" className="btn btn-secondary"
-                          disabled={processing === id}
-                          onClick={() => review(item, role, 'rejected')}>
-                          <XCircle size={16} /> Reject
+                        <button type="button" className="btn btn-secondary sra-reject"
+                           disabled={processing === id}
+                           onClick={() => review(item, role, 'rejected')}>
+                                                     <XCircle size={16} /> Return for Revision
                         </button>
                       </div>
                     </div>
@@ -418,8 +508,8 @@ function SprintApprovalsBody() {
                 })}
 
                 {canApply && (
-                  <button className="btn btn-primary" type="button"
-                    style={{ marginTop: 15 }}
+                  <button className="btn btn-primary sra-apply" type="button"
+                     style={{ marginTop: 15 }}
                     disabled={processing === id}
                     onClick={() => applyChange(item)}>
                     <CheckCircle2 size={16} /> Apply Approved Change
@@ -431,7 +521,8 @@ function SprintApprovalsBody() {
         </div>
       )}
 
-      <p style={{ fontSize: 12, color: '#64748b', marginTop: 20 }}>
+      {directoryWarning && <p className="sra-muted" role="status" style={{fontSize:12}}>Employee directory unavailable. Identity details will appear when directory access is restored.</p>}
+      <p className="sra-muted" style={{ fontSize: 12, marginTop: 20 }}>
         Approval permissions are enforced by the backend. Displayed actions
         do not independently grant permission to approve employee records.
       </p>

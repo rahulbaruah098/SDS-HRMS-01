@@ -4142,33 +4142,99 @@ export default function Settings({ user, setPage }) {
               </small>
             </div>
 
+            {/* Visual-only jelly switch. Save/confirmation logic is unchanged. */}
+            <style>{`
+              .sprint-jelly-toggle {
+                position: relative;
+                display: inline-flex;
+                align-items: center;
+                justify-content: space-between;
+                flex: 0 0 auto;
+                width: 102px;
+                height: 54px;
+                box-sizing: border-box;
+                padding: 0 13px;
+                border: 1px solid var(--border, #dbe3ec);
+                border-radius: 999px;
+                background: #64748b;
+                color: #fff;
+                cursor: pointer;
+                isolation: isolate;
+                box-shadow: inset 0 2px 5px rgba(0, 0, 0, .15);
+                transition: background-color .32s ease, box-shadow .32s ease;
+                -webkit-tap-highlight-color: transparent;
+              }
+              .sprint-jelly-toggle.is-on {
+                background: #0f766e;
+                box-shadow: inset 0 2px 5px rgba(0, 0, 0, .12);
+              }
+              .sprint-jelly-toggle:focus-visible {
+                outline: 3px solid var(--primary, #5142ce);
+                outline-offset: 4px;
+              }
+              .sprint-jelly-toggle:disabled {
+                cursor: not-allowed;
+                opacity: .60;
+              }
+              .sprint-jelly-toggle.is-saving {
+                cursor: progress;
+              }
+              .sprint-jelly-label {
+                position: absolute;
+                z-index: 1;
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: .04em;
+                user-select: none;
+                pointer-events: none;
+              }
+              .sprint-jelly-label.is-on-label { left: 15px; }
+              .sprint-jelly-label.is-off-label { right: 13px; }
+              .sprint-jelly-thumb {
+                position: absolute;
+                top: 5px;
+                left: 5px;
+                width: 42px;
+                height: 42px;
+                border-radius: 50%;
+                background: #fff;
+                box-shadow: 0 3px 9px rgba(15, 23, 42, .24);
+                transform: translateX(0);
+                transition: transform .46s cubic-bezier(.28, 1.55, .48, 1),
+                            border-radius .32s ease;
+                pointer-events: none;
+              }
+              .sprint-jelly-toggle.is-on .sprint-jelly-thumb {
+                transform: translateX(48px);
+              }
+              .sprint-jelly-toggle:not(:disabled):active .sprint-jelly-thumb {
+                border-radius: 46% 54% 54% 46%;
+                scale: 1.09 .88;
+              }
+              @media (prefers-reduced-motion: reduce) {
+                .sprint-jelly-toggle, .sprint-jelly-thumb {
+                  transition: none;
+                }
+              }
+            `}</style>
             <button
               type="button"
               role="switch"
+              className={`sprint-jelly-toggle ${sprintEnabled ? 'is-on' : ''} ${sprintSaving ? 'is-saving' : ''}`}
               aria-checked={sprintEnabled}
               aria-label="Enable Sprint Planning"
+              aria-busy={sprintSaving}
               onClick={handleSprintSettingChange}
               disabled={
                 sprintLoading ||
                 sprintSaving ||
                 !sprintCanManage
               }
-              style={{
-                border: 0,
-                borderRadius: 999,
-                padding: '12px 22px',
-                minWidth: 115,
-                cursor: sprintLoading || sprintSaving ? 'wait' : 'pointer',
-                fontWeight: 700,
-                background: sprintEnabled ? '#0f766e' : '#64748b',
-                color: '#fff',
-              }}
             >
-              {sprintSaving
-                ? 'Saving...'
-                : sprintEnabled
-                  ? 'ON'
-                  : 'OFF'}
+              <span className={`sprint-jelly-label ${sprintEnabled ? 'is-on-label' : 'is-off-label'}`} aria-hidden="true">
+                {sprintSaving ? '...' : sprintEnabled ? 'ON' : 'OFF'}
+              </span>
+              <span className="sprint-jelly-thumb" aria-hidden="true" />
             </button>
           </div>
 

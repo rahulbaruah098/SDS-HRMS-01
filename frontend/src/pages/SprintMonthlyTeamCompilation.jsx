@@ -1,7 +1,7 @@
 import SprintMonthlyInlineFields from '../components/SprintMonthlyInlineFields';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ClipboardList, RefreshCw, Send, CheckCircle2, XCircle
+  ClipboardList, RefreshCw, Send, CheckCircle2, XCircle, ChevronDown
 } from 'lucide-react';
 import {
   getMonthlyTeamCompilations,
@@ -62,6 +62,8 @@ export default function SprintMonthlyTeamCompilation({ month }) {
         message: error?.message || 'Request failed.',
       });
       setCoverage(null);
+      setItems([]);
+      setCanCompile(false);
     } finally {
       setLoading(false);
     }
@@ -90,8 +92,12 @@ export default function SprintMonthlyTeamCompilation({ month }) {
     }
   };
 
+  const expectedMissingIds = (coverage?.members || [])
+    .filter(member => member.submission_status === 'not_submitted')
+    .map(member => member.employee_id);
   const confirmationComplete = Boolean(coverage) &&
-    (coverage.not_submitted_count || 0) === missingIds.length;
+    expectedMissingIds.length === missingIds.length &&
+    expectedMissingIds.every(id => missingIds.includes(id));
 
   const monthCompilations = items.filter(
     item => item.month === month
@@ -205,11 +211,132 @@ export default function SprintMonthlyTeamCompilation({ month }) {
   if (!loading && !canCompile && items.length === 0) return null;
 
   return (
-    <section className="mws-card">
+    <section className="mws-card smtp-compilation" aria-label="Compiled team monthly sprint plan">
+      <style>{`
+        .smtp-compilation {
+          --smtp-border: var(--border, #dce3ed);
+          --smtp-muted: var(--text-muted, #64748b);
+          --smtp-surface: var(--surface, #fff);
+          --smtp-soft: var(--surface-secondary, #f8fafc);
+          color: var(--text, inherit);
+          max-width: 100%; min-width: 0;
+          margin-top: 18px;
+          padding: clamp(14px, 2vw, 24px);
+          background: var(--smtp-surface);
+          border: 1px solid var(--smtp-border);
+          border-radius: 16px;
+          box-sizing: border-box;
+        }
+        .smtp-compilation .mws-section-head,
+        .smtp-compilation .mws-toolbar {
+          display: flex; align-items: center; justify-content: space-between;
+          flex-wrap: wrap; gap: 12px;
+        }
+        .smtp-compilation .mws-muted {
+          color: var(--smtp-muted); font-size: 13px; line-height: 1.55;
+        }
+        .smtp-compilation .mws-approval {
+          padding: clamp(12px, 2vw, 18px);
+          background: var(--smtp-soft);
+          border: 1px solid var(--smtp-border);
+          border-radius: 12px; margin-top: 14px;
+        }
+        .smtp-compilation .mws-history {
+          padding: clamp(12px, 2vw, 18px);
+          border: 1px solid var(--smtp-border);
+          border-radius: 12px; margin-top: 12px;
+          background: var(--smtp-surface);
+        }
+        .smtp-compilation .mws-button {
+          display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+          min-height: 42px; max-width: 100%; padding: 10px 14px;
+          border: 1px solid var(--smtp-border); border-radius: 10px;
+          background: var(--smtp-surface); color: inherit;
+          font: inherit; font-size: 13px; font-weight: 650;
+          cursor: pointer; text-align: center;
+        }
+        .smtp-compilation .mws-button.mws-primary {
+          background: var(--primary, #5142ce);
+          border-color: var(--primary, #5142ce); color: #fff;
+        }
+        .smtp-compilation button:disabled { opacity: .55; cursor: not-allowed; }
+        .smtp-compilation button:focus-visible,
+        .smtp-compilation input:focus-visible,
+        .smtp-compilation textarea:focus-visible {
+          outline: 3px solid var(--primary, #5142ce);
+          outline-offset: 2px;
+        }
+        .smtp-compilation .mws-status {
+          display: inline-flex; align-items: center; min-height: 26px;
+          padding: 4px 10px; border-radius: 99px;
+          background: var(--smtp-soft); border: 1px solid var(--smtp-border);
+          color: inherit; font-size: 12px; font-weight: 700;
+        }
+        .smtp-compilation .mws-scroll {
+          width: 100%; max-width: 100%; overflow: auto;
+          border: 1px solid var(--smtp-border); border-radius: 10px;
+          margin-top: 12px;
+        }
+        .smtp-compilation .mws-table {
+          border-collapse: collapse; width: 100%; min-width: 550px;
+          font-size: 13px; background: var(--smtp-surface);
+        }
+        .smtp-compilation .mws-table th,
+        .smtp-compilation .mws-table td {
+          padding: 11px 12px; text-align: left; vertical-align: top;
+          border-bottom: 1px solid var(--smtp-border);
+          background: var(--smtp-surface); position: static;
+          min-width: 0; max-width: none;
+        }
+        .smtp-compilation .mws-table th {
+          background: var(--smtp-soft); font-weight: 700;
+          white-space: nowrap;
+        }
+        .smtp-compilation .smtp-coverage-table { min-width: 550px; }
+        .smtp-compilation .smtp-activities-table { min-width: 880px; }
+        .smtp-compilation .smtp-check-label {
+          display: inline-flex; align-items: center; gap: 9px;
+          white-space: nowrap; cursor: pointer; min-height: 40px;
+        }
+        .smtp-compilation .smtp-check-label input { width: 18px; height: 18px; flex-shrink: 0; }
+        .smtp-compilation .smtp-summary {
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+          gap: 9px; margin: 14px 0;
+        }
+        .smtp-compilation .smtp-summary > div {
+          padding: 11px 12px; border-radius: 10px;
+          background: var(--smtp-surface); border: 1px solid var(--smtp-border);
+          color: var(--smtp-muted); font-size: 12px;
+        }
+        .smtp-compilation .smtp-summary strong {
+          display: block; margin-top: 5px; font-size: 21px;
+          color: var(--text, inherit);
+        }
+        .smtp-compilation .smtp-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .smtp-compilation .smtp-review-remarks {
+          width: 100%; min-height: 76px; padding: 11px 12px;
+          border: 1px solid var(--smtp-border); border-radius: 9px;
+          box-sizing: border-box; margin-top: 10px;
+          background: var(--smtp-surface); color: inherit;
+          font: inherit; resize: vertical;
+        }
+        @media (max-width: 600px) {
+          .smtp-compilation { padding: 12px; border-radius: 12px; }
+          .smtp-compilation .mws-toolbar { justify-content: stretch; }
+          .smtp-compilation .mws-toolbar > .mws-button { flex: 1 1 145px; }
+          .smtp-compilation .smtp-review-actions .mws-button { flex: 1 1 120px; }
+          .smtp-compilation .smtp-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media print {
+          .smtp-compilation .mws-toolbar, .smtp-compilation .smtp-review-actions,
+          .smtp-compilation .smtp-check-label { display: none !important; }
+          .smtp-compilation .mws-scroll { overflow: visible; }
+        }
+      `}</style>
       <div className="mws-section-head">
         <div>
-          <h2 style={{ margin: 0, fontSize: 19 }}>
-            <ClipboardList size={18} style={{ verticalAlign: 'middle' }}/>
+          <h2 style={{ margin: 0, fontSize: 'clamp(17px, 2vw, 21px)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ClipboardList size={20} aria-hidden="true"/>
             {' '}Compiled Team Monthly Sprint Plan
           </h2>
           <p className="mws-muted">
@@ -242,11 +369,19 @@ export default function SprintMonthlyTeamCompilation({ month }) {
             <p className="mws-muted">Loading team submissions...</p>
           ) : coverage ? (
             <>
-              <p className="mws-muted">
-                {coverage.total_members || 0} members | {' '}{coverage.approved_count || 0} approved | {' '}{coverage.pending_count || 0} pending | {' '}{coverage.rejected_count || 0} rejected | {' '}{coverage.not_submitted_count || 0} not submitted
-              </p>
-              <div className="mws-scroll">
-                <table className="mws-table" style={{ minWidth: 550 }}>
+              <div className="smtp-summary" aria-label="Monthly team coverage statistics">
+                {[
+                  ['Team members', coverage.total_members || 0],
+                  ['Approved', coverage.approved_count || 0],
+                  ['Pending', coverage.pending_count || 0],
+                  ['Rejected', coverage.rejected_count || 0],
+                  ['Not submitted', coverage.not_submitted_count || 0],
+                ].map(([name, value]) => (
+                  <div key={name}>{name}<strong>{value}</strong></div>
+                ))}
+              </div>
+              <div className="mws-scroll" role="region" aria-label="Team submission checklist" tabIndex={0}>
+                <table className="mws-table smtp-coverage-table">
                   <thead>
                     <tr>
                       <th>Employee</th><th>Monthly Plan</th><th>Confirm Missing</th>
@@ -266,18 +401,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                           <td>{displayStatus(member.submission_status)}</td>
                           <td>
                             {isMissing ? (
-                              <label style={{
-                                display: 'flex',
-                                flexDirection: 'row',
-                                flexWrap: 'nowrap',
-                                alignItems: 'center',
-                                justifyContent: 'flex-start',
-                                gap: 10,
-                                width: '100%',
-                                minWidth: 130,
-                                whiteSpace: 'nowrap',
-                                cursor: 'pointer'
-                              }}>
+                              <label className="smtp-check-label">
                                 <input type="checkbox"
                                   style={{
                                     width: 16,
@@ -296,7 +420,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                                 Not submitted
                               </label>
                             ) : (
-                              <span className="mws-muted">?</span>
+                              <span className="mws-muted">Not applicable</span>
                             )}
                           </td>
                         </tr>
@@ -461,7 +585,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                     <p className="mws-muted">
                       {item.approved_count || 0} approved | {' '}{item.pending_count || 0} pending | {' '}{item.rejected_count || 0} rejected | {' '}{item.not_submitted_count || 0} not submitted
                     </p>
-                    <div className="mws-scroll">
+                    <div className="mws-scroll" role="region" aria-label="Compilation submission coverage" tabIndex={0}>
                       <table className="mws-table">
                         <thead><tr><th>Employee</th><th>Status</th></tr></thead>
                         <tbody>

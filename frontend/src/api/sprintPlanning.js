@@ -153,6 +153,15 @@ export function reviewWeeklyPlan(planId, decision, remarks = '') {
   );
 }
 
+// STEP 44B.53G.8F.18
+// Freeze the daily template before the first required file upload.
+export function prepareDailyActivityTemplate(planId, activityId) {
+  return api(
+    `${BASE}/weekly/${safeId(planId)}/activities/${safeId(activityId)}/prepare-daily-template`,
+    { method: 'POST' },
+  );
+}
+
 export function reportDailyActivity(planId, activityId, payload) {
   return api(
     `${BASE}/weekly/${safeId(planId)}/activities/${safeId(activityId)}/report`,
@@ -380,4 +389,145 @@ export function saveSprintSheetTemplate(payload) {
 // STEP 44B.53C.6 - Authenticated employee department template
 export function getMySprintTemplate(planType = 'monthly') {
   return api(`${BASE}/my-template${buildQuery({ plan_type: planType })}`);
+}
+
+
+// STEP 44B.53G.8F.2
+// Upload a Sprint Planning file through the existing authenticated API.
+export function uploadSprintAttachment({
+  planType,
+  planId,
+  file,
+  fieldKey,
+  rowId,
+  activityId,
+}) {
+  const allowed = ['monthly', 'weekly', 'daily'];
+
+  if (!allowed.includes(planType)) {
+    return Promise.reject(new Error('Invalid Sprint Planning type.'));
+  }
+
+  if (!planId || !file || !fieldKey) {
+    return Promise.reject(
+      new Error('Plan, file and field are required.')
+    );
+  }
+
+  if (planType === 'monthly' && !rowId) {
+    return Promise.reject(
+      new Error('Monthly row ID is required.')
+    );
+  }
+
+  if (planType !== 'monthly' && !activityId) {
+    return Promise.reject(
+      new Error('Activity ID is required.')
+    );
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('field_key', fieldKey);
+
+  if (planType === 'monthly') {
+    formData.append('row_id', rowId);
+  } else {
+    formData.append('activity_id', activityId);
+  }
+
+  return api(
+    `${BASE}/attachments/${planType}/${encodeURIComponent(planId)}`,
+    {
+      method: 'POST',
+      body: formData,
+      timeoutMs: 60000,
+    }
+  );
+}
+
+// Update one saved weekly draft activity's custom fields.
+export function updateWeeklyActivityCustomFields(
+  planId,
+  activityId,
+  customValues = {},
+) {
+  if (!planId || !activityId) {
+    return Promise.reject(
+      new Error('Plan and activity IDs are required.')
+    );
+  }
+
+  return api(
+    `${BASE}/weekly/${encodeURIComponent(planId)}/activities/` +
+    `${encodeURIComponent(activityId)}/custom-fields`,
+    {
+      method: 'PUT',
+      ...jsonBody({
+        custom_values: customValues,
+      }),
+    }
+  );
+}
+
+// Convert a server-issued attachment ID into a saved field reference.
+export function sprintAttachmentReference(attachmentId) {
+  const value = String(attachmentId || '').trim();
+
+  if (!/^[0-9a-f]{32}$/.test(value)) {
+    throw new Error('Invalid Sprint attachment ID.');
+  }
+
+  return `sprint-attachment:${value}`;
+}
+
+
+// STEP 44B.53G.8F.5-R3
+// Download via the authenticated HRMS API client.
+export async function downloadSprintAttachment(
+  attachmentRecordId,
+  filename = ''
+) {
+  const id = String(attachmentRecordId || '').trim();
+
+  // STEP 44B.53G.8F.11
+  // Backend attachment_id is UUID hex, not MongoDB ObjectId.
+  if (!/^[0-9a-f]{32}$/.test(id)) {
+    throw new Error('A valid 32-character attachment ID is required.');
+  }
+
+  const blob = await api(
+    `${BASE}/attachments/${encodeURIComponent(id)}/download`,
+    {
+      method: 'GET',
+      responseType: 'blob',
+      timeoutMs: 60000,
+    }
+  );
+
+  if (!(blob instanceof Blob) || blob.size <= 0) {
+    throw new Error('Attachment download returned an empty file.');
+  }
+
+  const safeName = String(filename || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim()
+    .slice(0, 180);
+
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+
+  try {
+    anchor.href = objectUrl;
+    anchor.download = safeName || `sprint-attachment-${id}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    window.setTimeout(
+      () => URL.revokeObjectURL(objectUrl),
+      1000,
+    );
+  }
 }

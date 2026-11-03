@@ -185,8 +185,36 @@ export default function SprintTeamDashboard() {
 
   return (
     <main className="sprint-team-dashboard"
-      style={{ maxWidth: 1450, margin: '0 auto', padding: 'clamp(12px,2vw,24px)' }}>
+      style={{ maxWidth: 1450, minWidth: 0, margin: '0 auto', padding: 'clamp(12px,2vw,24px)', color: 'var(--text, inherit)' }}>
       <style>{`
+        .sprint-team-dashboard { --sprint-primary: var(--primary, var(--color-primary, #2563eb)); }
+        .sprint-team-dashboard .card { min-width: 0; background: var(--surface, var(--card-bg, #fff)); border-color: var(--border, #e2e8f0); }
+        .sprint-team-dashboard .sprint-team-header { min-width: 0; }
+        .sprint-team-dashboard .sprint-team-title { font-size: clamp(1.22rem, 2.5vw, 1.65rem); line-height: 1.25; }
+        .sprint-team-dashboard .sprint-team-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; min-width: 0; }
+        .sprint-team-dashboard .sprint-team-control { min-height: 44px; max-width: 100%; }
+        .sprint-team-dashboard button { min-height: 42px; }
+        .sprint-team-dashboard button:focus-visible,
+        .sprint-team-dashboard input:focus-visible,
+        .sprint-team-dashboard select:focus-visible { outline: 2px solid var(--sprint-primary); outline-offset: 2px; }
+        .sprint-team-dashboard .sprint-team-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; margin-bottom: 18px; }
+        .sprint-team-dashboard .sprint-team-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; margin-bottom: 18px; }
+        .sprint-team-dashboard .sprint-team-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; margin-bottom: 18px; }
+        .sprint-team-dashboard .sprint-team-employee { min-width: 0; overflow-wrap: anywhere; background: var(--surface, #fff); }
+        .sprint-team-dashboard .sprint-team-employee-name { min-width: 0; }
+        .sprint-team-dashboard .sprint-team-employee-actions { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        .sprint-team-dashboard .sprint-team-employee-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+        .sprint-team-dashboard .sprint-team-employee-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+        @media (max-width: 600px) {
+          .sprint-team-dashboard .sprint-team-controls { width: 100%; }
+          .sprint-team-dashboard .sprint-team-controls .sprint-team-control { flex: 1 1 135px; }
+          .sprint-team-dashboard .sprint-team-controls button { flex: 1 1 110px; justify-content: center; }
+          .sprint-team-dashboard .sprint-team-employee-actions button { width: 100%; justify-content: center; }
+          .sprint-team-dashboard .sprint-team-employee-meta { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+        }
+        @media (max-width: 370px) {
+          .sprint-team-dashboard .sprint-team-employee-meta { grid-template-columns: 1fr; }
+        }
         @keyframes sprintTeamEnter {
           from { opacity: 0; transform: translateY(7px); }
           to { opacity: 1; transform: translateY(0); }
@@ -208,7 +236,7 @@ export default function SprintTeamDashboard() {
             style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 15 }}>
             <ArrowLeft size={16} /> Back to Team Performance
           </button>
-          <div className="card" style={{ padding: 17, marginBottom: 15 }}>
+          <div className="card" style={{ padding: 'clamp(14px, 2vw, 20px)', marginBottom: 15 }}>
             <strong>{selectedEmployee.name}</strong>
             <div style={{ fontSize: 13, color: 'var(--text-muted, #64748b)' }}>
               {selectedEmployee.employee_code} · {selectedEmployee.department || 'Department not assigned'}
@@ -221,13 +249,13 @@ export default function SprintTeamDashboard() {
         </>
       ) : (
         <>
-          <header style={{
+          <header className="sprint-team-header" style={{
             display: 'flex', justifyContent: 'space-between',
             alignItems: 'center', gap: 15, flexWrap: 'wrap',
             marginBottom: 22
           }}>
             <div>
-              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <h2 className="sprint-team-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <Users size={25} /> Team Sprint Performance
               </h2>
               <p style={{
@@ -238,9 +266,9 @@ export default function SprintTeamDashboard() {
                 within your authorised scope.
               </p>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <div className="sprint-team-controls">
               <CalendarDays size={17} />
-              <input type="month" value={month}
+              <input className="sprint-team-control" type="month" value={month}
                 aria-label="Team performance month"
                 onChange={event => setMonth(event.target.value)}
                 style={{
@@ -294,11 +322,7 @@ export default function SprintTeamDashboard() {
                 </div>
               )}
 
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))',
-                gap: 12, marginBottom: 18
-              }}>
+              <div className="sprint-team-stats">
                 <SummaryCard title="Employees" value={employees.length}
                   icon={Users} color={palette.primary} />
                 <SummaryCard title="Planned Activities" value={number(summary.planned)}
@@ -313,11 +337,7 @@ export default function SprintTeamDashboard() {
                   icon={FileCheck2} color={palette.complete} />
               </div>
 
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,320px),1fr))',
-                gap: 16, marginBottom: 18
-              }}>
+              <div className="sprint-team-panels">
                 <section className="card" style={{ padding: 20 }}>
                   <h3 style={{ marginTop: 0, fontSize: 17 }}>
                     Overall Completion
@@ -326,10 +346,10 @@ export default function SprintTeamDashboard() {
                     {rate(summary.completion_rate).toFixed(1)}%
                   </div>
                   <ProgressBar value={summary.completion_rate} />
-                  <p style={{ fontSize: 12, color: '#64748b' }}>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>
                     Reporting compliance: {rate(summary.reporting_rate).toFixed(1)}%
                   </p>
-                  <p style={{ fontSize: 12, color: '#64748b' }}>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>
                     Evidence coverage: {rate(summary.evidence_coverage_rate).toFixed(1)}%
                   </p>
                 </section>
@@ -339,7 +359,7 @@ export default function SprintTeamDashboard() {
                     Department Comparison
                   </h3>
                   {departmentStats.length === 0 ? (
-                    <p style={{ color: '#64748b', fontSize: 13 }}>
+                    <p style={{ color: 'var(--text-muted, #64748b)', fontSize: 13 }}>
                       No department data available.
                     </p>
                   ) : departmentStats.map(item => (
@@ -351,7 +371,7 @@ export default function SprintTeamDashboard() {
                         <span>{item.name} ({item.employees})</span>
                         <strong>{rate(item.completion_rate).toFixed(1)}%</strong>
                       </div>
-                      <ProgressBar value={item.completion_rate} color={palette.primary} />
+                      <ProgressBar value={item.completion_rate} color={'var(--sprint-primary)'} />
                     </div>
                   ))}
                 </section>
@@ -362,15 +382,11 @@ export default function SprintTeamDashboard() {
                   <TrendingUp size={20} /> Employee Performance
                 </h3>
 
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
-                  gap: 12, marginBottom: 18
-                }}>
+                <div className="sprint-team-filters">
                   <div style={{ position: 'relative' }}>
                     <Search size={16} style={{
                       position: 'absolute', left: 11, top: 12,
-                      color: '#64748b'
+                      color: 'var(--text-muted, #64748b)'
                     }} />
                     <input type="search" aria-label="Search employees"
                       placeholder="Search employee or code"
@@ -401,23 +417,20 @@ export default function SprintTeamDashboard() {
                 </div>
 
                 {filtered.length === 0 ? (
-                  <p style={{ color: '#64748b' }}>
+                  <p style={{ color: 'var(--text-muted, #64748b)' }}>
                     No employees match the selected filters.
                   </p>
                 ) : (
                   <div style={{ display: 'grid', gap: 12 }}>
                     {filtered.map(employee => (
-                      <div key={employee.employee_id} style={{
+                      <div className="sprint-team-employee" key={employee.employee_id} style={{
                         border: '1px solid var(--border, #e2e8f0)',
                         padding: 15, borderRadius: 11
                       }}>
-                        <div style={{
-                          display: 'flex', justifyContent: 'space-between',
-                          flexWrap: 'wrap', gap: 12, marginBottom: 12
-                        }}>
-                          <div>
+                        <div className="sprint-team-employee-actions" style={{ marginBottom: 12 }}>
+                          <div className="sprint-team-employee-name">
                             <strong>{employee.name}</strong>
-                            <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginTop: 3 }}>
                               {employee.employee_code || 'No code'}
                               {' · '}
                               {employee.department || 'Unassigned'}
@@ -428,18 +441,12 @@ export default function SprintTeamDashboard() {
                             View Details
                           </button>
                         </div>
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'minmax(130px,1fr) auto',
-                          gap: 12, alignItems: 'center'
-                        }}>
+                        <div className="sprint-team-employee-progress">
                           <ProgressBar value={employee.completion_rate} />
                           <strong>{rate(employee.completion_rate).toFixed(1)}%</strong>
                         </div>
-                        <div style={{
-                          display: 'flex', flexWrap: 'wrap', gap: 14,
-                          marginTop: 11, fontSize: 12,
-                          color: 'var(--text-muted, #64748b)'
+                        <div className="sprint-team-employee-meta" style={{
+                          marginTop: 11, fontSize: 12, color: 'var(--text-muted, #64748b)'
                         }}>
                           <span>Completed: {number(employee.completed)}/{number(employee.planned)}</span>
                           <span>Reporting: {rate(employee.reporting_rate).toFixed(1)}%</span>
