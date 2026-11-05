@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   buildAttendancePayload,
   createHolidayWorkRequest,
@@ -8,6 +9,16 @@ import {
   submitCheckOut,
 } from '../api/client';
 import { useCustomAlert } from './CustomAlertProvider.jsx';
+import {
+  getSprintAvailability,
+  getSprintCheckoutTasks,
+  getDailyCheckoutReadiness,
+  reportDailyActivity,
+  uploadCheckoutEvidence,
+  prepareDailyActivityTemplate,
+  uploadSprintAttachment,
+} from '../api/sprintPlanning';
+
 
 const HOLD_DURATION = 1600;
 const OTHER_REASON_CODE = 'other';
@@ -458,6 +469,66 @@ function HoldButton({
   );
 }
 
+
+// The backend supplies approved, tenant-scoped tasks for its attendance-local
+// date. Existing daily reports are prefilled so employees never retype them.
+function sprintCheckoutDraft(item) {
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+  const link = evidence.find((entry) => entry?.type === 'link');
+  return {
+    ...item,
+    key: `${item.plan_id}:${item.activity_id}`,
+    status: ['completed', 'in_progress', 'not_completed'].includes(item.status)
+      ? item.status : '',
+    incomplete_reason: String(item.incomplete_reason || ''),
+    remarks: String(item.remarks || ''),
+    evidence,
+    evidenceUrl: String(link?.reference || ''),
+    evidenceFile: null,
+    customValues: { ...(item.daily_custom_values || {}) },
+    customFiles: {},
+    dirty: false,
+  };
+}
+
+function sprintReportIsComplete(item) {
+  if (item.status === 'completed') {
+    return Boolean(
+      (item.evidence || []).some((entry) => entry?.type !== 'link') ||
+      item.evidenceUrl.trim() || item.evidenceFile ||
+      Object.values(item.customFiles || {}).some(Boolean)
+    );
+  }
+  return ['in_progress', 'not_completed'].includes(item.status) &&
+    item.incomplete_reason.trim().length >= 10;
+}
+
+function sprintEvidenceType(file) {
+  return String(file?.type || '').startsWith('image/') ? 'photo' : 'document';
+}
+
+function sprintValidationMessage(item) {
+  const label = item.title || 'Activity';
+  if (!item.status) return `${label}: choose the actual work status.`;
+  if (!sprintReportIsComplete(item)) {
+    return item.status === 'completed'
+      ? `${label}: add evidence (a URL, document or photo).`
+      : `${label}: explain unfinished work in at least 10 characters.`;
+  }
+  if (item.evidenceUrl.trim() &&
+      !/^https?:\/\/\S+$/i.test(item.evidenceUrl.trim())) {
+    return `${label}: evidence URL must begin with https:// or http://.`;
+  }
+  for (const column of item.daily_columns || []) {
+    const value = item.customValues?.[column.key];
+    if (column.required && !item.customFiles?.[column.key] &&
+        (value === null || value === undefined || value === '')) {
+      return `${label}: ${column.label} is required by the daily report template.`;
+    }
+  }
+  return '';
+}
+
 export default function AttendanceWidget({ onSuccess }) {
   const alerts = useCustomAlert();
 
@@ -469,6 +540,9 @@ export default function AttendanceWidget({ onSuccess }) {
   const [lateOtherReason, setLateOtherReason] = useState('');
   const [earlyCheckoutReasonCode, setEarlyCheckoutReasonCode] = useState('');
   const [earlyCheckoutOtherReason, setEarlyCheckoutOtherReason] = useState('');
+  const [sprintCheckout, setSprintCheckout] = useState(null);
+
+
 
   const [holidayRequestDate, setHolidayRequestDate] = useState(todayISO());
   const [holidayReason, setHolidayReason] = useState('');
@@ -639,6 +713,143 @@ async function loadStatus() {
     }
   }
 
+
+function updateSprintCheckoutTask(key, changes) {
+  setSprintCheckout((current) => current ? {
+    ...current,
+    items: current.items.map((item) =>
+      item.key === key ? { ...item, ...changes, dirty: true } : item
+    ),
+  } : current);
+}
+
+function updateSprintCustomValue(item, column, value) {
+  updateSprintCheckoutTask(item.key, {
+    customValues: { ...item.customValues, [column.key]: value },
+  });
+}
+
+function updateSprintCustomFile(item, column, file) {
+  updateSprintCheckoutTask(item.key, {
+    customFiles: { ...item.customFiles, [column.key]: file },
+  });
+}
+
+async function submitSprintReportAndCheckout() {
+  if (!sprintCheckout || loadingType) return;
+  const { items, workDate, dailyStatus, dailyReason, dailyEvidenceUrl, dailyEvidenceFile } = sprintCheckout;
+  if (!['completed', 'not_completed'].includes(dailyStatus)) {
+    alerts.warning('Select whether today\'s pending work was completed.', 'Daily Work Status Required');
+    return;
+  }
+  if (dailyStatus === 'not_completed' && String(dailyReason || '').trim().length < 10) {
+    alerts.warning('Enter a genuine reason of at least 10 characters.', 'Reason Required');
+    return;
+  }
+  if (dailyStatus === 'completed' && !String(dailyEvidenceUrl || '').trim() && !dailyEvidenceFile) {
+    alerts.warning('Add an evidence URL, upload a document, or take a photo.', 'Evidence Required');
+    return;
+  }
+  if (dailyEvidenceUrl?.trim() && !/^https?:\/\/\S+$/i.test(dailyEvidenceUrl.trim())) {
+    alerts.warning('Evidence URL must begin with https:// or http://.', 'Invalid Evidence URL');
+    return;
+  }
+  // One daily answer applies only to outstanding activities, never previously reported work.
+  // A required custom Sprint template cannot be silently bypassed by the compact form.
+  const unresolvedTemplate = items.find((item) => (item.daily_columns || []).some(
+    (column) => column.required && !item.customValues?.[column.key]
+  ));
+  if (unresolvedTemplate) {
+    alerts.warning('Your daily plan has required custom fields. Complete those in Sprint Planning before checkout.', 'Sprint Template Fields Required');
+    return;
+  }
+  const reportedItems = items.map((item) => ({
+    ...item,
+    status: dailyStatus,
+    incomplete_reason: dailyStatus === 'not_completed' ? dailyReason.trim() : '',
+    evidenceUrl: dailyStatus === 'completed' ? dailyEvidenceUrl.trim() : '',
+    evidenceFile: dailyStatus === 'completed' ? dailyEvidenceFile : null,
+    // Existing evidence is never reused to claim completion of a new pending activity.
+    evidence: [],
+    dirty: true,
+  }));
+  for (const item of reportedItems) {
+    const message = sprintValidationMessage(item);
+    if (message) {
+      alerts.warning(message, 'Daily Work Report Required');
+      return;
+    }
+  }
+
+  setLoadingType('sprint-report');
+  try {
+    // Save only pending/changed tasks to avoid rewriting valid daily reports.
+    for (const item of reportedItems) {
+      let evidence = (item.evidence || []).filter((entry) => entry?.type !== 'link');
+      if (item.evidenceUrl.trim()) {
+        evidence.push({ type: 'link', reference: item.evidenceUrl.trim() });
+      }
+
+      const values = { ...(item.customValues || {}) };
+      const customFiles = Object.entries(item.customFiles || {}).filter(([, file]) => file);
+      if (customFiles.length) {
+        await prepareDailyActivityTemplate(item.plan_id, item.activity_id);
+        for (const [key, file] of customFiles) {
+          const upload = await uploadSprintAttachment({
+            planType: 'daily', planId: item.plan_id,
+            activityId: item.activity_id, fieldKey: key, file,
+          });
+          const reference = `sprint-attachment:${upload.attachment_id}`;
+          values[key] = reference;
+          if (item.status === 'completed') {
+            evidence.push({ type: sprintEvidenceType(file), reference });
+          }
+        }
+      }
+
+      if (item.evidenceFile) {
+        const upload = await uploadCheckoutEvidence(
+          item.plan_id, item.activity_id, item.evidenceFile,
+        );
+        evidence.push({
+          type: sprintEvidenceType(item.evidenceFile),
+          reference: upload.reference,
+        });
+      }
+
+      const payload = {
+        status: item.status,
+        incomplete_reason: item.status === 'completed'
+          ? '' : item.incomplete_reason.trim(),
+        evidence,
+        remarks: item.remarks,
+      };
+      if ((item.daily_columns || []).length) {
+        payload.daily_custom_values = values;
+      }
+      await reportDailyActivity(item.plan_id, item.activity_id, payload);
+    }
+
+    const readiness = await getDailyCheckoutReadiness(workDate);
+    if (!readiness?.ready) {
+      throw new Error('The daily report is still incomplete. Refresh the checkout form and try again.');
+    }
+
+    setLoadingType('');
+    const checkedOutSuccessfully = await submitAttendance('check-out', true);
+    if (checkedOutSuccessfully) {
+      setSprintCheckout(null);
+    }
+  } catch (error) {
+    alerts.error(
+      `${attendanceErrorMessage(error)} Attendance has not been checked out.`,
+      'Daily Report / Checkout Failed',
+    );
+  } finally {
+    setLoadingType('');
+  }
+}
+
 async function refreshGps() {
   try {
     setLoadingType('gps-refresh');
@@ -672,7 +883,7 @@ function savedGpsPayload() {
 }
 
 
-async function submitAttendance(type) {
+async function submitAttendance(type, sprintReportAlreadySaved = false) {
   if (type === 'check-in') {
     if (checkedIn) {
       alerts.info('You have already checked in today.', 'Already Checked In');
@@ -769,6 +980,52 @@ async function submitAttendance(type) {
     }
   }
 
+
+if (type === 'check-out' && !sprintReportAlreadySaved) {
+  try {
+    setLoadingType('sprint-checkout');
+    // Tenant activation is resolved by the authenticated server, not local storage.
+    const availability = await getSprintAvailability();
+    if (typeof availability?.enabled !== 'boolean') {
+      throw new Error('Unable to verify your organisation\'s Sprint setting.');
+    }
+    if (availability.enabled) {
+      const daily = await getSprintCheckoutTasks();
+      if (!daily || typeof daily.ready !== 'boolean' || !Array.isArray(daily.items)) {
+        throw new Error('Unable to verify today\'s Sprint work report.');
+      }
+      if (!daily.ready) {
+        if (!daily.items.length) {
+          throw new Error('Sprint reporting is required, but today\'s activities could not be loaded.');
+        }
+        const pending = daily.items.map(sprintCheckoutDraft).filter((item) => !sprintReportIsComplete(item));
+        if (!pending.length) {
+          throw new Error('Daily reporting is required, but no pending activities were returned.');
+        }
+        setSprintCheckout({
+          workDate: daily.work_date,
+          items: pending,
+          dailyStatus: '',
+          dailyReason: '',
+          dailyEvidenceUrl: '',
+          dailyEvidenceFile: null,
+        });
+        return false;
+      }
+    }
+    // Confirmed Sprint-OFF tenants continue normal attendance checkout.
+  } catch (error) {
+    console.warn('Sprint checkout preflight failed; attendance checkout not attempted:', error);
+    alerts.error(
+      `${attendanceErrorMessage(error)} Please try again. Attendance has not been checked out.`,
+      'Unable to Verify Sprint Report',
+    );
+    return false;
+  } finally {
+    setLoadingType('');
+  }
+}
+
   try {
     setLoadingType(type);
     alerts.info('Capturing GPS location. Please wait...', 'GPS Capture');
@@ -819,6 +1076,7 @@ async function submitAttendance(type) {
     } catch (refreshError) {
       console.error('Attendance refresh failed after successful attendance action:', refreshError);
     }
+    return true;
   } catch (error) {
     let latestStatus = null;
 
@@ -848,6 +1106,7 @@ async function submitAttendance(type) {
         type === 'check-in' ? 'Check-in Failed' : 'Check-out Failed',
       );
     }
+    return actionWasRecorded;
   } finally {
     setLoadingType('');
   }
@@ -1024,6 +1283,206 @@ async function submitHolidayWorkRequest(event) {
           .attendance-reason-help {
             display: grid;
           }
+        }
+        /* Full-viewport checkout dialog: portal-mounted, outside the attendance card. */
+        .sprint-checkout-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 2147483000;
+          isolation: isolate;
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          background: rgba(17, 24, 54, 0.56);
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+        }
+        .sprint-checkout-dialog {
+          display: flex;
+          flex-direction: column;
+          width: min(510px, 100%);
+          max-height: min(85vh, 760px);
+          min-height: 0;
+          overflow: hidden;
+          border: 1px solid #d9defa;
+          border-radius: 23px;
+          background: #ffffff;
+          color: #192747;
+          box-shadow: 0 32px 100px rgba(21, 31, 83, .3), 0 7px 24px rgba(36, 45, 102, .1);
+          animation: sprintCheckoutReveal .2s ease-out;
+        }
+        @keyframes sprintCheckoutReveal {
+          from { opacity: .65; transform: translateY(12px) scale(.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .sprint-checkout-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 21px 23px 18px;
+          border-bottom: 1px solid #e7eafa;
+          background: linear-gradient(115deg, #f0f5ff 0%, #f9f7ff 55%, #eefbf9 100%);
+          flex: 0 0 auto;
+        }
+        .sprint-checkout-header h3 {
+          margin: 3px 0 6px;
+          color: #17264b;
+          font-family: Georgia, 'Times New Roman', serif;
+          font-size: 21px;
+          font-weight: 700;
+          line-height: 1.25;
+        }
+        .sprint-checkout-header p { margin: 0; color: #627397; font-size: 12.5px; line-height: 1.5; }
+        .sprint-checkout-eyebrow {
+          color: #5144cf !important;
+          font-family: inherit;
+          font-weight: 850;
+          font-size: 10.5px !important;
+          letter-spacing: .11em;
+          text-transform: uppercase;
+        }
+        .sprint-checkout-close {
+          display: grid;
+          place-items: center;
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
+          border: 1px solid #d9dff4;
+          border-radius: 10px;
+          background: #fff;
+          color: #596687;
+          font-size: 23px;
+          line-height: 1;
+          cursor: pointer;
+        }
+        .sprint-checkout-close:hover { border-color: #b8b7ef; background: #f4f2ff; color: #5144cf; }
+        .sprint-checkout-content {
+          display: grid;
+          gap: 11px;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: 17px 21px;
+          background: #fff;
+        }
+        .sprint-daily-summary {
+          border: 1px solid #dfe5f8;
+          border-radius: 14px;
+          padding: 13px 15px;
+          background: linear-gradient(120deg, #f5f7ff, #effbf9);
+          color: #28375c;
+        }
+        .sprint-daily-summary > strong { font-size: 13px; }
+        .sprint-daily-summary > span { float: right; font-size: 11px; color: #6253c9; font-weight: 750; }
+        .sprint-daily-summary p { margin: 6px 0; color: #6c7795; font-size: 12px; line-height: 1.5; }
+        .sprint-daily-summary details { margin-top: 9px; font-size: 12px; }
+        .sprint-daily-summary summary { cursor: pointer; color: #584bdb; font-weight: 750; }
+        .sprint-daily-summary ul { margin: 8px 0 0; padding-left: 17px; }
+        .sprint-daily-summary li { padding: 2px 0; }
+        .sprint-daily-form { display: grid; gap: 16px; padding: 15px; border: 1px solid #e2e8f6; border-radius: 15px; background: #fff; }
+        .sprint-daily-note { margin: 0; color: #77839b; font-size: 11px; line-height: 1.55; }
+        .sprint-checkout-task {
+          display: grid;
+          gap: 10px;
+          padding: 15px;
+          border: 1px solid #e0e6f6;
+          border-radius: 15px;
+          background: #fbfcff;
+        }
+        .sprint-checkout-task-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
+        .sprint-checkout-task-heading strong { color: #23345d; font-size: 13.5px; line-height: 1.4; }
+        .sprint-checkout-task-heading span {
+          flex-shrink: 0;
+          padding: 4px 7px;
+          border-radius: 100px;
+          background: #f0edff;
+          color: #6254ba;
+          font-size: 10px;
+          font-weight: 700;
+        }
+        .sprint-checkout-description { margin: 0; color: #7886a1; font-size: 12px; }
+        .sprint-checkout-field { display: grid; gap: 6px; color: #2a3658; font-size: 12px; font-weight: 750; }
+        .sprint-checkout-field input:not([type='checkbox']),
+        .sprint-checkout-field select,
+        .sprint-checkout-field textarea {
+          box-sizing: border-box;
+          width: 100%;
+          padding: 10px 11px;
+          border: 1px solid #d5def0;
+          border-radius: 10px;
+          outline: none;
+          background: #fff;
+          color: #20304d;
+          font: 400 13px/1.5 inherit;
+        }
+        .sprint-checkout-field select:focus,
+        .sprint-checkout-field textarea:focus,
+        .sprint-checkout-field input:focus { border-color: #6b5bf0; box-shadow: 0 0 0 3px rgba(107, 91, 240, .11); }
+        .sprint-checkout-field textarea { resize: vertical; min-height: 62px; }
+        .sprint-checkout-field small, .sprint-checkout-evidence small { color: #77839b; font-size: 11px; font-weight: 400; }
+        .sprint-checkout-field em, .sprint-checkout-evidence em { color: #d44865; font-style: normal; }
+        .sprint-checkout-evidence, .sprint-checkout-custom-fields { display: grid; gap: 9px; padding-top: 10px; border-top: 1px dashed #d8e0f1; }
+        .sprint-checkout-evidence > strong, .sprint-checkout-custom-fields > strong { font-size: 12px; }
+        .sprint-checkout-evidence-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .sprint-checkout-evidence-action {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 36px;
+          padding: 6px 12px;
+          border: 1px solid #cbd6f5;
+          border-radius: 10px;
+          background: #f3f6ff;
+          color: #4c4eaa;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .sprint-checkout-evidence-action:hover { background: #e9edff; border-color: #afaef0; }
+        .sprint-checkout-evidence-action:focus-within { outline: 2px solid #6b5bf0; outline-offset: 2px; }
+        .sprint-checkout-evidence-action input[type='file'] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+        .sprint-checkout-evidence-note { color: #77839b; font-size: 11px; }
+        .sprint-checkout-footer {
+          display: grid;
+          gap: 12px;
+          flex: 0 0 auto;
+          padding: 13px 21px 17px;
+          border-top: 1px solid #e8eafa;
+          background: #fff;
+        }
+        .sprint-checkout-footer small { color: #7683a0; font-size: 11px; line-height: 1.5; }
+        .sprint-checkout-footer > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+        .sprint-checkout-footer button {
+          min-height: 39px;
+          padding: 9px 14px;
+          border: 1px solid #d9def0;
+          border-radius: 11px;
+          background: #fff;
+          color: #455172;
+          font-weight: 750;
+          cursor: pointer;
+        }
+        .sprint-checkout-footer button.primary {
+          border-color: #5b4de1;
+          background: linear-gradient(100deg, #5849df, #7162ed);
+          color: #fff;
+          box-shadow: 0 5px 14px rgba(91, 77, 225, .18);
+        }
+        .sprint-checkout-footer button:disabled { opacity: .6; cursor: not-allowed; }
+        @media (max-width: 560px) {
+          .sprint-checkout-backdrop { padding: 12px; }
+          .sprint-checkout-dialog { max-height: min(92dvh, 760px); border-radius: 18px; }
+          .sprint-checkout-header { padding: 16px; }
+          .sprint-checkout-header h3 { font-size: 19px; }
+          .sprint-checkout-content { padding: 12px; }
+          .sprint-checkout-task { padding: 12px; }
+          .sprint-checkout-footer { padding: 12px; }
+          .sprint-checkout-task-heading { flex-wrap: wrap; }
+          .sprint-checkout-footer > div { display: grid; grid-template-columns: 1fr; }
         }
       `}</style>
 
@@ -1326,11 +1785,12 @@ async function submitHolidayWorkRequest(event) {
             loadingType === 'check-out' ? 'Checking Out...' : 'Processing...'
           }
           loading={loadingType === 'check-out'}
-          disabled={loadingType !== ''}
+          disabled={loadingType !== '' || Boolean(sprintCheckout)}
           onComplete={() => submitAttendance('check-out')}
           variant="secondary"
         />
       </div>
+
 
           <div className="attendance-extra-grid">
             <button
@@ -1440,6 +1900,135 @@ async function submitHolidayWorkRequest(event) {
               : 'Submit Holiday Work Request'}
           </button>
         </form>
+      )}
+
+      {sprintCheckout && createPortal(
+        <div className="sprint-checkout-backdrop" role="presentation">
+          <section
+            className="sprint-checkout-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sprint-checkout-title"
+          >
+            <div className="sprint-checkout-header">
+              <div>
+                <p className="sprint-checkout-eyebrow">Daily Work Report</p>
+                <h3 id="sprint-checkout-title">Daily Work Report before checkout</h3>
+                <p>{sprintCheckout.workDate} · Only today's pending tasks need reporting. Unfinished work is allowed with a reason.</p>
+              </div>
+              <button
+                type="button"
+                className="sprint-checkout-close"
+                disabled={loadingType !== ''}
+                aria-label="Close Sprint report"
+                onClick={() => setSprintCheckout(null)}
+              >×</button>
+            </div>
+
+            <div className="sprint-checkout-content">
+              <div className="sprint-daily-summary">
+                <strong>Today's work</strong>
+                <span>{sprintCheckout.items.length} pending {sprintCheckout.items.length === 1 ? 'activity' : 'activities'}</span>
+                <p>Give one overall answer for the pending work. It will be recorded against each pending activity.</p>
+                <details>
+                  <summary>View assigned activities</summary>
+                  <ul>{sprintCheckout.items.map((item) => <li key={item.key}>{item.title}</li>)}</ul>
+                </details>
+              </div>
+              <div className="sprint-daily-form">
+                <label className="sprint-checkout-field">
+                  Did you complete all of today's pending work? <em>*</em>
+                  <select
+                    value={sprintCheckout.dailyStatus || ''}
+                    disabled={loadingType !== ''}
+                    onChange={(event) => setSprintCheckout((current) => current && ({
+                      ...current, dailyStatus: event.target.value,
+                    }))}
+                  >
+                    <option value="">Select work status</option>
+                    <option value="completed">Yes, completed</option>
+                    <option value="not_completed">No, unfinished</option>
+                  </select>
+                </label>
+
+                {sprintCheckout.dailyStatus === 'not_completed' && (
+                  <label className="sprint-checkout-field">
+                    Why was the work unfinished? <em>*</em>
+                    <textarea
+                      rows={3}
+                      maxLength={1000}
+                      placeholder="Provide the actual reason (minimum 10 characters)"
+                      value={sprintCheckout.dailyReason || ''}
+                      disabled={loadingType !== ''}
+                      onChange={(event) => setSprintCheckout((current) => current && ({
+                        ...current, dailyReason: event.target.value,
+                      }))}
+                    />
+                  </label>
+                )}
+
+                {sprintCheckout.dailyStatus === 'completed' && (
+                  <div className="sprint-checkout-evidence">
+                    <strong>Evidence of completed work <em>*</em></strong>
+                    <label className="sprint-checkout-field">
+                      Evidence URL
+                      <input
+                        type="url"
+                        placeholder="https://..."
+                        value={sprintCheckout.dailyEvidenceUrl || ''}
+                        disabled={loadingType !== ''}
+                        onChange={(event) => setSprintCheckout((current) => current && ({
+                          ...current, dailyEvidenceUrl: event.target.value,
+                        }))}
+                      />
+                    </label>
+                    <div className="sprint-checkout-evidence-actions">
+                      <label className="sprint-checkout-evidence-action">
+                        Upload Document
+                        <input
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*"
+                          disabled={loadingType !== ''}
+                          onChange={(event) => setSprintCheckout((current) => current && ({
+                            ...current, dailyEvidenceFile: event.target.files?.[0] || null,
+                          }))}
+                        />
+                      </label>
+                      <label className="sprint-checkout-evidence-action">
+                        Take Photo
+                        <input
+                          type="file" accept="image/*" capture="environment"
+                          disabled={loadingType !== ''}
+                          onChange={(event) => setSprintCheckout((current) => current && ({
+                            ...current, dailyEvidenceFile: event.target.files?.[0] || null,
+                          }))}
+                        />
+                      </label>
+                    </div>
+                    {sprintCheckout.dailyEvidenceFile &&
+                      <small className="sprint-checkout-evidence-note">Selected: {sprintCheckout.dailyEvidenceFile.name}</small>}
+                  </div>
+                )}
+                <p className="sprint-daily-note">If some activities were completed and others were not, report them individually in Sprint Planning. Your checkout will then continue without asking again.</p>
+              </div>
+            </div>
+            <div className="sprint-checkout-footer">
+              <small>Your answer is saved to the Sprint Daily Work Report for each pending activity. Checkout happens only after successful saving.</small>
+              <div>
+                <button type="button" disabled={loadingType !== ''}
+                  onClick={() => setSprintCheckout(null)}>Cancel</button>
+                <button type="button" className="primary"
+                  disabled={loadingType !== ''}
+                  onClick={submitSprintReportAndCheckout}>
+                  {loadingType === 'sprint-report' ? 'Saving report...' :
+                    loadingType === 'check-out' ? 'Checking out...' :
+                      'Submit Report & Checkout'}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>,
+        document.body
       )}
 
       {holidayWorkRequest && (

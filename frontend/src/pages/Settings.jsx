@@ -889,6 +889,8 @@ export default function Settings({ user, setPage }) {
       const data = await updateSprintPlanningSettings(nextEnabled);
 
       setSprintEnabled(data?.enabled === true);
+      // Update the sidebar and dashboards without requiring a new login.
+      window.dispatchEvent(new Event('yourcomate:sprint-setting-changed'));
       setSprintMessage(
         data?.message || 'Sprint Planning setting updated successfully.',
       );

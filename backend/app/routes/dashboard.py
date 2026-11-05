@@ -6,6 +6,7 @@ import re
 from app.extensions import get_db
 from app.utils.auth import current_user_required
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 from app.middleware.tenant_guard import (
     active_tenant_required,
     get_loaded_tenant_context,
@@ -175,13 +176,8 @@ def tenant_query(extra=None, include_legacy=False):
 
 
 def active_employee_filter(extra=None):
-    q = {
-        "status": {"$ne": "Inactive"},
-        "is_deleted": {"$ne": True},
-    }
-
-    q.update(extra or {})
-    return q
+    """Active employees only, including case-insensitive resignation fields."""
+    return {**(extra or {}), **active_employee_fields()}
 
 
 def count_collection(db, collection, extra=None):
@@ -274,7 +270,7 @@ def find_employee_by_identity(
     }
 
     if active_only:
-        base_query["status"] = {"$ne": "Inactive"}
+        base_query.update(active_employee_fields())
 
     employee_object_ids = []
 
@@ -632,7 +628,7 @@ def employee_mapping_query(field_name, employee, tenant_id):
                 field_name: {"$in": identifier_values},
             },
             {
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
                 "is_deleted": {"$ne": True},
             },
         ]
@@ -953,7 +949,7 @@ def department_summary(db, tenant_id):
         {
             "$match": {
                 "tenant_id": tenant_id,
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
                 "is_deleted": {"$ne": True},
             }
         },
@@ -982,7 +978,7 @@ def designation_summary(db, tenant_id):
         {
             "$match": {
                 "tenant_id": tenant_id,
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
                 "is_deleted": {"$ne": True},
             }
         },
@@ -1083,7 +1079,7 @@ def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None)
     rows = list(
         db.employees.find({
             "tenant_id": tenant_id,
-            "status": {"$ne": "Inactive"},
+            **active_employee_fields(),
             "is_deleted": {"$ne": True},
             "$or": scope_or,
         })
@@ -1241,6 +1237,12 @@ def enrich_project_member(db, tenant_id, member, relation):
     return fallback
 
 
+def dashboard_active_project_member(db, tenant_id, member, relation):
+    ref = normalize_text(member.get('employee_id') or member.get('_id') or member.get('id'))
+    employee = employee_by_id(db, tenant_id, ref)
+    return employee_member_payload(employee, relation) if employee else None
+
+
 def build_project_team_tree(db, tenant_id, project, latest=None):
     latest = latest or {}
 
@@ -1262,7 +1264,7 @@ def build_project_team_tree(db, tenant_id, project, latest=None):
             "department": project.get("department", ""),
             "relation": "reporting_officer",
         }
-        if project.get("reporting_officer_name")
+        if project.get("reporting_officer_name") and not project.get("reporting_officer_id")
         else {}
     )
     apply_profile_photo_aliases(reporting_officer_payload)
@@ -1279,21 +1281,23 @@ def build_project_team_tree(db, tenant_id, project, latest=None):
             "department": project.get("department", ""),
             "relation": "team_leader",
         }
-        if project.get("team_leader_name")
+        if project.get("team_leader_name") and not project.get("team_leader_id")
         else {}
     )
     apply_profile_photo_aliases(team_leader_payload)
 
     assigned_members = [
-        enrich_project_member(db, tenant_id, member, "assigned_member")
-        for member in project.get("assigned_members", [])
+        resolved for member in project.get("assigned_members", [])
         if isinstance(member, dict)
+        for resolved in [dashboard_active_project_member(db, tenant_id, member, "assigned_member")]
+        if resolved
     ]
 
     collaborators = [
-        enrich_project_member(db, tenant_id, member, "collaborator")
-        for member in project.get("collaborators", [])
+        resolved for member in project.get("collaborators", [])
         if isinstance(member, dict)
+        for resolved in [dashboard_active_project_member(db, tenant_id, member, "collaborator")]
+        if resolved
     ]
 
     latest_progress_person = {}
@@ -1304,23 +1308,6 @@ def build_project_team_tree(db, tenant_id, project, latest=None):
 
         if latest_employee:
             latest_progress_person = employee_member_payload(latest_employee, "latest_progress_by")
-
-    if not latest_progress_person and (latest.get("employee_name") or project.get("latest_progress_by_name")):
-        latest_progress_person = {
-            "employee_id": latest_progress_by,
-            "employee_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
-            "name": latest.get("employee_name") or project.get("latest_progress_by_name"),
-            "display_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
-            "department": latest.get("employee_department") or project.get("department", ""),
-            "designation": latest.get("employee_designation", ""),
-            "relation": "latest_progress_by",
-        }
-        apply_profile_photo_aliases(
-            latest_progress_person,
-            latest.get("employee_avatar")
-            or latest.get("employee_profile_photo")
-            or project.get("latest_progress_by_avatar"),
-        )
 
     doing_people = assigned_members if assigned_members else []
     if not doing_people and latest_progress_person:
@@ -3121,7 +3108,7 @@ def admin_dashboard():
         db.employees
         .find({
             "tenant_id": tenant_id,
-            "status": {"$ne": "Inactive"},
+            **active_employee_fields(),
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)
@@ -3401,7 +3388,7 @@ def employee_dashboard():
                 .find({
                     "tenant_id": tenant_id,
                     "team_leader_id": emp.get("team_leader_id"),
-                    "status": {"$ne": "Inactive"},
+                    **active_employee_fields(),
                     "is_deleted": {"$ne": True},
                 })
                 .sort("name", 1)

@@ -175,6 +175,27 @@ const pageStyles = `
     display: inline-flex; align-items: center; justify-content: center;
     gap: 8px; min-height: 43px; white-space: normal; text-align: center;
   }
+  .sprint-planning-shell .sprint-actions .btn {
+    border: 1px solid var(--sprint-border); border-radius: 10px;
+    padding: 10px 16px; font: inherit; font-size: 13px;
+    font-weight: 650; line-height: 1.3; cursor: pointer;
+    transition: background 160ms, border-color 160ms, box-shadow 160ms;
+  }
+  .sprint-planning-shell .sprint-actions .btn.btn-primary {
+    color: #fff; background: var(--sprint-accent);
+    border-color: var(--sprint-accent);
+  }
+  .sprint-planning-shell .sprint-actions .btn.btn-primary:hover {
+    box-shadow: 0 3px 12px rgba(64, 56, 160, .16);
+    filter: brightness(.97);
+  }
+  .sprint-planning-shell .sprint-actions .btn.btn-secondary {
+    color: var(--sprint-text); background: var(--sprint-panel);
+    border-color: var(--sprint-border);
+  }
+  .sprint-planning-shell .sprint-actions .btn.btn-secondary:hover {
+    background: var(--sprint-soft); border-color: var(--sprint-accent);
+  }
   .sprint-planning-shell .sprint-help-note {
     display: flex; align-items: flex-start; gap: 12px;
     margin-top: 22px; padding: 15px 16px; border-radius: 12px;

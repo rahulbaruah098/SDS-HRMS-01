@@ -11,6 +11,7 @@ from pymongo.errors import DuplicateKeyError
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields, employee_is_active
 from app.routes.projects import get_current_employee, employee_identifier_values
 from app.services.sprint_planning_service import (
     PlanningError, new_monthly_plan, new_weekly_plan, validate_daily_update,
@@ -24,7 +25,7 @@ sprint_planning_bp = Blueprint('sprint_planning', __name__)
 
 
 def _tenant():
-    return str(getattr(g, 'tenant_id', None) or g.current_user.get('tenant_id') or 'sds')
+    return str(getattr(g, 'tenant_id', None) or (getattr(g, 'current_user', None) or {}).get('tenant_id') or '').strip()
 
 
 def _actor():
@@ -44,7 +45,7 @@ def _admin():
 
 def _employee(db):
     employee = get_current_employee(db)
-    if employee is None or str(employee.get("tenant_id")) != _tenant():
+    if employee is None or str(employee.get("tenant_id")) != _tenant() or not employee_is_active(employee):
         return None
     return employee
 
@@ -126,18 +127,43 @@ def _safe_call(fn):
 @sprint_planning_bp.before_request
 @current_user_required
 def _sprint_saas_role_guard():
-    """Keep platform and organisation administrators outside Sprint Planning.
+    """Enforce tenant-specific Sprint activation for every Sprint API route.
 
-    SaaS administration does not confer employee-workflow permissions.
-    This guard runs before every Sprint Planning endpoint.
+    Existing non-Sprint HRMS and attendance APIs are unaffected. Only the
+    restricted settings endpoints remain accessible while Sprint is OFF, so
+    an authorised organisation administrator can enable the module again.
     """
     roles = _roles()
+
+    # The read-only availability flag is safe for all authenticated roles,
+    # including administrators who must retain normal attendance checkout.
+    if request.endpoint == 'sprint_planning.get_sprint_module_availability':
+        return None
 
     if roles & {'super_admin'}:
         return _error(
             'Sprint Planning is not available to administrators',
             403
         )
+
+    if request.endpoint in {
+        'sprint_planning.get_sprint_module_settings',
+        'sprint_planning.update_sprint_module_settings',
+        'sprint_planning.get_sprint_module_availability',
+        # Template configuration is still available to authorised HR/Admin
+        # users while Sprint workflows are disabled.
+        'sprint_planning.list_sprint_sheet_templates',
+        'sprint_planning.save_sprint_sheet_template',
+    }:
+        return None
+
+    tenant_id = _tenant()
+    if not tenant_id:
+        return _error('Organisation context required', 403)
+
+    from app.services.sprint_feature_settings import sprint_planning_enabled
+    if not sprint_planning_enabled(get_db(), tenant_id):
+        return _error('Sprint Planning is disabled for this organisation', 403)
 
     return None
 
@@ -219,7 +245,7 @@ def _monthly_team_members_unfiltered(db, leader_id):
     members = []
     cursor = db.employees.find({
         'tenant_id': _tenant(),
-        'is_deleted': {'$ne': True},
+        **active_employee_fields(),
     })
     for employee in cursor:
         employee_id = str(employee['_id'])
@@ -312,7 +338,7 @@ def _monthly_assigned_tl(db, employee):
 
     candidates = db.employees.find({
         'tenant_id': _tenant(),
-        'is_deleted': {'$ne': True},
+        **active_employee_fields(),
     })
 
     matches = {
@@ -350,7 +376,7 @@ def _monthly_pinned_individual_approver(db, plan):
     approver = db.employees.find_one({
         '_id': _oid(approver_id),
         'tenant_id': _tenant(),
-        'is_deleted': {'$ne': True},
+        **active_employee_fields(),
     })
 
     if approver is None:
@@ -437,7 +463,7 @@ def _monthly_assigned_ro(db, employee):
 
     candidates = list(db.employees.find({
         'tenant_id': _tenant(),
-        'is_deleted': {'$ne': True},
+        **active_employee_fields(),
     }))
 
     matches = [
@@ -1317,8 +1343,39 @@ def monthly_review_inbox():
             if not authorised:
                 continue
 
+            owner = db.employees.find_one({
+                '_id': _oid(owner_id),
+                'tenant_id': _tenant(),
+                'is_deleted': {'$ne': True},
+            })
+
+            owner = owner or {}
+            owner_name = (
+                owner.get('name')
+                or owner.get('employee_name')
+                or ' '.join(filter(None, [
+                    owner.get('first_name'),
+                    owner.get('last_name'),
+                ]))
+                or plan.get('employee_name')
+                or 'Employee profile unavailable'
+            )
+            owner_department = (
+                owner.get('department_name')
+                or owner.get('department')
+                or plan.get('department_name')
+                or plan.get('department')
+                or ''
+            )
+
             results.append({
                 **plan,
+                'employee_name': str(owner_name),
+                'department_name': (
+                    str(owner_department)
+                    if isinstance(owner_department, str)
+                    else ''
+                ),
                 'reviewer_kind': reviewer_kind,
                 'reviewer_label': (
                     'Reporting Officer'
@@ -2032,6 +2089,24 @@ def report_activity(plan_id, activity_id):
             SprintAttachmentBindingError,
         )
 
+        # FIX 10.15 - Validate internal daily evidence ownership
+        # before any activity report database update.
+        from app.services.sprint_daily_evidence_authorization import (
+            validate_daily_evidence_ownership,
+            SprintDailyEvidenceAuthorizationError,
+        )
+
+        try:
+            validate_daily_evidence_ownership(
+                attachments=db.sprint_attachments,
+                evidence=patch['evidence'],
+                tenant_id=_tenant(),
+                employee_id=_own_id(db),
+                plan_id=doc['_id'],
+                activity_id=activity_id,
+            )
+        except SprintDailyEvidenceAuthorizationError as error:
+            return _error(str(error), 400)
         if 'daily_custom_values' in daily_fields:
             # Daily templates may be frozen for the first time by
             # this report; validate against the resulting snapshot.
@@ -2075,6 +2150,145 @@ def report_activity(plan_id, activity_id):
         audit('daily_report', 'sprint_weekly_activity', activity_id, {'weekly_plan_id': plan_id})
         return _serialize(_document(db, 'sprint_weekly_plans', plan_id))
     return _safe_call(action)
+
+
+
+# Attendance checkout integration. These routes expose ONLY the signed-in
+# employee's current-day approved work and evidence-upload scope.
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/checkout-tasks', methods=['GET']
+)
+@current_user_required
+def get_checkout_tasks():
+    def action():
+        from app.routes.attendance import today_local
+        from app.services.sprint_template_service import SprintTemplateError
+
+        db = get_db()
+        employee = _employee(db)
+        if employee is None:
+            return _error('Active employee profile required', 403)
+
+        work_date = today_local().isoformat()
+        plans = db.sprint_weekly_plans.find({
+            'tenant_id': _tenant(),
+            'employee_id': str(employee['_id']),
+            'status': 'approved',
+            'is_deleted': {'$ne': True},
+            'week_start': {'$lte': work_date},
+            'week_end': {'$gte': work_date},
+        })
+        items = []
+        readiness_activities = []
+        for plan in plans:
+            for activity in plan.get('activities', []):
+                if activity.get('planned_date') != work_date:
+                    continue
+                if not activity.get('activity_id'):
+                    return _error('Approved plan has an invalid activity', 409)
+                readiness_activities.append(activity)
+                template = activity.get('daily_template_snapshot')
+                if not template:
+                    try:
+                        department = _sprint_employee_department(employee)
+                        template = _sprint_latest_department_template(
+                            db, _tenant(), department, 'daily'
+                        )
+                    except SprintTemplateError as error:
+                        return _error(str(error), 409)
+                items.append({
+                    'plan_id': str(plan['_id']),
+                    'activity_id': str(activity['activity_id']),
+                    'title': str(activity.get('title') or 'Planned activity'),
+                    'description': str(activity.get('description') or ''),
+                    'status': activity.get('status') or 'planned',
+                    'evidence': activity.get('evidence') or [],
+                    'incomplete_reason': activity.get('incomplete_reason') or '',
+                    'remarks': activity.get('employee_remarks') or '',
+                    'daily_custom_values': activity.get('daily_custom_values') or {},
+                    'daily_columns': (template or {}).get('columns') or [],
+                })
+        readiness = checkout_readiness(readiness_activities)
+        return jsonify({
+            'work_date': work_date,
+            'items': items,
+            'ready': readiness['ready'],
+            'problems': readiness['problems'],
+        }), 200
+    return _safe_call(action)
+
+
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/checkout-evidence/<plan_id>/<activity_id>',
+    methods=['POST'],
+)
+@current_user_required
+def upload_checkout_evidence(plan_id, activity_id):
+    """Store photos/documents as authorized DAILY evidence; no generic file paths."""
+    from pathlib import Path
+    from flask import current_app
+    from app.routes.attendance import today_local
+    from app.services.sprint_attachment_service import (
+        SprintAttachmentError, MAX_SPRINT_ATTACHMENT_BYTES,
+        safe_attachment_filename, safe_tenant_segment,
+        validate_attachment_content,
+    )
+    from app.services.sprint_attachment_storage import save_sprint_attachment
+    from app.services.sprint_attachment_metadata import (
+        SprintAttachmentOwnershipError, validate_upload_ownership,
+        build_sprint_attachment_metadata,
+    )
+
+    db = get_db()
+    employee = _employee(db)
+    plan = _document(db, 'sprint_weekly_plans', plan_id)
+    try:
+        validate_upload_ownership(
+            plan, employee, _tenant(), 'daily', activity_id=activity_id,
+        )
+    except SprintAttachmentOwnershipError as error:
+        return _error(str(error), 403)
+
+    activity = next((a for a in plan.get('activities', [])
+                     if str(a.get('activity_id')) == activity_id), None)
+    if not activity or activity.get('planned_date') != today_local().isoformat():
+        return _error('Checkout evidence is allowed only for today', 403)
+
+    upload = request.files.get('file')
+    if not upload or not upload.filename:
+        return _error('Evidence file is required', 400)
+
+    try:
+        filename = safe_attachment_filename(upload.filename)
+        contents = upload.stream.read(MAX_SPRINT_ATTACHMENT_BYTES + 1)
+        validate_attachment_content(filename, contents)
+        root = Path(
+            current_app.config.get('SPRINT_ATTACHMENT_UPLOAD_FOLDER')
+            or str(Path(current_app.instance_path) / 'sprint_attachments')
+        )
+        root.mkdir(parents=True, exist_ok=True)
+        saved = save_sprint_attachment(root, _tenant(), filename, contents)
+        metadata = build_sprint_attachment_metadata(
+            tenant_id=_tenant(), employee_id=str(employee['_id']),
+            plan_id=str(plan['_id']), plan_type='daily',
+            activity_id=activity_id, field_key='checkout_evidence',
+            storage_metadata=saved,
+        )
+        try:
+            db.sprint_attachments.insert_one(metadata)
+        except Exception:
+            (root / safe_tenant_segment(_tenant()) / saved['storage_id']).unlink(
+                missing_ok=True
+            )
+            raise
+    except SprintAttachmentError as error:
+        return _error(str(error), 400)
+
+    return jsonify({
+        'attachment_id': metadata['attachment_id'],
+        'reference': 'sprint-attachment:' + metadata['attachment_id'],
+        'original_filename': metadata['original_filename'],
+    }), 201
 
 
 @sprint_planning_bp.route('/api/v1/sprint-planning/checkout-readiness', methods=['GET'])
@@ -2696,7 +2910,7 @@ def get_sprint_approval_inbox():
             employees = db.employees.find(
                 {
                     'tenant_id': tenant,
-                    'is_deleted': {'$ne': True}
+                    **active_employee_fields(),
                 },
                 {
                     '_id': 1,
@@ -3138,7 +3352,7 @@ def get_sprint_team_metrics():
         # employees. A manager login role is not sufficient.
         employee_query = {
             'tenant_id': tenant,
-            'is_deleted': {'$ne': True}
+            **active_employee_fields(),
         }
 
         employee_fields = {
@@ -3462,6 +3676,28 @@ def get_sprint_team_metrics():
 
 # STEP 44B.52E - SPRINT MODULE SETTINGS
 # Controls are tenant-specific. Missing configuration means OFF.
+
+@sprint_planning_bp.route(
+    '/api/v1/sprint-planning/availability', methods=['GET']
+)
+@current_user_required
+def get_sprint_module_availability():
+    """Read-only tenant-scoped flag for every authenticated HRMS user.
+
+    This reveals no other tenant's settings and does not grant access to
+    Sprint planning data or to the administrative settings write route.
+    """
+    tenant = str(
+        getattr(g, 'tenant_id', None)
+        or (getattr(g, 'current_user', None) or {}).get('tenant_id')
+        or ''
+    ).strip()
+    if not tenant:
+        return _error('Organisation context required', 403)
+
+    from app.services.sprint_feature_settings import sprint_planning_enabled
+    return jsonify({'enabled': sprint_planning_enabled(get_db(), tenant)}), 200
+
 
 def _sprint_settings_manager_allowed(user):
     """Check authenticated HR/Admin roles, never client-supplied roles."""

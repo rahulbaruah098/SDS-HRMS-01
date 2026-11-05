@@ -45,6 +45,14 @@ const monthLastDate = month => {
   return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 };
 
+// Display only: retain the YYYY-MM values used by forms, requests and saved plans.
+const displayMonth = value => {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value || '')) return String(value || '');
+  const [year, month] = value.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' })
+    .format(new Date(year, month - 1, 1));
+};
+
 const makeRow = month => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   objective: '', activity: '', deliverable: '', kpi: '',
@@ -126,7 +134,7 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
   return (
     <>
     {!readOnly && <div className="mws-summary-hint">Activity overview · Use <strong>Edit</strong> beside any row to enter or change its details in the clearly labeled form below. Scroll horizontally to review every column.</div>}
-    <div className="mws-scroll" role="region" aria-label="Monthly work plan table" tabIndex={0}>
+    <div className="mws-scroll mws-sheet-scroll" role="region" aria-label="Monthly work plan table" tabIndex={0}>
       <table className="mws-table">
         <thead><tr>
           <th className="mws-sticky">Sl. No.</th>
@@ -142,6 +150,7 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
               <td className="mws-sticky mws-number">
                 {String(index + 1).padStart(2, '0')}
                 {!readOnly && <button type="button" className="mws-row-edit"
+                  aria-pressed={selectedKey === row.key}
                   onClick={() => setSelectedKey(row.key)}>
                   {selectedKey === row.key ? 'Editing' : 'Edit'}
                 </button>}
@@ -713,7 +722,34 @@ export default function SprintMonthlyPlanning() {
         .mws-table { min-width:1950px; }
         .mws-table td { padding:13px 12px; line-height:1.5; }
         .mws-table th { font-size:12px; padding:14px 12px; }
-        .mws-row-edit { border-radius:8px; padding:7px 12px; font-size:11px; }
+        /* Keep the monthly sheet header readable while horizontally scrolling.
+           The two old sticky data columns overlapped headers when scrolling. */
+        .mws-sheet-scroll .mws-table th { position:static; top:auto; }
+        .mws-sheet-scroll .mws-table th:first-child,
+        .mws-sheet-scroll .mws-table td:first-child {
+          position:sticky; left:0; min-width:86px; max-width:86px; width:86px; box-sizing:border-box;
+          background:#f5f5ff; z-index:3;
+          box-shadow:2px 0 0 #e0e5f3;
+        }
+        .mws-sheet-scroll .mws-table th:nth-child(2),
+        .mws-sheet-scroll .mws-table td:nth-child(2),
+        .mws-sheet-scroll .mws-table th:nth-child(3),
+        .mws-sheet-scroll .mws-table td:nth-child(3) {
+          position:static; left:auto;
+        }
+        .mws-sheet-scroll .mws-table th:first-child { background:#eeeefe; z-index:4; }
+        @media print {
+          .mws-sheet-scroll .mws-table th:first-child,
+          .mws-sheet-scroll .mws-table td:first-child { position:static; box-shadow:none; }
+        }
+        /* Keep the active Edit control on one line inside the 86px sticky column. */
+        .mws-sheet-scroll .mws-row-edit {
+          display:block; box-sizing:border-box; width:100%; min-width:0;
+          max-width:100%; padding:6px 4px; margin:6px auto 0;
+          white-space:nowrap; overflow-wrap:normal;
+          font-size:11px; line-height:1.25; text-align:center;
+          border-radius:8px;
+        }
         .mws-readonly { font-size:12px; }
         .mws-editor { background:var(--mws-surface-soft); border:1px solid var(--mws-border); border-radius:17px; padding:22px; }
         .mws-editor-grid { gap:18px; }
@@ -855,7 +891,7 @@ export default function SprintMonthlyPlanning() {
               <article key={id} className="mws-history">
                 <div className="mws-section-head">
                   <div><strong>{plan.title || 'Monthly Plan'}</strong>
-                    <div className="mws-muted">{plan.month} · {sheetRows.length} activities</div></div>
+                    <div className="mws-muted">{displayMonth(plan.month)} · {sheetRows.length} {sheetRows.length === 1 ? 'activity' : 'activities'}</div></div>
                   <span className="mws-status">{labels[status] || status}</span>
                 </div>
                 <div className="mws-toolbar mws-no-print" style={{justifyContent:'flex-start',marginTop:12}}>

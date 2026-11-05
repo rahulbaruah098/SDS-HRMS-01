@@ -1373,7 +1373,7 @@ function AutoFitEmployeeName({ name }) {
   );
 }
 
-export default function EmployeeDashboard({ setPage }) {
+export default function EmployeeDashboard({ setPage, sprintEnabled = false }) {
   const [data, setData] = useState(null);
   const [attendanceStatus, setAttendanceStatus] = useState(null);
   const [modeRequests, setModeRequests] = useState([]);
@@ -6064,13 +6064,15 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
         )}
       </section>
 
-      {/* Sprint Planning: employee performance summary */}
-      <section
-        className="employee-dashboard-single-panel"
-        aria-label="My Sprint Planning Progress"
-      >
-        <SprintDashboardSummary setPage={setPage} />
-      </section>
+      {/* Sprint summary is available only when this tenant has Sprint ON. */}
+      {sprintEnabled && (
+        <section
+          className="employee-dashboard-single-panel"
+          aria-label="My Sprint Planning Progress"
+        >
+          <SprintDashboardSummary setPage={setPage} />
+        </section>
+      )}
 
       <section className="employee-dashboard-single-panel">
         <div className="panel employee-dashboard-feature-panel">

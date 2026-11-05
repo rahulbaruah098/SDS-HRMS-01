@@ -29,14 +29,26 @@ const directoryItems = response => {
 const employeeById = people => new Map(people.map(person => [
   String(person?._id || person?.id || '').trim(), person
 ]).filter(([id]) => id));
-const employeeName = (people, id) => {
-  const person = people.get(String(id || '').trim());
-  return person?.name || person?.employee_name || 'Employee profile unavailable';
-};
-const employeeMeta = (people, id) => {
-  const person = people.get(String(id || '').trim());
-  return [person?.employee_code || person?.employee_id, person?.department || person?.department_name]
-    .filter(Boolean).join(' · ') || (person ? 'Employee' : 'Identity unavailable');
+// Prefer the tenant-scoped directory; use server-provided identity only as a
+// fallback when a directory entry is not accessible. Never display raw IDs.
+const requesterIdentity = (people, item) => {
+  const identifier = String(item?.employee_id || '').trim();
+  const person = people.get(identifier);
+  const embedded = item?.employee && typeof item.employee === 'object'
+    ? item.employee : null;
+  const name = person?.name || person?.employee_name ||
+    item?.employee_name || item?.requester_name ||
+    embedded?.name || embedded?.employee_name || 'Employee profile unavailable';
+  const code = person?.employee_code || embedded?.employee_code ||
+    item?.employee_code || '';
+  const department = person?.department || person?.department_name ||
+    embedded?.department || embedded?.department_name ||
+    item?.department_name || item?.department || '';
+  return {
+    name: String(name),
+    meta: [code, department].filter(Boolean).join(' · ') ||
+      (name === 'Employee profile unavailable' ? 'Identity unavailable' : 'Employee')
+  };
 };
 
 const getId = (item) => String(item?._id || item?.id || '');
@@ -299,6 +311,10 @@ function SprintApprovalsBody() {
         .sra-page .sra-stat { min-width:0; background:var(--surface, var(--card, #fff)); border:1px solid var(--border, #e2e8f0); }
         .sra-page .sra-filter-bar { display:flex; gap:8px; margin-bottom:18px; overflow-x:auto; max-width:100%; padding:3px 2px 8px; scrollbar-width:thin; }
         .sra-page .sra-filter-bar button { flex:0 0 auto; white-space:nowrap; }
+        .sra-page .sra-filter-tab { border:1px solid var(--border,#dce2ef); background:var(--surface,#fff); color:var(--text,#24314d); border-radius:11px; padding:10px 15px; font-weight:700; box-shadow:none; transition:background .18s,border-color .18s; }
+        .sra-page .sra-filter-tab:hover { background:var(--surface-secondary,#f6f4ff); border-color:var(--primary,#6355d8); }
+        .sra-page .sra-filter-tab.is-active { border-color:var(--primary,#6355d8); background:var(--surface-secondary,#f5f3ff); color:var(--primary,#5142ce); box-shadow:inset 0 0 0 1px var(--primary,#6355d8); }
+        .sra-page .sra-filter-tab:focus-visible { outline:2px solid var(--primary,#6355d8); outline-offset:2px; }
         .sra-page .sra-request { min-width:0; border:1px solid var(--border, #e2e8f0); background:var(--surface, var(--card, #fff)); overflow-wrap:anywhere; }
         .sra-page .sra-request-details { border:1px solid var(--border, #e2e8f0); color:var(--text, inherit); min-width:0; overflow-wrap:anywhere; }
         .sra-page .sra-status { display:inline-flex; align-items:center; border:1px solid currentColor; border-radius:999px; padding:6px 12px; max-width:100%; background:var(--surface-secondary,#f8fafc); letter-spacing:.01em; }
@@ -392,7 +408,7 @@ function SprintApprovalsBody() {
           ['daily_change', 'Day-Wise Changes']
         ].map(([value, label]) => (
           <button key={value} type="button"
-            className={filter === value ? 'btn btn-primary' : 'btn btn-secondary'}
+            className={`sra-filter-tab ${filter === value ? 'is-active' : ''}`}
             aria-pressed={filter === value}
             onClick={() => setFilter(value)}>
             {label}
@@ -426,27 +442,28 @@ function SprintApprovalsBody() {
               item.planning_type === 'daily_change' &&
               item.status === 'approved_pending_application' &&
               actions.includes('apply_change');
+            const requester = requesterIdentity(employeeLookup, item);
 
             return (
               <article className="card sra-request" key={`${item.planning_type}-${id}`}
                 style={{ padding: 20, borderRadius: 14 }}>
-                                 <div className="sra-request-head">
+                <div className="sra-request-head">
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <Icon size={19} />
                       <strong>{kindLabel[item.planning_type] || 'Planning Request'}</strong>
                     </div>
-                                         <div className="sra-request-title">
+                    <div className="sra-request-title">
                        {item.title || item.month ||
                          `${item.week_start || ''} — ${item.week_end || ''}`}
                      </div>
                      <div className="sra-person">
                        <span className="sra-person-avatar" aria-hidden="true">
-                         {employeeName(employeeLookup, item.employee_id).slice(0, 1).toUpperCase()}
+                         {requester.name === 'Employee profile unavailable' ? '—' : requester.name.slice(0, 1).toUpperCase()}
                        </span>
                        <div>
-                         <div className="sra-person-name">{employeeName(employeeLookup, item.employee_id)}</div>
-                         <div className="sra-person-meta">{employeeMeta(employeeLookup, item.employee_id)}</div>
+                         <div className="sra-person-name">{requester.name}</div>
+                         <div className="sra-person-meta">{requester.meta}</div>
                        </div>
                      </div>
                   </div>
@@ -465,7 +482,7 @@ function SprintApprovalsBody() {
 
                 {detailsOpen[detailKey] && <RequestDetails item={item} />}
 
-                                  {reviewActions.length === 0 && !canApply && item.status === 'pending_approval' && (
+                {reviewActions.length === 0 && !canApply && item.status === 'pending_approval' && (
                   <p className="sra-quiet">
                     <AlertTriangle size={14} style={{ verticalAlign: 'middle' }} />
                     {' '}Monitoring only — no approval action assigned to this login.

@@ -1,3 +1,4 @@
+
 """YourComate planning domain service (phase 1).
 
 This module defines tenant-scoped monthly, weekly and day-wise plans, mandatory
@@ -69,12 +70,20 @@ def validate_evidence(evidence: Any) -> list[dict[str, str]]:
         kind = item.get("type")
         if kind not in VALID_EVIDENCE_TYPES:
             raise PlanningError(f"evidence[{index}].type is invalid")
-        reference = require_text(item.get("reference"), f"evidence[{index}].reference", 2048)
+        reference = require_text(
+            item.get("reference"),
+            f"evidence[{index}].reference",
+            2048
+        )
         validated.append({"type": kind, "reference": reference})
     return validated
 
 
-def validate_activities(activities: Any, start: str, end: str) -> list[dict[str, Any]]:
+def validate_activities(
+    activities: Any,
+    start: str,
+    end: str
+) -> list[dict[str, Any]]:
     if not isinstance(activities, list) or not activities or len(activities) > 200:
         raise PlanningError("activities must contain between 1 and 200 items")
     result = []
@@ -94,7 +103,9 @@ def validate_activities(activities: Any, start: str, end: str) -> list[dict[str,
             "planned_date": planned_date,
             "title": require_text(item.get("title"), "title", 200),
             "description": str(item.get("description") or "").strip()[:2000],
-            "expected_deliverable": str(item.get("expected_deliverable") or "").strip()[:500],
+            "expected_deliverable": str(
+                item.get("expected_deliverable") or ""
+            ).strip()[:500],
             "status": "planned",
             "evidence": [],
             "incomplete_reason": None,
@@ -111,21 +122,45 @@ def ensure_indexes(db: Any) -> None:
     plan constraints and migration handling can be introduced separately.
     """
     db.sprint_monthly_plans.create_index(
-        [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("month", ASCENDING)]
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("month", ASCENDING)
+        ]
     )
     db.sprint_weekly_plans.create_index(
-        [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("week_start", ASCENDING)]
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("week_start", ASCENDING)
+        ]
     )
     db.sprint_daily_reports.create_index(
-        [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("work_date", ASCENDING)]
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("work_date", ASCENDING)
+        ]
     )
     db.sprint_change_requests.create_index(
-        [("tenant_id", ASCENDING), ("employee_id", ASCENDING), ("status", ASCENDING)]
+        [
+            ("tenant_id", ASCENDING),
+            ("employee_id", ASCENDING),
+            ("status", ASCENDING)
+        ]
     )
 
 
-def new_monthly_plan(*, tenant_id: str, employee_id: str, month: str,
-                     title: str, goals: list[str], actor_id: str, sheet_rows=None) -> dict[str, Any]:
+def new_monthly_plan(
+    *,
+    tenant_id: str,
+    employee_id: str,
+    month: str,
+    title: str,
+    goals: list[str],
+    actor_id: str,
+    sheet_rows=None
+) -> dict[str, Any]:
     """Build an unsaved draft; route must check actor authorization and duplicates."""
     tenant_id = require_text(tenant_id, "tenant_id", 120)
     employee_id = require_text(employee_id, "employee_id", 120)
@@ -156,7 +191,10 @@ def new_monthly_plan(*, tenant_id: str, employee_id: str, month: str,
 
         total_weight = Decimal("0")
         month_start = f"{month}-01"
-        month_end = f"{month}-{monthrange(int(month[:4]), int(month[5:7]))[1]:02d}"
+        month_end = (
+            f"{month}-"
+            f"{monthrange(int(month[:4]), int(month[5:7]))[1]:02d}"
+        )
 
         for index, row in enumerate(sheet_rows):
             if not isinstance(row, dict):
@@ -176,7 +214,9 @@ def new_monthly_plan(*, tenant_id: str, employee_id: str, month: str,
             kpi = field("kpi", 300, True)
 
             if cleaned_goals[index] != activity:
-                raise PlanningError("Monthly goals and sheet activities do not match")
+                raise PlanningError(
+                    "Monthly goals and sheet activities do not match"
+                )
 
             start_date = field("start_date", 10, True)
             end_date = field("end_date", 10, True)
@@ -192,7 +232,9 @@ def new_monthly_plan(*, tenant_id: str, employee_id: str, month: str,
                 or end_date > month_end
                 or start_parsed > end_parsed
             ):
-                raise PlanningError("Activity dates must be within the planning month")
+                raise PlanningError(
+                    "Activity dates must be within the planning month"
+                )
 
             try:
                 weight = Decimal(str(row.get("weightage") or "0"))
@@ -231,87 +273,170 @@ def new_monthly_plan(*, tenant_id: str, employee_id: str, month: str,
             })
 
         if total_weight > 100:
-            raise PlanningError("Total planned weightage cannot exceed 100%")
-
+            raise PlanningError(
+                "Total planned weightage cannot exceed 100%"
+            )
 
     now = utc_now()
     return {
-        "tenant_id": tenant_id, "employee_id": employee_id, "month": month,
-        "title": require_text(title, "title", 200), "goals": cleaned_goals,
-        "sheet_rows": cleaned_rows, "sheet_version": 1 if sheet_rows is not None else 0,
-        "status": "draft", "approval_history": [],
-        "created_by": actor_id, "created_at": now, "updated_at": now,
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "month": month,
+        "title": require_text(title, "title", 200),
+        "goals": cleaned_goals,
+        "sheet_rows": cleaned_rows,
+        "sheet_version": 1 if sheet_rows is not None else 0,
+        "status": "draft",
+        "approval_history": [],
+        "created_by": actor_id,
+        "created_at": now,
+        "updated_at": now,
         "is_deleted": False,
     }
 
 
-def new_weekly_plan(*, tenant_id: str, employee_id: str, monthly_plan_id: str,
-                    week_start: str, week_end: str, activities: list[dict],
-                    actor_id: str) -> dict[str, Any]:
+def new_weekly_plan(
+    *,
+    tenant_id: str,
+    employee_id: str,
+    monthly_plan_id: str,
+    week_start: str,
+    week_end: str,
+    activities: list[dict],
+    actor_id: str
+) -> dict[str, Any]:
     tenant_id = require_text(tenant_id, "tenant_id", 120)
     employee_id = require_text(employee_id, "employee_id", 120)
     actor_id = require_text(actor_id, "actor_id", 120)
-    monthly_plan_id = require_text(monthly_plan_id, "monthly_plan_id", 120)
+    monthly_plan_id = require_text(
+        monthly_plan_id, "monthly_plan_id", 120
+    )
     start = require_date(week_start, "week_start")
     end = require_date(week_end, "week_end")
-    if end < start or (date.fromisoformat(end) - date.fromisoformat(start)).days > 6:
-        raise PlanningError("weekly plan period must be between 1 and 7 days")
+    if (
+        end < start
+        or (date.fromisoformat(end) - date.fromisoformat(start)).days > 6
+    ):
+        raise PlanningError(
+            "weekly plan period must be between 1 and 7 days"
+        )
     now = utc_now()
     return {
-        "tenant_id": tenant_id, "employee_id": employee_id,
-        "monthly_plan_id": monthly_plan_id, "week_start": start,
-        "week_end": end, "activities": validate_activities(activities, start, end),
-        "status": "draft", "approval_history": [],
-        "created_by": actor_id, "created_at": now, "updated_at": now,
+        "tenant_id": tenant_id,
+        "employee_id": employee_id,
+        "monthly_plan_id": monthly_plan_id,
+        "week_start": start,
+        "week_end": end,
+        "activities": validate_activities(activities, start, end),
+        "status": "draft",
+        "approval_history": [],
+        "created_by": actor_id,
+        "created_at": now,
+        "updated_at": now,
         "is_deleted": False,
     }
 
 
-def validate_daily_update(*, status: str, evidence: Any = None,
-                          incomplete_reason: str | None = None,
-                          remarks: str = "") -> dict[str, Any]:
+def validate_daily_update(
+    *,
+    status: str,
+    evidence: Any = None,
+    incomplete_reason: str | None = None,
+    remarks: str = ""
+) -> dict[str, Any]:
     """Return a validated daily report patch; never fabricate completion."""
     if status not in DAY_STATES - {"planned"}:
-        raise PlanningError("status must be in_progress, completed or not_completed")
-    validated_evidence = validate_evidence(evidence if evidence is not None else [])
+        raise PlanningError(
+            "status must be in_progress, completed or not_completed"
+        )
+    validated_evidence = validate_evidence(
+        evidence if evidence is not None else []
+    )
     reason = (incomplete_reason or "").strip()
     if status == "completed" and not validated_evidence:
-        raise PlanningError("completed work requires at least one evidence reference")
+        raise PlanningError(
+            "completed work requires at least one evidence reference"
+        )
     if status in {"not_completed", "in_progress"} and len(reason) < 10:
-        raise PlanningError("unfinished or in-progress work requires a reason of at least 10 characters")
+        raise PlanningError(
+            "unfinished or in-progress work requires a reason of at least 10 characters"
+        )
     if len(reason) > 1000:
         raise PlanningError("incomplete_reason exceeds 1000 characters")
     return {
         "status": status,
         "evidence": validated_evidence,
-        "incomplete_reason": reason if status in {"not_completed", "in_progress"} else None,
+        "incomplete_reason": (
+            reason if status in {"not_completed", "in_progress"} else None
+        ),
         "employee_remarks": str(remarks or "").strip()[:2000],
         "updated_at": utc_now(),
     }
 
 
-def checkout_readiness(activities: list[dict[str, Any]]) -> dict[str, Any]:
+def checkout_readiness(
+    activities: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Assess reporting readiness, not whether *all* work was completed.
 
-    This pure check is not an attendance authorization decision. The future
-    checkout endpoint must also enforce approved-plan/change-request policies,
+    This pure check is not an attendance authorization decision. The checkout
+    endpoint must also enforce approved-plan/change-request policies,
     time zone, employee ownership, attendance and emergency exceptions.
     """
     problems = []
+
     if not isinstance(activities, list):
         raise PlanningError("activities must be a list")
+
     if not activities:
         return {"ready": True, "problems": []}
+
     for item in activities:
         activity_id = str(item.get("activity_id", ""))
         status = item.get("status", "planned")
+
         if status not in {"completed", "in_progress", "not_completed"}:
-            problems.append({"activity_id": activity_id, "reason": "status_required"})
-        elif status == "completed" and not item.get("evidence"):
-            problems.append({"activity_id": activity_id, "reason": "evidence_required"})
-        elif status == "not_completed" and len(str(item.get("incomplete_reason") or "").strip()) < 10:
-            problems.append({"activity_id": activity_id, "reason": "incomplete_reason_required"})
-        elif status == "in_progress" and len(str(item.get("incomplete_reason") or "").strip()) < 10:
-            # Work that remains in progress at checkout also needs an explanation.
-            problems.append({"activity_id": activity_id, "reason": "incomplete_reason_required"})
-    return {"ready": not problems, "problems": problems}
+            problems.append({
+                "activity_id": activity_id,
+                "reason": "status_required",
+            })
+
+        elif status == "completed":
+            # FIX 09: Reuse the same evidence validation applied when
+            # daily reports are saved. A nonempty list alone is insufficient:
+            # entries must have an accepted type and a nonblank reference.
+            try:
+                validated_evidence = validate_evidence(
+                    item.get("evidence")
+                )
+            except PlanningError:
+                validated_evidence = []
+
+            if not validated_evidence:
+                problems.append({
+                    "activity_id": activity_id,
+                    "reason": "evidence_required",
+                })
+
+        elif status == "not_completed" and len(
+            str(item.get("incomplete_reason") or "").strip()
+        ) < 10:
+            problems.append({
+                "activity_id": activity_id,
+                "reason": "incomplete_reason_required",
+            })
+
+        elif status == "in_progress" and len(
+            str(item.get("incomplete_reason") or "").strip()
+        ) < 10:
+            # Work that remains in progress at checkout also needs
+            # an explanation.
+            problems.append({
+                "activity_id": activity_id,
+                "reason": "incomplete_reason_required",
+            })
+
+    return {
+        "ready": not problems,
+        "problems": problems,
+    }

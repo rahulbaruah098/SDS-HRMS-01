@@ -8,6 +8,7 @@ import re
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 from app.middleware.tenant_guard import load_tenant_context
 from app.services.tenant_service import (
     can_access_module as saas_can_access_module,
@@ -1689,34 +1690,12 @@ def employee_team_leader_query():
 
 def resolve_active_employee_by_id(db, employee_id, tenant_id):
     employee_obj_id = safe_object_id(employee_id)
-
     if not employee_obj_id:
         return None
-
     return db.employees.find_one({
         "_id": employee_obj_id,
         "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "$and": [
-            {
-                "$or": [
-                    {"is_alumni": {"$ne": True}},
-                    {"is_alumni": {"$exists": False}},
-                ],
-            },
-            {
-                "$or": [
-                    {"status": {"$exists": False}},
-                    {"status": {"$not": ALUMNI_STATUS_REGEX}},
-                ],
-            },
-            {
-                "$or": [
-                    {"employment_status": {"$exists": False}},
-                    {"employment_status": {"$not": ALUMNI_STATUS_REGEX}},
-                ],
-            },
-        ],
+        **active_employee_fields(),
     })
 
 
@@ -2085,7 +2064,7 @@ def clean_payload(data):
 
 
 ALUMNI_STATUS_REGEX = re.compile(
-    r"^(inactive|resigned|left|terminated|alumni|ex-employee|ex_employee)$",
+    r"^(inactive|resign|resigned|left|terminated|retired|alumni|ex-employee|ex_employee)$",
     re.IGNORECASE,
 )
 
@@ -2111,35 +2090,14 @@ def employee_alumni_query():
             {"is_alumni": True},
             {"status": ALUMNI_STATUS_REGEX},
             {"employment_status": ALUMNI_STATUS_REGEX},
+            {"employee_status": ALUMNI_STATUS_REGEX},
             {"last_working_date": {"$exists": True, "$nin": [None, ""]}},
         ]
     }
 
 
 def employee_active_query():
-    return {
-        "$and": [
-            {"is_alumni": {"$ne": True}},
-            {
-                "$or": [
-                    {"status": {"$exists": False}},
-                    {"status": {"$not": ALUMNI_STATUS_REGEX}},
-                ]
-            },
-            {
-                "$or": [
-                    {"employment_status": {"$exists": False}},
-                    {"employment_status": {"$not": ALUMNI_STATUS_REGEX}},
-                ]
-            },
-            {
-                "$or": [
-                    {"last_working_date": {"$exists": False}},
-                    {"last_working_date": {"$in": [None, ""]}},
-                ]
-            },
-        ]
-    }
+    return active_employee_fields()
 
 
 def employee_is_alumni_payload(payload):
@@ -2160,6 +2118,8 @@ def employee_is_alumni_payload(payload):
         "alumni",
         "ex-employee",
         "ex_employee",
+        "retired",
+        "resign",
     }
 
     if status in alumni_statuses:
@@ -2442,7 +2402,7 @@ def employee_scoped_ids_for_current_user(db):
 
     rows = list(db.employees.find({
         "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "is_deleted": {"$ne": True},
         "$or": scope_or,
     }, {"_id": 1}))
@@ -2674,7 +2634,7 @@ def performance_review_scope_query(db, q):
         team_members = list(db.employees.find({
             "tenant_id": employee.get("tenant_id") or current_tenant_id(),
             "team_leader_id": {"$in": identifier_values},
-            "status": {"$ne": "Inactive"},
+            **active_employee_fields(),
             "is_deleted": {"$ne": True},
         }, {"_id": 1}))
 
@@ -2690,7 +2650,7 @@ def performance_review_scope_query(db, q):
         reporting_members = list(db.employees.find({
             "tenant_id": employee.get("tenant_id") or current_tenant_id(),
             "reporting_officer_id": {"$in": identifier_values},
-            "status": {"$ne": "Inactive"},
+            **active_employee_fields(),
             "is_deleted": {"$ne": True},
         }, {"_id": 1}))
 
@@ -2877,7 +2837,7 @@ def resolve_employee_for_project(db, employee_id, tenant_id):
     return db.employees.find_one({
         "_id": employee_obj_id,
         "tenant_id": tenant_id,
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "is_deleted": {"$ne": True},
     })
 

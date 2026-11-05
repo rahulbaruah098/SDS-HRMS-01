@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, g
 from app.extensions import get_db
 from app.utils.auth import current_user_required, normalize_roles, audit
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 from app.middleware.tenant_guard import tenant_module_required
 
 
@@ -75,13 +76,7 @@ def current_employee(db):
         "is_deleted": {"$ne": True},
     })
 
-    if employee:
-        return employee
-
-    return db.employees.find_one({
-        "user_id": user_id,
-        "is_deleted": {"$ne": True},
-    })
+    return employee
 
 
 def employee_display_name(employee):
@@ -209,7 +204,7 @@ def group_member_scope(db, group):
             {
                 "_id": {"$in": employee_ids},
                 "tenant_id": group.get("tenant_id"),
-                "is_deleted": {"$ne": True},
+                **active_employee_fields(),
             },
             employee_projection(),
         )
@@ -335,8 +330,7 @@ def management_group_employee_options():
             {
                 "tenant_id": current_tenant_id(),
                 "is_deleted": {"$ne": True},
-                "status": {"$nin": ["Resigned", "Left", "Terminated", "Retired"]},
-                "employment_status": {"$nin": ["Resigned", "Left", "Terminated", "Retired"]},
+                **active_employee_fields(),
             },
             employee_projection(),
         )
@@ -401,7 +395,7 @@ def update_management_group_members():
         db.employees.find({
             "_id": {"$in": employee_obj_ids},
             "tenant_id": current_tenant_id(),
-            "is_deleted": {"$ne": True},
+            **active_employee_fields(),
         })
     )
 

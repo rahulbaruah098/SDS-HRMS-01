@@ -15,6 +15,17 @@ import {
 import { useCustomAlert } from '../components/CustomAlertProvider';
 
 const validMonth = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value || '');
+const displayMonth = value => {
+  if (!validMonth(value)) return String(value || '');
+  const [year, month] = value.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' })
+    .format(new Date(year, month - 1, 1));
+};
+
+// Only reformat the system-generated title. Never modify stored/user-entered titles.
+const displayCompilationTitle = title => String(title || 'Team Monthly Sprint Plan')
+  .replace(/^(Team Monthly Sprint Plan)\s*-\s*(\d{4}-(?:0[1-9]|1[0-2]))$/,
+    (_, prefix, month) => `${prefix} · ${displayMonth(month)}`);
 const displayStatus = value => ({
   approved: 'Approved',
   pending_approval: 'Pending Approval',
@@ -296,9 +307,28 @@ export default function SprintMonthlyTeamCompilation({ month }) {
         .smtp-compilation .smtp-activities-table { min-width: 880px; }
         .smtp-compilation .smtp-check-label {
           display: inline-flex; align-items: center; gap: 9px;
-          white-space: nowrap; cursor: pointer; min-height: 40px;
+          max-width: 100%; min-height: 38px; padding: 7px 10px;
+          border: 1px solid var(--smtp-border); border-radius: 9px;
+          background: var(--smtp-surface); font-size: 12px;
+          white-space: normal; cursor: pointer;
         }
-        .smtp-compilation .smtp-check-label input { width: 18px; height: 18px; flex-shrink: 0; }
+        .smtp-compilation .smtp-check-label.is-confirmed {
+          background: rgba(81, 66, 206, .065);
+          border-color: rgba(81, 66, 206, .35);
+        }
+        /* Override the general .mws-table input min-width/padding for checkboxes. */
+        .smtp-compilation .smtp-check-label input[type="checkbox"] {
+          appearance: auto; box-sizing: border-box;
+          width: 17px; height: 17px; min-width: 17px; min-height: 17px;
+          margin: 0; padding: 0; flex: 0 0 17px;
+          accent-color: var(--primary, #5142ce);
+        }
+        .smtp-compilation .smtp-activities-table tbody tr.smtp-employee-start:not(:first-child) td {
+          border-top: 2px solid var(--smtp-border);
+        }
+        .smtp-compilation .smtp-activities-table tbody tr.smtp-employee-start td:first-child {
+          font-weight: 700;
+        }
         .smtp-compilation .smtp-summary {
           display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
           gap: 9px; margin: 14px 0;
@@ -356,7 +386,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                 existingCompilation
               }
               onClick={compile}>
-              <ClipboardList size={14}/> Compile {month}
+              <ClipboardList size={14}/> Compile {displayMonth(month)}
             </button>
           )}
         </div>
@@ -384,7 +414,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                 <table className="mws-table smtp-coverage-table">
                   <thead>
                     <tr>
-                      <th>Employee</th><th>Monthly Plan</th><th>Confirm Missing</th>
+                      <th>Employee</th><th>Monthly Plan</th><th>Confirm not submitted</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -401,14 +431,8 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                           <td>{displayStatus(member.submission_status)}</td>
                           <td>
                             {isMissing ? (
-                              <label className="smtp-check-label">
+                              <label className={`smtp-check-label${missingIds.includes(member.employee_id) ? ' is-confirmed' : ''}`}>
                                 <input type="checkbox"
-                                  style={{
-                                    width: 16,
-                                    height: 16,
-                                    flexShrink: 0,
-                                    margin: 0
-                                  }}
                                   disabled={busy}
                                   checked={missingIds.includes(member.employee_id)}
                                   onChange={event => setMissingIds(previous =>
@@ -417,7 +441,9 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                                       : previous.filter(id => id !== member.employee_id)
                                   )}
                                 />
-                                Not submitted
+                                {missingIds.includes(member.employee_id)
+                                  ? 'Confirmed not submitted'
+                                  : 'Confirm missing submission'}
                               </label>
                             ) : (
                               <span className="mws-muted">Not applicable</span>
@@ -453,7 +479,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
           border: '1px solid #dce2f4',
           borderRadius: 10
         }}>
-          <strong>Approved team compilation - locked</strong>
+          <strong>Approved team compilation · Locked</strong>
           <p className="mws-muted" style={{ marginTop: 8 }}>
             This compilation preserves the activities and submission
             statuses reviewed by the Reporting Officer at the time
@@ -513,7 +539,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
           <article className="mws-history" key={id}>
             <div className="mws-section-head">
               <div>
-                <strong>{item.title || 'Team Monthly Sprint Plan'}</strong>
+                <strong>{displayCompilationTitle(item.title)}</strong>
                 {item.status === 'approved' && (
                   <p className="mws-muted" style={{
                     marginTop: 5,
@@ -602,7 +628,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                 )}
 
                 <div className="mws-scroll">
-                  <table className="mws-table" style={{ minWidth: 850 }}>
+                  <table className="mws-table smtp-activities-table" style={{ minWidth: 880 }}>
                     <thead>
                       <tr>
                         <th>Employee</th><th>Monthly Plan</th>
@@ -617,12 +643,13 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                           ? plan.sheet_rows
                           : (plan.goals || []).map(goal => ({ activity: goal }));
                         return rows.map((row, index) => (
-                          <tr key={`${plan.employee_id}-${index}`}>
+                          <tr key={`${plan.employee_id}-${index}`}
+                            className={index === 0 ? 'smtp-employee-start' : undefined}>
                             <td>{plan.employee_name || plan.employee_id}</td>
                             <td>{plan.title || 'Monthly Plan'}</td>
-                            <td>{row.objective ? `${row.objective} ? ` : ''}{row.activity}</td>
-                            <td>{row.deliverable || '?'}</td>
-                            <td>{row.kpi || '?'}</td>
+                            <td>{row.objective ? `${row.objective} — ` : ''}{row.activity}</td>
+                            <td>{row.deliverable || '—'}</td>
+                            <td>{row.kpi || '—'}</td>
                             <td>
                               {/* STEP 44B.53D.3 - Per-plan custom values */}
                               <SprintMonthlyInlineFields
@@ -642,10 +669,10 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                     ? <p>No actions yet.</p>
                     : item.approval_history.map((entry, index) => (
                         <p key={index}>
-                          {entry.action} ? {entry.at
+                          {entry.action} · {entry.at
                             ? new Date(entry.at).toLocaleString()
                             : 'Date unavailable'}
-                          {entry.remarks ? ` ? ${entry.remarks}` : ''}
+                          {entry.remarks ? ` · ${entry.remarks}` : ''}
                         </p>
                       ))}
                 </div>

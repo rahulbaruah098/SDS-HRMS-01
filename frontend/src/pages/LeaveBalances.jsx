@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   CalendarDays,
+  Download,
+  Filter,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -10,11 +13,14 @@ import {
   Search,
   Sparkles,
   UserRound,
+  X,
   XCircle,
 } from 'lucide-react';
 import {
   getInitials,
+  correctLeaveAvailableBalance,
   getLeaveBalances,
+  exportLeaveBalancesWorkbook,
   getProfilePhotoUrl,
   listCollection,
   saveCombinedLeaveBalance,
@@ -445,12 +451,56 @@ export default function LeaveBalances({ user = {} }) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [employeeQuery, setEmployeeQuery] = useState('');
   const [tableQuery, setTableQuery] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [balanceFilter, setBalanceFilter] = useState('all');
+  const [exportPeriod, setExportPeriod] = useState('current');
+  const [exportDate, setExportDate] = useState(() => new Date().toLocaleDateString('en-CA'));
+  const [exportFrom, setExportFrom] = useState('');
+  const [exportTo, setExportTo] = useState('');
+  const [exporting, setExporting] = useState(false);
   const [casualLeaveToAdd, setCasualLeaveToAdd] = useState('');
   const [earnedLeaveToAdd, setEarnedLeaveToAdd] = useState('');
+  const [showBalanceCorrection, setShowBalanceCorrection] = useState(false);
+  const [correctionLeaveType, setCorrectionLeaveType] = useState('CL');
+  const [correctionAvailable, setCorrectionAvailable] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [pendingBalanceCorrection, setPendingBalanceCorrection] = useState(null);
+  const confirmationButtonRef = useRef(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [feedbackMap, setFeedbackMap] = useState({});
   const feedbackTimersRef = useRef({});
+
+  useEffect(() => {
+    if (!pendingBalanceCorrection) return undefined;
+    const previousFocus = document.activeElement;
+    confirmationButtonRef.current?.focus();
+    function onKeyDown(event) {
+      if (event.key === 'Escape' && !saving) {
+        setPendingBalanceCorrection(null);
+      }
+      if (event.key === 'Tab') {
+        const dialog = document.getElementById('lb-balance-confirm-dialog');
+        const focusables = dialog?.querySelectorAll('button:not([disabled])');
+        if (!focusables?.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus?.();
+    };
+  }, [pendingBalanceCorrection, saving]);
 
   const balanceRows = useMemo(
     () => buildBalanceRows(employees, balanceItems),
@@ -492,24 +542,27 @@ export default function LeaveBalances({ user = {} }) {
     );
   }, [employeeQuery, employees, selectedEmployeeId]);
 
+  const departmentOptions = useMemo(() => [...new Set(balanceRows.map((row) => row.department).filter(Boolean))].sort(), [balanceRows]);
+
   const visibleRows = useMemo(() => {
     const query = tableQuery.trim().toLowerCase();
+    return balanceRows.filter((row) => {
+      if (departmentFilter && row.department !== departmentFilter) return false;
+      if (query && ![
+        row.employee_name, row.employee_code, row.department, row.designation,
+      ].filter(Boolean).join(' ').toLowerCase().includes(query)) return false;
+      const kinds = typeFilter === 'ALL' ? ['cl', 'el'] : [typeFilter.toLowerCase()];
+      if (balanceFilter === 'all') return true;
+      return kinds.some((kind) => {
+        const available = toNumber(row[kind]?.available, 0);
+        if (balanceFilter === 'zero') return available === 0;
+        if (balanceFilter === 'positive') return available > 0;
+        return available < 0;
+      });
+    });
+  }, [balanceRows, tableQuery, departmentFilter, typeFilter, balanceFilter]);
 
-    if (!query) return balanceRows;
-
-    return balanceRows.filter((row) =>
-      [
-        row.employee_name,
-        row.employee_code,
-        row.department,
-        row.designation,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [balanceRows, tableQuery]);
+  useEffect(() => { setPage(1); }, [tableQuery, departmentFilter, typeFilter, balanceFilter]);
 
   const totals = useMemo(
     () =>
@@ -535,6 +588,41 @@ export default function LeaveBalances({ user = {} }) {
   const safePage = Math.min(Math.max(1, page), pageCount);
   const pageStart = (safePage - 1) * pageSize;
   const pagedRows = visibleRows.slice(pageStart, pageStart + pageSize);
+
+  async function downloadBalanceReport() {
+    if (exporting || loading) return;
+    if (exportPeriod === 'custom' && (!exportFrom || !exportTo || exportFrom > exportTo)) {
+      showFeedback('export', 'warning', 'Choose a valid start and end date.', 'Invalid Date Range');
+      return;
+    }
+    setExporting(true);
+    try {
+      const params = {
+        period: exportPeriod, search: tableQuery, department: departmentFilter,
+        leave_type: typeFilter, balance_filter: balanceFilter,
+      };
+      if (exportPeriod === 'weekly' || exportPeriod === 'monthly') params.on_date = exportDate;
+      if (exportPeriod === 'custom') {
+        params.date_from = exportFrom;
+        params.date_to = exportTo;
+      }
+      const blob = await exportLeaveBalancesWorkbook(params);
+      const filename = `YourComate_Leave_Balances_${exportPeriod}_${exportPeriod === 'custom' ? exportFrom + '_to_' + exportTo : exportDate}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      showFeedback('export', 'success', 'Excel report downloaded successfully.', 'Export Complete');
+    } catch (error) {
+      showFeedback('export', 'error', error.message || 'Excel export failed.', 'Export Failed');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function clearFeedback(scopeKey) {
     if (!scopeKey) return;
@@ -722,6 +810,9 @@ export default function LeaveBalances({ user = {} }) {
     setSelectedEmployeeId(normalizedEmployeeId);
     setCasualLeaveToAdd('');
     setEarnedLeaveToAdd('');
+    setCorrectionAvailable('');
+    setCorrectionReason('');
+    setShowBalanceCorrection(false);
 
     if (!showSelectionFeedback || !normalizedEmployeeId) {
       return;
@@ -903,7 +994,65 @@ export default function LeaveBalances({ user = {} }) {
     }
   }
 
+  async function saveBalanceCorrection(event) {
+    event.preventDefault();
+    clearFeedback('balance-correction');
+    if (!selectedEmployeeId) return;
+    if (correctionAvailable.trim() === '' || !Number.isFinite(Number(correctionAvailable)) ||
+        Number(correctionAvailable) < 0 || Number(correctionAvailable) * 2 !== Math.round(Number(correctionAvailable) * 2)) {
+      showFeedback('balance-correction', 'warning', 'Enter a non-negative balance in half-day increments, including 0.', 'Invalid Balance');
+      return;
+    }
+    if (correctionReason.trim().length < 5) {
+      showFeedback('balance-correction', 'warning', 'Enter a reason of at least five characters.', 'Reason Required');
+      return;
+    }
+    const existing = correctionLeaveType === 'CL' ? selectedBalance.cl : selectedBalance.el;
+    setPendingBalanceCorrection({
+      employeeId: selectedEmployeeId,
+      employeeName: getEmployeeName(selectedEmployee),
+      leaveType: correctionLeaveType,
+      previousAvailable: existing.available,
+      targetAvailable: Number(correctionAvailable),
+      reason: correctionReason.trim(),
+    });
+  }
+
+  async function confirmBalanceCorrection() {
+    if (!pendingBalanceCorrection || saving) return;
+    const correction = pendingBalanceCorrection;
+    setSaving(true);
+    try {
+      await correctLeaveAvailableBalance(correction.employeeId, {
+        leave_type: correction.leaveType,
+        available: correction.targetAvailable,
+        expected_available: correction.previousAvailable,
+        reason: correction.reason,
+      });
+      setPendingBalanceCorrection(null);
+      // Use refreshed server values, rather than optimistic local arithmetic.
+      await loadData({ showLoader: false });
+      setCorrectionAvailable('');
+      setCorrectionReason('');
+      showFeedback('balance-correction', 'success', `Updated ${correction.leaveType} available balance to ${formatLeaveDays(correction.targetAvailable)} days. Previous values and reason were recorded for audit.`, 'Balance Corrected');
+    } catch (error) {
+      setPendingBalanceCorrection(null);
+      showFeedback('balance-correction', 'error', error.message || 'Unable to correct leave balance.', 'Correction Failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const pageStyles = `
+
+    .lb-report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; padding: 16px; background: #f7f9fd; border: 1px solid rgba(77,119,221,.15); border-radius: 18px; margin: 14px 0 16px; }
+    .lb-report-filters label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; color: #52617f; }
+    .lb-report-filters select, .lb-report-filters input { width: 100%; min-height: 40px; border: 1px solid #d9e1f1; background: #fff; border-radius: 10px; padding: 8px 10px; color: #172545; font: inherit; font-weight: 600; }
+    .lb-report-export { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; padding: 16px; border: 1px solid rgba(77,119,221,.15); border-radius: 18px; margin-bottom: 16px; background: #fff; }
+    .lb-report-export label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; color: #52617f; }
+    .lb-report-export select, .lb-report-export input { min-width: 154px; min-height: 40px; border: 1px solid #d9e1f1; background: #fff; border-radius: 10px; padding: 8px 10px; color: #172545; font: inherit; }
+    .lb-report-note { color: #677795; font-size: 12px; margin: -3px 0 14px; line-height: 1.55; }
+
     .leave-balances-page {
       --lb-ink: #101a3a;
       --lb-copy: #5d6d8d;
@@ -1851,6 +2000,91 @@ export default function LeaveBalances({ user = {} }) {
       color: var(--lb-blue);
     }
 
+    .lb-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 5000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(13, 23, 48, .58);
+      backdrop-filter: blur(5px);
+      animation: lb-confirm-fade .18s ease both;
+    }
+    .lb-confirm-dialog {
+      width: min(100%, 470px);
+      border: 1px solid rgba(192, 204, 231, .7);
+      border-radius: 22px;
+      padding: 28px;
+      background: #fff;
+      box-shadow: 0 26px 76px rgba(13, 23, 48, .28);
+      animation: lb-confirm-rise .2s ease both;
+      color: #172344;
+    }
+    .lb-confirm-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .lb-confirm-icon {
+      width: 54px;
+      height: 54px;
+      border-radius: 17px;
+      display: grid;
+      place-items: center;
+      color: #4d68c9;
+      background: #edf2ff;
+    }
+    .lb-confirm-close {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 11px;
+      background: #f2f5fa;
+      color: #576580;
+      cursor: pointer;
+    }
+    .lb-confirm-dialog h2 { margin: 18px 0 8px; font-size: 23px; font-weight: 750; line-height: 1.25; }
+    .lb-confirm-description { margin: 0 0 20px; line-height: 1.55; color: #62718e; font-size: 14px; }
+    .lb-confirm-employee { margin-bottom: 12px; font-weight: 700; font-size: 14px; }
+    .lb-confirm-balance {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 16px;
+      border-radius: 15px;
+      background: #f5f7fc;
+      border: 1px solid #e8ecf5;
+    }
+    .lb-confirm-balance div { display: grid; gap: 4px; }
+    .lb-confirm-balance span { font-size: 12px; color: #697997; }
+    .lb-confirm-balance strong { font-size: 22px; font-weight: 800; }
+    .lb-confirm-balance .lb-confirm-new { color: #365bba; }
+    .lb-confirm-balance svg { color: #8090ad; }
+    .lb-confirm-reason { margin: 14px 0 0; font-size: 13px; color: #62718e; overflow-wrap: anywhere; }
+    .lb-confirm-reason strong { color: #334363; }
+    .lb-confirm-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+    .lb-confirm-actions button {
+      border-radius: 11px;
+      border: 1px solid #dbe2f0;
+      padding: 11px 18px;
+      min-height: 44px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .lb-confirm-cancel { color: #4d5d7a; background: white; }
+    .lb-confirm-submit { color: white; background: #436bd0; border-color: #436bd0 !important; display: inline-flex; align-items: center; gap: 8px; }
+    .lb-confirm-actions button:disabled { cursor: not-allowed; opacity: .65; }
+    .lb-confirm-actions button:focus-visible, .lb-confirm-close:focus-visible { outline: 3px solid #a5bfff; outline-offset: 2px; }
+    @keyframes lb-confirm-fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes lb-confirm-rise { from { transform: translateY(10px) scale(.98); opacity: .7; } to { transform: translateY(0) scale(1); opacity: 1; } }
+    @media (max-width: 520px) {
+      .lb-confirm-dialog { padding: 20px; border-radius: 18px; }
+      .lb-confirm-actions { flex-direction: column-reverse; }
+      .lb-confirm-actions button { width: 100%; justify-content: center; }
+    }
+
     @media (max-width: 1180px) {
       .lb-summary-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2022,6 +2256,48 @@ export default function LeaveBalances({ user = {} }) {
   return (
     <div className="leave-balances-page">
       <style>{pageStyles}</style>
+      {pendingBalanceCorrection && canManage ? (
+        <div className="lb-confirm-overlay" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !saving) setPendingBalanceCorrection(null);
+        }}>
+          <section
+            id="lb-balance-confirm-dialog"
+            className="lb-confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="lb-confirm-title"
+            aria-describedby="lb-confirm-description"
+          >
+            <div className="lb-confirm-top">
+              <span className="lb-confirm-icon"><AlertTriangle size={26} aria-hidden="true" /></span>
+              <button type="button" className="lb-confirm-close" aria-label="Cancel balance correction"
+                onClick={() => setPendingBalanceCorrection(null)} disabled={saving}><X size={18} /></button>
+            </div>
+            <h2 id="lb-confirm-title">Confirm balance correction</h2>
+            <p id="lb-confirm-description" className="lb-confirm-description">
+              This replaces the employee&apos;s available leave balance. It does not add extra days or remove past leave records.
+            </p>
+            <div className="lb-confirm-employee">
+              {pendingBalanceCorrection.employeeName} · {pendingBalanceCorrection.leaveType === 'CL' ? 'Casual Leave' : 'Earned Leave'}
+            </div>
+            <div className="lb-confirm-balance">
+              <div><span>Current balance</span><strong>{formatLeaveDays(pendingBalanceCorrection.previousAvailable)} days</strong></div>
+              <ChevronRight size={20} aria-hidden="true" />
+              <div><span>New balance</span><strong className="lb-confirm-new">{formatLeaveDays(pendingBalanceCorrection.targetAvailable)} days</strong></div>
+            </div>
+            <p className="lb-confirm-reason"><strong>Reason:</strong> {pendingBalanceCorrection.reason}</p>
+            <div className="lb-confirm-actions">
+              <button type="button" className="lb-confirm-cancel" disabled={saving}
+                onClick={() => setPendingBalanceCorrection(null)}>Cancel</button>
+              <button type="button" className="lb-confirm-submit" ref={confirmationButtonRef} disabled={saving}
+                onClick={confirmBalanceCorrection}>
+                {saving ? <Loader2 className="lb-spin" size={17} aria-hidden="true" /> : <CheckCircle2 size={17} aria-hidden="true" />}
+                {saving ? 'Saving...' : 'Confirm & Set Balance'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {!canManage ? (
         <section className="lb-restricted">
@@ -2045,8 +2321,7 @@ export default function LeaveBalances({ user = {} }) {
               </h1>
 
               <p>
-                Select an employee, enter Casual Leave and Earned Leave to
-                add, and save both together with one click.
+                Select an employee to add leave credits or use Edit / Set Balance to correct the available amount.
               </p>
             </div>
 
@@ -2236,6 +2511,53 @@ export default function LeaveBalances({ user = {} }) {
                   />
                 </div>
               </form>
+
+              <div style={{ marginTop: 20, borderTop: '1px solid #e1e6f1', paddingTop: 16 }}>
+                <button
+                  type="button"
+                  className="lb-soft-btn"
+                  disabled={saving || !selectedEmployeeId}
+                  onClick={() => {
+                    setShowBalanceCorrection((current) => !current);
+                    setCorrectionAvailable('');
+                    setCorrectionReason('');
+                  }}
+                >
+                  {showBalanceCorrection ? 'Close Balance Editor' : 'Edit / Set Balance'}
+                </button>
+                {showBalanceCorrection && selectedEmployeeId ? (
+                  <form className="lb-form" onSubmit={saveBalanceCorrection} style={{ marginTop: 16 }}>
+                    <h3>Set exact available balance</h3>
+                    <p>Use this for corrections only. This replaces the available amount; it does not add leave. Existing used leave and past requests remain unchanged.</p>
+                    <div className="lb-field">
+                      <label htmlFor="balance-correction-type">Leave Type</label>
+                      <select id="balance-correction-type" value={correctionLeaveType} disabled={saving}
+                        onChange={(event) => { setCorrectionLeaveType(event.target.value); setCorrectionAvailable(''); }}>
+                        <option value="CL">Casual Leave (CL)</option>
+                        <option value="EL">Earned Leave (EL)</option>
+                      </select>
+                    </div>
+                    <p>Current available: <strong>{formatLeaveDays((correctionLeaveType === 'CL' ? selectedBalance.cl : selectedBalance.el).available)} days</strong></p>
+                    <div className="lb-field">
+                      <label htmlFor="balance-correction-available">Correct available days (0 allowed)</label>
+                      <input id="balance-correction-available" type="number" min="0" step="0.5" required
+                        value={correctionAvailable} disabled={saving}
+                        onChange={(event) => setCorrectionAvailable(event.target.value)} placeholder="Enter final available balance" />
+                    </div>
+                    <div className="lb-field">
+                      <label htmlFor="balance-correction-reason">Reason for correction</label>
+                      <textarea id="balance-correction-reason" rows={3} maxLength={500} minLength={5} required
+                        value={correctionReason} disabled={saving}
+                        onChange={(event) => setCorrectionReason(event.target.value)} placeholder="Explain why this balance needs correction" />
+                    </div>
+                    <button type="submit" className="lb-primary-btn" disabled={saving || refreshing}>
+                      {saving ? 'Saving correction...' : 'Set Balance'}
+                    </button>
+                    <LeaveBalanceInlineMessage message={feedbackMap['balance-correction']}
+                      onClose={() => clearFeedback('balance-correction')} />
+                  </form>
+                ) : null}
+              </div>
             </article>
 
             <article className="lb-card">
@@ -2399,6 +2721,35 @@ export default function LeaveBalances({ user = {} }) {
               </div>
             </div>
 
+            <div className="lb-report-filters" aria-label="Leave balance filters">
+              <label><span>Department</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+                <option value="">All departments</option>{departmentOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select></label>
+              <label><span>Leave Type</span><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                <option value="ALL">Casual + Earned</option><option value="CL">Casual Leave (CL)</option><option value="EL">Earned Leave (EL)</option>
+              </select></label>
+              <label><span>Available Balance</span><select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value)}>
+                <option value="all">All balances</option><option value="zero">Zero</option><option value="positive">Above zero</option><option value="negative">Below zero</option>
+              </select></label>
+              <div style={{ display: 'flex', alignItems: 'end' }}><button className="lb-soft-btn" type="button" onClick={() => { setTableQuery(''); setDepartmentFilter(''); setTypeFilter('ALL'); setBalanceFilter('all'); }}><Filter size={15} /> Clear filters</button></div>
+            </div>
+            <div className="lb-report-export">
+              <label><span>Excel report</span><select value={exportPeriod} onChange={(e) => setExportPeriod(e.target.value)}>
+                <option value="current">Current balances</option><option value="weekly">Weekly activity + balances</option><option value="monthly">Monthly activity + balances</option><option value="custom">Custom period</option>
+              </select></label>
+              {(exportPeriod === 'weekly' || exportPeriod === 'monthly') && <label><span>Week / month containing</span><input type="date" value={exportDate} onChange={(e) => setExportDate(e.target.value)} /></label>}
+              {exportPeriod === 'custom' && <>
+                <label><span>From</span><input type="date" value={exportFrom} onChange={(e) => setExportFrom(e.target.value)} /></label>
+                <label><span>To</span><input type="date" value={exportTo} min={exportFrom || undefined} onChange={(e) => setExportTo(e.target.value)} /></label>
+              </>}
+              <button className="lb-primary-btn" type="button" onClick={downloadBalanceReport} disabled={exporting || loading}>
+                {exporting ? <Loader2 size={16} className="lb-spin" /> : <Download size={16} />}
+                {exporting ? 'Exporting...' : 'Export Excel'}
+              </button>
+            </div>
+            <p className="lb-report-note">Excel includes employee names and filtered current leave balances. Weekly, monthly and custom reports also include leave requests overlapping the period. Current balances are not represented as historical balances.</p>
+            <LeaveBalanceInlineMessage message={feedbackMap.export} onClose={() => clearFeedback('export')} />
+
             <LeaveBalancePageSize
               total={visibleRows.length}
               pageSize={pageSize}
@@ -2470,6 +2821,22 @@ export default function LeaveBalances({ user = {} }) {
                             disabled={saving}
                           >
                             Add Leave
+                          </button>
+                          <button
+                            type="button"
+                            className="lb-soft-btn"
+                            disabled={saving}
+                            onClick={() => {
+                              selectEmployee(row.employee_id);
+                              setShowBalanceCorrection(true);
+                              setCorrectionAvailable('');
+                              setCorrectionReason('');
+                              document.getElementById('leave-allocation')?.scrollIntoView({
+                                behavior: 'smooth', block: 'start',
+                              });
+                            }}
+                          >
+                            Edit Balance
                           </button>
 
                           <LeaveBalanceInlineMessage

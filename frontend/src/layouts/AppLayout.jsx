@@ -999,7 +999,7 @@ function notificationIsUnread(notification = {}) {
   return notification.read !== true && notification.status !== 'read';
 }
 
-export default function AppLayout({ user, setUser, page, setPage, children }) {
+export default function AppLayout({ user, setUser, page, setPage, children, sprintEnabled = false }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -1111,7 +1111,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   applyProfilePhotoAliases(safeUser, getUserPhoto(safeUser));
 
   const modules = moduleList(safeUser).filter(
-    (module) => module[0] !== 'dashboard',
+    (module) => module[0] !== 'dashboard' &&
+      (module[0] !== 'sprint_planning' || sprintEnabled),
   );
 
   const groupedModules = useMemo(() => {

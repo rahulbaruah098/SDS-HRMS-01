@@ -104,6 +104,11 @@ function DailyTrend({ points }) {
   const selectedIndex = rows.findIndex(row => row.date === selectedDate);
   const focus = rows[selectedIndex >= 0 ? selectedIndex : rows.length - 1];
   const ceiling = Math.max(1, ...rows.flatMap(row => [row.planned, row.completed]));
+  // Activity counts are integers. Fractional Y-axis labels are misleading.
+  const axisTop = ceiling <= 4 ? ceiling : Math.ceil(ceiling / 4) * 4;
+  const ticks = ceiling <= 4
+    ? Array.from({ length: ceiling + 1 }, (_, index) => ceiling - index)
+    : [4, 3, 2, 1, 0].map(quarter => axisTop * quarter / 4);
   if (!rows.length) {
     return <div className="ycp-empty-chart"><BarChart3 size={28} /><strong>No daily trend yet</strong>
       <span>Approved weekly activities will appear here as they are scheduled and reported.</span></div>;
@@ -126,9 +131,11 @@ function DailyTrend({ points }) {
         aria-label="Scrollable daily activity chart with selectable dates">
         <div className="ycp-bar-chart" style={{ minWidth: `${Math.max(360, rows.length * 88)}px` }}>
           <div className="ycp-bar-plot" role="group" aria-label="Daily planned and completed activity bars">
+            <div className="ycp-axis-labels" aria-hidden="true">
+              {ticks.map((tick, index) => <span key={tick} style={{ top: `${index * 100 / (ticks.length - 1)}%` }}>{tick}</span>)}
+            </div>
             <div className="ycp-gridlines" aria-hidden="true">
-              {[1, .75, .5, .25, 0].map(tick => <span key={tick}
-                className="ycp-gridline" data-value={(ceiling * tick).toFixed(ceiling < 4 ? 1 : 0)} />)}
+              {ticks.map((tick, index) => <span key={tick} className="ycp-gridline" style={{ top: `${index * 100 / (ticks.length - 1)}%` }} />)}
             </div>
             {rows.map(row => {
               const active = focus.date === row.date;
@@ -138,11 +145,11 @@ function DailyTrend({ points }) {
                 onClick={() => setSelectedDate(row.date)}>
                 <span className="ycp-bar-pair">
                   {(metric === 'both' || metric === 'planned') &&
-                    <span className="ycp-bar ycp-bar-planned" style={{height:`${Math.max(0, row.planned / ceiling * 100)}%`}}>
+                    <span className="ycp-bar ycp-bar-planned" style={{height:`${Math.max(0, row.planned / axisTop * 100)}%`}}>
                       <span className="ycp-bar-number">{row.planned}</span>
                     </span>}
                   {(metric === 'both' || metric === 'completed') &&
-                    <span className="ycp-bar ycp-bar-completed" style={{height:`${Math.max(0, row.completed / ceiling * 100)}%`}}>
+                    <span className="ycp-bar ycp-bar-completed" style={{height:`${Math.max(0, row.completed / axisTop * 100)}%`}}>
                       <span className="ycp-bar-number">{row.completed}</span>
                     </span>}
                 </span>
@@ -161,8 +168,9 @@ function DailyTrend({ points }) {
   );
 }
 
-export default function SprintPerformanceDashboard({ employeeId }) {
-  const [month, setMonth] = useState(currentMonth);
+export default function SprintPerformanceDashboard({ employeeId, initialMonth }) {
+  // Optional period from the team drill-down; standalone view keeps its current-month default.
+  const [month, setMonth] = useState(() => initialMonth || currentMonth());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -251,7 +259,7 @@ export default function SprintPerformanceDashboard({ employeeId }) {
         .ycp-chart-metric-switch{display:flex;flex-wrap:wrap;gap:6px}.ycp-chart-toggle{border:1px solid var(--ycp-border);background:var(--ycp-surface);color:var(--ycp-ink);font:inherit;font-size:12px;font-weight:700;border-radius:9px;min-height:34px;padding:6px 11px;cursor:pointer}
         .ycp-chart-toggle.is-active{color:var(--ycp-accent);border-color:var(--ycp-accent);background:var(--ycp-soft)}.ycp-chart-toggle:focus-visible,.ycp-bar-day:focus-visible{outline:3px solid var(--ycp-accent);outline-offset:2px}
         .ycp-bar-chart{width:100%;padding:0 14px 3px}.ycp-bar-plot{position:relative;display:flex;align-items:stretch;gap:12px;height:244px;border-bottom:1px solid var(--ycp-border);padding:0 0 0 37px}
-        .ycp-gridlines{position:absolute;left:36px;right:0;top:0;bottom:32px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none}.ycp-gridline{border-top:1px dashed var(--ycp-border);height:0;position:relative}.ycp-gridline:before{content:attr(data-value);position:absolute;right:calc(100% + 10px);top:-9px;font-size:10px;color:var(--ycp-subtle)}
+        .ycp-gridlines{position:absolute;left:42px;right:0;top:0;bottom:32px;display:flex;flex-direction:column;pointer-events:none}.ycp-gridline{position:absolute;left:0;right:0;width:100%;border-top:1px dashed var(--ycp-border);height:0}.ycp-axis-labels{position:absolute;left:0;top:0;bottom:32px;width:33px;display:flex;flex-direction:column;pointer-events:none}.ycp-axis-labels span{position:absolute;right:0;display:block;min-width:25px;text-align:right;white-space:nowrap;line-height:1;font-variant-numeric:tabular-nums;font-size:11px;color:var(--ycp-subtle);transform:translateY(-50%)}.ycp-axis-labels span:first-child{transform:translateY(0)}.ycp-axis-labels span:last-child{transform:translateY(-100%)}
         .ycp-bar-day{position:relative;z-index:1;appearance:none;display:flex;flex:1 1 75px;min-width:66px;max-width:140px;align-items:center;flex-direction:column;justify-content:flex-end;border:1px solid transparent;background:transparent;border-radius:9px 9px 0 0;cursor:pointer;padding:0 7px 0;color:var(--ycp-ink);font:inherit}
         .ycp-bar-day:hover,.ycp-bar-day.is-active{background:var(--ycp-soft);border-color:var(--ycp-border)}.ycp-bar-pair{height:210px;width:100%;display:flex;align-items:flex-end;justify-content:center;gap:7px;position:relative}.ycp-bar{width:min(35%,37px);min-width:14px;position:relative;display:flex;align-items:flex-start;justify-content:center;border-radius:6px 6px 0 0;min-height:0;animation:ycp-bar-rise .9s cubic-bezier(.16,1,.3,1) both;transform-origin:bottom}
         .ycp-bar-planned{background:${colors.purple}}.ycp-bar-completed{background:${colors.green}}.ycp-bar-number{position:absolute;bottom:calc(100% + 5px);font-size:11px;font-weight:800;color:var(--ycp-ink)}.ycp-bar-date{font-size:11px;font-weight:700;margin:10px 0 7px;white-space:nowrap;color:var(--ycp-subtle)}.ycp-bar-day.is-active .ycp-bar-date{color:var(--ycp-accent)}.ycp-chart-wrap>.ycp-legend{margin:12px 0 6px;justify-content:flex-start}

@@ -225,6 +225,29 @@ export function getDailyCheckoutReadiness(workDate) {
   );
 }
 
+
+// Attendance widget: read-only tenant activation and the current day's
+// own approved activities. The backend always determines the tenant/date.
+export function getSprintAvailability() {
+  return api(`${BASE}/availability`);
+}
+
+export function getSprintCheckoutTasks() {
+  return api(`${BASE}/checkout-tasks`);
+}
+
+export function uploadCheckoutEvidence(planId, activityId, file) {
+  if (!file) {
+    return Promise.reject(new Error('Choose a photo or document.'));
+  }
+  const formData = new FormData();
+  formData.append('file', file);
+  return api(
+    `${BASE}/checkout-evidence/${safeId(planId)}/${safeId(activityId)}`,
+    { method: 'POST', body: formData, timeoutMs: 60000 },
+  );
+}
+
 // =====================================================
 // GENERIC PLANNING HELPERS
 // =====================================================

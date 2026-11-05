@@ -552,7 +552,7 @@ function ProjectTeamRootCard({ project }) {
   );
 }
 
-export default function AdminDashboard({ setPage, user = {} }) {
+export default function AdminDashboard({ setPage, user = {}, sprintEnabled = false }) {
   const alerts = useCustomAlert();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -3398,7 +3398,7 @@ export default function AdminDashboard({ setPage, user = {} }) {
         </section>
       )}
       {/* Sprint Planning is restricted to non-admin roles. */}
-      {!([user.role, user.primary_role, ...(Array.isArray(user.roles) ? user.roles : [])]
+      {sprintEnabled && !([user.role, user.primary_role, ...(Array.isArray(user.roles) ? user.roles : [])]
         .map(role => String(role || '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'))
         .some(role => ['super_admin'].includes(role))) && (
         <section

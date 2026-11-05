@@ -6,6 +6,7 @@ import os
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 from app.middleware.tenant_guard import tenant_module_required
 from app.routes.attendance import (
     attendance_schedule_for_tenant,
@@ -1225,7 +1226,7 @@ def department_employee_query(tenant_id, department_values):
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "$or": [
             {"department_id": {"$in": department_values}},
             {"department": {"$in": department_values}},
@@ -1274,7 +1275,7 @@ def team_employee_query(tenant_id, owner_values, team_type=""):
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "$or": team_or,
     }
 
@@ -1285,7 +1286,7 @@ def notification_department_options(db, tenant_id):
             {
                 "tenant_id": tenant_id,
                 "is_deleted": {"$ne": True},
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
             },
             {
                 "department": 1,
@@ -1324,7 +1325,7 @@ def notification_team_options(db, tenant_id):
             {
                 "tenant_id": tenant_id,
                 "is_deleted": {"$ne": True},
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
                 "$or": [
                     {"is_team_leader": True},
                     {"is_reporting_officer": True},
@@ -4531,6 +4532,126 @@ def application_status():
 # Leave management APIs
 # -----------------------------------------------------------------------------
 
+
+
+@workflow_bp.get("/leave_balances/export")
+@tenant_module_required("apply_leave")
+@roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
+def export_leave_balances():
+    """Export a current balance snapshot and dated leave requests (not a backdated ledger)."""
+    from flask import Response
+    from app.services.leave_balance_export import build_leave_balance_workbook
+    from io import BytesIO
+
+    def parse_iso(value):
+        try:
+            return date.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    period = normalize_text(request.args.get("period") or "current").lower()
+    if period not in {"current", "weekly", "monthly", "custom"}:
+        return jsonify({"message": "Invalid export period"}), 400
+    anchor = parse_iso(request.args.get("on_date")) or date.today()
+    if period == "weekly":
+        start = anchor - timedelta(days=anchor.weekday())
+        end = start + timedelta(days=6)
+    elif period == "monthly":
+        start = anchor.replace(day=1)
+        next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end = next_month - timedelta(days=1)
+    elif period == "custom":
+        start = parse_iso(request.args.get("date_from"))
+        end = parse_iso(request.args.get("date_to"))
+        if not start or not end:
+            return jsonify({"message": "Valid start and end dates are required"}), 400
+    else:
+        start = end = None
+    if start and (start > end or (end - start).days > 366):
+        return jsonify({"message": "Choose a valid range of up to 366 days"}), 400
+
+    tenant = current_tenant_id()
+    db = get_db()
+    search = normalize_text(request.args.get("search")).lower()
+    department = normalize_text(request.args.get("department"))
+    leave_type = normalize_text(request.args.get("leave_type") or "ALL").upper()
+    balance_filter = normalize_text(request.args.get("balance_filter") or "all").lower()
+    if leave_type not in {"ALL", "CL", "EL"} or balance_filter not in {"all", "zero", "positive", "negative"}:
+        return jsonify({"message": "Invalid balance filters"}), 400
+
+    employee_docs = list(db.employees.find({"tenant_id": tenant, "is_deleted": {"$ne": True}}).limit(5000))
+    excluded = {"inactive", "disabled", "resigned", "resign", "left", "terminated", "retired", "deleted", "alumni", "ex-employee", "ex_employee"}
+    def active(emp):
+        if emp.get("is_active") is False or emp.get("is_alumni") is True:
+            return False
+        return not any(str(emp.get(f) or "").strip().lower() in excluded for f in ("status", "employment_status", "employee_status"))
+    employees = {}
+    for emp in employee_docs:
+        if not active(emp):
+            continue
+        eid = str(emp["_id"])
+        name = employee_display_name(emp)
+        code = employee_code(emp)
+        dept = str(emp.get("department") or "")
+        designation = str(emp.get("designation") or "")
+        if department and dept != department:
+            continue
+        if search and search not in " ".join((name, code, dept, designation, str(emp.get("email") or ""))).lower():
+            continue
+        employees[eid] = (name, code, dept, designation)
+
+    balances = {eid: {} for eid in employees}
+    if employees:
+        query = {"tenant_id": tenant, "employee_id": {"$in": list(employees)}, "is_deleted": {"$ne": True}}
+        for b in db.leave_balances.find(query):
+            kind = normalize_leave_type(b.get("leave_type"))
+            if kind in {"CL", "EL"}:
+                balances[str(b["employee_id"])][kind] = b
+
+    snapshot = []
+    selected_ids = set()
+    for eid, details in sorted(employees.items(), key=lambda it: it[1][0].lower()):
+        types = ("CL", "EL") if leave_type == "ALL" else (leave_type,)
+        for kind in types:
+            b = balances[eid].get(kind, {})
+            available = float(b.get("available") or 0)
+            if balance_filter == "zero" and available != 0:
+                continue
+            if balance_filter == "positive" and available <= 0:
+                continue
+            if balance_filter == "negative" and available >= 0:
+                continue
+            snapshot.append([details[0], details[1], details[2], details[3], kind,
+                             float(b.get("opening_balance") or 0), float(b.get("credited") or 0),
+                             float(b.get("used") or 0), available])
+            selected_ids.add(eid)
+
+    activity = []
+    if start and selected_ids:
+        query = {"tenant_id": tenant, "employee_id": {"$in": list(selected_ids)},
+                 "is_deleted": {"$ne": True},
+                 "from_date": {"$lte": end.isoformat()}, "to_date": {"$gte": start.isoformat()}}
+        for leave in db.leave_requests.find(query).sort("from_date", 1).limit(10000):
+            kind = normalize_leave_type(leave.get("deducted_leave_type") or leave.get("leave_type"))
+            if leave_type != "ALL" and kind != leave_type:
+                continue
+            eid = str(leave.get("employee_id") or "")
+            details = employees.get(eid)
+            if not details:
+                continue
+            activity.append([details[0], details[1], details[2],
+                            leave.get("from_date") or "", leave.get("to_date") or "",
+                            kind or str(leave.get("leave_type") or ""),
+                            str(leave.get("status") or ""),
+                            float(leave.get("leave_days") or 0),
+                            "Yes" if leave.get("balance_deducted") else "No"])
+
+    workbook = build_leave_balance_workbook(snapshot, activity, period, start, end, tenant)
+    filename = f"Leave_Balances_{tenant}_{period}_{anchor.isoformat()}.xlsx"
+    return Response(workbook, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                             "Cache-Control": "no-store"})
+
 @workflow_bp.get("/leave_balances")
 @tenant_module_required("apply_leave")
 @current_user_required
@@ -4579,6 +4700,133 @@ def create_or_update_leave_balances():
         return jsonify({"message": "employee_id is required"}), 400
 
     return set_leave_balance(employee_id)
+
+
+@workflow_bp.patch("/leave_balances/<employee_id>/set-available")
+@tenant_module_required("apply_leave")
+@roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
+def correct_leave_available_balance(employee_id):
+    """Rebase a CL/EL balance to an exact available amount; preserve used leave.
+
+    This is an administrative correction, not an additive credit. A before/after
+    snapshot is retained in an append-only correction record for audit review.
+    """
+    import math
+
+    employee_obj_id = safe_object_id(employee_id)
+    if not employee_obj_id:
+        return jsonify({"message": "Invalid employee id"}), 400
+
+    data = request.get_json(silent=True) or {}
+    leave_type = normalize_leave_type(data.get("leave_type"))
+    if leave_type not in LEAVE_TYPES_WITH_BALANCE:
+        return jsonify({"message": "Leave type must be CL or EL"}), 400
+
+    raw_target = data.get("available")
+    if isinstance(raw_target, bool) or raw_target is None or str(raw_target).strip() == "":
+        return jsonify({"message": "An exact available balance is required"}), 400
+    try:
+        target = float(raw_target)
+    except (ValueError, TypeError):
+        return jsonify({"message": "Available balance must be a number"}), 400
+    if not math.isfinite(target) or target < 0 or round(target * 2) != target * 2:
+        return jsonify({"message": "Balance must be non-negative in half-day increments"}), 400
+
+    reason = normalize_text(data.get("reason"))
+    if len(reason) < 5 or len(reason) > 500:
+        return jsonify({"message": "Provide a correction reason (5–500 characters)"}), 400
+
+    # Even super administrators correct only within their current tenant context.
+    # Never accept a tenant_id supplied in the request body.
+    tenant_id = current_tenant_id()
+    db = get_db()
+    employee = db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    })
+    if not employee:
+        return jsonify({"message": "Employee not found in this tenant"}), 404
+
+    balance = get_leave_balance(db, employee, leave_type)
+    if not balance:
+        # A missing balance is equivalent to zero; avoid inserting records until
+        # all validations have succeeded.
+        balance = ensure_leave_balance(db, employee, leave_type)
+
+    old_available = float(balance.get("available", 0) or 0)
+    old_used = float(balance.get("used", 0) or 0)
+    if not math.isfinite(old_used) or old_used < 0:
+        return jsonify({"message": "Stored used-leave value requires review"}), 409
+
+    # Prevent overwriting a newer value loaded in a second browser tab.
+    if "expected_available" in data:
+        try:
+            expected = float(data["expected_available"])
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid expected balance"}), 400
+        if not math.isfinite(expected) or abs(expected - old_available) > 0.000001:
+            return jsonify({"message": "Balance changed; refresh before editing"}), 409
+
+    before = {
+        key: float(balance.get(key, 0) or 0)
+        for key in ("opening_balance", "credited", "used", "available")
+    }
+    # All three canonical fields remain consistent after this correction:
+    # opening + credited - used = exact requested available.
+    # Past leave requests and deductions are not changed.
+    after = {
+        "opening_balance": target + old_used,
+        "credited": 0.0,
+        "used": old_used,
+        "available": target,
+    }
+    now = datetime.utcnow()
+    match = {
+        "_id": balance["_id"],
+        "tenant_id": tenant_id,
+        "employee_id": str(employee_obj_id),
+        "is_deleted": {"$ne": True},
+        # Compare-and-swap prevents a concurrent leave deduction being lost.
+        "used": balance.get("used"),
+        "available": balance.get("available"),
+        "credited": balance.get("credited"),
+        "opening_balance": balance.get("opening_balance"),
+    }
+    updated = db.leave_balances.update_one(match, {"$set": {
+        **after,
+        "updated_at": now,
+        "updated_by": str(g.current_user["_id"]),
+        "updated_by_name": g.current_user.get("name") or g.current_user.get("email"),
+    }})
+    if updated.matched_count != 1:
+        return jsonify({"message": "Balance changed concurrently; refresh and retry"}), 409
+
+    audit_entry = {
+        "tenant_id": tenant_id,
+        "employee_id": str(employee_obj_id),
+        "leave_type": leave_type,
+        "action": "set_available",
+        "reason": reason,
+        "before": before,
+        "after": after,
+        "changed_by": str(g.current_user["_id"]),
+        "changed_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "created_at": now,
+    }
+    db.leave_balance_corrections.insert_one(audit_entry)
+    audit("correct_leave_balance", "leave_balances", str(balance["_id"]), {
+        "employee_id": str(employee_obj_id),
+        "leave_type": leave_type,
+        "reason": reason,
+        "before": before,
+        "after": after,
+    })
+    updated_balance = get_leave_balance(db, employee, leave_type)
+    return jsonify({
+        "message": "Leave balance corrected",
+        "item": clean_doc(updated_balance),
+    })
 
 
 @workflow_bp.patch("/leave_balances/<employee_id>")
@@ -4776,7 +5024,7 @@ def leave_request_options():
     member_query = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }
 
     if member_or_filters:

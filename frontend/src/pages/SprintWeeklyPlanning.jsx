@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CalendarDays, Plus, Trash2, RefreshCw, Send,
-  ClipboardCheck, FileText, AlertCircle, Save
+  ClipboardCheck, FileText, AlertCircle, Save, ChevronRight
 } from 'lucide-react';
 import {
   getMonthlyPlans, getWeeklyPlans, createWeeklyPlan,
@@ -15,6 +15,7 @@ import SprintAttachmentField from '../components/SprintAttachmentField';
 import { updateWeeklyActivityCustomFields } from '../api/sprintPlanning';
 import SprintDailyCustomFields from '../components/SprintDailyCustomFields';
 import { useCustomAlert } from '../components/CustomAlertProvider';
+import { currentUser } from '../api/client';
 
 const emptyActivity = () => ({
   planned_date: '',
@@ -81,6 +82,43 @@ const savedEvidenceReference = (evidence) => {
   return '';
 };
 
+// UI wording only: the backend remains responsible for selecting and enforcing
+// the authorised reviewer for every submitted weekly plan.
+const getWeeklySubmissionCopy = (user) => {
+  const rawRoles = [
+    user?.role, user?.primary_role,
+    ...(Array.isArray(user?.roles) ? user.roles : []),
+    ...(Array.isArray(user?.effective_roles) ? user.effective_roles : [])
+  ];
+  const roles = new Set(rawRoles.filter(Boolean).map(value =>
+    String(value).trim().toLowerCase().replace(/[\s-]+/g, '_')
+  ));
+  const isTeamLeader = user?.is_team_leader === true ||
+    roles.has('team_leader') || roles.has('teamleader') || roles.has('tl');
+
+  // A TL's own plan goes to the Reporting Officer, not back to the TL.
+  if (isTeamLeader) return {
+    button: 'Submit for Reporting Officer Approval',
+    confirm: 'Submit this weekly planning sheet for Reporting Officer approval?',
+    success: 'Your weekly plan has been submitted for Reporting Officer review.'
+  };
+
+  const isEmployee = roles.has('employee') || roles.has('staff') ||
+    roles.has('team_member');
+  if (isEmployee) return {
+    button: 'Submit for Team Leader Approval',
+    confirm: 'Submit this weekly planning sheet for Team Leader approval?',
+    success: 'Your weekly plan has been submitted for Team Leader review.'
+  };
+
+  // Do not incorrectly promise a particular reviewer for an unknown role.
+  return {
+    button: 'Submit Weekly Plan for Approval',
+    confirm: 'Submit this weekly planning sheet for approval?',
+    success: 'Your weekly plan has been submitted to the assigned reviewer.'
+  };
+};
+
 const parseEvidence = (value) => {
   const reference = value.trim();
   if (!reference) return [];
@@ -92,6 +130,7 @@ const parseEvidence = (value) => {
 
 export default function SprintWeeklyPlanning() {
   const { notify, confirm: customConfirm } = useCustomAlert();
+  const submissionCopy = getWeeklySubmissionCopy(currentUser());
 
   const [monthly, setMonthly] = useState([]);
   const [weekly, setWeekly] = useState([]);
@@ -306,7 +345,7 @@ export default function SprintWeeklyPlanning() {
 
   const submit = async (plan) => {
     const yes = await customConfirm(
-      'Submit this weekly planning sheet to your Reporting Team Leader?',
+      submissionCopy.confirm,
       { title: 'Submit Weekly Plan', confirmText: 'Submit Plan' }
     );
     if (!yes) return;
@@ -314,7 +353,7 @@ export default function SprintWeeklyPlanning() {
     setBusy(true);
     try {
       await submitWeeklyPlan(getId(plan));
-      alert('success', 'Plan submitted', 'Your Team Leader can now review the weekly plan.');
+      alert('success', 'Plan submitted', submissionCopy.success);
       await load();
     } catch (error) {
       alert('error', 'Submission failed', messageOf(error));
@@ -455,24 +494,41 @@ export default function SprintWeeklyPlanning() {
   const changeForm = (plan, activity) => {
     const key = activity?.activity_id || `add-${getId(plan)}`;
     const data = changes[key] || {};
+    const fieldId = (name) => `swp-change-${getId(plan)}-${activity?.activity_id || 'new'}-${name}`;
     return (
-      <div className="swp-change-form" style={{ ...stack, padding: 14, border: '1px dashed var(--border, #dbe1e8)', borderRadius: 10, marginTop: 12 }}>
+      <div className="swp-change-form" style={{ ...stack, padding: 16, border: '1px solid var(--border, #dbe1e8)', background: 'var(--surface-secondary, #f8f9ff)', borderRadius: 12, marginTop: 12 }}>
         <strong>{activity ? 'Request Activity Modification' : 'Request Additional Activity'}</strong>
-        <input type="date" style={field} aria-label="Changed activity date"
-          min={plan.week_start} max={plan.week_end}
-          value={data.planned_date || activity?.planned_date || ''}
-          onChange={e => updateChange(key, { planned_date: e.target.value })} />
-        <input style={field} placeholder="Activity title" aria-label="Changed activity title"
-          value={data.title ?? activity?.title ?? ''}
-          onChange={e => updateChange(key, { title: e.target.value })} />
-        <textarea style={field} rows={2} placeholder="Description (optional)"
-          value={data.description ?? activity?.description ?? ''}
-          onChange={e => updateChange(key, { description: e.target.value })} />
-        <input style={field} placeholder="Expected deliverable (optional)"
-          value={data.expected_deliverable ?? activity?.expected_deliverable ?? ''}
-          onChange={e => updateChange(key, { expected_deliverable: e.target.value })} />
-        <textarea style={field} rows={2} placeholder="Why is this change required? (minimum 10 characters)"
-          value={data.reason || ''} onChange={e => updateChange(key, { reason: e.target.value })} />
+        <div>
+          <label style={label} htmlFor={fieldId('date')}>Activity date <span aria-hidden="true">*</span></label>
+          <input id={fieldId('date')} type="date" style={field} required
+            min={plan.week_start} max={plan.week_end}
+            value={data.planned_date || activity?.planned_date || ''}
+            onChange={e => updateChange(key, { planned_date: e.target.value })} />
+        </div>
+        <div>
+          <label style={label} htmlFor={fieldId('title')}>Activity title <span aria-hidden="true">*</span></label>
+          <input id={fieldId('title')} style={field} placeholder="Enter the activity title" maxLength={200} required
+            value={data.title ?? activity?.title ?? ''}
+            onChange={e => updateChange(key, { title: e.target.value })} />
+        </div>
+        <div>
+          <label style={label} htmlFor={fieldId('description')}>Description <span className="swp-muted">(optional)</span></label>
+          <textarea id={fieldId('description')} style={field} rows={2} placeholder="Describe the activity"
+            value={data.description ?? activity?.description ?? ''}
+            onChange={e => updateChange(key, { description: e.target.value })} />
+        </div>
+        <div>
+          <label style={label} htmlFor={fieldId('deliverable')}>Expected deliverable <span className="swp-muted">(optional)</span></label>
+          <input id={fieldId('deliverable')} style={field} placeholder="Expected result or output"
+            value={data.expected_deliverable ?? activity?.expected_deliverable ?? ''}
+            onChange={e => updateChange(key, { expected_deliverable: e.target.value })} />
+        </div>
+        <div>
+          <label style={label} htmlFor={fieldId('reason')}>Reason for change <span aria-hidden="true">*</span></label>
+          <textarea id={fieldId('reason')} style={field} rows={2} minLength={10} required
+            placeholder="Explain why the change is needed (at least 10 characters)"
+            value={data.reason || ''} onChange={e => updateChange(key, { reason: e.target.value })} />
+        </div>
         <button className="btn btn-secondary" type="button" disabled={busy}
           onClick={() => requestChange(plan, activity)}>
           <Send size={15} /> Submit Change Request
@@ -487,7 +543,13 @@ export default function SprintWeeklyPlanning() {
         .swp-page { min-width:0; color:var(--text, inherit); }
         .swp-page .swp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; }
         .swp-page .swp-heading { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:clamp(22px, 3vw, 30px); line-height:1.25; }
-        .swp-page .swp-subtitle { margin:10px 0 0; line-height:1.65; max-width:780px; color:var(--text-muted, #64748b); }
+        .swp-page .swp-subtitle { margin:0; line-height:1.65; max-width:780px; color:var(--text-muted, #64748b); flex-basis:100%; order:3; }
+        .swp-page .swp-header > .btn { margin-left:auto; }
+        .swp-page .swp-heading { min-width:0; }
+        @media(max-width:700px) {
+          .swp-page .swp-header > .btn { margin-left:0; }
+          .swp-page .swp-subtitle { order:2; }
+        }
         .swp-page .card { min-width:0; border:1px solid var(--border, #dbe1e8); border-radius:16px; background:var(--surface, var(--card-bg, #fff)); }
         .swp-page .swp-section-heading { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 16px; font-size:clamp(17px, 2vw, 20px); }
         .swp-page .swp-form-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; }
@@ -508,7 +570,11 @@ export default function SprintWeeklyPlanning() {
         .swp-page input, .swp-page select, .swp-page textarea { max-width:100%; font-size:16px; }
         .swp-page input:focus-visible, .swp-page select:focus-visible, .swp-page textarea:focus-visible, .swp-page button:focus-visible { outline:2px solid var(--primary,#5142ce); outline-offset:2px; }
         .swp-page .btn { min-height:42px; display:inline-flex; justify-content:center; align-items:center; gap:8px; white-space:normal; text-align:center; }
-        .swp-page summary { padding:10px 0; cursor:pointer; font-weight:650; }
+        .swp-page .swp-disclosure { display:flex; align-items:center; flex-wrap:wrap; gap:9px; list-style:none; padding:11px 12px; cursor:pointer; font-weight:650; border-radius:10px; background:var(--surface-secondary, #f8f9ff); border:1px solid var(--border,#dbe1e8); line-height:1.45; }
+        .swp-page .swp-disclosure::-webkit-details-marker { display:none; }
+        .swp-page .swp-disclosure-icon { display:inline-flex; flex:0 0 auto; color:var(--primary,#6354d9); transition:transform .2s ease; }
+        .swp-page details[open] > .swp-disclosure .swp-disclosure-icon { transform:rotate(90deg); }
+        .swp-page .swp-disclosure-text { min-width:0; flex:1 1 160px; overflow-wrap:break-word; }
         .swp-page .swp-empty { padding:16px; border:1px dashed var(--border,#dbe1e8); border-radius:12px; color:var(--text-muted,#64748b); }
         @media(max-width:700px) {
           .swp-page .swp-form-grid { grid-template-columns:minmax(0,1fr); }
@@ -631,7 +697,7 @@ export default function SprintWeeklyPlanning() {
               {plan.status === 'draft' && (
                 <button className="btn btn-primary" style={{ marginTop: 12 }}
                   type="button" disabled={busy} onClick={() => submit(plan)}>
-                  <Send size={15} /> Submit for Team Leader Approval
+                  <Send size={15} /> {submissionCopy.button}
                 </button>
               )}
 
@@ -794,8 +860,9 @@ export default function SprintWeeklyPlanning() {
                           </button>
                         </div>
                         <details style={{ marginTop: 12 }}>
-                          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                            Request a Change to This Activity
+                          <summary className="swp-disclosure">
+                            <span className="swp-disclosure-icon"><ChevronRight size={17} aria-hidden="true" /></span>
+                            <span className="swp-disclosure-text">Request a Change to This Activity</span>
                           </summary>
                           {changeForm(plan, activity)}
                         </details>
@@ -807,8 +874,10 @@ export default function SprintWeeklyPlanning() {
 
               {plan.status === 'approved' && (
                 <details style={{ marginTop: 15 }}>
-                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                    <Plus size={15} style={{ verticalAlign: 'middle' }} /> Add Unplanned Activity (Approval Required)
+                  <summary className="swp-disclosure">
+                    <span className="swp-disclosure-icon"><ChevronRight size={17} aria-hidden="true" /></span>
+                    <Plus size={16} aria-hidden="true" style={{ flexShrink: 0 }} />
+                    <span className="swp-disclosure-text">Add Unplanned Activity (Approval Required)</span>
                   </summary>
                   <p className="swp-muted" style={{ fontSize: 13 }}>
                     <AlertCircle size={14} style={{ verticalAlign: 'middle' }} />

@@ -122,14 +122,14 @@ def validate_attachment_content(filename, content):
 
     signatures = {
         ".pdf": (b"%PDF-",),
-        ".png": (b"\\x89PNG\\r\\n\\x1a\\n",),
-        ".jpg": (b"\\xff\\xd8\\xff",),
-        ".jpeg": (b"\\xff\\xd8\\xff",),
+        ".png": (b"\x89PNG\r\n\x1a\n",),
+        ".jpg": (b"\xff\xd8\xff",),
+        ".jpeg": (b"\xff\xd8\xff",),
         ".webp": (b"RIFF",),
-        ".docx": (b"PK\\x03\\x04",),
-        ".xlsx": (b"PK\\x03\\x04",),
-        ".doc": (b"\\xd0\\xcf\\x11\\xe0",),
-        ".xls": (b"\\xd0\\xcf\\x11\\xe0", b"PK\\x03\\x04"),
+        ".docx": (b"PK\x03\x04",),
+        ".xlsx": (b"PK\x03\x04",),
+        ".doc": (b"\xd0\xcf\x11\xe0",),
+        ".xls": (b"\xd0\xcf\x11\xe0", b"PK\x03\x04"),
     }
 
     expected = signatures.get(extension)

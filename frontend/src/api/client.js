@@ -4116,6 +4116,13 @@ export function getLeaveBalances(params = {}) {
   return api(`/leave_balances${buildQuery(params)}`);
 }
 
+export function exportLeaveBalancesWorkbook(params = {}) {
+  return api(`/leave_balances/export${buildQuery(params)}`, {
+    responseType: 'blob',
+    timeoutMs: 60000,
+  });
+}
+
 export function createLeaveBalances(payload = {}) {
   return api('/leave_balances', {
     method: 'POST',
@@ -4125,6 +4132,13 @@ export function createLeaveBalances(payload = {}) {
 
 export function setLeaveBalance(employeeId, payload = {}) {
   return api(`/leave_balances/${employeeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function correctLeaveAvailableBalance(employeeId, payload = {}) {
+  return api(`/leave_balances/${employeeId}/set-available`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });

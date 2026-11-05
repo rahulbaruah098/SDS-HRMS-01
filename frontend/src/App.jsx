@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { currentUser, getTodayCelebrations } from './api/client';
+import { api, currentUser, getTodayCelebrations } from './api/client';
 import {
   canAccessModule,
   hasFullSaasAccess,
@@ -1043,7 +1043,7 @@ function shouldUseEmployeeDashboard(userRoles = []) {
   return hasAnyRole(userRoles, EMPLOYEE_CAPABILITY_ROLES);
 }
 
-function DashboardRouter({ user, setPage }) {
+function DashboardRouter({ user, setPage, sprintEnabled = false }) {
   const userRoles = normalizeRoles(user);
 
   if (userRoles.includes('super_admin')) {
@@ -1057,7 +1057,7 @@ function DashboardRouter({ user, setPage }) {
     employee + reporting_officer, it must still open EmployeeDashboard.
   */
   if (shouldUseEmployeeDashboard(userRoles)) {
-    return <EmployeeDashboard setPage={setPage} />;
+    return <EmployeeDashboard setPage={setPage} sprintEnabled={sprintEnabled} />;
   }
 
   return (
@@ -1067,6 +1067,7 @@ function DashboardRouter({ user, setPage }) {
         roles: userRoles,
       }}
       setPage={setPage}
+      sprintEnabled={sprintEnabled}
     />
   );
 }
@@ -1089,12 +1090,12 @@ function UnauthorizedPage({ setPage }) {
   );
 }
 
-function PageRouter({ page, user, setPage }) {
+function PageRouter({ page, user, setPage, sprintEnabled = false }) {
   const safeUser = mergeUserWithEmployeeProfile(user || {});
   const normalizedPage = normalizePageKey(page);
 
   if (normalizedPage === 'dashboard') {
-    return <DashboardRouter user={safeUser} setPage={setPage} />;
+    return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
   }
 
   if (normalizedPage === 'superadmin_attendance_correction') {
@@ -1115,7 +1116,7 @@ function PageRouter({ page, user, setPage }) {
   if (normalizedPage === 'billing') {
     // SDS has lifetime access and must never see subscription/payment screens.
     if (isSdsLifetimeTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
     }
 
     // Client Billing contains company-level subscription, quotation, payment,
@@ -1129,7 +1130,7 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'subscription_expired') {
     if (!isExpiredOrSuspendedTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
     }
 
     return <SubscriptionExpired setPage={setPage} user={safeUser} />;
@@ -1303,7 +1304,7 @@ if (normalizedPage === 'companies') {
     )) {
       return <UnauthorizedPage setPage={setPage} />;
     }
-    if (!canAccessModule(safeUser, 'sprint_planning')) {
+    if (!sprintEnabled || !canAccessModule(safeUser, 'sprint_planning')) {
       return <UnauthorizedPage setPage={setPage} />;
     }
     return (
@@ -1452,6 +1453,50 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
+
+  // Server-owned, tenant-specific Sprint activation. Fail closed until loaded.
+  const [sprintAvailability, setSprintAvailability] = useState({
+    context: '', enabled: false,
+  });
+  const [sprintRefreshVersion, setSprintRefreshVersion] = useState(0);
+  const sprintContext = normalizedUser
+    ? [
+        String(normalizedUser.tenant_id || normalizedUser.tenant?.id || normalizedUser.tenant?._id || ''),
+        String(normalizedUser._id || normalizedUser.id || normalizedUser.email || ''),
+      ].join(':')
+    : '';
+  const sprintEnabled = Boolean(
+    sprintContext &&
+    sprintAvailability.context === sprintContext &&
+    sprintAvailability.enabled === true
+  );
+
+  useEffect(() => {
+    const refresh = () => setSprintRefreshVersion(version => version + 1);
+    window.addEventListener('yourcomate:sprint-setting-changed', refresh);
+    return () => window.removeEventListener('yourcomate:sprint-setting-changed', refresh);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setSprintAvailability({ context: sprintContext, enabled: false });
+    if (!normalizedUser || !sprintContext.split(':')[0]) {
+      return () => { active = false; };
+    }
+
+    api('/sprint-planning/availability')
+      .then(data => {
+        if (active) setSprintAvailability({
+          context: sprintContext,
+          enabled: data?.enabled === true,
+        });
+      })
+      .catch(() => {
+        if (active) setSprintAvailability({ context: sprintContext, enabled: false });
+      });
+
+    return () => { active = false; };
+  }, [sprintContext, sprintRefreshVersion]);
 
   const effectivePage = useMemo(() => {
     if (!normalizedUser || !isExpiredOrSuspendedTenant(normalizedUser)) {
@@ -1687,6 +1732,10 @@ export default function App() {
     const normalizedNextPage = normalizePageKey(nextPage);
     const shouldSyncUrl = options?.syncUrl !== false;
     const shouldReplace = options?.replace === true;
+
+    if (normalizedNextPage === 'sprint_planning' && !sprintEnabled) {
+      return;
+    }
 
     setPage(normalizedNextPage);
 
@@ -2001,11 +2050,13 @@ return (
       setUser={handleSessionUserUpdate}
       page={effectivePage}
       setPage={handleSetPage}
+      sprintEnabled={sprintEnabled}
     >
       <PageRouter
         page={effectivePage}
         user={normalizedUser}
         setPage={handleSetPage}
+        sprintEnabled={sprintEnabled}
       />
     </AppLayout>
 

@@ -159,7 +159,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
                 <div className="sma-meta">
                   <span><CalendarDays size={14} aria-hidden="true" /> {valueOrDash(plan.month)}</span>
                   <span>{rows.length} {rows.length === 1 ? 'activity' : 'activities'}</span>
-                  <span><UserRound size={14} aria-hidden="true" /> Employee: {valueOrDash(plan.employee_id)}</span>
+                  <span><UserRound size={14} aria-hidden="true" /> Employee: {valueOrDash(plan.employee_name || plan.requester_name || plan.employee?.name || 'Employee profile unavailable')}</span>
                   <span>{plan.reviewer_label || 'Assigned Approver'}</span>
                 </div>
               </div>
