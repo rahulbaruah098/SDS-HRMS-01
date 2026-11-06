@@ -87,7 +87,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
   return (
     <section className="sma-queue" aria-label="Monthly planning approval queue">
       <style>{`
-        .sma-queue { --sma-ink:var(--text, #26334b); --sma-muted:var(--text-muted, #64748b); --sma-line:var(--border, #e2e8f0); --sma-bg:var(--surface, #fff); --sma-soft:var(--surface-secondary, #f8fafc); --sma-accent:var(--primary, #5142ce); color:var(--sma-ink); padding:clamp(14px, 2vw, 23px); margin:18px 0; background:var(--sma-bg); border:1px solid var(--sma-line); border-radius:16px; min-width:0; }
+        .sma-queue { --sma-ink:var(--text, #26334b); --sma-muted:var(--text-muted, #64748b); --sma-line:var(--border, #e2e8f0); --sma-bg:var(--surface, #fff); --sma-soft:var(--surface-secondary, #f8fafc); --sma-accent:var(--primary, #5142ce); color:var(--sma-ink); padding:clamp(14px, 2vw, 22px); margin:18px 0; background:var(--sma-bg); border:1px solid var(--sma-line); border-radius:16px; min-width:0; box-shadow:0 3px 12px rgba(25,35,85,.035); }
         .sma-queue * { box-sizing:border-box; }
         .sma-heading, .sma-card-head, .sma-actions { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
         .sma-heading h2 { display:flex; gap:9px; align-items:center; font-size:clamp(17px, 2.2vw, 21px); margin:0; line-height:1.3; }
@@ -96,14 +96,14 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
         .sma-button:hover:not(:disabled) { background:var(--sma-soft); }
         .sma-button:focus-visible, .sma-remarks:focus-visible { outline:3px solid var(--sma-accent); outline-offset:2px; }
         .sma-button:disabled { opacity:.6; cursor:not-allowed; }
-        .sma-button-primary { background:var(--sma-accent); border-color:var(--sma-accent); color:#fff; }
+        .sma-button-primary { background:var(--sma-accent); border-color:var(--sma-accent); color:#fff; font-weight:700; }
         .sma-button-primary:hover:not(:disabled) { filter:brightness(.94); background:var(--sma-accent); }
-        .sma-card { min-width:0; background:var(--sma-bg); border:1px solid var(--sma-line); padding:clamp(13px, 2vw, 20px); border-radius:13px; margin-top:14px; }
+        .sma-card { min-width:0; background:var(--sma-bg); border:1px solid var(--sma-line); padding:clamp(13px, 2vw, 20px); border-radius:13px; margin-top:14px; box-shadow:0 2px 8px rgba(25,35,85,.025); }
         .sma-card h3 { font-size:16px; margin:0; overflow-wrap:anywhere; }
-        .sma-status { border-radius:999px; padding:6px 11px; font-size:12px; font-weight:750; color:#995908; background:#fff3d7; white-space:nowrap; }
-        .sma-meta { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:10px; color:var(--sma-muted); font-size:12px; }
+        .sma-status { border:1px solid #f1ddb1; border-radius:999px; padding:6px 11px; font-size:12px; font-weight:700; color:#805313; background:#fff7e7; white-space:nowrap; }
+        .sma-meta { display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:10px; color:var(--sma-muted); font-size:12px; line-height:1.5; }
         .sma-meta span { display:inline-flex; align-items:center; gap:5px; }
-        .sma-table-wrap { max-width:100%; overflow-x:auto; border:1px solid var(--sma-line); border-radius:11px; margin-top:15px; }
+        .sma-table-wrap { max-width:100%; overflow-x:auto; overscroll-behavior-x:contain; border:1px solid var(--sma-line); border-radius:11px; margin-top:15px; }
         .sma-table { width:100%; min-width:850px; border-collapse:collapse; font-size:13px; }
         .sma-table th { background:var(--sma-soft); font-weight:750; text-align:left; padding:12px; border-bottom:1px solid var(--sma-line); white-space:nowrap; }
         .sma-table td { border-bottom:1px solid var(--sma-line); padding:11px 12px; vertical-align:top; overflow-wrap:anywhere; max-width:260px; }
@@ -114,6 +114,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
         .sma-saved-fields { min-width:0; max-width:100%; overflow-x:auto; margin-top:16px; }
         @media (max-width:600px) {
           .sma-heading { align-items:stretch; }
+          .sma-queue { padding:max(12px,env(safe-area-inset-left)) max(12px,env(safe-area-inset-right)); }
           .sma-heading > .sma-button { width:100%; }
           .sma-card-head { align-items:flex-start; }
           .sma-actions { display:grid; grid-template-columns:1fr; }
@@ -126,7 +127,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
       <div className="sma-heading">
         <div>
           <h2><ClipboardCheck size={21} aria-hidden="true" /> Monthly Plans Awaiting Your Approval</h2>
-          <p className="sma-subtle">Review plans assigned through your reporting relationship before making a decision.</p>
+          <p className="sma-subtle">Review assigned monthly plans.</p>
         </div>
         <button type="button" className="sma-button sma-no-print" onClick={load} disabled={loading || Boolean(busyId)}>
           <RefreshCw size={16} aria-hidden="true" /> {loading ? 'Refreshing…' : 'Refresh Queue'}

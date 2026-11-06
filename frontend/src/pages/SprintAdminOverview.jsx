@@ -323,16 +323,16 @@ export default function SprintAdminOverview({ setPage }) {
   return (
     <div className="spx-root" aria-label="Organisation Sprint Analytics">
       <style>{`
-        .spx-root { color:#1e293b; margin:22px 0 32px; }
+        .spx-root { color:var(--text,#1e293b); margin:18px 0 28px; min-width:0; }
         .spx-head { display:flex; justify-content:space-between; align-items:center; gap:15px; flex-wrap:wrap; margin-bottom:18px; }
         .spx-head h2 { margin:4px 0 5px; font-size:clamp(21px,2.3vw,29px); font-weight:850; letter-spacing:-.03em; }
-        .spx-head p,.spx-panel p { color:#64748b; margin:0; font-size:12px; line-height:1.6; }
-        .spx-eyebrow { color:#6355ca; font-size:11px; letter-spacing:.12em; font-weight:850; text-transform:uppercase; }
-        .spx-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-        .spx-actions button,.spx-actions input { border:1px solid #d9def0; background:#fff; color:#334155; border-radius:10px; padding:9px 11px; font:inherit; font-size:12px; cursor:pointer; }
-        .spx-actions .spx-go { background:linear-gradient(110deg,#5145cc,#7566ed); color:white; border:none; display:flex; align-items:center; gap:7px; }
+        .spx-head p,.spx-panel p { color:var(--text-muted,#64748b); margin:0; font-size:13px; line-height:1.5; }
+        .spx-eyebrow { color:var(--primary,#6355ca); font-size:11px; letter-spacing:.055em; font-weight:700; text-transform:uppercase; }
+        .spx-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+        .spx-actions button,.spx-actions input { border:1px solid var(--border,#d9def0); background:var(--surface,#fff); color:var(--text,#334155); border-radius:10px; padding:10px 12px; min-height:42px; font:inherit; font-size:13px; cursor:pointer; max-width:100%; }
+        .spx-actions .spx-go { background:var(--primary,#6254da); color:white; border:1px solid var(--primary,#6254da); display:flex; align-items:center; gap:7px; font-weight:700; }
         .spx-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:13px; }
-        .spx-card,.spx-panel { border:1px solid #e5e9f4; background:linear-gradient(150deg,#fff,#f8f9ff); border-radius:17px; box-shadow:0 8px 25px rgba(25,35,85,.045); animation:spx-rise .55s ease both; }
+        .spx-card,.spx-panel { border:1px solid var(--border,#e2e8f0); background:var(--surface,#fff); border-radius:16px; box-shadow:0 3px 12px rgba(25,35,85,.035); }
         .spx-card { padding:17px; }
         .spx-card-top { display:flex; justify-content:space-between; align-items:center; gap:5px; color:#64748b; font-size:12px; font-weight:750; }
         .spx-icon { width:35px; height:35px; border-radius:11px; background:#f0efff; display:grid; place-items:center; }
@@ -341,14 +341,14 @@ export default function SprintAdminOverview({ setPage }) {
         .spx-panels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }
         .spx-panel { padding:20px; min-width:0; }
         .spx-panel h3 { font-size:16px; margin:0 0 5px; font-weight:800; }
-        .spx-ring { display:grid; place-items:center; width:190px; height:190px; border-radius:50%; margin:25px auto; background:conic-gradient(#6255d9 0 var(--fill),#e9eaf8 var(--fill) 100%); animation:spx-rise .75s ease both; }
+        .spx-ring { display:grid; place-items:center; width:190px; height:190px; border-radius:50%; margin:22px auto; background:conic-gradient(var(--primary,#6255d9) 0 var(--fill),#e9eaf8 var(--fill) 100%); }
         .spx-ring > div { background:white; width:150px; height:150px; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
         .spx-ring strong { font-size:36px; font-weight:850; }
         .spx-ring span { color:#94a3b8; font-size:11px; font-weight:700; }
         .spx-bar-row { display:grid; grid-template-columns:105px minmax(0,1fr) 43px; gap:10px; align-items:center; margin-top:14px; font-size:12px; }
         .spx-bar-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700; }
         .spx-track { height:12px; background:#e9edf7; border-radius:20px; overflow:hidden; }
-        .spx-fill { height:100%; border-radius:20px; transform-origin:left; animation:spx-grow 1s ease both; }
+        .spx-fill { height:100%; border-radius:20px; }
         .spx-dept { margin-top:18px; }
         .spx-dept-head { display:flex; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; margin-bottom:7px; }
         .spx-group { display:grid; gap:4px; }
@@ -359,7 +359,7 @@ export default function SprintAdminOverview({ setPage }) {
         .spx-column-item { flex:1; max-width:90px; height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:5px; }
         .spx-column-item strong { font-size:11px; }
         .spx-column-item span { text-align:center; font-size:10px; color:#64748b; }
-        .spx-column { width:70%; min-height:2px; border-radius:8px 8px 0 0; background:linear-gradient(180deg,#7366e8,#5145c7); transform-origin:bottom; animation:spx-risebar .9s ease both; }
+        .spx-column { width:70%; min-height:2px; border-radius:5px 5px 0 0; background:var(--primary,#6254da); transform-origin:bottom; }
         .spx-empty { margin-top:20px!important; color:#94a3b8!important; }
         .spx-error { padding:13px; border-radius:10px; background:#fff1f2; color:#be123c; margin-bottom:12px; font-size:12px; }
         .spx-skeleton { opacity:.6; }
@@ -377,32 +377,11 @@ export default function SprintAdminOverview({ setPage }) {
           border-radius:11px;
           font-size:12px;
           margin-top:8px;
-          animation:spx-rise .2s ease both;
         }
-        .spx-animated-line {
-          stroke-dasharray:1;
-          stroke-dashoffset:1;
-          animation:spx-draw 1.6s ease forwards;
-        }
-        .spx-trend-dot {
-          transition:r .2s ease;
-        }
-        .spx-card {
-          transition:transform .25s ease,box-shadow .25s ease;
-        }
-        .spx-card:hover {
-          transform:translateY(-4px);
-          box-shadow:0 15px 35px rgba(55,48,163,.12);
-        }
-        .spx-panel {
-          transition:box-shadow .25s ease;
-        }
-        .spx-panel:hover {
-          box-shadow:0 14px 38px rgba(55,48,163,.09);
-        }
-        .spx-fill {
-          transition:width .8s cubic-bezier(.2,.8,.2,1);
-        }
+        .spx-animated-line { stroke-dasharray:none; stroke-dashoffset:0; }
+        .spx-trend-dot { transition:r .2s ease; }
+        .spx-card:hover,.spx-panel:hover { border-color:var(--primary,#6254da); }
+        .spx-fill { transition:width .2s ease; }
         @keyframes spx-draw {
           to { stroke-dashoffset:0; }
         }
@@ -411,7 +390,7 @@ export default function SprintAdminOverview({ setPage }) {
         @keyframes spx-risebar { from { transform:scaleY(0); } to { transform:scaleY(1); } }
         @media(max-width:1050px) { .spx-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
         @media(max-width:750px) { .spx-panels { grid-template-columns:1fr; } }
-        @media(max-width:450px) { .spx-cards { grid-template-columns:1fr; } .spx-bar-row { grid-template-columns:80px minmax(0,1fr) 35px; } }
+        @media(max-width:450px) { .spx-cards { grid-template-columns:1fr; } .spx-bar-row { grid-template-columns:80px minmax(0,1fr) 35px; } .spx-head { align-items:stretch; } .spx-actions { width:100%; } .spx-actions button,.spx-actions input { min-width:0; flex:1 1 135px; } .spx-panel { padding:14px; } }
         @media(prefers-reduced-motion:reduce) { .spx-card,.spx-panel,.spx-ring,.spx-fill,.spx-column,.spx-animated-line { animation:none; transition:none; } .spx-animated-line { stroke-dashoffset:0; } }
       `}</style>
 
