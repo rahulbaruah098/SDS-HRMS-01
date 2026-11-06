@@ -362,6 +362,76 @@ export default function SprintMonthlyTeamCompilation({ month }) {
           .smtp-compilation .smtp-check-label { display: none !important; }
           .smtp-compilation .mws-scroll { overflow: visible; }
         }
+
+        /* FIX 03D.1: compact compiled-plan register; scoped to this module */
+        .smtp-compilation .smtp-record {
+          padding: 0; margin-top: 8px; border-radius: 10px;
+          border-color: #dce3f0; background: #fff;
+          box-shadow: none; overflow: hidden;
+        }
+        .smtp-compilation .smtp-record:first-of-type { margin-top: 12px; }
+        .smtp-compilation .smtp-record-body {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 16px; padding: 15px 18px; min-width: 0;
+        }
+        .smtp-compilation .smtp-record-details { min-width: 0; flex: 1 1 300px; }
+        .smtp-compilation .smtp-record-title-row {
+          display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+        }
+        .smtp-compilation .smtp-record-title {
+          margin: 0; font: inherit; font-size: 14px; line-height: 1.45;
+          font-weight: 700; letter-spacing: 0; color: #1e2d49;
+          overflow-wrap: anywhere;
+        }
+        .smtp-compilation .smtp-record-meta {
+          display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+          font-size: 12px; line-height: 1.6; color: #64748b; margin-top: 5px;
+        }
+        .smtp-compilation .smtp-record-meta .smtp-meta-dot { color: #9caac0; }
+        .smtp-compilation .smtp-record-note {
+          font-size: 12px; line-height: 1.5; color: #64748b; margin: 5px 0 0;
+        }
+        .smtp-compilation .smtp-record .smtp-record-status {
+          min-height: 23px; padding: 2px 9px; font-size: 11px;
+          font-weight: 650; border-color: #cfe4db; color: #22694b;
+          background: #eef8f2; white-space: nowrap;
+        }
+        .smtp-compilation .smtp-record .smtp-status-pending_approval {
+          color: #8a5a14; border-color: #f1dfad; background: #fffaec;
+        }
+        .smtp-compilation .smtp-record .smtp-status-rejected {
+          color: #a5363c; border-color: #f1d0d2; background: #fff4f4;
+        }
+        .smtp-compilation .smtp-record .smtp-status-draft {
+          color: #566780; border-color: #dce3ed; background: #f6f8fc;
+        }
+        .smtp-compilation .smtp-record-archived { background: #fbfcff; }
+        .smtp-compilation .smtp-record-archived .smtp-record-status {
+          color: #59687b; border-color: #dce3ed; background: #f2f5fa;
+        }
+        .smtp-compilation .smtp-record-actions {
+          display: flex; align-items: center; justify-content: flex-end;
+          flex-wrap: wrap; gap: 8px; flex: 0 1 auto;
+        }
+        .smtp-compilation .smtp-record-actions .mws-button {
+          min-height: 36px; padding: 7px 11px; font-size: 12px;
+          font-weight: 650; border-radius: 8px;
+        }
+        .smtp-compilation .smtp-record-actions .smtp-view-button {
+          color: #354467; background: #fff; border-color: #d4deed;
+        }
+        .smtp-compilation .smtp-view-button svg { transition: transform .15s ease; }
+        .smtp-compilation .smtp-view-button .smtp-chevron-open { transform: rotate(180deg); }
+        .smtp-compilation .smtp-action-note { font-size: 12px; }
+        @media (max-width: 760px) {
+          .smtp-compilation .smtp-record-body { align-items: stretch; flex-direction: column; gap: 12px; padding: 13px; }
+          .smtp-compilation .smtp-record-details { flex-basis: auto; }
+          .smtp-compilation .smtp-record-actions { justify-content: flex-start; }
+        }
+        @media (max-width: 420px) {
+          .smtp-compilation .smtp-record-actions .mws-button { flex: 1 1 auto; }
+          .smtp-compilation .smtp-record-title-row { align-items: flex-start; }
+        }
       `}</style>
       <div className="mws-section-head">
         <div>
@@ -536,71 +606,64 @@ export default function SprintMonthlyTeamCompilation({ month }) {
           !hasChildRevision;
 
         return (
-          <article className="mws-history" key={id}>
-            <div className="mws-section-head">
-              <div>
-                <strong>{displayCompilationTitle(item.title)}</strong>
-                {item.status === 'approved' && (
-                  <p className="mws-muted" style={{
-                    marginTop: 5,
-                    fontWeight: isLatestApproved ? 700 : 400,
-                    color: isLatestApproved ? '#315c45' : '#64748b'
-                  }}>
-                    {isLatestApproved
-                      ? 'Latest Approved Version'
-                      : 'Previous Approved Version - retained for history'}
-                  </p>
+          <article className={`mws-history smtp-record${item.status === 'approved' && !isLatestApproved ? ' smtp-record-archived' : ''}`} key={id}>
+            <div className="smtp-record-body">
+              <div className="smtp-record-details">
+                <div className="smtp-record-title-row">
+                  <h3 className="smtp-record-title">{displayCompilationTitle(item.title)}</h3>
+                  <span className={`mws-status smtp-record-status smtp-status-${item.status || 'draft'}`}>
+                    {item.status === 'pending_approval'
+                      ? 'Pending approval'
+                      : item.status === 'approved'
+                        ? (isLatestApproved ? 'Approved' : 'Archived approval')
+                        : item.status === 'rejected'
+                          ? 'Returned' : 'Draft'}
+                  </span>
+                </div>
+                <div className="smtp-record-meta">
+                  <span>{item.team_size || 0} employees</span>
+                  <span className="smtp-meta-dot" aria-hidden="true">·</span>
+                  <span>{item.activity_count || 0} {(item.activity_count || 0) === 1 ? 'activity' : 'activities'}</span>
+                  {Number(item.revision_number || 1) > 1 && (
+                    <>
+                      <span className="smtp-meta-dot" aria-hidden="true">·</span>
+                      <span>Revision {item.revision_number}</span>
+                    </>
+                  )}
+                </div>
+                {item.status === 'approved' && !isLatestApproved && (
+                  <p className="smtp-record-note">Retained for reference; a newer approved version is available.</p>
                 )}
-                {item.supersedes_compilation_id && (
-                  <p className="mws-muted" style={{ marginTop: 5 }}>
-                    Revision {item.revision_number || 2} |
-                    {' '}Previous approved compilation retained
-                  </p>
-                )}
-                <p className="mws-muted">
-                  {item.team_size || 0} employees | {item.activity_count || 0} {(item.activity_count || 0) === 1
-                  ? 'activity' : 'activities'}
-                </p>
               </div>
-              <span className="mws-status">
-                  {item.status === 'pending_approval'
-                    ? 'Pending Approval'
-                    : item.status === 'approved'
-                      ? (isLatestApproved ? 'Latest Approved' : 'Approved - History')
-                      : item.status === 'rejected'
-                        ? 'Rejected' : 'Draft'}
-                </span>
-            </div>
-
-            <div className="mws-toolbar" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
-              <button type="button" className="mws-button"
-                onClick={() => setExpandedId(expanded ? '' : id)}>
-                {expanded ? 'Hide' : 'View'} Compiled Sheet
-              </button>
-              {canCreateNewRevision && (
-                <button type="button" className="mws-button mws-primary"
-                  disabled={busy || loading} onClick={() => createNewRevision(item)}>
-                  <ClipboardList size={14}/> Create New Revision
+              <div className="smtp-record-actions">
+                <button type="button" className="mws-button smtp-view-button"
+                  aria-expanded={expanded} onClick={() => setExpandedId(expanded ? '' : id)}>
+                  {expanded ? 'Hide details' : 'View compiled sheet'}
+                  <ChevronDown size={15} aria-hidden="true" className={expanded ? 'smtp-chevron-open' : ''}/>
                 </button>
-              )}
-              {item.can_create_revision && hasChildRevision && (
-                <span className="mws-muted">
-                  A newer revision already exists
-                </span>
-              )}
-              {canEdit && (
-                <button type="button" className="mws-button"
-                  disabled={busy} onClick={() => revise(item)}>
-                  <RefreshCw size={14}/>
-                  {item.status === 'rejected' ? 'Revise Compilation' : 'Refresh Approved Plans'}
-                </button>
-              )}
-              {item.can_submit && item.status === 'draft' && (
-                <button type="button" className="mws-button mws-primary"
-                  disabled={busy} onClick={() => submit(item)}>
-                  <Send size={14}/> Submit to Reporting Officer
-                </button>
-              )}
+                {canCreateNewRevision && (
+                  <button type="button" className="mws-button mws-primary"
+                    disabled={busy || loading} onClick={() => createNewRevision(item)}>
+                    <ClipboardList size={14}/> New revision
+                  </button>
+                )}
+                {item.can_create_revision && hasChildRevision && (
+                  <span className="mws-muted smtp-action-note">Newer revision exists</span>
+                )}
+                {canEdit && (
+                  <button type="button" className="mws-button"
+                    disabled={busy} onClick={() => revise(item)}>
+                    <RefreshCw size={14}/>
+                    {item.status === 'rejected' ? 'Revise compilation' : 'Refresh approved plans'}
+                  </button>
+                )}
+                {item.can_submit && item.status === 'draft' && (
+                  <button type="button" className="mws-button mws-primary"
+                    disabled={busy} onClick={() => submit(item)}>
+                    <Send size={14}/> Submit to Reporting Officer
+                  </button>
+                )}
+              </div>
             </div>
 
             {expanded && (

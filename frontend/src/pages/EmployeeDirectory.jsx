@@ -904,15 +904,13 @@ const employeeOrganisation = String(
           <div>
             <div className="employee-directory-kicker">
               <Sparkles size={15} />
-              Tenant Contact Hub
+              Company Directory
             </div>
 
             <h1 className="employee-directory-title">Employee Directory</h1>
 
             <p className="employee-directory-subtitle">
-              View active employees from your company with quick access to their
-              name, designation, state, phone number, email and profile photo.
-              Resigned employees are automatically removed from this list.
+              Find active colleagues and their contact details.
             </p>
           </div>
 

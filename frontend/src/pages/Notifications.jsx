@@ -2739,12 +2739,10 @@ export default function Notifications({ setPage } = {}) {
             Notification Center
           </span>
 
-          <h1>Tenant Notifications & Announcements</h1>
+          <h1>Notifications & Announcements</h1>
 
           <p>
-            HR, Admin, Super Admin, Managing Director, Manager and Team Leader rank users
-            can send notifications to everyone in their own tenant only. Notifications
-            are shown in the bell, notification center and dashboard popup.
+            Read updates and announcements from your organisation.
           </p>
         </div>
 

@@ -257,121 +257,90 @@ function roleLabel(role = '') {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+// Sidebar presentation only. Module visibility and permissions stay in data/modules.js.
+const SIDEBAR_SECTIONS = [
+  {
+    name: 'Work & Planning',
+    keys: ['sprint_planning', 'projects'],
+  },
+  {
+    name: 'Attendance & Leave',
+    keys: [
+      'attendance', 'leave_requests', 'team_approvals', 'application_status',
+      'team_field_attendance', 'attendance_logs', 'leave', 'leave_balances',
+      'holiday_work_requests', 'compoff_credits', 'compoff_records',
+      'holiday_calendar', 'attendance_mode_requests',
+    ],
+  },
+  {
+    name: 'People & Organisation',
+    keys: [
+      'employee_directory', 'employees', 'organisations', 'departments',
+      'designations', 'states',
+    ],
+  },
+  {
+    name: 'Payroll & Finance',
+    keys: [
+      'payslips', 'payroll_runs', 'reimbursements', 'loans_advances',
+      'payroll_banking', 'payroll_reports', 'tax_declarations',
+      'payroll_configuration', 'payslip_designer',
+    ],
+  },
+  {
+    name: 'Talent & Performance',
+    keys: ['performance_reviews', 'recruitment', 'job_openings', 'candidates'],
+  },
+  {
+    name: 'Reports & Insights',
+    keys: ['reports'],
+  },
+  {
+    name: 'Support & Resources',
+    keys: ['notifications', 'it_support', 'grievances', 'assets',
+      'tickets', 'policies', 'documents'],
+  },
+  {
+    name: 'Administration',
+    keys: [
+      'companies', 'users', 'subscriptions', 'demo_requests',
+      'premium_requests', 'billing', 'system_settings', 'audit_logs',
+    ],
+  },
+  {
+    name: 'Management',
+    keys: ['management_groups'],
+  },
+  {
+    name: 'Account',
+    keys: ['profile'],
+  },
+];
+
+const SIDEBAR_GROUP_BY_KEY = Object.fromEntries(
+  SIDEBAR_SECTIONS.flatMap((section) =>
+    section.keys.map((key) => [key, section.name]),
+  ),
+);
+const SIDEBAR_KEY_POSITION = Object.fromEntries(
+  SIDEBAR_SECTIONS.flatMap((section) =>
+    section.keys.map((key, position) => [key, position]),
+  ),
+);
+
 function moduleGroup(key) {
-  if (
-    [
-      'companies',
-      'users',
-      'billing',
-      'system_settings',
-      'audit_logs',
-    ].includes(key)
-  ) {
-    return 'Administration';
-  }
-
-  if (
-    [
-      'employees',
-      'departments',
-      'designations',
-      'states',
-    ].includes(key)
-  ) {
-    return 'Employee Setup';
-  }
-
-  if (key === 'projects') {
-    return 'Projects';
-  }
-
-  if (
-    [
-      'attendance',
-      'attendance_logs',
-      'holiday_work_requests',
-      'team_field_attendance',
-      'attendance_mode_requests',
-      'holiday_calendar',
-      'compoff_credits',
-      'compoff_records',
-      'team_approvals',
-      'leave_requests',
-      'leave',
-      'leave_balances',
-      'leave_types',
-      'application_status',
-    ].includes(key)
-  ) {
-    return 'Attendance & Leave';
-  }
-
-  if (key === 'reports') {
-    return 'Reports';
-  }
-
-  if (
-    [
-      'payroll_configuration',
-      'payslip_designer',
-      'loans_advances',
-      'reimbursements',
-      'payroll_banking',
-      'payroll_reports',
-      'tax_declarations',
-      'payroll_runs',
-      'payslips',
-    ].includes(key)
-  ) {
-    return 'Payroll & Finance';
-  }
-
-if (
-  [
-    'job_openings',
-    'candidates',
-    'performance_reviews',
-  ].includes(key)
-) {
-  return 'Talent & Performance';
+  return SIDEBAR_GROUP_BY_KEY[key] || 'Other Modules';
 }
 
-  if (
-    [
-      'assets',
-      'tickets',
-      'grievances',
-      'it_support',
-      'notifications',
-      'policies',
-      'documents',
-    ].includes(key)
-  ) {
-    return 'Support & Records';
-  }
-
-  if (key === 'profile') {
-    return 'Account';
-  }
-
-  return 'Modules';
+function groupOrder(group, isSuperAdmin = false) {
+  if (isSuperAdmin && group === 'Administration') return -1;
+  const position = SIDEBAR_SECTIONS.findIndex((section) => section.name === group);
+  return position === -1 ? SIDEBAR_SECTIONS.length : position;
 }
 
-function groupOrder(group) {
-  const order = {
-    Administration: 1,
-    'Employee Setup': 2,
-    Projects: 3,
-    'Attendance & Leave': 4,
-    Reports: 5,
-    'Payroll & Finance': 6,
-    'Talent & Performance': 7,
-    'Support & Records': 8,
-    Account: 9,
-    Modules: 99,
-  };
-
-  return order[group] || 99;
+function sidebarModuleOrder([keyA], [keyB]) {
+  return (SIDEBAR_KEY_POSITION[keyA] ?? Number.MAX_SAFE_INTEGER) -
+    (SIDEBAR_KEY_POSITION[keyB] ?? Number.MAX_SAFE_INTEGER);
 }
 
 function buildCapabilityText(user) {
@@ -1127,13 +1096,17 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
       return acc;
     }, {});
 
+    const isSuperAdmin = safeUser.roles.includes('super_admin');
+
     return Object.entries(grouped)
-      .sort(([groupA], [groupB]) => groupOrder(groupA) - groupOrder(groupB))
+      .sort(([groupA], [groupB]) =>
+        groupOrder(groupA, isSuperAdmin) - groupOrder(groupB, isSuperAdmin),
+      )
       .map(([group, groupModules]) => ({
         group,
-        modules: groupModules,
+        modules: [...groupModules].sort(sidebarModuleOrder),
       }));
-  }, [modules]);
+  }, [modules, safeUser.roles.includes('super_admin')]);
 
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);

@@ -276,6 +276,48 @@ export default function SprintPerformanceDashboard({ employeeId, initialMonth })
         @media(max-width:800px){.ycp-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:550px){.ycp-header{align-items:stretch}.ycp-controls{display:grid;grid-template-columns:1fr auto;width:100%}.ycp-control{min-width:0}.ycp-month{width:100%;min-width:0}.ycp-stats{gap:9px}.ycp-metric{padding:14px}.ycp-metric-help{font-size:10px}.ycp-panel{padding:15px}.ycp-rates{grid-template-columns:1fr;gap:18px}.ycp-ring-wrapper{max-width:125px}.ycp-ring-block>p{max-width:250px}.ycp-insight{gap:10px}.ycp-insight-muted{margin-left:0}}
         @media(max-width:355px){.ycp-stats{grid-template-columns:1fr}.ycp-controls{grid-template-columns:1fr}.ycp-btn{width:100%}}
+        /* YC_FIX03E_PERFORMANCE_BEGIN — scoped core HRMS alignment */
+        .ycp-page {--ycp-ink:#17213d;--ycp-subtle:#586987;--ycp-border:#dce3f1;--ycp-soft:#f5f5ff;--ycp-track:#edf0f8; padding:clamp(12px,1.7vw,24px); padding-bottom:max(20px,env(safe-area-inset-bottom));}
+        .ycp-header{align-items:center;gap:18px;padding:clamp(16px,2.2vw,28px);margin-bottom:20px;border:1px solid #d5e0ee;border-radius:22px;background:linear-gradient(112deg,#eefaff 0%,#fff 52%,#f5f1ff 100%);box-shadow:0 10px 27px rgba(31,48,93,.06)}
+        .ycp-eyebrow{font-size:10px;letter-spacing:.075em;color:#6254da}
+        .ycp-title{font-weight:800;color:#192441;font-size:clamp(21px,2vw,28px)}
+        .ycp-title-icon{background:#f0eeff;border-color:#dedaf8;border-radius:12px}
+        .ycp-description{margin-top:6px;max-width:620px}
+        .ycp-controls{margin-left:auto;gap:10px;min-width:0}
+        .ycp-month,.ycp-btn,.ycp-chart-toggle{border-color:#d9e0ef;border-radius:10px;min-height:42px}
+        .ycp-btn{font-weight:700;white-space:nowrap}
+        .ycp-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+        .ycp-metric,.ycp-panel,.ycp-banner,.ycp-message{border-color:#dfe5f1;border-radius:17px;background:#fff;box-shadow:0 5px 18px rgba(31,48,93,.045)}
+        .ycp-metric{padding:17px;gap:7px;min-width:0}
+        .ycp-metric:hover{box-shadow:0 7px 20px rgba(31,48,93,.07)}
+        .ycp-metric-caption{color:#435474;font-weight:750}
+        .ycp-metric-help{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+        .ycp-panel{padding:20px}
+        .ycp-panel-title{color:#192441;font-size:16px;font-weight:800}
+        .ycp-panel-description{margin-bottom:14px}
+        .ycp-contents{grid-template-columns:minmax(0,1.3fr) minmax(280px,.9fr);gap:14px}
+        .ycp-rates{gap:14px}
+        .ycp-ring-wrapper{max-width:132px}
+        .ycp-ring-block>p{max-width:160px;overflow-wrap:anywhere}
+        .ycp-chart-panel{overflow:hidden}
+        .ycp-chart-toolbar{gap:12px}
+        .ycp-chart-toggle{padding:8px 12px;min-height:40px}
+        .ycp-chart-scroll{border:1px solid #e8ecf5;border-radius:12px;background:linear-gradient(#fff,#fdfdff);padding:20px 8px 8px;min-width:0}
+        .ycp-bar-chart{padding:0 12px 2px}
+        .ycp-bar-day{min-width:66px}
+        .ycp-axis-labels{width:35px}
+        .ycp-insight{gap:12px;border-color:#e0e4f3}
+        .ycp-insight-muted{margin-left:auto}
+        .ycp-page :where(button,input):focus-visible{outline:3px solid rgba(98,84,218,.45);outline-offset:2px}
+        @media(max-width:1120px){.ycp-contents{grid-template-columns:1fr}.ycp-ring-wrapper{max-width:145px}}
+        @media(max-width:850px){.ycp-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ycp-header{align-items:stretch}.ycp-controls{margin-left:0}}
+        @media(max-width:620px){.ycp-page{padding:10px;padding-bottom:max(20px,env(safe-area-inset-bottom))}.ycp-header{padding:16px 14px;border-radius:17px}.ycp-stats{gap:9px}.ycp-metric{padding:14px}.ycp-contents{gap:12px}.ycp-panel{padding:15px}.ycp-rates{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ycp-ring-wrapper{max-width:112px}.ycp-ring-block>p{font-size:10px}.ycp-chart-caption{flex-basis:100%}.ycp-insight-muted{margin-left:0}.ycp-bar-chart{padding:0 8px 2px}}
+        /* YC_FIX03G7_RING_RESPONSIVE: compact phones get single-column performance rings */
+        @media(max-width:550px){.ycp-rates{grid-template-columns:1fr;gap:16px}}
+        @media(max-width:420px){.ycp-controls{display:grid;grid-template-columns:minmax(0,1fr);width:100%}.ycp-btn,.ycp-month{width:100%;min-width:0}.ycp-title{font-size:21px}.ycp-rates{grid-template-columns:1fr;gap:16px}.ycp-ring-wrapper{max-width:128px}.ycp-ring-block>p{max-width:230px;font-size:11px}.ycp-chart-metric-switch{width:100%}.ycp-chart-toggle{flex:1;min-width:0}.ycp-insight{align-items:flex-start}}
+        @media(max-width:350px){.ycp-stats{grid-template-columns:1fr}.ycp-title-icon{width:37px;height:37px}}
+        @media print{.ycp-header,.ycp-metric,.ycp-panel{box-shadow:none!important;background:#fff!important}.ycp-controls,.ycp-chart-metric-switch{display:none!important}}
+        /* YC_FIX03E_PERFORMANCE_END */
         @media(prefers-reduced-motion:reduce){.ycp-page *{animation:none!important;transition:none!important}.ycp-draw-line{stroke-dasharray:none;stroke-dashoffset:0}}
       `}</style>
       <header className="ycp-header">

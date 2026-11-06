@@ -3740,9 +3740,7 @@ function renderTicketCard(ticket, section = 'my') {
           <span className="eyebrow">Technology Helpdesk</span>
           <h1>IT Support</h1>
           <p>
-            Raise IT issues to your tenant IT Department. IT Department Team
-            Leader can assign tickets to IT members and escalate major software
-            or server problems to Super Admin.
+            Raise and track technical support requests.
           </p>
         </div>
 

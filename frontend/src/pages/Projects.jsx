@@ -4474,9 +4474,7 @@ async function handleAssign(projectId, payload, feedbackScope = '') {
           <span className="project-kicker">Project Management</span>
           <h1>Team Projects, Collaborators & Daily Progress</h1>
           <p>
-            Team Leaders and Reporting Officers can create projects, assign team members,
-            assign projects to themselves, and add collaborators. Employees and team
-            members can view scoped projects and update only project status/progress.
+            Track projects, team assignments, and progress in one place.
           </p>
 
           <div className="project-permission-note">

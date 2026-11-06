@@ -1970,9 +1970,7 @@ export default function LoansAdvances({ user = {} }) {
           </span>
           <h1>Loans & Advances</h1>
           <p>
-            Manage employee requests, Finance approval, disbursement and immutable
-            payroll recovery. A loan is deducted only after it is disbursed, and the
-            final deduction never exceeds the remaining balance.
+            Track requests, approvals, disbursements, and repayments.
           </p>
         </div>
 

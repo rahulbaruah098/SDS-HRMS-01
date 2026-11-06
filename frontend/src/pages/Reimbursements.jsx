@@ -2681,9 +2681,7 @@ export default function Reimbursements({ user = {} }) {
           </span>
           <h1>Reimbursements</h1>
           <p>
-            Manage itemized employee claims, receipts, HR review, Finance
-            approval, taxable or non-taxable treatment, payroll scheduling and
-            manual payment completion.
+            Submit claims and track review, approval, and payment.
           </p>
         </div>
 

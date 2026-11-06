@@ -590,6 +590,31 @@ export default function SprintWeeklyPlanning() {
           .swp-page .swp-activity-top .btn { min-width:44px; }
           .swp-page .swp-daily-fields .btn, .swp-page .swp-change-form .btn { width:100%; }
         }
+        /* YC_FIX03C_WEEKLY_CORE_BEGIN */
+        .swp-page { --swp-ink:#101a3a; --swp-muted:#596483; --swp-accent:#6254da; --swp-border:#dfe5f2; color:var(--swp-ink); font-family:var(--yc-ui,var(--body),inherit); }
+        .swp-page .swp-header { position:relative; isolation:isolate; border:1px solid rgba(171,181,211,.72); border-radius:clamp(20px,2.5vw,32px); background:radial-gradient(circle at 8% 8%,rgba(121,219,238,.29),transparent 32%),radial-gradient(circle at 92% 12%,rgba(191,190,249,.27),transparent 34%),linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%); box-shadow:7px 8px 0 #b9d7ff,0 18px 34px rgba(34,38,110,.10); padding:clamp(18px,2.4vw,30px); }
+        .swp-page .swp-heading { color:var(--swp-ink); font-weight:800; letter-spacing:-.025em; }
+        .swp-page .swp-heading svg { color:var(--swp-accent); flex-shrink:0; }
+        .swp-page .swp-subtitle,.swp-page .swp-muted { color:var(--swp-muted); }
+        .swp-page .card { border-color:var(--swp-border); border-radius:clamp(16px,1.8vw,24px) !important; box-shadow:0 12px 32px rgba(34,38,110,.07); background:#fff; }
+        .swp-page .swp-section-heading { color:var(--swp-ink); font-weight:750; letter-spacing:-.015em; }
+        .swp-page .swp-activity-card,.swp-page .swp-plan-card,.swp-page .swp-change-form,.swp-page .swp-daily-fields { border-color:var(--swp-border) !important; border-radius:15px !important; background:#fcfcff; }
+        .swp-page .swp-plan-card { box-shadow:0 6px 18px rgba(34,38,110,.045); }
+        .swp-page .swp-plan-dates,.swp-page .swp-activity-name strong { color:var(--swp-ink); }
+        .swp-page .swp-plan-status { background:#f1efff; border-radius:999px; }
+        .swp-page input,.swp-page select,.swp-page textarea { box-sizing:border-box; min-width:0; min-height:42px; border-radius:11px !important; border-color:#d8deee; }
+        .swp-page .btn { box-sizing:border-box; border-radius:11px; min-height:42px; }
+        .swp-page .btn.btn-primary { background:#6254da; border-color:#6254da; color:#fff; }
+        .swp-page .btn.btn-primary:hover:not(:disabled) { background:#5143c8; border-color:#5143c8; }
+        .swp-page .btn.btn-secondary { border-color:#d7dded; }
+        .swp-page .swp-disclosure { border-color:#e0defb; background:#f5f4ff; color:#342b78; }
+        .swp-page :where(input,select,textarea,button,summary):focus-visible { outline:3px solid rgba(98,84,218,.35); outline-offset:2px; }
+        .swp-page .swp-attachment,.swp-page .swp-daily-fields,.swp-page .swp-plan-activity { overflow-wrap:anywhere; }
+        @media(max-width:760px) { .swp-page .swp-header { box-shadow:4px 5px 0 #b9d7ff,0 12px 24px rgba(34,38,110,.08); padding:18px 16px; } .swp-page .card { box-shadow:0 8px 20px rgba(34,38,110,.05); } }
+        @media(max-width:480px) { .swp-page .swp-header { padding:15px 12px; border-radius:18px; } .swp-page .swp-heading { font-size:clamp(20px,6vw,24px); } .swp-page .swp-page-actions { display:grid; grid-template-columns:minmax(0,1fr); } .swp-page .swp-page-actions > .btn { width:100%; min-width:0; } .swp-page .swp-activity-card,.swp-page .swp-plan-card { padding:12px !important; } }
+        @media(prefers-reduced-motion:reduce) { .swp-page .btn { transition:none; } }
+        @media print { .swp-page .swp-header { background:#fff; box-shadow:none; border:0; } .swp-page .card { box-shadow:none; } }
+        /* YC_FIX03C_WEEKLY_CORE_END */
         @media(prefers-reduced-motion:reduce) { .swp-page * { scroll-behavior:auto !important; } }
       `}</style>
       <header className="swp-header" style={{ marginBottom: 24 }}>

@@ -186,6 +186,9 @@ export default function SprintDashboardSummary({ setPage, employeeId, compact = 
         .sprint-dashboard-summary .scs-footer{margin-top:16px;padding-top:13px;border-top:1px solid var(--scs-border);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
         .sprint-dashboard-summary .scs-footnote{display:flex;align-items:flex-start;gap:6px;font-size:11px;line-height:1.5;color:var(--scs-muted);max-width:590px}
         .sprint-dashboard-summary .scs-footnote svg{flex-shrink:0;margin-top:1px}
+        /* Reserve space for the application-wide floating assistant beside the footer action. */
+        .sprint-dashboard-summary .scs-footer>.scs-action{margin-inline-end:84px}
+        @media(max-width:600px){.sprint-dashboard-summary .scs-footer{align-items:flex-start;flex-direction:column}.sprint-dashboard-summary .scs-footer>.scs-action{max-width:calc(100% - 78px);margin-inline-end:0}}
         @keyframes scs-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
         @keyframes scs-pulse{from{opacity:.55}to{opacity:1}}
         @media(max-width:730px){.sprint-dashboard-summary .scs-insights{grid-template-columns:1fr}}

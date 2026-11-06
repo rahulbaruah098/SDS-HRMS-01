@@ -438,6 +438,96 @@ export default function SprintTeamDashboard() {
         .sprint-team-dashboard .sprint-team-bar {
           transition: width .8s ease;
         }
+
+        /* YC_FIX03F_TEAM_BEGIN — visual presentation only; no metric or workflow changes */
+        .sprint-team-dashboard {
+          --yc-team-line: var(--border, #e1e6f1);
+          --yc-team-ink: var(--ink, #172744);
+          --yc-team-subtle: var(--muted, #62728b);
+          max-width: 100%;
+          overflow-wrap: break-word;
+        }
+        .sprint-team-dashboard .sprint-team-header {
+          padding: clamp(16px, 2.1vw, 26px);
+          background: linear-gradient(115deg, #f5f8ff 0%, #ffffff 70%);
+          border: 1px solid var(--yc-team-line);
+          border-radius: 16px;
+          box-shadow: 0 4px 15px rgba(32, 48, 87, .035);
+        }
+        .sprint-team-dashboard .sprint-team-title { color: var(--yc-team-ink); font-weight: 750; letter-spacing: -.025em; }
+        .sprint-team-dashboard .sprint-team-title svg { color: var(--primary, #5851d8); }
+        .sprint-team-dashboard .sprint-team-header p { font-size: 13px; line-height: 1.55; max-width: 65ch; }
+        .sprint-team-dashboard .sprint-team-controls { gap: 9px; }
+        .sprint-team-dashboard .sprint-team-controls > svg { color: var(--primary, #5851d8); }
+        .sprint-team-dashboard .sprint-team-control,
+        .sprint-team-dashboard .sprint-team-filters input,
+        .sprint-team-dashboard .sprint-team-filters select {
+          min-width: 0;
+          border: 1px solid var(--yc-team-line) !important;
+          border-radius: 10px !important;
+          color: var(--yc-team-ink);
+          background: var(--surface, #fff);
+        }
+        .sprint-team-dashboard .card {
+          border: 1px solid var(--yc-team-line);
+          border-radius: 15px;
+          box-shadow: 0 3px 15px rgba(24, 42, 80, .035);
+        }
+        .sprint-team-dashboard .sprint-team-stats,
+        .sprint-team-dashboard .sprint-team-ring-grid,
+        .sprint-team-dashboard .sprint-team-deep-panels,
+        .sprint-team-dashboard .sprint-team-panels { gap: 13px; }
+        .sprint-team-dashboard .sprint-team-stats > .card { border-color: var(--yc-team-line); }
+        .sprint-team-dashboard .sprint-team-ring-card {
+          padding: clamp(14px, 1.5vw, 19px);
+          border: 1px solid var(--yc-team-line);
+          background: var(--surface, #fff);
+          box-shadow: 0 3px 15px rgba(24, 42, 80, .035);
+        }
+        .sprint-team-dashboard .sprint-team-ring-title { font-weight: 700; color: var(--yc-team-ink); }
+        .sprint-team-dashboard .sprint-team-chart-card { padding: clamp(15px, 1.75vw, 20px); }
+        .sprint-team-dashboard .sprint-team-panel-heading h3,
+        .sprint-team-dashboard .sprint-team-panels h3 { color: var(--yc-team-ink); font-weight: 700; }
+        .sprint-team-dashboard .sprint-team-week-chart { min-width: 0; }
+        .sprint-team-dashboard .sprint-team-week { touch-action: manipulation; }
+        .sprint-team-dashboard .sprint-team-employee {
+          border: 1px solid var(--yc-team-line) !important;
+          border-radius: 12px !important;
+          transition: border-color .15s, box-shadow .15s;
+        }
+        .sprint-team-dashboard .sprint-team-employee:hover {
+          border-color: #c5cdf0 !important;
+          box-shadow: 0 4px 14px rgba(30, 45, 90, .045);
+        }
+        .sprint-team-dashboard .sprint-team-employee-name strong { color: var(--yc-team-ink); font-size: 14px; }
+        .sprint-team-dashboard .btn.btn-secondary { border-radius: 10px; }
+        .sprint-team-dashboard .sprint-team-notice { background: #f8faff; border-style: solid; }
+        @media (max-width: 900px) {
+          .sprint-team-dashboard .sprint-team-ring-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 640px) {
+          .sprint-team-dashboard { padding: 12px max(10px, env(safe-area-inset-right)) 20px max(10px, env(safe-area-inset-left)) !important; }
+          .sprint-team-dashboard .sprint-team-header { padding: 16px; margin-bottom: 16px !important; }
+          .sprint-team-dashboard .sprint-team-controls { width: 100%; }
+          .sprint-team-dashboard .sprint-team-controls > svg { display: none; }
+          .sprint-team-dashboard .sprint-team-controls .sprint-team-control { flex: 1 1 140px; }
+          .sprint-team-dashboard .sprint-team-controls button { flex: 0 1 auto; }
+          .sprint-team-dashboard .sprint-team-ring-grid { grid-template-columns: 1fr; }
+          .sprint-team-dashboard .sprint-team-ring-card { gap: 14px; }
+          .sprint-team-dashboard .sprint-team-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+          .sprint-team-dashboard .sprint-team-panels { grid-template-columns: 1fr; }
+          .sprint-team-dashboard .sprint-team-week-label { font-size: 10px; }
+          .sprint-team-dashboard .sprint-team-week-legend { flex-wrap: wrap; }
+          .sprint-team-dashboard .sprint-team-employee-progress { gap: 8px; }
+          .sprint-team-dashboard .sprint-team-employee { padding: 13px !important; }
+        }
+        @media (max-width: 360px) {
+          .sprint-team-dashboard .sprint-team-stats { grid-template-columns: 1fr; }
+          .sprint-team-dashboard .sprint-team-controls button { flex: 1 1 100%; }
+          .sprint-team-dashboard .sprint-team-ring-card { padding: 12px; }
+        }
+        /* YC_FIX03F_TEAM_END */
+
         @media (prefers-reduced-motion: reduce) {
           .sprint-team-dashboard * {
             transition: none !important;

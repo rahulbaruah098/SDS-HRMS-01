@@ -907,14 +907,13 @@ export default function Policies({ user }) {
           <div>
             <div className="policy-kicker">
               <ShieldCheck size={16} />
-              Tenant-wise Policy Centre
+              Company Policies
             </div>
 
             <h1>Policies & Documents</h1>
 
             <p>
-              View official HR policy documents uploaded for your company. HR can upload
-              tenant-specific policies, and employees can securely download the documents.
+              View and download your company policies.
             </p>
           </div>
 

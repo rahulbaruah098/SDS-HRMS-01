@@ -5,6 +5,7 @@ are stored as user submissions, NOT independently verified proof or uploaded fil
 """
 from datetime import datetime, timezone
 from bson import ObjectId
+from bson.errors import InvalidId
 from flask import Blueprint, g, jsonify, request
 from pymongo.errors import DuplicateKeyError
 
@@ -1415,7 +1416,11 @@ def _weekly_plan_reviewer_kind(db, plan):
         return saved_kind
 
     owner_id = str(plan.get('employee_id') or '')
-    linked_monthly_id = _oid(plan.get('monthly_plan_id'))
+    try:
+        linked_monthly_id = _oid(plan.get('monthly_plan_id'))
+    except InvalidId:
+        # Legacy/corrupt references must not crash weekly reviewer resolution.
+        linked_monthly_id = None
     if linked_monthly_id is not None and owner_id:
         monthly_plan = db.sprint_monthly_plans.find_one({
             '_id': linked_monthly_id,

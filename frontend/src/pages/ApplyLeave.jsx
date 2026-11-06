@@ -1515,9 +1515,7 @@ async function handleSubmit(event) {
           </h1>
 
           <p>
-            Submit a leave request, review your available Casual Leave and
-            Earned Leave, confirm the approval path, and hand over work from
-            one connected YourComate workspace.
+            Request leave, check balances, and follow approval status.
           </p>
         </div>
 
