@@ -74,6 +74,46 @@ def default_tenant_id():
     return current_app.config.get("DEFAULT_TENANT_ID", "sds")
 
 
+
+def employee_login_is_alumni(employee):
+    """Reject departed accounts without treating a scheduled exit as departed."""
+    if not employee:
+        return False
+
+    def normalized(value):
+        return str(value or "").strip().lower()
+
+    def enabled(value):
+        return value is True or normalized(value) in {
+            "true", "yes", "1", "on"
+        }
+
+    if enabled(employee.get("is_alumni")):
+        return True
+
+    blocked_statuses = {
+        "resigned",
+        "resign",
+        "alumni",
+        "left",
+        "terminated",
+        "retired",
+        "ex-employee",
+        "ex_employee",
+        "inactive",
+    }
+
+    return any(
+        normalized(employee.get(field)) in blocked_statuses
+        for field in (
+            "status",
+            "employment_status",
+            "employee_status",
+        )
+    )
+
+
+
 def find_employee_for_user(db, user):
     if not user:
         return None
@@ -89,10 +129,7 @@ def find_employee_for_user(db, user):
     if employee:
         return employee
 
-    return db.employees.find_one({
-        "user_id": str(user["_id"]),
-        "is_deleted": {"$ne": True},
-    })
+    return None
 
 
 def build_effective_roles(user, employee=None):
@@ -316,6 +353,14 @@ def current_user_required(fn):
         tenant_id = user.get("tenant_id") or payload.get("tenant_id") or default_tenant_id()
 
         user["tenant_id"] = tenant_id
+
+        linked_employee = find_employee_for_user(db, user)
+
+        if employee_login_is_alumni(linked_employee):
+            return jsonify({
+                "message": "This employee account is no longer active."
+            }), 401
+
         user = sync_effective_roles(db, user)
 
         g.current_user = user

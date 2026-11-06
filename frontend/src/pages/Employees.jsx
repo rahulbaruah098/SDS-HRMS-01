@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import {
+  api,
   createEmployee,
   createPastEmployee,
   downloadAlumniCsv,
@@ -1188,7 +1189,7 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
   );
 }
 
-function AlumniTable({ rows, loading }) {
+function AlumniTable({ rows, loading, onView }) {
   if (loading) return <div className="hrms-empty-state">Loading alumni employees...</div>;
   if (!rows.length) return <div className="hrms-empty-state">No alumni employees found.</div>;
 
@@ -1205,6 +1206,7 @@ function AlumniTable({ rows, loading }) {
             <th>Last Working Date</th>
             <th>Reason</th>
             <th>Status</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -1232,6 +1234,12 @@ function AlumniTable({ rows, loading }) {
                 <span className="hrms-pill hrms-pill-red">
                   {displayValue(employee.employment_status || employee.status, 'Resigned')}
                 </span>
+              </td>
+              <td data-label="Action">
+                <button type="button" className="hrms-secondary-btn compact"
+                  onClick={() => onView(employee)}>
+                  View Details
+                </button>
               </td>
             </tr>
           ))}
@@ -1417,6 +1425,118 @@ export default function Employees({ user = {}, setPage } = {}) {
   const [activeAlumniSection, setActiveAlumniSection] = useState('employees');
   const [employees, setEmployees] = useState([]);
   const [alumni, setAlumni] = useState([]);
+  const [viewingAlumni, setViewingAlumni] = useState(null);
+  const [loadingAlumniDetails, setLoadingAlumniDetails] = useState(false);
+  const [alumniDetailsError, setAlumniDetailsError] = useState('');
+  const [alumniHistory, setAlumniHistory] = useState(null);
+  const [alumniHistoryLoading, setAlumniHistoryLoading] = useState(false);
+  const [alumniHistoryError, setAlumniHistoryError] = useState('');
+  const [exitDocumentFile, setExitDocumentFile] = useState(null);
+  const [exitDocumentCategory, setExitDocumentCategory] = useState('handover');
+  const [exitDocumentDescription, setExitDocumentDescription] = useState('');
+  const [exitDocumentSaving, setExitDocumentSaving] = useState(false);
+  const [exitDocumentDownloading, setExitDocumentDownloading] = useState('');
+  const [exitDocumentFeedback, setExitDocumentFeedback] = useState('');
+  const canUploadAlumniExitDocuments = (
+    Array.isArray(user?.roles)
+      ? user.roles
+      : String(user?.roles || user?.role || '').split(',')
+  ).some((role) =>
+    ['hr_admin', 'super_admin'].includes(String(role).trim().toLowerCase())
+  );
+  async function uploadAlumniExitDocument(event) {
+    event.preventDefault();
+
+    if (
+      !viewingAlumni?._id ||
+      !canUploadAlumniExitDocuments ||
+      !exitDocumentFile ||
+      exitDocumentSaving
+    ) {
+      return;
+    }
+
+    const allowedExtensions = ['pdf', 'docx', 'jpg', 'jpeg', 'png', 'webp'];
+    const extension = String(exitDocumentFile.name || '')
+      .split('.')
+      .pop()
+      .toLowerCase();
+
+    if (!allowedExtensions.includes(extension)) {
+      setExitDocumentFeedback('Please select a PDF, DOCX or supported image.');
+      return;
+    }
+
+    if (exitDocumentFile.size > 10 * 1024 * 1024) {
+      setExitDocumentFeedback('The file must not exceed 10 MB.');
+      return;
+    }
+
+    const employeeId = viewingAlumni._id;
+    const formData = new FormData();
+    formData.append('file', exitDocumentFile);
+    formData.append('category', exitDocumentCategory);
+    formData.append('description', exitDocumentDescription.trim());
+
+    try {
+      setExitDocumentSaving(true);
+      setExitDocumentFeedback('Uploading exit document...');
+
+      await api(`/employees/${employeeId}/exit-documents`, {
+        method: 'POST',
+        body: formData,
+        timeoutMs: 60000,
+      });
+
+      const history = await api(`/employees/${employeeId}/alumni-history`);
+
+      // Avoid displaying old results if another employee was opened.
+      setAlumniHistory(history);
+      setExitDocumentFile(null);
+      setExitDocumentDescription('');
+      setExitDocumentFeedback('Exit document uploaded successfully.');
+    } catch (error) {
+      setExitDocumentFeedback(
+        error?.message || 'Unable to upload exit document.'
+      );
+    } finally {
+      setExitDocumentSaving(false);
+    }
+  }
+
+  async function downloadAlumniExitDocument(exitDoc) {
+    if (!viewingAlumni?._id || !exitDoc?._id) return;
+
+    const employeeId = viewingAlumni._id;
+
+    try {
+      setExitDocumentDownloading(exitDoc._id);
+      setExitDocumentFeedback('');
+
+      const blob = await api(
+        `/employees/${employeeId}/exit-documents/${exitDoc._id}/download`,
+        { responseType: 'blob', timeoutMs: 60000 }
+      );
+
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = String(exitDoc.original_filename || 'exit-document')
+        .replace(/[\\/:*?"<>|]/g, '_');
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    } catch (error) {
+      setExitDocumentFeedback(
+        error?.message || 'Unable to download exit document.'
+      );
+    } finally {
+      setExitDocumentDownloading('');
+    }
+  }
+
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingAlumni, setLoadingAlumni] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2024,6 +2144,39 @@ export default function Employees({ user = {}, setPage } = {}) {
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openAlumniDetails = async (employee) => {
+    const id = employeeRowId(employee);
+    if (!id) return;
+
+    setViewingAlumni(employee);
+    setAlumniDetailsError('');
+    setAlumniHistory(null);
+    setAlumniHistoryError('');
+    setLoadingAlumniDetails(true);
+    setAlumniHistoryLoading(true);
+
+    api(`/employees/${encodeURIComponent(id)}/alumni-history`)
+      .then((result) => setAlumniHistory(result))
+      .catch((error) => setAlumniHistoryError(
+        error?.message || 'Unable to load historical records.'
+      ))
+      .finally(() => setAlumniHistoryLoading(false));
+
+    try {
+      const response = await api(`/employees/${encodeURIComponent(id)}`);
+      if (!response?.item) {
+        throw new Error('Employee record was not found.');
+      }
+      setViewingAlumni(response.item);
+    } catch (error) {
+      setAlumniDetailsError(
+        error?.message || 'Unable to load the complete employee record.'
+      );
+    } finally {
+      setLoadingAlumniDetails(false);
     }
   };
 
@@ -4146,6 +4299,7 @@ export default function Employees({ user = {}, setPage } = {}) {
               <AlumniTable
                 rows={pagedAlumni}
                 loading={loadingAlumni}
+                onView={openAlumniDetails}
               />
             </div>
           ) : null}
@@ -4177,6 +4331,369 @@ export default function Employees({ user = {}, setPage } = {}) {
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {viewingAlumni ? createPortal(
+        <div
+                className="hrms-modal"
+
+                aria-modal="true"
+                aria-label="Alumni employee details"
+
+              data-alumni-details-workspace="true"
+
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setViewingAlumni(null);
+          }}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 2000,
+                display: 'flex',
+                alignItems: 'stretch',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                padding: 0,
+              }}
+              role="presentation"
+>
+          <div className="hrms-modal" role="dialog" aria-modal="true"
+            aria-label="Alumni employee details"
+            style={{ maxWidth: 880, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="hrms-section-heading">
+              <div>
+                <span className="hrms-section-kicker">Alumni Record</span>
+                <h3>{viewingAlumni.name || viewingAlumni.employee_name || 'Former Employee'}</h3>
+                <p>Read-only employee profile and exit details</p>
+                {loadingAlumniDetails ? (
+                  <p role="status">Loading full employee record...</p>
+                ) : null}
+                {alumniDetailsError ? (
+                  <p role="alert" style={{ color: '#b42318' }}>
+                    {alumniDetailsError}
+                  </p>
+                ) : null}
+              </div>
+              <button type="button" className="hrms-secondary-btn"
+                onClick={() => setViewingAlumni(null)}>
+                Close
+              </button>
+            </div>
+            {[
+              ['Personal Details', [
+                ['Employee Name', viewingAlumni.name || viewingAlumni.employee_name],
+                ['Employee Code', viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id],
+                ['Email', viewingAlumni.email || viewingAlumni.official_email],
+                ['Phone', viewingAlumni.phone || viewingAlumni.mobile],
+                ['Date of Birth', viewingAlumni.date_of_birth || viewingAlumni.dob],
+                ['Gender', viewingAlumni.gender],
+                ['Address', viewingAlumni.address],
+                ['State', viewingAlumni.state],
+              ]],
+              ['Employment Details', [
+                ['Organisation', viewingAlumni.organisation || viewingAlumni.organization],
+                ['Department', viewingAlumni.department],
+                ['Designation', viewingAlumni.designation],
+                ['Joining Date', viewingAlumni.joining_date || viewingAlumni.date_of_joining],
+                ['Employee Type', viewingAlumni.employee_type],
+                ['Job Type', viewingAlumni.job_type],
+                ['Team Leader', viewingAlumni.team_leader_name],
+                ['Reporting Officer', viewingAlumni.reporting_officer_name],
+              ]],
+              ['Exit Details', [
+                ['Employment Status', viewingAlumni.employment_status || viewingAlumni.status],
+                ['Exit Type', viewingAlumni.exit_type],
+                ['Resignation Date', viewingAlumni.resignation_date],
+                ['Last Working Date', viewingAlumni.last_working_date],
+                ['Resignation Reason', viewingAlumni.resignation_reason],
+              ]],
+            ].map(([heading, fields]) => (
+              <section key={heading} className="hrms-panel"
+                style={{ marginTop: 16, padding: 18 }}>
+                <h4 style={{ margin: '0 0 14px' }}>{heading}</h4>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: 16,
+                }}>
+                  {fields.map(([label, value]) => (
+                    <div key={label} style={{ minWidth: 0 }}>
+                      <small style={{ opacity: 0.7 }}>{label}</small>
+                      <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                        {displayValue(value)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+            <section className="hrms-panel"
+              style={{ marginTop: 16, padding: 18 }}>
+              <h4 style={{ margin: '0 0 14px' }}>Historical Records</h4>
+
+              {alumniHistoryLoading ? (
+                <p role="status">Loading historical records...</p>
+              ) : null}
+
+              {alumniHistoryError ? (
+                <p role="alert" style={{ color: '#b42318' }}>
+                  {alumniHistoryError}
+                </p>
+              ) : null}
+
+              <section
+                style={{
+                  marginTop: 20,
+                  padding: 18,
+                  border: '1px solid rgba(110,120,150,.22)',
+                  borderRadius: 14,
+                }}
+              >
+                <h3 style={{ marginTop: 0 }}>Exit Documents</h3>
+                <p>
+                  Resignation, clearance, handover and final settlement
+                  documents retained with the former employee's record.
+                </p>
+
+                {canUploadAlumniExitDocuments && (
+                  <form
+                    onSubmit={uploadAlumniExitDocument}
+                    style={{
+                      display: 'grid',
+                      gap: 12,
+                      marginTop: 16,
+                      marginBottom: 20,
+                    }}
+                  >
+                    <label>
+                      Document Category
+                      <select
+                        value={exitDocumentCategory}
+                        onChange={(event) =>
+                          setExitDocumentCategory(event.target.value)
+                        }
+                        required
+                      >
+                        <option value="resignation_letter">Resignation Letter</option>
+                        <option value="resignation_acceptance">Resignation Acceptance</option>
+                        <option value="handover">Work Handover</option>
+                        <option value="asset_return">Asset Return</option>
+                        <option value="it_clearance">IT Clearance</option>
+                        <option value="department_clearance">Department Clearance</option>
+                        <option value="no_dues">No Dues Certificate</option>
+                        <option value="full_final_settlement">Full and Final Settlement</option>
+                        <option value="relieving_letter">Relieving Letter</option>
+                        <option value="experience_certificate">Experience Certificate</option>
+                        <option value="exit_interview">Exit Interview</option>
+                        <option value="other_exit_document">Other Exit Document</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Choose Document
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.jpg,.jpeg,.png,.webp"
+                        onChange={(event) =>
+                          setExitDocumentFile(event.target.files?.[0] || null)
+                        }
+                        required
+                        key={exitDocumentFile ? 'selected' : 'empty'}
+                      />
+                    </label>
+
+                    <label>
+                      Description (Optional)
+                      <textarea
+                        value={exitDocumentDescription}
+                        onChange={(event) =>
+                          setExitDocumentDescription(event.target.value)
+                        }
+                        maxLength={500}
+                        rows={2}
+                        placeholder="Add an optional note about this document"
+                      />
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="hrms-primary-btn"
+                      disabled={!exitDocumentFile || exitDocumentSaving}
+                    >
+                      {exitDocumentSaving ? 'Uploading...' : 'Upload Exit Document'}
+                    </button>
+                  </form>
+                )}
+
+                {exitDocumentFeedback ? (
+                  <p role="status">{exitDocumentFeedback}</p>
+                ) : null}
+
+                <h4>
+                  Saved Exit Documents
+                  {' '}({alumniHistory?.totals?.exit_documents ?? 0})
+                </h4>
+
+                {alumniHistoryLoading ? (
+                  <p>Loading documents...</p>
+                ) : (alumniHistory?.records?.exit_documents || []).length === 0 ? (
+                  <p>No exit documents uploaded yet.</p>
+                ) : (
+                  <div className="hrms-table-wrap">
+                    <table className="hrms-table">
+                      <thead>
+                        <tr>
+                          <th>Document</th>
+                          <th>Category</th>
+                          <th>Uploaded</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(alumniHistory?.records?.exit_documents || []).map(
+                          (exitDoc) => (
+                            <tr key={exitDoc._id}>
+                              <td>{exitDoc.original_filename || 'Document'}</td>
+                              <td>
+                                {String(exitDoc.category || '')
+                                  .replaceAll('_', ' ')}
+                              </td>
+                              <td>{exitDoc.uploaded_at || '?'}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="hrms-secondary-btn"
+                                  disabled={exitDocumentDownloading === exitDoc._id}
+                                  onClick={() =>
+                                    downloadAlumniExitDocument(exitDoc)
+                                  }
+                                >
+                                  {exitDocumentDownloading === exitDoc._id
+                                    ? 'Downloading...'
+                                    : 'Download'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {alumniHistory && !alumniHistoryLoading ? (
+                <div>
+                  {[
+                    ['Attendance History', 'attendance', [
+                      ['Date', 'date'],
+                      ['Status', 'status'],
+                      ['Mode', 'mode'],
+                      ['Check In', 'check_in'],
+                      ['Check Out', 'check_out'],
+                    ]],
+                    ['Leave Requests', 'leave_requests', [
+                      ['Leave Type', 'leave_type'],
+                      ['From', 'from_date'],
+                      ['To', 'to_date'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Leave Balances', 'leave_balances', [
+                      ['Leave Type', 'leave_type'],
+                      ['Available', 'available'],
+                      ['Used', 'used'],
+                      ['Year', 'year'],
+                    ]],
+                    ['Payslip History', 'payslips', [
+                      ['Period', 'period_key'],
+                      ['Gross Salary', 'gross_salary'],
+                      ['Net Pay', 'net_amount'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Monthly Plans', 'monthly_plans', [
+                      ['Month', 'month'],
+                      ['Plan', 'title'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Weekly Plans', 'weekly_plans', [
+                      ['Week Start', 'week_start'],
+                      ['Week End', 'week_end'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Change Requests', 'change_requests', [
+                      ['Activity', 'title'],
+                      ['Change Type', 'change_type'],
+                      ['Reason', 'reason'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Employee Document Metadata', 'documents', [
+                      ['File Name', 'original_filename'],
+                      ['Type', 'document_type'],
+                      ['Status', 'status'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                    ['Recruitment Document Metadata', 'recruitment_documents', [
+                      ['File Name', 'original_filename'],
+                      ['Type', 'document_type'],
+                      ['Status', 'status'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                    ['Sprint Attachments', 'attachments', [
+                      ['File Name', 'original_filename'],
+                      ['Plan Type', 'plan_type'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                  ].map(([title, key, columns]) => {
+                    const rows = alumniHistory.records?.[key] || [];
+                    const total = alumniHistory.totals?.[key] ?? 0;
+
+                    return (
+                      <div key={key} style={{ marginTop: 20 }}>
+                        <h4 style={{ marginBottom: 10 }}>
+                          {title} ({total})
+                        </h4>
+
+                        {rows.length ? (
+                          <div className="hrms-table-wrap">
+                            <table className="hrms-table">
+                              <thead>
+                                <tr>
+                                  {columns.map(([label]) => (
+                                    <th key={label}>{label}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((record, index) => (
+                                  <tr key={record._id || index}>
+                                    {columns.map(([label, field]) => (
+                                      <td key={field} data-label={label}>
+                                        {displayValue(record[field])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p>No historical records available.</p>
+                        )}
+
+                        {total > rows.length ? (
+                          <small>
+                            Showing {rows.length} of {total} records.
+                          </small>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          </div>
+        </div>,
+        document.body
       ) : null}
 
       {editingEmployee

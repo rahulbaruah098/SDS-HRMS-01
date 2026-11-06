@@ -1176,11 +1176,18 @@ def rollback_employee_login_user(db, previous_user=None, current_user=None):
 
 
 def find_employee_user(db, employee_doc):
+    tenant_id = employee_doc.get("tenant_id") or current_tenant_id()
+
     user_id = employee_doc.get("user_id")
     user_obj_id = safe_object_id(user_id)
 
     if user_obj_id:
-        user = db.users.find_one({"_id": user_obj_id})
+        user = db.users.find_one({
+            "_id": user_obj_id,
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
+
         if user:
             return user
 
@@ -1189,7 +1196,7 @@ def find_employee_user(db, employee_doc):
     if email:
         return db.users.find_one({
             "email": email,
-            "tenant_id": employee_doc.get("tenant_id") or current_tenant_id(),
+            "tenant_id": tenant_id,
             "is_deleted": {"$ne": True},
         })
 
@@ -1211,7 +1218,10 @@ def build_user_sync_payload(employee_doc, existing_user=None):
     )
 
     is_active = not (
-        status.lower() in {"inactive", "disabled", "deleted"}
+        status.lower() in {"inactive", "disabled", "deleted", "resigned", "resign", "left", "terminated", "retired", "alumni", "ex-employee", "ex_employee"}
+        or truthy(employee_doc.get("is_alumni"))
+        or bool(normalize_text(employee_doc.get("last_working_date")))
+        or normalize_text(employee_doc.get("employment_status")).lower() in {"inactive", "resigned", "resign", "left", "terminated", "retired", "alumni", "ex-employee", "ex_employee"}
         or truthy(employee_doc.get("is_deleted"))
     )
 
@@ -1284,6 +1294,40 @@ def ensure_employee_login_user(db, employee_doc, raw_password=None):
     existing_user = find_employee_user(db, employee_doc)
 
     if existing_user:
+        # Never assign a previous employee's login to their replacement.
+        incoming_id = normalize_text(employee_doc.get("_id"))
+        existing_user_id = str(existing_user["_id"])
+
+        linked_employee = db.employees.find_one({
+            "tenant_id": employee_doc.get("tenant_id") or current_tenant_id(),
+            "user_id": existing_user_id,
+            "is_deleted": {"$ne": True},
+        })
+
+        linked_ref = normalize_text(
+            existing_user.get("employee_ref_id")
+        )
+        linked_ref_oid = safe_object_id(linked_ref)
+
+        if (
+            (linked_employee and (
+                not incoming_id
+                or str(linked_employee["_id"]) != incoming_id
+            ))
+            or (
+                linked_ref_oid
+                and (
+                    not incoming_id
+                    or str(linked_ref_oid) != incoming_id
+                )
+            )
+        ):
+            return None, (
+                "This login belongs to another employee. "
+                "Create the replacement employee with a unique email "
+                "and separate login account."
+            )
+
         employee_doc["user_id"] = str(existing_user["_id"])
         sync_payload = build_user_sync_payload(employee_doc, existing_user)
         update_doc = {"$set": sync_payload}
@@ -1335,6 +1379,28 @@ def sync_employee_login_user(db, employee_doc):
     apply_avatar_aliases(employee_doc)
 
     user = find_employee_user(db, employee_doc)
+
+    if user:
+        tenant_id = employee_doc.get("tenant_id") or current_tenant_id()
+        incoming_id = normalize_text(employee_doc.get("_id"))
+        linked_employee = db.employees.find_one({
+            "tenant_id": tenant_id,
+            "user_id": str(user["_id"]),
+            "is_deleted": {"$ne": True},
+        })
+
+        linked_ref = safe_object_id(user.get("employee_ref_id"))
+
+        if (
+            linked_employee
+            and str(linked_employee["_id"]) != incoming_id
+        ) or (
+            linked_ref and str(linked_ref) != incoming_id
+        ):
+            return None, (
+                "This login belongs to another employee. "
+                "Use a separate employee account."
+            )
 
     if not user:
         return ensure_employee_login_user(
@@ -1389,6 +1455,24 @@ def deactivate_employee_login_user(db, employee_doc):
                 "updated_at": now_utc(),
                 "updated_by": current_user_id(),
                 "updated_by_name": current_user_name(),
+            }
+        },
+    )
+
+
+
+    # Invalidate outstanding refresh sessions for the resigned employee.
+    revoked_at = now_utc()
+    db.auth_sessions.update_many(
+        {
+            "user_id": str(user["_id"]),
+            "is_revoked": {"$ne": True},
+        },
+        {
+            "$set": {
+                "is_revoked": True,
+                "revoked_at": revoked_at,
+                "updated_at": revoked_at,
             }
         },
     )
@@ -4092,6 +4176,501 @@ def list_collection(collection):
         })
 
     return jsonify(response)
+
+
+def alumni_document_metadata(record):
+    """Allowlist only safe read-only document metadata."""
+    fields = (
+        "_id",
+        "name",
+        "filename",
+        "original_filename",
+        "document_type",
+        "type",
+        "status",
+        "uploaded_at",
+        "created_at",
+        "updated_at",
+    )
+    return {
+        key: record[key]
+        for key in fields
+        if key in record
+    }
+
+
+def alumni_document_identity_query(tenant_id, employee_oid):
+    """Match one employee's canonical ID, never name/email/code."""
+    employee_id = str(employee_oid)
+    return {
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+        "$or": [
+            {"employee_id": {"$in": [employee_id, employee_oid]}},
+            {"employee_ref_id": {"$in": [employee_id, employee_oid]}},
+        ],
+    }
+
+
+
+ALUMNI_EXIT_UPLOAD_ROLES = {"super_admin", "hr_admin"}
+ALUMNI_EXIT_READ_ROLES = ADMIN_ROLES
+ALUMNI_EXIT_MAX_BYTES = 10 * 1024 * 1024
+
+ALUMNI_EXIT_FILE_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+ALUMNI_EXIT_CATEGORIES = {
+    "resignation_letter",
+    "resignation_acceptance",
+    "handover",
+    "asset_return",
+    "it_clearance",
+    "department_clearance",
+    "no_dues",
+    "full_final_settlement",
+    "relieving_letter",
+    "experience_certificate",
+    "exit_interview",
+    "other_exit_document",
+}
+
+
+def alumni_exit_is_resigned(employee):
+    """Exit files are restricted to employees explicitly marked departed."""
+    if not employee:
+        return False
+
+    statuses = {
+        "resigned",
+        "resign",
+        "left",
+        "terminated",
+        "retired",
+        "alumni",
+        "ex_employee",
+        "ex-employee",
+    }
+
+    values = (
+        normalize_text(employee.get("status")).lower(),
+        normalize_text(employee.get("employment_status")).lower(),
+        normalize_text(employee.get("employee_status")).lower(),
+    )
+
+    # A date can be scheduled in advance. It is not proof that
+    # the employee has been moved into the Alumni lifecycle.
+    return (
+        any(value in statuses for value in values)
+        or truthy(employee.get("is_alumni"))
+    )
+
+
+
+def alumni_exit_file_signature_valid(extension, content):
+    """Check real file signatures, not only filename extensions."""
+    if extension == ".pdf":
+        return content.startswith(b"%PDF-")
+    if extension in {".jpg", ".jpeg"}:
+        return (
+            content.startswith(bytes.fromhex("FFD8FF"))
+            and content.rstrip().endswith(bytes.fromhex("FFD9"))
+        )
+    if extension == ".png":
+        return content.startswith(bytes.fromhex("89504E470D0A1A0A"))
+    if extension == ".webp":
+        return (
+            len(content) >= 12
+            and content[:4] == b"RIFF"
+            and content[8:12] == b"WEBP"
+        )
+    if extension == ".docx":
+        import io
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = set(archive.namelist())
+                return (
+                    "[Content_Types].xml" in names
+                    and "word/document.xml" in names
+                    and not archive.testzip()
+                )
+        except (zipfile.BadZipFile, OSError, ValueError):
+            return False
+    return False
+
+
+def alumni_exit_employee_or_error(db, employee_id):
+    oid = safe_object_id(employee_id)
+    if not oid:
+        return None, (jsonify({"message": "Invalid employee ID"}), 400)
+
+    employee = db.employees.find_one({
+        "_id": oid,
+        "tenant_id": current_tenant_id(),
+        "is_deleted": {"$ne": True},
+    })
+
+    if not employee:
+        return None, (jsonify({"message": "Employee not found"}), 404)
+
+    if not alumni_exit_is_resigned(employee):
+        return None, (
+            jsonify({
+                "message": "Exit documents are available only for Alumni"
+            }),
+            409,
+        )
+
+    return employee, None
+
+
+def alumni_exit_public_metadata(doc):
+    return {
+        "_id": str(doc["_id"]),
+        "employee_id": str(doc["employee_id"]),
+        "category": doc.get("category", ""),
+        "description": doc.get("description", ""),
+        "original_filename": doc.get("original_filename", ""),
+        "content_type": doc.get("content_type", ""),
+        "size_bytes": doc.get("size_bytes", 0),
+        "uploaded_by": doc.get("uploaded_by", ""),
+        "uploaded_at": doc.get("uploaded_at").isoformat()
+            if doc.get("uploaded_at") else "",
+    }
+
+
+@crud_bp.post("/employees/<employee_id>/exit-documents")
+@current_user_required
+def upload_alumni_exit_document(employee_id):
+    if not current_user_roles().intersection(ALUMNI_EXIT_UPLOAD_ROLES):
+        return jsonify({"message": "HR Admin access required"}), 403
+
+    db = get_db()
+    employee, error = alumni_exit_employee_or_error(db, employee_id)
+    if error:
+        return error
+
+    from pathlib import Path
+    from werkzeug.utils import secure_filename
+    from gridfs import GridFS
+
+    uploaded = request.files.get("file")
+    if not uploaded:
+        return jsonify({"message": "Select a document"}), 400
+
+    filename = secure_filename(uploaded.filename or "")[:180]
+    extension = Path(filename).suffix.lower()
+
+    if not filename or extension not in ALUMNI_EXIT_FILE_TYPES:
+        return jsonify({
+            "message": "Only PDF, DOCX, JPG, PNG and WEBP are allowed"
+        }), 400
+
+    category = normalize_text(request.form.get("category")).lower()
+    if category not in ALUMNI_EXIT_CATEGORIES:
+        return jsonify({"message": "Select a valid exit-document category"}), 400
+
+    description = normalize_text(request.form.get("description"))[:500]
+
+    content = uploaded.stream.read(ALUMNI_EXIT_MAX_BYTES + 1)
+    if not content or len(content) > ALUMNI_EXIT_MAX_BYTES:
+        return jsonify({
+            "message": "File must be nonempty and not exceed 10 MB"
+        }), 400
+
+    if not alumni_exit_file_signature_valid(extension, content):
+        return jsonify({
+            "message": "File content does not match the selected format"
+        }), 400
+
+    now_value = datetime.utcnow()
+    fs = GridFS(db, collection="alumni_exit_files")
+    grid_id = fs.put(
+        content,
+        filename=filename,
+        content_type=ALUMNI_EXIT_FILE_TYPES[extension],
+        tenant_id=current_tenant_id(),
+        employee_id=str(employee["_id"]),
+    )
+
+    document = {
+        "tenant_id": current_tenant_id(),
+        "employee_id": str(employee["_id"]),
+        "gridfs_id": grid_id,
+        "category": category,
+        "description": description,
+        "original_filename": filename,
+        "content_type": ALUMNI_EXIT_FILE_TYPES[extension],
+        "size_bytes": len(content),
+        "uploaded_by": str(g.current_user["_id"]),
+        "uploaded_at": now_value,
+        "is_deleted": False,
+    }
+
+    try:
+        inserted = db.alumni_exit_documents.insert_one(document)
+    except Exception:
+        fs.delete(grid_id)
+        raise
+
+    document["_id"] = inserted.inserted_id
+
+    audit(
+        "alumni_exit_document_upload",
+        "alumni_exit_documents",
+        inserted.inserted_id,
+        {
+            "employee_id": str(employee["_id"]),
+            "category": category,
+            "filename": filename,
+        },
+    )
+
+    return jsonify({
+        "message": "Exit document uploaded successfully",
+        "item": alumni_exit_public_metadata(document),
+    }), 201
+
+
+@crud_bp.get("/employees/<employee_id>/exit-documents")
+@current_user_required
+def list_alumni_exit_documents(employee_id):
+    if not current_user_roles().intersection(ALUMNI_EXIT_READ_ROLES):
+        return jsonify({"message": "Forbidden"}), 403
+
+    db = get_db()
+    employee, error = alumni_exit_employee_or_error(db, employee_id)
+    if error:
+        return error
+
+    query = {
+        "tenant_id": current_tenant_id(),
+        "employee_id": str(employee["_id"]),
+        "is_deleted": {"$ne": True},
+    }
+
+    items = [
+        alumni_exit_public_metadata(doc)
+        for doc in db.alumni_exit_documents.find(query)
+        .sort("uploaded_at", -1).limit(200)
+    ]
+
+    return jsonify({
+        "items": items,
+        "total": db.alumni_exit_documents.count_documents(query),
+    })
+
+
+@crud_bp.get("/employees/<employee_id>/exit-documents/<document_id>/download")
+@current_user_required
+def download_alumni_exit_document(employee_id, document_id):
+    if not current_user_roles().intersection(ALUMNI_EXIT_READ_ROLES):
+        return jsonify({"message": "Forbidden"}), 403
+
+    db = get_db()
+    employee, error = alumni_exit_employee_or_error(db, employee_id)
+    if error:
+        return error
+
+    document_oid = safe_object_id(document_id)
+    if not document_oid:
+        return jsonify({"message": "Invalid document ID"}), 400
+
+    document = db.alumni_exit_documents.find_one({
+        "_id": document_oid,
+        "tenant_id": current_tenant_id(),
+        "employee_id": str(employee["_id"]),
+        "is_deleted": {"$ne": True},
+    })
+
+    if not document:
+        return jsonify({"message": "Document not found"}), 404
+
+    from gridfs import GridFS, NoFile
+    from flask import send_file
+    from io import BytesIO
+
+    try:
+        content = GridFS(
+            db, collection="alumni_exit_files"
+        ).get(document["gridfs_id"]).read()
+    except NoFile:
+        return jsonify({"message": "Stored file not found"}), 404
+
+    if len(content) > ALUMNI_EXIT_MAX_BYTES:
+        return jsonify({"message": "Stored file exceeds size limit"}), 409
+
+    audit(
+        "alumni_exit_document_download",
+        "alumni_exit_documents",
+        document_oid,
+        {"employee_id": str(employee["_id"])},
+    )
+
+    response = send_file(
+        BytesIO(content),
+        mimetype=document["content_type"],
+        as_attachment=True,
+        download_name=document["original_filename"],
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@crud_bp.get("/employees/<employee_id>/alumni-history")
+@current_user_required
+def get_alumni_history(employee_id):
+    if not current_user_roles().intersection(ADMIN_ROLES):
+        return jsonify({"message": "Forbidden"}), 403
+
+    employee_oid = safe_object_id(employee_id)
+    if not employee_oid:
+        return jsonify({"message": "Invalid employee ID"}), 400
+
+    db = get_db()
+    tenant_id = current_tenant_id()
+
+    employee = db.employees.find_one({
+        "_id": employee_oid,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not employee:
+        return jsonify({"message": "Employee not found"}), 404
+
+    if not employee_is_alumni_payload(employee):
+        return jsonify({"message": "Employee is not an Alumni record"}), 400
+
+    identifiers = []
+    for key in (
+        "_id", "employee_id", "employee_code",
+        "emp_code", "code", "user_id"
+    ):
+        value = normalize_text(employee.get(key))
+        if value and value not in identifiers:
+            identifiers.append(value)
+
+    object_ids = [employee_oid]
+    identity_values = identifiers + object_ids
+
+    collection_fields = {
+        "attendance": ("attendance_logs", ("employee_id", "employee_ref_id")),
+        "leave_requests": ("leave_requests", ("employee_id", "employee_ref_id")),
+        "leave_balances": ("leave_balances", ("employee_id", "employee_ref_id")),
+        "payslips": ("payslips", ("employee_id", "employee_ref_id")),
+    }
+
+    records = {}
+    totals = {}
+
+    for section, (collection_name, fields) in collection_fields.items():
+        query = {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {field: {"$in": identity_values}}
+                for field in fields
+            ],
+        }
+
+        collection = db[collection_name]
+        totals[section] = collection.count_documents(query)
+        records[section] = serialize_list(
+            list(collection.find(query).sort("_id", -1).limit(200))
+        )
+
+    # Preserve work history under the original employee identity.
+    # These are read-only metadata queries; attachments are not downloaded.
+    sprint_collections = {
+        "monthly_plans": "sprint_monthly_plans",
+        "weekly_plans": "sprint_weekly_plans",
+        "change_requests": "sprint_change_requests",
+        "attachments": "sprint_attachments",
+    }
+
+    for section, collection_name in sprint_collections.items():
+        collection = db[collection_name]
+        query = {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "employee_id": {"$in": identity_values},
+        }
+
+        totals[section] = collection.count_documents(query)
+
+        projection = {"storage_id": 0} if section == "attachments" else None
+        cursor = collection.find(query, projection).sort("_id", -1).limit(200)
+        records[section] = serialize_list(list(cursor))
+
+    # Optional historical document records, restricted to the
+    # canonical employee identity. Never return storage identifiers
+    # or file-download URLs from the Alumni summary endpoint.
+    document_sources = {
+        "documents": "documents",
+        "recruitment_documents": "recruitment_documents",
+    }
+
+    document_query = alumni_document_identity_query(
+        tenant_id, employee_oid
+    )
+
+    for section, collection_name in document_sources.items():
+        collection = db[collection_name]
+
+        totals[section] = collection.count_documents(document_query)
+
+        metadata = []
+        for document in collection.find(
+            document_query,
+            {
+                "_id": 1,
+                "name": 1,
+                "filename": 1,
+                "original_filename": 1,
+                "document_type": 1,
+                "type": 1,
+                "status": 1,
+                "uploaded_at": 1,
+                "created_at": 1,
+                "updated_at": 1,
+            },
+        ).sort("_id", -1).limit(200):
+            metadata.append(alumni_document_metadata(document))
+
+        records[section] = serialize_list(metadata)
+
+    exit_query = {
+        "tenant_id": tenant_id,
+        "employee_id": str(employee_oid),
+        "is_deleted": {"$ne": True},
+    }
+
+    totals["exit_documents"] = db.alumni_exit_documents.count_documents(
+        exit_query
+    )
+
+    records["exit_documents"] = [
+        alumni_exit_public_metadata(doc)
+        for doc in db.alumni_exit_documents.find(exit_query)
+        .sort("uploaded_at", -1).limit(200)
+    ]
+
+    return jsonify({
+        "employee_id": str(employee_oid),
+        "records": records,
+        "totals": totals,
+        "limit_per_section": 200,
+        "message": "Alumni history loaded successfully",
+    })
 
 
 @crud_bp.get("/<collection>/<item_id>")

@@ -370,6 +370,46 @@ def employee_snapshot(employee, user=None):
     return snapshot
 
 
+
+def employee_login_is_alumni(employee):
+    """Reject departed accounts without treating a scheduled exit as departed."""
+    if not employee:
+        return False
+
+    def normalized(value):
+        return str(value or "").strip().lower()
+
+    def enabled(value):
+        return value is True or normalized(value) in {
+            "true", "yes", "1", "on"
+        }
+
+    if enabled(employee.get("is_alumni")):
+        return True
+
+    blocked_statuses = {
+        "resigned",
+        "resign",
+        "alumni",
+        "left",
+        "terminated",
+        "retired",
+        "ex-employee",
+        "ex_employee",
+        "inactive",
+    }
+
+    return any(
+        normalized(employee.get(field)) in blocked_statuses
+        for field in (
+            "status",
+            "employment_status",
+            "employee_status",
+        )
+    )
+
+
+
 def find_employee_for_user(db, user):
     if not user:
         return None
@@ -842,6 +882,11 @@ def login():
 
     raw_employee = find_employee_for_user(db, user)
 
+    if employee_login_is_alumni(raw_employee):
+        return jsonify({
+            "message": "This employee account is no longer active."
+        }), 401
+
     try:
         user, raw_employee = sync_user_employee_link(
             db,
@@ -986,6 +1031,24 @@ def refresh_access_token():
 
     user = sync_user_login_defaults(db, user)
     raw_employee = find_employee_for_user(db, user)
+
+    if employee_login_is_alumni(raw_employee):
+        db.auth_sessions.update_many(
+            {
+                "user_id": str(user["_id"]),
+                "is_revoked": {"$ne": True},
+            },
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": now_utc(),
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+        return jsonify({
+            "message": "This employee account is no longer active."
+        }), 401
 
     try:
         user, raw_employee = sync_user_employee_link(

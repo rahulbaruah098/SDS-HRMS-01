@@ -1100,11 +1100,36 @@ def employee_code(employee_doc):
     )
 
 
+def employee_is_departed(employee_doc):
+    if not employee_doc:
+        return False
+
+    departed = {
+        "resigned", "resign", "left", "terminated",
+        "retired", "alumni", "ex-employee", "ex_employee",
+    }
+
+    status = normalize_text(employee_doc.get("status")).lower()
+    employment = normalize_text(
+        employee_doc.get("employment_status")
+    ).lower()
+
+    return (
+        status in departed
+        or employment in departed
+        or truthy(employee_doc.get("is_alumni"))
+        or bool(normalize_text(employee_doc.get("last_working_date")))
+    )
+
+
 def employee_status_is_active(employee_doc):
     status = normalize_text(employee_doc.get("status") or "active").lower()
 
     return not (
-        status in {"inactive", "disabled", "deleted", "terminated"}
+        status in {"inactive", "disabled", "deleted", "terminated", "resigned", "resign", "left", "retired", "alumni", "ex-employee", "ex_employee"}
+        or truthy(employee_doc.get("is_alumni"))
+        or bool(normalize_text(employee_doc.get("last_working_date")))
+        or normalize_text(employee_doc.get("employment_status")).lower() in {"inactive", "resigned", "resign", "left", "terminated", "retired", "alumni", "ex-employee", "ex_employee"}
         or truthy(employee_doc.get("is_deleted"))
     )
 
@@ -1152,11 +1177,17 @@ def user_profile_payload_from_employee(employee_doc, existing_user=None):
 
 
 def find_user_for_employee(db, employee_doc):
+    tenant_id = employee_doc.get("tenant_id") or "sds"
+
     user_id = normalize_text(employee_doc.get("user_id"))
     user_obj_id = safe_object_id(user_id)
 
     if user_obj_id:
-        user = db.users.find_one({"_id": user_obj_id})
+        user = db.users.find_one({
+            "_id": user_obj_id,
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+        })
 
         if user:
             return user
@@ -1166,21 +1197,37 @@ def find_user_for_employee(db, employee_doc):
     if not email:
         return None
 
-    tenant_id = employee_doc.get("tenant_id") or "sds"
-
-    user = db.users.find_one({
+    return db.users.find_one({
         "email": email,
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
     })
 
-    if user:
-        return user
 
-    return db.users.find_one({
-        "email": email,
+def user_login_belongs_to_another_employee(db, user, employee_doc):
+    """Prevent account reuse across distinct employee identities."""
+    if not user:
+        return False
+
+    tenant_id = employee_doc.get("tenant_id") or "sds"
+    current_id = normalize_text(employee_doc.get("_id"))
+    user_id = str(user["_id"])
+
+    linked_employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": user_id,
         "is_deleted": {"$ne": True},
     })
+
+    if linked_employee and str(linked_employee["_id"]) != current_id:
+        return True
+
+    linked_ref = safe_object_id(user.get("employee_ref_id"))
+
+    if linked_ref and str(linked_ref) != current_id:
+        return True
+
+    return False
 
 
 def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
@@ -1192,6 +1239,11 @@ def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
     apply_profile_photo_aliases(employee_doc)
 
     existing_user = find_user_for_employee(db, employee_doc)
+
+    if user_login_belongs_to_another_employee(
+        db, existing_user, employee_doc
+    ):
+        return None
 
     if existing_user:
         photo = merge_profile_photo_from_sources(employee_doc, existing_user)
@@ -1252,7 +1304,9 @@ def ensure_user_for_employee(db, employee_doc, default_password="User@123"):
 def sync_employee_roles(db, employee_doc):
     user = find_user_for_employee(db, employee_doc)
 
-    if not user:
+    if not user or user_login_belongs_to_another_employee(
+        db, user, employee_doc
+    ):
         return
 
     photo = merge_profile_photo_from_sources(employee_doc, user)
@@ -2217,6 +2271,8 @@ def list_users():
     orphan_employees = list(db.employees.find(employee_repair_query).limit(500))
 
     for emp in orphan_employees:
+        if employee_is_departed(emp):
+            continue
         ensure_user_for_employee(db, emp)
 
     if search:
@@ -2478,6 +2534,496 @@ def create_user():
     }), 201
 
 
+def successor_is_assigned_reviewer(owner, successor, kind):
+    """Require an explicit TL/RO mapping to this replacement identity."""
+    if not owner or not successor or kind not in {"tl", "ro"}:
+        return False
+
+    prefix = "team_leader" if kind == "tl" else "reporting_officer"
+
+    mapping_fields = (
+        f"{prefix}_id",
+        f"{prefix}_employee_id",
+        f"{prefix}_user_id",
+    )
+
+    referenced = {
+        normalize_text(owner.get(field)).lower()
+        for field in mapping_fields
+        if normalize_text(owner.get(field))
+    }
+
+    # Conflicting mapping references must be corrected by HR first.
+    # Never infer authorization merely from an employee's designation.
+    employee_id = normalize_text(successor.get("_id")).lower()
+    user_id = normalize_text(successor.get("user_id")).lower()
+
+    identities = {value for value in (employee_id, user_id) if value}
+
+    return bool(referenced) and referenced.issubset(identities)
+
+
+def predecessor_is_explicit_alumni(employee):
+    """Only an explicitly departed employee may be succeeded."""
+    if not employee:
+        return False
+
+    value = employee.get("is_alumni")
+    alumni_flag = (
+        value is True
+        or str(value or "").strip().lower()
+        in {"true", "yes", "1", "on"}
+    )
+
+    if alumni_flag:
+        return True
+
+    departed_statuses = {
+        "resigned",
+        "resign",
+        "alumni",
+        "left",
+        "terminated",
+        "retired",
+        "ex_employee",
+        "ex-employee",
+    }
+
+    return any(
+        str(employee.get(field) or "").strip().lower()
+        in departed_statuses
+        for field in (
+            "status",
+            "employment_status",
+            "employee_status",
+        )
+    )
+
+
+@superadmin_bp.post("/users/pending-approval-handover")
+@roles_required("super_admin")
+def handover_pending_approvals():
+    """Explicit reassignment of pinned, unfinished Sprint approvals."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    old_user_id = safe_object_id(data.get("predecessor_user_id"))
+    new_user_id = safe_object_id(data.get("successor_user_id"))
+
+    if not old_user_id or not new_user_id or old_user_id == new_user_id:
+        return jsonify({"message": "Two distinct user IDs are required"}), 400
+
+    predecessor = db.users.find_one({
+        "_id": old_user_id,
+        "is_deleted": {"$ne": True},
+    })
+    successor = db.users.find_one({
+        "_id": new_user_id,
+        "is_active": True,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not predecessor or not successor:
+        return jsonify({"message": "Eligible accounts not found"}), 404
+
+    tenant_id = predecessor.get("tenant_id")
+    if not tenant_id or successor.get("tenant_id") != tenant_id:
+        return jsonify({"message": "Company mismatch"}), 403
+
+    old_emp = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": str(old_user_id),
+        "is_deleted": {"$ne": True},
+    })
+    new_emp = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": str(new_user_id),
+        "is_deleted": {"$ne": True},
+    })
+
+    if not old_emp or not new_emp:
+        return jsonify({"message": "Linked employee profiles required"}), 409
+
+    if not predecessor_is_explicit_alumni(old_emp):
+        return jsonify({"message": "Predecessor must be Alumni"}), 409
+
+    if not employee_status_is_active(new_emp):
+        return jsonify({"message": "Replacement must be active"}), 409
+
+    old_id = str(old_emp["_id"])
+    new_id = str(new_emp["_id"])
+
+    if old_id == new_id:
+        return jsonify({"message": "Employee identities must differ"}), 409
+
+    collection_names = (
+        "sprint_monthly_plans",
+        "sprint_weekly_plans",
+        "sprint_monthly_team_compilations",
+    )
+
+    requested_ids = data.get("plan_ids", [])
+    if not isinstance(requested_ids, list) or len(requested_ids) > 100:
+        return jsonify({"message": "plan_ids must be a list of up to 100 IDs"}), 400
+
+    selected_ids = set()
+    for value in requested_ids:
+        parsed = safe_object_id(value)
+        if not parsed:
+            return jsonify({"message": "Invalid plan ID"}), 400
+        selected_ids.add(str(parsed))
+
+    dry_run = not (data.get("dry_run") is False)
+
+    # Preview may inspect all pending items, but an actual handover
+    # must contain explicit, individually selected plan IDs.
+    if not dry_run and not selected_ids:
+        return jsonify({
+            "message": (
+                "Select at least one pending approval before "
+                "confirming handover"
+            ),
+            "code": "handover_selection_required",
+        }), 400
+
+    eligible = []
+    blocked = []
+
+    for name in collection_names:
+        query = {
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "status": "pending_approval",
+            "approver_employee_id": old_id,
+        }
+
+        if selected_ids:
+            query["_id"] = {
+                "$in": [ObjectId(value) for value in selected_ids]
+            }
+
+        matching_plans = list(db[name].find(query).limit(101))
+
+        if len(matching_plans) > 100:
+            return jsonify({
+                "message": (
+                    "More than 100 matching pending approvals were found "
+                    "in a collection. Narrow the request for review."
+                )
+            }), 409
+
+        for plan in matching_plans:
+            plan_id = str(plan["_id"])
+
+            if plan_id == new_id or (
+                str(plan.get("employee_id") or "") == new_id
+            ) or (
+                str(plan.get("team_leader_employee_id") or "") == new_id
+            ):
+                blocked.append({
+                    "collection": name,
+                    "plan_id": plan_id,
+                    "reason": "Self-approval is forbidden",
+                })
+                continue
+
+            kind = str(plan.get("approval_kind") or "").lower()
+
+            if name == "sprint_monthly_team_compilations":
+                kind = "ro"
+
+            if kind not in {"tl", "ro"}:
+                blocked.append({
+                    "collection": name,
+                    "plan_id": plan_id,
+                    "reason": "Approval type requires manual review",
+                })
+                continue
+
+            capability = (
+                "is_reporting_officer" if kind == "ro"
+                else "is_team_leader"
+            )
+
+            if not truthy(new_emp.get(capability)):
+                blocked.append({
+                    "collection": name,
+                    "plan_id": plan_id,
+                    "reason": "Replacement lacks reviewer capability",
+                })
+                continue
+
+            owner_id = (
+                plan.get("team_leader_employee_id")
+                if name == "sprint_monthly_team_compilations"
+                else plan.get("employee_id")
+            )
+
+            owner_oid = safe_object_id(owner_id)
+
+            owner = (
+                db.employees.find_one({
+                    "_id": owner_oid,
+                    "tenant_id": tenant_id,
+                    "is_deleted": {"$ne": True},
+                })
+                if owner_oid else None
+            )
+
+            if not successor_is_assigned_reviewer(owner, new_emp, kind):
+                blocked.append({
+                    "collection": name,
+                    "plan_id": plan_id,
+                    "reason": (
+                        "Replacement is not explicitly mapped as this "
+                        "employee's assigned reviewer. Update the reporting "
+                        "relationship before requesting handover."
+                    ),
+                })
+                continue
+
+            eligible.append({
+                "collection": name,
+                "plan_id": plan_id,
+                "approval_kind": kind,
+            })
+
+    if dry_run:
+        return jsonify({
+            "message": "Pending approval preview",
+            "dry_run": True,
+            "eligible": eligible,
+            "blocked": blocked,
+            "eligible_count": len(eligible),
+            "blocked_count": len(blocked),
+        }), 200
+
+    if not selected_ids:
+        return jsonify({
+            "message": "Explicit plan_ids required for reassignment"
+        }), 400
+
+    reviewed_ids = {item["plan_id"] for item in eligible}
+    if reviewed_ids != selected_ids or blocked:
+        return jsonify({
+            "message": "One or more selected plans cannot be transferred",
+            "eligible": eligible,
+            "blocked": blocked,
+        }), 409
+
+    transferred = []
+
+    for item in eligible:
+        collection = db[item["collection"]]
+        plan_oid = ObjectId(item["plan_id"])
+
+        result = collection.update_one(
+            {
+                "_id": plan_oid,
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+                "status": "pending_approval",
+                "approver_employee_id": old_id,
+            },
+            {
+                "$set": {
+                    "approver_employee_id": new_id,
+                    "updated_at": now(),
+                },
+                "$push": {
+                    "approval_history": {
+                        "action": "approver_reassigned",
+                        "from_employee_id": old_id,
+                        "to_employee_id": new_id,
+                        "actor_id": str(g.current_user["_id"]),
+                        "at": now(),
+                    }
+                },
+            },
+        )
+
+        if result.modified_count == 1:
+            transferred.append(item)
+
+    audit(
+        "handover_pending_approvals",
+        "users",
+        new_user_id,
+        {
+            "tenant_id": tenant_id,
+            "predecessor_employee_id": old_id,
+            "successor_employee_id": new_id,
+            "transferred": transferred,
+        },
+    )
+
+    return jsonify({
+        "message": "Pending approval handover processed",
+        "transferred": transferred,
+        "transferred_count": len(transferred),
+        "requested_count": len(selected_ids),
+        "historical_decisions_preserved": True,
+    }), 200
+
+
+@superadmin_bp.post("/users/role-succession")
+@roles_required("super_admin")
+def assign_successor_roles():
+    """Grant organizational roles to a distinct replacement employee."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+
+    predecessor_id = safe_object_id(data.get("predecessor_user_id"))
+    successor_id = safe_object_id(data.get("successor_user_id"))
+
+    if not predecessor_id or not successor_id:
+        return jsonify({"message": "Both user IDs are required"}), 400
+
+    if predecessor_id == successor_id:
+        return jsonify({
+            "message": "Replacement must be a different user"
+        }), 400
+
+    predecessor = db.users.find_one({
+        "_id": predecessor_id,
+        "is_deleted": {"$ne": True},
+    })
+    successor = db.users.find_one({
+        "_id": successor_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if not predecessor or not successor:
+        return jsonify({"message": "User account not found"}), 404
+
+    tenant_id = predecessor.get("tenant_id")
+
+    if (
+        not tenant_id
+        or successor.get("tenant_id") != tenant_id
+    ):
+        return jsonify({
+            "message": "Users must belong to the same company"
+        }), 403
+
+    old_employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": str(predecessor_id),
+        "is_deleted": {"$ne": True},
+    })
+
+    new_employee = db.employees.find_one({
+        "tenant_id": tenant_id,
+        "user_id": str(successor_id),
+        "is_deleted": {"$ne": True},
+    })
+
+    if not old_employee or not new_employee:
+        return jsonify({
+            "message": "Both employees must have linked profiles"
+        }), 409
+
+    if str(old_employee["_id"]) == str(new_employee["_id"]):
+        return jsonify({
+            "message": "Employee identities must be different"
+        }), 409
+
+    if not predecessor_is_explicit_alumni(old_employee):
+        return jsonify({
+            "message": "Predecessor must first be marked Alumni"
+        }), 409
+
+    if not employee_status_is_active(new_employee):
+        return jsonify({
+            "message": "Replacement employee must be active"
+        }), 409
+
+    if not truthy(successor.get("is_active")):
+        return jsonify({
+            "message": "Replacement login must be active"
+        }), 409
+
+    permitted_roles = {
+        "admin",
+        "hr",
+        "hr_admin",
+        "hr_manager",
+        "finance",
+        "accounts_finance",
+    }
+
+    previous_roles = set(normalize_roles(
+        predecessor.get("roles", [])
+    ))
+
+    eligible_roles = previous_roles.intersection(permitted_roles)
+
+    requested = data.get("roles")
+
+    if requested is None:
+        selected = eligible_roles
+    elif isinstance(requested, list):
+        selected = set(normalize_roles(requested))
+    else:
+        return jsonify({
+            "message": "Roles must be supplied as a list"
+        }), 400
+
+    if not selected or not selected.issubset(eligible_roles):
+        return jsonify({
+            "message": "Requested roles are not eligible for transfer",
+            "eligible_roles": sorted(eligible_roles),
+        }), 400
+
+    current_roles = set(normalize_roles(
+        successor.get("roles", [])
+    ))
+
+    new_roles = sorted(current_roles.union(selected))
+
+    result = db.users.update_one(
+        {
+            "_id": successor_id,
+            "tenant_id": tenant_id,
+            "is_active": True,
+            "is_deleted": {"$ne": True},
+        },
+        {
+            "$set": {
+                "roles": new_roles,
+                "updated_at": now(),
+                "updated_by": str(g.current_user["_id"]),
+            }
+        },
+    )
+
+    if result.matched_count != 1:
+        return jsonify({
+            "message": "Replacement account is no longer eligible"
+        }), 409
+
+    audit(
+        "assign_successor_roles",
+        "users",
+        successor_id,
+        {
+            "tenant_id": tenant_id,
+            "predecessor_user_id": str(predecessor_id),
+            "successor_user_id": str(successor_id),
+            "roles_granted": sorted(selected),
+        },
+    )
+
+    return jsonify({
+        "message": "Replacement roles assigned successfully",
+        "tenant_id": tenant_id,
+        "successor_user_id": str(successor_id),
+        "roles_granted": sorted(selected),
+        "effective_roles": new_roles,
+        "historical_records_unchanged": True,
+    }), 200
+
+
 @superadmin_bp.patch("/users/<user_id>")
 @roles_required("super_admin")
 def update_user(user_id):
@@ -2493,6 +3039,27 @@ def update_user(user_id):
 
     if not existing_user:
         return jsonify({"message": "User not found"}), 404
+
+    original_tenant_id = existing_user.get("tenant_id") or "sds"
+
+    lifecycle_employee = db.employees.find_one({
+        "user_id": user_id,
+        "tenant_id": original_tenant_id,
+        "is_deleted": {"$ne": True},
+    })
+
+    if (
+        "is_active" in data
+        and truthy(data.get("is_active"))
+        and lifecycle_employee
+        and not employee_status_is_active(lifecycle_employee)
+    ):
+        return jsonify({
+            "message": (
+                "This employee has left the organization. "
+                "An Alumni account cannot be reactivated from User Control."
+            )
+        }), 409
 
     user_update = {}
     incoming_photo = profile_photo_value(data)
@@ -2529,6 +3096,15 @@ def update_user(user_id):
 
     if "tenant_id" in data:
         tenant_id = normalize_text(data.get("tenant_id")).lower()
+
+        if tenant_id != original_tenant_id:
+            return jsonify({
+                "message": (
+                    "An existing user cannot be moved to another company "
+                    "through User Control. Use a separate, controlled "
+                    "migration process."
+                )
+            }), 409
 
         if not tenant_id:
             return jsonify({"message": "tenant_id is required"}), 400
@@ -2575,10 +3151,30 @@ def update_user(user_id):
 
     existing_emp = db.employees.find_one({
         "user_id": user_id,
+        "tenant_id": original_tenant_id,
         "is_deleted": {"$ne": True},
     })
 
     emp_update = build_employee_profile_payload(data)
+
+    if existing_emp:
+        # The profile builder supplies defaults for omitted fields.
+        # Never overwrite existing values during partial User Control edits.
+        derived_fields = {
+            "state": "branch",
+            "is_it_support_member": "is_it_support_head",
+        }
+
+        for field in tuple(emp_update):
+            if field in data:
+                continue
+
+            source_field = derived_fields.get(field)
+
+            if source_field and source_field in data:
+                continue
+
+            emp_update.pop(field, None)
 
     for identity_field in EMPLOYEE_IDENTITY_FIELDS:
         if identity_field not in data:
@@ -2634,7 +3230,7 @@ def update_user(user_id):
 
     updated_emp = None
 
-    if emp_update:
+    if emp_update and existing_emp:
         emp_update["updated_at"] = now()
         emp_update["updated_by"] = str(g.current_user["_id"])
 
@@ -2658,49 +3254,6 @@ def update_user(user_id):
                 }), 409
 
             updated_emp = db.employees.find_one({"_id": existing_emp["_id"]})
-        else:
-            if not incoming_photo:
-                photo = profile_photo_value(updated_user)
-                if photo:
-                    apply_profile_photo_aliases(emp_update, photo)
-
-            emp_update.setdefault("tenant_id", tenant_for_lookup)
-            emp_update.setdefault("user_id", user_id)
-            emp_update.setdefault("name", updated_user.get("name", ""))
-            emp_update.setdefault("employee_name", updated_user.get("name", ""))
-            emp_update.setdefault("email", updated_user.get("email", ""))
-            emp_update.setdefault("country", "India")
-            emp_update.setdefault("branch", "Assam(HO)")
-            emp_update.setdefault("state", normalize_state(emp_update.get("state") or emp_update.get("branch")))
-            emp_update.setdefault("role", "Employee")
-            emp_update.setdefault("shift", "General")
-            emp_update.setdefault("status", "Active")
-            emp_update.setdefault("is_team_leader", "false")
-            emp_update.setdefault("is_reporting_officer", "false")
-            emp_update.setdefault("is_it_support_head", "false")
-            emp_update.setdefault("is_it_support_member", "false")
-
-            if truthy(emp_update.get("is_it_support_head")):
-                emp_update["is_it_support_member"] = "true"
-
-            emp_update["created_at"] = now()
-            emp_update["created_by"] = str(g.current_user["_id"])
-            emp_update["is_deleted"] = False
-
-            emp_update["identity_alias_keys"] = employee_identity_alias_keys(emp_update)
-
-            try:
-                res = db.employees.insert_one(emp_update)
-            except DuplicateKeyError:
-                if user_update:
-                    db.users.replace_one({"_id": user_obj_id}, existing_user)
-
-                return jsonify({
-                    "message": "Employee ID/code is already assigned to another active employee in this company"
-                }), 409
-
-            updated_emp = db.employees.find_one({"_id": res.inserted_id})
-
         if updated_emp:
             photo = merge_profile_photo_from_sources(updated_emp, updated_user)
             if photo:
@@ -2928,35 +3481,30 @@ def list_tenant_users_for_user_control():
         user_id = str(user.get("_id"))
         email = normalize_email(user.get("email"))
 
-        emp_query = {
+        # Linked identity is authoritative.
+        emp = db.employees.find_one({
             "tenant_id": tenant_id,
             "is_deleted": {"$ne": True},
-            "$or": [
-                {"user_id": user_id},
-                {"user_id": user.get("_id")},
-            ],
-        }
+            "user_id": {"$in": [user_id, user.get("_id")]},
+        })
 
-        if email:
-            emp_query["$or"].extend([
-                {"email": email},
-                {"official_email": email},
-            ])
-
-        emp = db.employees.find_one(emp_query)
+        # Legacy fallback only for profiles with no assigned login.
+        # Never take ownership of another employee's account.
+        if not emp and email:
+            emp = db.employees.find_one({
+                "tenant_id": tenant_id,
+                "is_deleted": {"$ne": True},
+                "user_id": {"$in": ["", None]},
+                "$or": [
+                    {"email": email},
+                    {"official_email": email},
+                ],
+            })
 
         if emp:
             photo = merge_profile_photo_from_sources(emp, user)
 
-            if normalize_text(emp.get("user_id")) != user_id:
-                emp_update = {
-                    "user_id": user_id,
-                    "updated_at": now(),
-                }
-                apply_profile_photo_aliases(emp_update, photo)
-                db.employees.update_one({"_id": emp["_id"]}, {"$set": emp_update})
-                emp["user_id"] = user_id
-
+            # Listing users is read-only; account links are not rewritten.
             if photo:
                 apply_profile_photo_aliases(emp, photo)
                 apply_profile_photo_aliases(user, photo)
@@ -3255,6 +3803,21 @@ def update_tenant_user_status(user_id):
     if existing.get("role") == "super_admin" or "super_admin" in user_roles:
         return jsonify({"message": "Super admin user status cannot be changed here"}), 400
 
+    if is_active:
+        linked_employee = db.employees.find_one({
+            "tenant_id": existing.get("tenant_id"),
+            "user_id": str(user_obj_id),
+            "is_deleted": {"$ne": True},
+        })
+
+        if linked_employee and employee_is_departed(linked_employee):
+            return jsonify({
+                "message": (
+                    "Former employees cannot be reactivated. "
+                    "Create a separate account for the replacement."
+                )
+            }), 409
+
     status = "active" if is_active else "inactive"
 
     db.users.update_one(
@@ -3270,25 +3833,8 @@ def update_tenant_user_status(user_id):
         },
     )
 
-    db.employees.update_many(
-        {
-            "tenant_id": existing.get("tenant_id"),
-            "is_deleted": {"$ne": True},
-            "$or": [
-                {"user_id": str(user_obj_id)},
-                {"user_id": user_obj_id},
-                {"email": normalize_email(existing.get("email"))},
-                {"official_email": normalize_email(existing.get("email"))},
-            ],
-        },
-        {
-            "$set": {
-                "status": "Active" if is_active else "Inactive",
-                "updated_at": now(),
-                "updated_by": str(g.current_user["_id"]),
-            }
-        },
-    )
+    # Account access is separate from employment lifecycle.
+    # Never rewrite employee status through an account toggle.
 
     audit("update_tenant_user_status", "users", user_id, {"is_active": is_active})
 
@@ -3316,6 +3862,20 @@ def delete_tenant_user_from_control(user_id):
     if existing.get("role") == "super_admin" or "super_admin" in user_roles:
         return jsonify({"message": "Super admin user cannot be deleted"}), 400
 
+    linked_employee = db.employees.find_one({
+        "tenant_id": existing.get("tenant_id"),
+        "user_id": str(user_obj_id),
+        "is_deleted": {"$ne": True},
+    })
+
+    if linked_employee and employee_is_departed(linked_employee):
+        return jsonify({
+            "message": (
+                "Alumni accounts must be retained for historical records. "
+                "Their login is disabled automatically upon resignation."
+            )
+        }), 409
+
     delete_payload = {
         "is_deleted": True,
         "is_active": False,
@@ -3335,12 +3895,8 @@ def delete_tenant_user_from_control(user_id):
     db.employees.update_many(
         {
             "tenant_id": existing.get("tenant_id"),
-            "$or": [
-                {"user_id": str(user_obj_id)},
-                {"user_id": user_obj_id},
-                {"email": normalize_email(existing.get("email"))},
-                {"official_email": normalize_email(existing.get("email"))},
-            ],
+            "user_id": {"$in": [str(user_obj_id), user_obj_id]},
+            "is_deleted": {"$ne": True},
         },
         {
             "$set": {

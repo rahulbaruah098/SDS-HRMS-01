@@ -713,6 +713,23 @@ export default function UserControl() {
   const inlineFeedbackTimersRef = useRef({});
 
   const [rows, setRows] = useState([]);
+  const [successionCandidates, setSuccessionCandidates] = useState([]);
+  const [succession, setSuccession] = useState({
+    predecessor_user_id: '',
+    successor_user_id: '',
+    role: '',
+  });
+  const [successionSaving, setSuccessionSaving] = useState(false);
+  const [approvalPreview, setApprovalPreview] = useState(null);
+  const [approvalSelection, setApprovalSelection] = useState([]);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalFeedback, setApprovalFeedback] = useState('');
+
+  useEffect(() => {
+    setApprovalPreview(null);
+    setApprovalSelection([]);
+    setApprovalFeedback('');
+  }, [succession.predecessor_user_id, succession.successor_user_id, tenant]);
   const [tenants, setTenants] = useState([]);
   const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
   const [q, setQ] = useState('');
@@ -921,6 +938,7 @@ export default function UserControl() {
 
     if (!cleanTenant) {
       setRows([]);
+      setSuccessionCandidates([]);
       return [];
     }
 
@@ -933,6 +951,12 @@ export default function UserControl() {
 
     const items = data.items || [];
     setRows(items);
+
+    const allUsers = await getSuperAdminTenantUsers({
+      tenant_id: cleanTenant,
+    });
+    setSuccessionCandidates(allUsers.items || []);
+
     return items;
   }
 
@@ -1247,6 +1271,180 @@ export default function UserControl() {
       }, 100);
     } catch (error) {
       scopedAlerts(`user:${user?._id || 'unknown'}`).error(error.message || 'Unable to open edit form', 'Edit Open Failed');
+    }
+  }
+
+  async function submitRoleSuccession(event) {
+    event.preventDefault();
+
+    const { predecessor_user_id, successor_user_id, role } = succession;
+
+    if (!predecessor_user_id || !successor_user_id || !role) {
+      scopedAlerts('succession').warning(
+        'Select the outgoing employee, replacement and role.',
+        'Incomplete Handover'
+      );
+      return;
+    }
+
+    if (predecessor_user_id === successor_user_id) {
+      scopedAlerts('succession').warning(
+        'The replacement must be a different employee.',
+        'Invalid Selection'
+      );
+      return;
+    }
+
+    const outgoing = successionCandidates.find((item) => item._id === predecessor_user_id);
+    const incoming = successionCandidates.find((item) => item._id === successor_user_id);
+
+    if (!outgoing || !incoming || outgoing.tenant_id !== incoming.tenant_id) {
+      scopedAlerts('succession').warning(
+        'Both employees must belong to the selected company.',
+        'Invalid Company'
+      );
+      return;
+    }
+
+    const confirmed = await showConfirm(
+      `Grant ${role} access to ${incoming.name || incoming.email} as the ` +
+      `replacement for ${outgoing.name || outgoing.email}? ` +
+      'Historical records and previous approvals will remain unchanged.',
+      'Confirm Role Handover',
+      { danger: false, confirmLabel: 'Grant Role' }
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setSuccessionSaving(true);
+      const response = await api('/superadmin/users/role-succession', {
+        method: 'POST',
+        body: JSON.stringify({
+          predecessor_user_id,
+          successor_user_id,
+          roles: [role],
+        }),
+      });
+
+      scopedAlerts('succession').success(
+        response.message || 'Role granted successfully.',
+        'Handover Complete'
+      );
+
+      // Retain both employees for the pending-approval handover.
+      setSuccession((previous) => ({
+        ...previous,
+        role: '',
+      }));
+      setApprovalPreview(null);
+      setApprovalSelection([]);
+      setApprovalFeedback('');
+
+      await load(tenant);
+    } catch (error) {
+      scopedAlerts('succession').error(
+        error.message || 'Unable to complete role handover.',
+        'Handover Failed'
+      );
+    } finally {
+      setSuccessionSaving(false);
+    }
+  }
+
+  async function previewPendingApprovals() {
+    const { predecessor_user_id, successor_user_id } = succession;
+
+    if (!predecessor_user_id || !successor_user_id) return;
+
+    setApprovalBusy(true);
+    setApprovalPreview(null);
+    setApprovalSelection([]);
+    setApprovalFeedback('');
+
+    try {
+      const result = await api('/superadmin/users/pending-approval-handover', {
+        method: 'POST',
+        body: JSON.stringify({
+          predecessor_user_id,
+          successor_user_id,
+          dry_run: true,
+        }),
+      });
+
+      setApprovalPreview(result);
+      setApprovalFeedback(
+        `${result.eligible_count || 0} eligible pending approvals found. ` +
+        `${result.blocked_count || 0} require separate review.`
+      );
+    } catch (error) {
+      setApprovalFeedback(
+        error?.message || 'Could not preview pending approvals.'
+      );
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
+  async function confirmPendingApprovalHandover() {
+    if (!approvalPreview || !approvalSelection.length || approvalBusy) return;
+
+    const selected = (approvalPreview.eligible || []).filter(
+      (item) => approvalSelection.includes(item.plan_id)
+    );
+
+    if (selected.length !== approvalSelection.length) {
+      setApprovalFeedback('Selection changed. Preview again.');
+      return;
+    }
+
+    const outgoing = successionCandidates.find(
+      (item) => item._id === succession.predecessor_user_id
+    );
+    const incoming = successionCandidates.find(
+      (item) => item._id === succession.successor_user_id
+    );
+
+    const confirmed = await showConfirm(
+      `Reassign ${selected.length} pending Sprint approval(s) from ` +
+      `${outgoing?.name || 'the former employee'} to ` +
+      `${incoming?.name || 'the replacement'}? ` +
+      'Existing approval decisions and employee records will remain unchanged.',
+      'Confirm Pending Approval Handover',
+      { danger: false, confirmLabel: 'Reassign Selected' }
+    );
+
+    if (!confirmed) return;
+
+    setApprovalBusy(true);
+    setApprovalFeedback('');
+
+    try {
+      const result = await api('/superadmin/users/pending-approval-handover', {
+        method: 'POST',
+        body: JSON.stringify({
+          predecessor_user_id: succession.predecessor_user_id,
+          successor_user_id: succession.successor_user_id,
+          dry_run: false,
+          plan_ids: selected.map((item) => item.plan_id),
+        }),
+      });
+
+      const completed = Number(result.transferred_count || 0);
+
+      setApprovalFeedback(
+        `${completed} of ${selected.length} selected approvals reassigned.`
+      );
+      setApprovalPreview(null);
+      setApprovalSelection([]);
+    } catch (error) {
+      setApprovalFeedback(
+        error?.message || 'Approval handover failed. No success assumed.'
+      );
+      setApprovalPreview(null);
+      setApprovalSelection([]);
+    } finally {
+      setApprovalBusy(false);
     }
   }
 
@@ -3898,6 +4096,215 @@ export default function UserControl() {
               ›
             </button>
           </div>
+        </div>
+      </section>
+
+      <section className="panel" id="role-succession-section">
+        <div className="toolbar">
+          <div>
+            <h3>HR / Finance / Admin Role Handover</h3>
+            <p>
+              Grant organizational access to a separately created replacement
+              employee. Existing payroll and historical approvals stay with
+              the original employee.
+            </p>
+          </div>
+        </div>
+
+        <form className="dynamic-form" onSubmit={submitRoleSuccession}>
+          <label>
+            Outgoing Employee
+            <select
+              value={succession.predecessor_user_id}
+              onChange={(event) => setSuccession({
+                predecessor_user_id: event.target.value,
+                successor_user_id: '',
+                role: '',
+              })}
+              required
+            >
+              <option value="">Select former employee</option>
+              {successionCandidates.filter((item) => item.is_active === false).map((item) => (
+                <option key={item._id} value={item._id}>
+                  {item.name || item.email} ? {item.email}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Replacement Employee
+            <select
+              value={succession.successor_user_id}
+              onChange={(event) => setSuccession((previous) => ({
+                ...previous,
+                successor_user_id: event.target.value,
+              }))}
+              required
+            >
+              <option value="">Select active replacement</option>
+              {successionCandidates.filter((item) =>
+                item.is_active === true &&
+                item._id !== succession.predecessor_user_id
+              ).map((item) => (
+                <option key={item._id} value={item._id}>
+                  {item.name || item.email} ? {item.email}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Organizational Role
+            <select
+              value={succession.role}
+              onChange={(event) => setSuccession((previous) => ({
+                ...previous,
+                role: event.target.value,
+              }))}
+              required
+            >
+              <option value="">Select role to grant</option>
+              {[
+                'admin',
+                'hr',
+                'hr_admin',
+                'hr_manager',
+                'finance',
+                'accounts_finance',
+              ].filter((role) => {
+                const outgoing = successionCandidates.find(
+                  (item) => item._id === succession.predecessor_user_id
+                );
+                const roles = Array.isArray(outgoing?.roles)
+                  ? outgoing.roles
+                  : String(outgoing?.roles || '').split(',');
+                return roles.map((item) => item.trim()).includes(role);
+              }).map((role) => (
+                <option key={role} value={role}>
+                  {role.replaceAll('_', ' ').toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="uc-form-action-stack">
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                successionSaving ||
+                !succession.predecessor_user_id ||
+                !succession.successor_user_id ||
+                !succession.role
+              }
+            >
+              {successionSaving ? 'Assigning Role...' : 'Confirm Role Handover'}
+            </button>
+
+            <InlineActionMessage
+              feedback={inlineFeedback.succession}
+              onClose={() => clearInlineFeedback('succession')}
+            />
+          </div>
+        </form>
+        <div style={{
+          borderTop: '1px solid rgba(120,130,160,.22)',
+          paddingTop: 20,
+          marginTop: 22,
+        }}>
+          <h3>Pending Sprint Approval Handover</h3>
+          <p>
+            Preview and select unfinished approvals assigned to the former
+            employee. Completed approvals and historical decisions are retained.
+          </p>
+
+          <button
+            type="button"
+            className="secondary"
+            onClick={previewPendingApprovals}
+            disabled={
+              approvalBusy ||
+              !succession.predecessor_user_id ||
+              !succession.successor_user_id
+            }
+          >
+            {approvalBusy ? 'Processing...' : 'Preview Pending Approvals'}
+          </button>
+
+          {approvalFeedback && (
+            <p role="status" style={{ marginTop: 12 }}>
+              {approvalFeedback}
+            </p>
+          )}
+
+          {approvalPreview && (
+            <div style={{ marginTop: 16 }}>
+              <h4>
+                Eligible Pending Approvals
+                {' '}({approvalPreview.eligible_count || 0})
+              </h4>
+
+              {(approvalPreview.eligible || []).length === 0 ? (
+                <p>No eligible pending approvals to reassign.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {(approvalPreview.eligible || []).map((item) => (
+                    <label
+                      key={`${item.collection}:${item.plan_id}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={approvalSelection.includes(item.plan_id)}
+                        onChange={(event) => {
+                          setApprovalSelection((previous) =>
+                            event.target.checked
+                              ? [...previous, item.plan_id]
+                              : previous.filter((id) => id !== item.plan_id)
+                          );
+                        }}
+                      />
+                      <span>
+                        {item.collection.replaceAll('_', ' ')}
+                        {' ? '}
+                        {String(item.approval_kind || '').toUpperCase()}
+                        {' ? '}
+                        {item.plan_id}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {(approvalPreview.blocked || []).length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h4>Requires Separate Review</h4>
+                  {(approvalPreview.blocked || []).map((item) => (
+                    <p key={`${item.collection}:${item.plan_id}`}>
+                      {item.collection.replaceAll('_', ' ')}
+                      {' ? '}
+                      {item.reason}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="primary"
+                style={{ marginTop: 16 }}
+                onClick={confirmPendingApprovalHandover}
+                disabled={approvalBusy || approvalSelection.length === 0}
+              >
+                Reassign Selected ({approvalSelection.length})
+              </button>
+            </div>
+          )}
         </div>
       </section>
 
