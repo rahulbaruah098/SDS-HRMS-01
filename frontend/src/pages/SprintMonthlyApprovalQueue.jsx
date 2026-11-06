@@ -151,6 +151,8 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
         const id = planId(plan);
         const rows = planRows(plan);
         const isExpanded = Boolean(expanded[id]);
+        const department = [plan.department_name, plan.department]
+          .find(value => typeof value === 'string' && value.trim()) || '';
         return (
           <article className="sma-card" key={id}>
             <div className="sma-card-head">
@@ -160,6 +162,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
                   <span><CalendarDays size={14} aria-hidden="true" /> {valueOrDash(plan.month)}</span>
                   <span>{rows.length} {rows.length === 1 ? 'activity' : 'activities'}</span>
                   <span><UserRound size={14} aria-hidden="true" /> Employee: {valueOrDash(plan.employee_name || plan.requester_name || plan.employee?.name || 'Employee profile unavailable')}</span>
+                  {department && <span>Department: {department.trim()}</span>}
                   <span>{plan.reviewer_label || 'Assigned Approver'}</span>
                 </div>
               </div>

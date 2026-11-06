@@ -547,7 +547,7 @@ export default function SprintWeeklyPlanning() {
         .swp-page .swp-header > .btn { margin-left:auto; }
         .swp-page .swp-heading { min-width:0; }
         @media(max-width:700px) {
-          .swp-page .swp-header > .btn { margin-left:0; }
+          .swp-page .swp-header > .btn { margin-left:0; order:3; }
           .swp-page .swp-subtitle { order:2; }
         }
         .swp-page .card { min-width:0; border:1px solid var(--border, #dbe1e8); border-radius:16px; background:var(--surface, var(--card-bg, #fff)); }
