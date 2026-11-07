@@ -593,7 +593,14 @@ def leave_summary_for_employee(
         for date_key in overlap_working_dates:
             weight = default_weight
 
-            if entire_leave_is_lwp:
+            # New notice requests carry an explicit date ledger. It prevents
+            # assigning LWP to pre-notice days when a request crosses the boundary.
+            explicit_notice_dates = row.get("notice_lwp_dates")
+            if isinstance(explicit_notice_dates, list):
+                lwp_weight = weight if date_key in explicit_notice_dates else Decimal("0")
+                if lwp_weight > 0:
+                    remaining_explicit_lwp = max(Decimal("0"), remaining_explicit_lwp - lwp_weight)
+            elif entire_leave_is_lwp:
                 lwp_weight = weight
             elif remaining_explicit_lwp > 0:
                 lwp_weight = min(weight, remaining_explicit_lwp)
@@ -624,6 +631,28 @@ def leave_summary_for_employee(
                 "An approved leave request contains more LWP days than its "
                 f"working-day overlap in {period.period_key}."
             )
+
+    # Notice-period LWP is based ONLY on approved leave overlapping existing
+    # working dates. The guard leaves ordinary payroll behavior unchanged until
+    # the integration feature flag is explicitly enabled. Paid and LWP weights
+    # are reclassified rather than added to avoid double salary deductions.
+    from flask import current_app, has_app_context
+    if has_app_context() and current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        start = parse_date(employee.get("notice_start_date"))
+        end = parse_date(employee.get("last_working_day"))
+        policy = safe_str(employee.get("notice_policy"))
+        notice_state = normalize_key(employee.get("notice_status"))
+        if start and end and policy == "leave_during_notice_is_lwp" and notice_state not in {"cancelled", "waived"}:
+            for date_key, paid_weight in list(paid_by_date.items()):
+                leave_day = parse_date(date_key)
+                if start <= leave_day <= end and paid_weight > 0:
+                    lwp_by_date[date_key] = min(
+                        Decimal("1"),
+                        lwp_by_date.get(date_key, Decimal("0")) + paid_weight,
+                    )
+                    paid_by_date[date_key] = Decimal("0")
+            paid_by_date = {key: value for key, value in paid_by_date.items() if value > 0}
+            warnings.append("Approved leave during notice period classified as LWP for payroll.")
 
     paid_leave_days = sum(paid_by_date.values(), Decimal("0"))
     lwp_days = sum(lwp_by_date.values(), Decimal("0"))

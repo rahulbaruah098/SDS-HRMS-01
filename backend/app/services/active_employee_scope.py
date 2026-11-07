@@ -21,7 +21,19 @@ def active_employee_fields():
         "status": {"$not": ALUMNI_STATUS_REGEX},
         "employment_status": {"$not": ALUMNI_STATUS_REGEX},
         "employee_status": {"$not": ALUMNI_STATUS_REGEX},
-        "last_working_date": {"$in": [None, ""]},
+        "$or": [
+            {"last_working_date": {"$in": [None, ""]}},
+            {
+                "notice_status": {"$in": ["scheduled", "serving"]},
+                "notice_start_date": {"$exists": True, "$nin": [None, ""]},
+                "last_working_day": {
+                    "$gte": __import__(
+                        "app.services.notice_period_service",
+                        fromlist=["local_today"],
+                    ).local_today().isoformat()
+                },
+            },
+        ],
     }
 
 

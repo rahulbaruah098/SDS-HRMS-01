@@ -5124,6 +5124,42 @@ def leave_request_options():
     })
 
 
+def notice_leave_allocation_for_workflow(db, employee, leave_doc):
+    """Return a date-wise split, or None when Notice Period is disabled.
+
+    Use the same holiday eligibility check used by attendance reporting.
+    Fail closed when the legacy leave-day total differs from eligible days.
+    """
+    if not current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        return None
+    if not employee.get("notice_start_date") or not employee.get("last_working_day"):
+        return None
+    if str(employee.get("notice_status") or "").lower() not in (
+        "scheduled", "serving", "due_for_alumni"
+    ):
+        return None
+    if employee.get("notice_policy") != "leave_during_notice_is_lwp":
+        return None
+    from app.services.notice_leave_allocation import allocate_notice_leave
+    from app.routes.attendance import is_working_day_for_employee
+    first = parse_date(leave_doc.get("from_date"))
+    last = parse_date(leave_doc.get("to_date") or leave_doc.get("upto_date"))
+    if not first or not last or last < first or (last - first).days > 366:
+        raise ValueError("Invalid notice-period leave date range")
+    eligible = []
+    day = first
+    while day <= last:
+        if is_working_day_for_employee(db, employee, day):
+            eligible.append(day.isoformat())
+        day += timedelta(days=1)
+    return allocate_notice_leave(
+        employee, first, last, leave_doc.get("leave_days", 1), eligible,
+        is_half_day=(normalize_leave_type(leave_doc.get("leave_type")) == "HALF-DAY"
+                     or truthy(leave_doc.get("is_half_day"))
+                     or normalize_text(leave_doc.get("day_type")).lower() == "half_day"),
+    )
+
+
 @workflow_bp.get("/leave_requests")
 @tenant_module_required("apply_leave")
 @current_user_required
@@ -5317,12 +5353,23 @@ def apply_leave_request():
         except ValueError as exc:
             return jsonify({"message": str(exc)}), 400
     else:
+        try:
+            notice_allocation = notice_leave_allocation_for_workflow(db, employee, {
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "leave_days": leave_days,
+                "leave_type": leave_type,
+                "is_half_day": is_half_day_request,
+            })
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+        paid_check_days = float(notice_allocation["paid_days"]) if notice_allocation else leave_days
         sufficient, balance = has_sufficient_leave_balance(
             db,
             employee,
             leave_type,
-            leave_days,
-        )
+            paid_check_days,
+        ) if paid_check_days > 0 else (True, None)
 
         if not sufficient:
             return jsonify({
@@ -5419,6 +5466,160 @@ def apply_leave_request():
         "message": response_message,
         "item": clean_doc(enrich_leave_request_doc(doc)),
     }), 201
+
+
+class NoticeLeaveApprovalConflict(Exception):
+    """A safe, retryable notice-leave accounting conflict."""
+
+
+def finalize_notice_leave_transaction(
+    *, db, employee, existing, leave_obj_id, current_stage,
+    stage_fields, note, now, allocation, leave_type, leave_days,
+):
+    """Atomically approve and debit an eligible notice-period leave request.
+
+    All database reads/writes required for the balance debit and final status
+    transition share one MongoDB session. No external notification occurs here.
+    """
+    paid_days = float(allocation["paid_days"])
+    notice_lwp_days = float(allocation["notice_lwp_days"])
+    if paid_days < 0 or notice_lwp_days < 0 or abs(
+        paid_days + notice_lwp_days - leave_days
+    ) > 0.000001:
+        raise NoticeLeaveApprovalConflict("Leave allocation does not reconcile")
+
+    tenant = employee.get("tenant_id")
+    if not tenant or tenant != existing.get("tenant_id"):
+        raise NoticeLeaveApprovalConflict("Employee tenant mismatch")
+
+    if leave_type == "HALF-DAY" and paid_days not in (0.0, 0.5):
+        raise NoticeLeaveApprovalConflict("Invalid half-day allocation")
+
+    # A replica set alone is not sufficient: start_transaction and commit
+    # must both succeed; otherwise neither leave approval nor debit persists.
+    with db.client.start_session() as session:
+        with session.start_transaction():
+            active = db.leave_requests.find_one(
+                {
+                    "_id": leave_obj_id,
+                    "tenant_id": tenant,
+                    "status": {"$in": ["pending", "in_review"]},
+                    "approval_stage": existing.get("approval_stage"),
+                    "balance_deducted": {"$ne": True},
+                    "is_deleted": {"$ne": True},
+                },
+                session=session,
+            )
+            if active is None:
+                raise NoticeLeaveApprovalConflict(
+                    "Leave was already decided or changed; refresh"
+                )
+
+            current_employee = db.employees.find_one(
+                {"_id": employee["_id"], "tenant_id": tenant,
+                 "is_deleted": {"$ne": True}},
+                session=session,
+            )
+            if current_employee is None or any(
+                current_employee.get(field) != employee.get(field)
+                for field in (
+                    "notice_start_date", "last_working_day",
+                    "notice_status", "notice_policy", "notice_updated_at",
+                )
+            ):
+                raise NoticeLeaveApprovalConflict(
+                    "Notice schedule changed; refresh and re-approve"
+                )
+
+            deducted_type = leave_type
+            paid_balance_deducted = False
+            lwp_days = notice_lwp_days
+            if paid_days > 0:
+                choices = (["CL", "EL"] if leave_type == "HALF-DAY"
+                           else [leave_type])
+                found = False
+                for candidate in choices:
+                    balance = db.leave_balances.find_one(
+                        {"tenant_id": tenant,
+                         "employee_id": str(employee["_id"]),
+                         "leave_type": candidate,
+                         "is_deleted": {"$ne": True}},
+                        session=session,
+                    )
+                    if not balance or float(balance.get("available") or 0) < paid_days:
+                        continue
+                    updated_balance = db.leave_balances.update_one(
+                        {"_id": balance["_id"], "tenant_id": tenant,
+                         "available": {"$gte": paid_days}},
+                        {"$inc": {"available": -paid_days, "used": paid_days},
+                         "$set": {"updated_at": now}},
+                        session=session,
+                    )
+                    if updated_balance.modified_count != 1:
+                        raise NoticeLeaveApprovalConflict(
+                            "Leave balance changed; refresh and retry"
+                        )
+                    deducted_type = candidate
+                    paid_balance_deducted = True
+                    found = True
+                    break
+                if not found:
+                    if leave_type == "HALF-DAY":
+                        deducted_type = "LWP"
+                        lwp_days = leave_days
+                        # Explicit date ledger must follow the fallback LWP.
+                        allocation = {
+                            **allocation,
+                            "notice_lwp_dates": allocation["paid_dates"],
+                            "paid_dates": [],
+                        }
+                    else:
+                        raise NoticeLeaveApprovalConflict(
+                            "Insufficient paid leave balance at final approval"
+                        )
+
+            # A notice-only half day remains HALF-DAY with a precise LWP ledger.
+            if leave_type == "HALF-DAY" and paid_days == 0:
+                deducted_type = "HALF-DAY"
+
+            set_fields = {
+                "status": "approved",
+                "approval_stage": "approved",
+                "approval_stage_label": "Approved",
+                "decision_reason": note,
+                "approved_at": now,
+                "approved_by": str(g.current_user["_id"]),
+                "approved_by_name": (
+                    g.current_user.get("name") or g.current_user.get("email")
+                ),
+                "deducted_leave_type": deducted_type,
+                "deducted_leave_type_label": leave_type_label(deducted_type),
+                "balance_deducted": paid_balance_deducted,
+                "lwp_days": lwp_days,
+                "notice_lwp_dates": allocation["notice_lwp_dates"],
+                "notice_paid_dates": allocation["paid_dates"],
+                "notice_paid_balance_days": paid_days if paid_balance_deducted else 0.0,
+                "updated_at": now,
+                **stage_fields,
+            }
+            result = db.leave_requests.update_one(
+                {"_id": leave_obj_id, "tenant_id": tenant,
+                 "status": {"$in": ["pending", "in_review"]},
+                 "approval_stage": existing.get("approval_stage"),
+                 "balance_deducted": {"$ne": True}},
+                {"$set": set_fields,
+                 "$push": {"approval_history": create_leave_history_entry(
+                     "approved", current_stage, note
+                 )}},
+                session=session,
+            )
+            if result.modified_count != 1:
+                raise NoticeLeaveApprovalConflict(
+                    "Leave status changed concurrently; transaction rolled back"
+                )
+
+    # The transaction has committed before we fetch/publish the result.
+    return db.leave_requests.find_one({"_id": leave_obj_id, "tenant_id": tenant})
 
 
 @workflow_bp.patch("/leave_requests/<req_id>/decision")
@@ -5580,34 +5781,93 @@ def leave_decision(req_id):
     balance_deducted = False
     lwp_days = 0.0
 
+    # Notice allocation is computed before ANY balance write.
+    # Approved historical leave cannot be silently re-deducted here.
+    try:
+        notice_allocation = notice_leave_allocation_for_workflow(db, employee, existing)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    notice_paid_days = (float(notice_allocation["paid_days"])
+                        if notice_allocation is not None else leave_days)
+    notice_lwp_days = (float(notice_allocation["notice_lwp_days"])
+                       if notice_allocation is not None else 0.0)
+
+    if notice_allocation is not None and notice_lwp_days > 0 and leave_type == "COMP-OFF":
+        return jsonify({"message": "COMP-OFF across notice period requires HR review"}), 409
+
+    if notice_allocation is not None and existing.get("balance_deducted"):
+        return jsonify({"message": "Already-deducted leave requires balance reconciliation before notice approval"}), 409
+
+    # Notice-period final approval uses a single MongoDB transaction for both
+    # paid-leave balance accounting and final approval. Legacy approvals stay
+    # on their established path while Notice Period is disabled.
+    if notice_allocation is not None:
+        if leave_type == "COMP-OFF":
+            return jsonify({"message": "COMP-OFF notice leave requires HR review"}), 409
+        if leave_type not in LEAVE_TYPES_WITH_BALANCE and leave_type != "HALF-DAY":
+            return jsonify({"message": "Unsupported notice leave type requires HR review"}), 409
+        try:
+            updated = finalize_notice_leave_transaction(
+                db=db, employee=employee, existing=existing,
+                leave_obj_id=leave_obj_id, current_stage=current_stage,
+                stage_fields=current_stage_fields, note=note, now=now,
+                allocation=notice_allocation, leave_type=leave_type,
+                leave_days=leave_days,
+            )
+        except NoticeLeaveApprovalConflict as exc:
+            return jsonify({"message": str(exc)}), 409
+        except Exception:
+            current_app.logger.exception("Notice leave transaction failed")
+            return jsonify({"message": "Notice leave approval not completed; retry safely"}), 503
+
+        # External notifications and audit are deliberately outside the DB
+        # transaction. A retry sees an approved request and cannot deduct twice.
+        notify_employee_leave_decision(db, employee, updated, "approved")
+        notify_hr_leave_result(db, employee, updated, "approved")
+        audit("approve_leave_final", "leave_requests", req_id, data)
+        return jsonify({
+            "message": "Leave approved",
+            "item": clean_doc(enrich_leave_request_doc(updated)),
+        })
+
     if leave_type == "HALF-DAY" and not existing.get("balance_deducted"):
-        deduction_result = deduct_leave_balance(db, employee, existing)
-
-        deducted_leave_type = normalize_leave_type(
-            deduction_result.get("leave_type") if isinstance(deduction_result, dict) else leave_type
-        )
-        deducted_leave_type_label = leave_type_label(deducted_leave_type)
-
-        balance_deducted = deducted_leave_type in LEAVE_TYPES_WITH_BALANCE
-        lwp_days = leave_days if deducted_leave_type == "LWP" else 0.0
+        if notice_allocation is not None and notice_paid_days == 0:
+            deducted_leave_type = "HALF-DAY"
+            deducted_leave_type_label = leave_type_label("HALF-DAY")
+            lwp_days = notice_lwp_days
+        else:
+            deduction_result = deduct_leave_balance(db, employee, existing)
+            deducted_leave_type = normalize_leave_type(
+                deduction_result.get("leave_type") if isinstance(deduction_result, dict) else leave_type
+            )
+            deducted_leave_type_label = leave_type_label(deducted_leave_type)
+            balance_deducted = deducted_leave_type in LEAVE_TYPES_WITH_BALANCE
+            lwp_days = leave_days if deducted_leave_type == "LWP" else 0.0
 
     elif leave_type in LEAVE_TYPES_WITH_BALANCE and not existing.get("balance_deducted"):
-        sufficient, balance = has_sufficient_leave_balance(db, employee, leave_type, leave_days)
+        if notice_paid_days > 0:
+            sufficient, balance = has_sufficient_leave_balance(
+                db, employee, leave_type, notice_paid_days
+            )
+            if not sufficient:
+                return jsonify({
+                    "message": f"Insufficient {leave_type_label(leave_type)} balance at final approval",
+                    "available": float(balance.get("available", 0) or 0) if balance else 0,
+                }), 400
+            # Deduct paid working-day fraction, not the whole leave request.
+            paid_slice = {**existing, "leave_days": notice_paid_days}
+            result = deduct_leave_balance(db, employee, paid_slice)
+            if result is None:
+                return jsonify({"message": "Leave balance deduction failed; retry"}), 409
+            balance_deducted = True
+        lwp_days = notice_lwp_days
 
-        if not sufficient:
-            return jsonify({
-                "message": f"Insufficient {leave_type_label(leave_type)} balance at final approval",
-                "available": float(balance.get("available", 0) or 0) if balance else 0,
-            }), 400
-
-        deduct_leave_balance(db, employee, existing)
-        balance_deducted = True
-    
     elif leave_type == "COMP-OFF":
         balance_deducted = False
         deducted_leave_type = "COMP-OFF"
         deducted_leave_type_label = leave_type_label("COMP-OFF")
-        
+
     update_set = {
         "status": "approved",
         "approval_stage": "approved",
@@ -5619,6 +5879,11 @@ def leave_decision(req_id):
         "deducted_leave_type": deducted_leave_type,
         "deducted_leave_type_label": deducted_leave_type_label,
         "lwp_days": lwp_days,
+        **({
+            "notice_lwp_dates": notice_allocation["notice_lwp_dates"],
+            "notice_paid_dates": notice_allocation["paid_dates"],
+            "notice_paid_balance_days": notice_paid_days,
+        } if notice_allocation and notice_lwp_days > 0 else {}),
         "balance_deducted": balance_deducted,
         "compoff_status": "used" if leave_type == "COMP-OFF" else existing.get("compoff_status", ""),
         "updated_at": now,

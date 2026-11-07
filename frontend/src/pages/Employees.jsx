@@ -130,6 +130,8 @@ const EMPTY_ALUMNI_FORM = {
 };
 
 const EMPTY_RESIGN_FORM = {
+  exit_mode: 'immediate',
+  notice_start_date: '',
   last_working_date: '',
   resignation_date: '',
   resignation_reason: '',
@@ -2147,9 +2149,20 @@ export default function Employees({ user = {}, setPage } = {}) {
     }
   };
 
-  const openAlumniDetails = async (employee) => {
+  const openAlumniDetails = async (employee, syncUrl = true) => {
     const id = employeeRowId(employee);
     if (!id) return;
+
+    setActiveTab('alumni');
+    setActiveAlumniSection('employees');
+
+    if (syncUrl && typeof window !== 'undefined') {
+      const target = `/hrms/employees/alumni/${encodeURIComponent(id)}`;
+      if (window.location.pathname !== target) {
+        window.history.pushState({}, '', target);
+        window.dispatchEvent(new Event('app:navigation'));
+      }
+    }
 
     setViewingAlumni(employee);
     setAlumniDetailsError('');
@@ -2180,10 +2193,56 @@ export default function Employees({ user = {}, setPage } = {}) {
     }
   };
 
+
+  const closeAlumniDetails = () => {
+    setViewingAlumni(null);
+    setActiveTab('alumni');
+    setActiveAlumniSection('employees');
+
+    if (typeof window !== 'undefined') {
+      const target = '/hrms/employees';
+
+      if (window.location.pathname !== target) {
+        window.history.pushState({}, '', target);
+        window.dispatchEvent(new Event('app:navigation'));
+      }
+    }
+  };
+
+  useEffect(() => {
+    const readAlumniRoute = () => {
+      const match = window.location.pathname.match(
+        /^\/hrms\/employees\/alumni\/([a-f0-9]{24})\/?$/i
+      );
+
+      if (!match) {
+        setViewingAlumni(null);
+        return;
+      }
+
+      const id = match[1];
+      setActiveTab('alumni');
+      setActiveAlumniSection('employees');
+      openAlumniDetails({ _id: id }, false);
+    };
+
+    readAlumniRoute();
+
+    window.addEventListener('popstate', readAlumniRoute);
+
+    return () => {
+      window.removeEventListener('popstate', readAlumniRoute);
+    };
+    // Route listener is intentionally installed once per Employees mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const noticeFeatureEnabled = import.meta.env.VITE_NOTICE_PERIOD_ENABLED === 'true';
+
   const openResignModal = (employee) => {
     setResignEmployee(employee);
     const today = new Date().toISOString().slice(0, 10);
-    setResignForm({ ...EMPTY_RESIGN_FORM, last_working_date: today, resignation_date: today });
+    setResignForm({ ...EMPTY_RESIGN_FORM, last_working_date: today, resignation_date: today, notice_start_date: today });
   };
 
   const closeResignModal = () => {
@@ -2195,8 +2254,10 @@ export default function Employees({ user = {}, setPage } = {}) {
     const { name, value } = event.target;
     setResignForm((previous) => {
       const next = { ...previous, [name]: value };
-      if (name === 'last_working_date') next.resignation_date = previous.resignation_date || value;
-      if (name === 'resignation_date') next.last_working_date = previous.last_working_date || value;
+      if (next.exit_mode === 'immediate') {
+        if (name === 'last_working_date') next.resignation_date = previous.resignation_date || value;
+        if (name === 'resignation_date') next.last_working_date = previous.last_working_date || value;
+      }
       return next;
     });
   };
@@ -2225,17 +2286,32 @@ export default function Employees({ user = {}, setPage } = {}) {
     );
 
     try {
-      await markEmployeeAsResigned(id, {
-        ...resignForm,
-        status: 'Resigned',
-        employment_status: 'Resigned',
-      });
+      const schedulingNotice = noticeFeatureEnabled && resignForm.exit_mode === 'notice';
+      if (schedulingNotice) {
+        if (!resignForm.notice_start_date || !resignForm.last_working_date || !resignForm.resignation_date) {
+          throw new Error('Resignation date, notice start date and last working day are required.');
+        }
+        await api(`/notice-period/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            resignation_date: resignForm.resignation_date,
+            notice_start_date: resignForm.notice_start_date,
+            last_working_day: resignForm.last_working_date,
+          }),
+        });
+      } else {
+        await markEmployeeAsResigned(id, {
+          ...resignForm,
+          status: 'Resigned',
+          employment_status: 'Resigned',
+        });
+      }
       closeResignModal();
       await reloadAll();
       showMessage(
         'success',
-        'Employee moved to alumni successfully.',
-        'Employee Moved To Alumni',
+        schedulingNotice ? 'Notice period scheduled. Employee remains active until the approved last working day.' : 'Employee moved to alumni successfully.',
+        schedulingNotice ? 'Notice Period Scheduled' : 'Employee Moved To Alumni',
         { scope: 'master-actions' },
       );
     } catch (error) {
@@ -2249,6 +2325,1885 @@ export default function Employees({ user = {}, setPage } = {}) {
       setSaving(false);
     }
   };
+
+  if (viewingAlumni) {
+    return (
+      <section className="hrms-employees-page">
+        <style>{`
+        @keyframes hrmsEmployeeSpin {
+          to { transform: rotate(360deg); }
+        }
+
+        @keyframes hrmsEmployeeRefreshIdle {
+          0%, 84% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes hrmsEmployeeSectionReveal {
+          from { opacity: 0; transform: translateY(5px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes hrmsEmployeeModalFade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes hrmsEmployeeModalIn {
+          from { opacity: 0; transform: translateY(24px) scale(.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .hrms-employees-page {
+          --emp-ink: #101a3a;
+          --emp-soft: #5d6d8d;
+          --emp-violet: #4d77dd;
+          --emp-deep: #575092;
+          --emp-blue: #4d77dd;
+          --emp-cyan: #2eb2b9;
+          --emp-teal: #2eb2b9;
+          --emp-yellow: #d8ff43;
+          --emp-danger: #d84d68;
+          --emp-line: rgba(16, 26, 58, .14);
+          --emp-flat-blue: #b9d7ff;
+          --emp-flat-violet: #c9c0ff;
+          --emp-flat-teal: #aee6d9;
+          --emp-ease: cubic-bezier(.22, 1, .36, 1);
+
+          display: grid;
+          gap: clamp(16px, 1.8vw, 24px);
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          padding-bottom: max(18px, env(safe-area-inset-bottom));
+          color: var(--emp-ink);
+          background: transparent;
+          font-family: var(--yc-ui, var(--body), inherit);
+        }
+
+        .hrms-employees-page,
+        .hrms-employees-page * {
+          box-sizing: border-box;
+        }
+
+        .hrms-employees-page > *,
+        .hrms-employees-page section,
+        .hrms-employees-page article,
+        .hrms-employees-page form,
+        .hrms-employees-page nav,
+        .hrms-employees-page aside,
+        .hrms-employees-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .hrms-employees-page h1,
+        .hrms-employees-page h2,
+        .hrms-employees-page h3,
+        .hrms-employees-page h4,
+        .hrms-employees-page p,
+        .hrms-employees-page strong,
+        .hrms-employees-page small,
+        .hrms-employees-page span,
+        .hrms-employees-page td,
+        .hrms-employees-page th {
+          overflow-wrap: anywhere;
+        }
+
+        .hrms-employees-page button,
+        .hrms-employees-page input,
+        .hrms-employees-page select,
+        .hrms-employees-page textarea {
+          font: inherit;
+          max-width: 100%;
+        }
+
+        .hrms-employees-page button {
+          min-width: 0;
+          cursor: pointer;
+        }
+
+        .hrms-spin {
+          animation: hrmsEmployeeSpin 1s linear infinite;
+        }
+
+        .hrms-hero {
+          position: relative;
+          isolation: isolate;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(190px, 300px);
+          gap: clamp(20px, 3vw, 36px);
+          align-items: center;
+          min-height: 250px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            10px 12px 0 #b9d7ff,
+            0 26px 44px rgba(70, 92, 140, .12);
+        }
+
+        .hrms-hero-content {
+          display: contents;
+        }
+
+        .hrms-kicker,
+        .hrms-section-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: max-content;
+          max-width: 100%;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .hrms-kicker {
+          margin-bottom: 15px;
+          padding: 9px 13px;
+          box-shadow: 4px 5px 0 #575092;
+        }
+
+        .hrms-section-kicker {
+          margin-bottom: 10px;
+          padding: 7px 10px;
+          box-shadow: 3px 4px 0 #575092;
+        }
+
+        .hrms-hero h1 {
+          max-width: 900px;
+          margin: 0;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 77px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
+        }
+
+        .hrms-hero h1 em {
+          color: var(--emp-violet);
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 500;
+        }
+
+        .hrms-hero p {
+          max-width: 840px;
+          margin: 17px 0 0;
+          color: var(--emp-soft);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
+        }
+
+        .hrms-hero-actions {
+          display: flex;
+          justify-content: flex-end;
+          width: 100%;
+        }
+
+        .hrms-action-stack {
+          width: min(320px, 100%);
+          display: grid;
+          gap: 9px;
+        }
+
+        .hrms-refresh-btn,
+        .hrms-primary-btn,
+        .hrms-secondary-btn,
+        .hrms-danger-soft-btn,
+        .hrms-tab-btn,
+        .hrms-alumni-subtab-btn,
+        .hrms-page-button,
+        .hrms-page-number,
+        .hrms-inline-feedback-close {
+          appearance: none;
+          font-weight: 900;
+          transition:
+            transform 190ms ease,
+            box-shadow 190ms ease,
+            filter 190ms ease,
+            opacity 190ms ease;
+        }
+
+        .hrms-refresh-btn {
+          min-height: 54px;
+          padding: 10px 18px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 15px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow:
+            6px 7px 0 #575092,
+            0 14px 25px rgba(67, 116, 170, .12);
+          white-space: nowrap;
+        }
+
+        .hrms-refresh-btn svg:first-child {
+          animation: hrmsEmployeeRefreshIdle 4.2s linear infinite;
+        }
+
+        .hrms-refresh-btn:disabled svg:first-child {
+          animation: hrmsEmployeeSpin 1s linear infinite;
+        }
+
+        .hrms-refresh-btn:hover:not(:disabled),
+        .hrms-primary-btn:hover:not(:disabled),
+        .hrms-secondary-btn:hover:not(:disabled),
+        .hrms-danger-soft-btn:hover:not(:disabled),
+        .hrms-page-button:hover:not(:disabled),
+        .hrms-page-number:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .hrms-refresh-btn:disabled,
+        .hrms-primary-btn:disabled,
+        .hrms-secondary-btn:disabled,
+        .hrms-danger-soft-btn:disabled,
+        .hrms-page-button:disabled,
+        .hrms-page-number:disabled {
+          opacity: .58;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .hrms-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .hrms-stat-card {
+          min-width: 0;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow:
+            7px 9px 0 #b9d7ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+          transition: transform 190ms ease;
+        }
+
+        .hrms-stat-card:nth-child(2) {
+          background: #eaf8f4;
+          box-shadow:
+            7px 9px 0 #aee6d9,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:nth-child(3) {
+          background: #fff4d5;
+          box-shadow:
+            7px 9px 0 #ffe0a5,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:nth-child(4) {
+          background: #f1efff;
+          box-shadow:
+            7px 9px 0 #c9c0ff,
+            0 18px 30px rgba(34, 38, 110, .09);
+        }
+
+        .hrms-stat-card:hover {
+          transform: translateY(-4px);
+        }
+
+        .hrms-stat-card span {
+          display: block;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
+        }
+
+        .hrms-stat-card strong {
+          display: block;
+          margin-top: 10px;
+          color: var(--emp-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(30px, 3vw, 43px);
+          line-height: 1;
+        }
+
+        .hrms-section-tabs-holder {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .hrms-tabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          width: 100%;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow:
+            6px 7px 0 #c4ccff,
+            0 16px 28px rgba(34, 38, 110, .08);
+        }
+
+        .hrms-tab-btn {
+          min-width: 0;
+          min-height: 62px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: center;
+          padding: 11px 14px;
+          border: 1px solid rgba(77, 119, 221, .22);
+          border-radius: 16px;
+          color: #4767b4;
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
+          box-shadow: 3px 4px 0 rgba(87, 80, 146, .16);
+          text-align: left;
+        }
+
+        .hrms-tab-btn:hover {
+          transform: translateY(-2px);
+          border-color: rgba(46, 178, 185, .46);
+        }
+
+        .hrms-tab-btn.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .hrms-tab-copy {
+          min-width: 0;
+          display: grid;
+          gap: 3px;
+        }
+
+        .hrms-tab-copy strong {
+          font-size: 12px;
+          font-weight: 950;
+          line-height: 1.2;
+        }
+
+        .hrms-tab-copy small {
+          color: currentColor;
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.35;
+          opacity: .78;
+        }
+
+        .hrms-tab-count {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 7px;
+          display: inline-grid;
+          place-items: center;
+          border-radius: 999px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(52, 43, 120, .10);
+          font-size: 9px;
+          font-weight: 950;
+        }
+
+        .hrms-section-content {
+          width: 100%;
+          min-width: 0;
+          animation: hrmsEmployeeSectionReveal 220ms ease both;
+        }
+
+        .hrms-panel,
+        .hrms-form-card {
+          min-width: 0;
+          width: 100%;
+          padding: clamp(18px, 2vw, 28px);
+          overflow: hidden;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: #fff;
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
+        }
+
+        .hrms-section-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          width: 100%;
+          min-width: 0;
+          margin-bottom: 18px;
+        }
+
+        .hrms-section-heading > div {
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+
+        .hrms-section-heading h3,
+        .hrms-section-heading h2 {
+          margin: 0;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(25px, 2.3vw, 37px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.045em;
+        }
+
+        .hrms-section-heading p {
+          margin: 8px 0 0;
+          color: var(--emp-soft);
+          font-size: 13px;
+          line-height: 1.58;
+        }
+
+        .hrms-actions,
+        .hrms-row-actions,
+        .hrms-form-actions,
+        .hrms-modal-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .hrms-primary-btn,
+        .hrms-secondary-btn,
+        .hrms-danger-soft-btn {
+          min-height: 44px;
+          padding: 9px 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border-radius: 15px;
+        }
+
+        .hrms-primary-btn {
+          border: 0;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 5px 6px 0 #575092;
+        }
+
+        .hrms-secondary-btn {
+          border: 1px solid rgba(77, 119, 221, .18);
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        .hrms-danger-soft-btn {
+          border: 1px solid rgba(216, 77, 104, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 4px 5px 0 #f2c2cc;
+        }
+
+        .hrms-primary-btn.compact,
+        .hrms-secondary-btn.compact,
+        .hrms-danger-soft-btn.compact {
+          min-height: 36px;
+          padding: 7px 10px;
+          border-radius: 11px;
+          font-size: 10px;
+        }
+
+        .hrms-plan-alert {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          flex-wrap: wrap;
+          width: 100%;
+          padding: 15px 16px;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 18px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+          font-size: 11px;
+          line-height: 1.55;
+        }
+
+        .hrms-plan-alert.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 4px 5px 0 #aee6d9;
+        }
+
+        .hrms-plan-alert.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 4px 5px 0 #f2c2cc;
+        }
+
+        .hrms-plan-alert strong {
+          display: block;
+          margin-bottom: 4px;
+          font-weight: 950;
+        }
+
+        .hrms-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .hrms-inline-feedback.success {
+          border-color: rgba(4, 120, 87, .18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .hrms-inline-feedback.warning {
+          border-color: rgba(154, 104, 23, .18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .hrms-inline-feedback.error {
+          border-color: rgba(162, 52, 77, .18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .hrms-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 22px;
+        }
+
+        .hrms-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .hrms-inline-feedback-copy strong,
+        .hrms-inline-feedback-copy span {
+          display: block;
+        }
+
+        .hrms-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .hrms-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .hrms-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          display: inline-grid;
+          place-items: center;
+          margin: -2px -3px -2px 0;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          box-shadow: none;
+          font-size: 17px;
+          line-height: 1;
+        }
+
+        .hrms-inline-feedback-close:hover {
+          transform: none;
+          filter: none;
+          background: #fff;
+        }
+
+        .hrms-filter-grid {
+          display: grid;
+          grid-template-columns:
+            auto
+            minmax(220px, 1.45fr)
+            repeat(4, minmax(135px, .9fr))
+            auto;
+          gap: 10px;
+          align-items: stretch;
+          width: 100%;
+          min-width: 0;
+          margin-bottom: 18px;
+          padding: 12px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+        }
+
+        .hrms-filter-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          align-self: center;
+          color: #5d6785;
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .hrms-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .hrms-search-wrap svg {
+          position: absolute;
+          left: 13px;
+          top: 50%;
+          color: #6c7da2;
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .hrms-search-wrap input {
+          padding-left: 38px;
+        }
+
+        .hrms-filter-grid input,
+        .hrms-filter-grid select,
+        .hrms-field input,
+        .hrms-field select,
+        .hrms-field textarea,
+        .hrms-searchable-field input,
+        .hrms-searchable-field select,
+        .hrms-modal input,
+        .hrms-modal select,
+        .hrms-modal textarea {
+          width: 100%;
+          min-width: 0;
+          min-height: 49px;
+          padding: 0 14px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 15px;
+          outline: 0;
+          color: var(--emp-ink);
+          background: rgba(255, 255, 255, .96);
+          font-size: 13px;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
+        }
+
+        .hrms-field textarea,
+        .hrms-modal textarea {
+          min-height: 120px;
+          padding: 14px;
+          resize: vertical;
+        }
+
+        .hrms-filter-grid input:focus,
+        .hrms-filter-grid select:focus,
+        .hrms-field input:focus,
+        .hrms-field select:focus,
+        .hrms-field textarea:focus,
+        .hrms-searchable-field input:focus,
+        .hrms-searchable-field select:focus {
+          border-color: rgba(77, 119, 221, .65);
+          box-shadow:
+            4px 5px 0 rgba(87, 80, 146, .14),
+            0 0 0 4px rgba(77, 119, 221, .08);
+          transform: translateY(-1px);
+        }
+
+        .hrms-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          min-width: 0;
+          margin: 0 0 15px;
+          padding: 12px 13px;
+          border: 1px solid rgba(171, 181, 211, .52);
+          border-radius: 16px;
+          background: #f8f9ff;
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .07);
+        }
+
+        .hrms-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          min-width: 0;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .hrms-pagination-copy strong {
+          color: var(--emp-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .hrms-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+          max-width: 100%;
+          flex-wrap: wrap;
+        }
+
+        .hrms-page-size-control {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .hrms-page-size-control select {
+          min-width: 108px;
+          height: 38px;
+          padding: 0 30px 0 10px;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .hrms-page-button {
+          min-width: 78px;
+          height: 38px;
+          padding: 0 11px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+          font-size: 10px;
+        }
+
+        .hrms-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .hrms-page-number {
+          width: 36px;
+          height: 36px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(77, 119, 221, .20);
+          border-radius: 11px;
+          color: #4767b4;
+          background: #fff;
+          box-shadow: 2px 3px 0 rgba(87, 80, 146, .12);
+          font-size: 10px;
+        }
+
+        .hrms-page-number.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #575092;
+        }
+
+        .hrms-page-ellipsis {
+          width: 20px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .hrms-page-indicator {
+          min-width: 82px;
+          color: var(--emp-soft);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
+        }
+
+        .hrms-table-wrap {
+          width: 100%;
+          min-width: 0;
+          overflow-x: auto;
+          overflow-y: hidden;
+          border: 1px solid rgba(171, 181, 211, .54);
+          border-radius: 18px;
+          background: #fff;
+          scrollbar-width: thin;
+          scrollbar-color: #b9c7e8 #f4f6fb;
+          cursor: grab;
+        }
+
+        .hrms-table-wrap.is-dragging {
+          cursor: grabbing;
+          user-select: none;
+        }
+
+        .hrms-table {
+          width: 100%;
+          min-width: 1050px;
+          border-collapse: separate;
+          border-spacing: 0;
+          color: var(--emp-ink);
+        }
+
+        .hrms-table th {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          padding: 12px 13px;
+          border-bottom: 1px solid rgba(171, 181, 211, .55);
+          color: #5d6785;
+          background: #f8f9ff;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-align: left;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .hrms-table td {
+          padding: 13px;
+          border-bottom: 1px solid rgba(171, 181, 211, .32);
+          color: #384564;
+          font-size: 11px;
+          line-height: 1.45;
+          vertical-align: middle;
+        }
+
+        .hrms-table tbody tr {
+          transition: background 170ms ease;
+        }
+
+        .hrms-table tbody tr:hover {
+          background: #fbfcff;
+        }
+
+        .hrms-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .hrms-table td > strong,
+        .hrms-person-cell strong {
+          display: block;
+          color: var(--emp-ink);
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .hrms-table td > small,
+        .hrms-person-cell small {
+          display: block;
+          margin-top: 3px;
+          color: #74809c;
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .hrms-table-action {
+          min-width: 180px;
+        }
+
+        .hrms-person-cell {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 190px;
+        }
+
+        .hrms-employee-avatar {
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 11px;
+          font-weight: 950;
+          object-fit: cover;
+        }
+
+        .hrms-pill {
+          display: inline-flex;
+          align-items: center;
+          padding: 6px 9px;
+          border-radius: 999px;
+          font-size: 9px;
+          font-weight: 900;
+          text-transform: capitalize;
+          white-space: nowrap;
+        }
+
+        .hrms-pill-green {
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 2px 3px 0 #aee6d9;
+        }
+
+        .hrms-pill-red {
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 2px 3px 0 #f2c2cc;
+        }
+
+        .hrms-empty-state {
+          min-height: 180px;
+          padding: 24px;
+          display: grid;
+          place-items: center;
+          gap: 8px;
+          border: 1px dashed rgba(77, 119, 221, .28);
+          border-radius: 20px;
+          color: var(--emp-soft);
+          background: #fafbff;
+          text-align: center;
+        }
+
+        .hrms-form-card {
+          display: grid;
+          gap: 18px;
+        }
+
+        .hrms-form-section {
+          padding: clamp(15px, 1.8vw, 20px);
+          border: 1px solid rgba(77, 119, 221, .16);
+          border-radius: 20px;
+          background: linear-gradient(135deg, #f8fbff 0%, #fbfffe 100%);
+          box-shadow: 4px 5px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-form-section h4 {
+          margin: 0 0 14px;
+          color: #4767b4;
+          font-size: 11px;
+          font-weight: 950;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .hrms-form-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .hrms-field {
+          display: block;
+          min-width: 0;
+        }
+
+        .hrms-field > span {
+          display: block;
+          margin-bottom: 8px;
+          color: #303b5b;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .hrms-field > span b {
+          margin-left: 3px;
+          color: var(--emp-danger);
+        }
+
+        .hrms-searchable-field {
+          display: grid;
+          gap: 8px;
+        }
+
+        .hrms-searchable-field > span {
+          margin-bottom: 0;
+        }
+
+        .hrms-checkbox-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .hrms-checkbox {
+          min-height: 48px;
+          padding: 12px 14px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          border: 1px solid rgba(77, 119, 221, .16);
+          border-radius: 15px;
+          color: #384564;
+          background: #f8f9ff;
+          font-size: 11px;
+          font-weight: 850;
+        }
+
+        .hrms-checkbox input {
+          width: 16px;
+          min-width: 16px;
+          height: 16px;
+          accent-color: #4d77dd;
+        }
+
+        .hrms-form-note {
+          color: #6b7897;
+          font-size: 10px;
+          line-height: 1.55;
+        }
+
+        .hrms-form-actions {
+          padding-top: 2px;
+        }
+
+        .hrms-alumni-layout {
+          display: grid;
+          gap: 16px;
+        }
+
+        .hrms-alumni-subtabs {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          width: 100%;
+          padding: 10px;
+          border: 1px solid rgba(171, 181, 211, .55);
+          border-radius: 18px;
+          background: #fff;
+          box-shadow: 4px 5px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-alumni-subtab-btn {
+          min-height: 48px;
+          padding: 10px 13px;
+          border: 1px solid rgba(77, 119, 221, .18);
+          border-radius: 14px;
+          color: #4767b4;
+          background: #f0f5ff;
+          box-shadow: 3px 4px 0 rgba(87, 80, 146, .10);
+        }
+
+        .hrms-alumni-subtab-btn.active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+        }
+
+        .hrms-alumni-section {
+          animation: hrmsEmployeeSectionReveal 220ms ease both;
+        }
+
+        .hrms-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 980;
+          padding: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(16, 26, 58, .48);
+          backdrop-filter: blur(7px);
+          animation: hrmsEmployeeModalFade 180ms ease both;
+        }
+
+        .hrms-modal {
+          width: min(1120px, calc(100vw - 36px));
+          max-height: calc(100dvh - 36px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: clamp(16px, 2vw, 22px);
+          border: 1px solid rgba(255, 255, 255, .70);
+          border-radius: 28px;
+          background: #fff;
+          box-shadow: 0 30px 80px rgba(16, 26, 58, .30);
+          animation: hrmsEmployeeModalIn 230ms var(--emp-ease) both;
+        }
+
+        .hrms-modal.small {
+          width: min(620px, calc(100vw - 36px));
+          padding: clamp(22px, 3vw, 32px);
+        }
+
+        .hrms-modal.small > h3 {
+          margin: 0;
+          color: var(--emp-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(28px, 3vw, 40px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.04em;
+        }
+
+        .hrms-modal.small > p {
+          margin: 12px 0 0;
+          color: var(--emp-soft);
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .hrms-modal-grid {
+          margin-top: 20px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .hrms-modal-actions {
+          margin-top: 18px;
+        }
+
+        @media (max-width: 1366px) {
+          .hrms-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-filter-grid {
+            grid-template-columns:
+              auto
+              minmax(210px, 1.35fr)
+              repeat(3, minmax(130px, .85fr));
+          }
+
+          .hrms-filter-grid > select:nth-of-type(4),
+          .hrms-filter-grid > .hrms-secondary-btn {
+            grid-column: span 1;
+          }
+
+          .hrms-form-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 1024px) {
+          .hrms-hero {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-hero-actions {
+            justify-content: flex-start;
+          }
+
+          .hrms-action-stack {
+            width: min(360px, 100%);
+          }
+
+          .hrms-tabs {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-filter-label {
+            grid-column: 1 / -1;
+          }
+
+          .hrms-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .hrms-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .hrms-employees-page {
+            gap: 16px;
+          }
+
+          .hrms-hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow:
+              6px 7px 0 #b9d7ff,
+              0 18px 30px rgba(34, 38, 110, .10);
+          }
+
+          .hrms-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
+          .hrms-stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-panel,
+          .hrms-form-card {
+            padding: 18px;
+            border-radius: 22px;
+            box-shadow:
+              5px 6px 0 #c4ccff,
+              0 17px 28px rgba(34, 38, 110, .09);
+          }
+
+          .hrms-section-heading {
+            flex-direction: column;
+          }
+
+          .hrms-actions {
+            width: 100%;
+            justify-content: flex-start;
+          }
+
+          .hrms-filter-grid,
+          .hrms-form-grid,
+          .hrms-checkbox-grid,
+          .hrms-modal-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-filter-label {
+            grid-column: auto;
+          }
+
+          .hrms-filter-grid > * {
+            grid-column: auto !important;
+          }
+
+          .hrms-pagination-controls {
+            align-items: stretch;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .hrms-page-size-control,
+          .hrms-page-numbers,
+          .hrms-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .hrms-page-size-control {
+            justify-content: space-between;
+          }
+
+          .hrms-page-size-control select {
+            flex: 1 1 auto;
+          }
+
+          .hrms-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .hrms-page-indicator {
+            text-align: center;
+          }
+
+          .hrms-page-button {
+            width: 100%;
+          }
+
+          .hrms-alumni-subtabs {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-table-wrap {
+            overflow: visible;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            cursor: default;
+          }
+
+          .hrms-table {
+            min-width: 0;
+            border-collapse: separate;
+            border-spacing: 0 12px;
+          }
+
+          .hrms-table thead {
+            display: none;
+          }
+
+          .hrms-table,
+          .hrms-table tbody,
+          .hrms-table tr,
+          .hrms-table td {
+            display: block;
+            width: 100%;
+          }
+
+          .hrms-table tbody tr {
+            overflow: hidden;
+            border: 1px solid rgba(171, 181, 211, .58);
+            border-radius: 18px;
+            background: #fff;
+            box-shadow:
+              4px 5px 0 #c4ccff,
+              0 14px 24px rgba(34, 38, 110, .07);
+          }
+
+          .hrms-table td {
+            min-height: 46px;
+            padding: 11px 13px 11px 42%;
+            border-bottom: 1px solid rgba(171, 181, 211, .28);
+            position: relative;
+          }
+
+          .hrms-table td::before {
+            content: attr(data-label);
+            position: absolute;
+            top: 12px;
+            left: 13px;
+            width: 34%;
+            color: #5d6785;
+            font-size: 8px;
+            font-weight: 950;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+          }
+
+          .hrms-table td:last-child {
+            border-bottom: 0;
+          }
+
+          .hrms-table-action {
+            min-width: 0;
+          }
+
+          .hrms-person-cell {
+            min-width: 0;
+          }
+
+          .hrms-row-actions {
+            justify-content: flex-start;
+          }
+
+          .hrms-modal-backdrop {
+            align-items: flex-end;
+            padding: 0;
+          }
+
+          .hrms-modal,
+          .hrms-modal.small {
+            width: 100%;
+            max-width: 100%;
+            max-height: calc(100dvh - max(8px, env(safe-area-inset-top)));
+            margin: 0;
+            padding:
+              16px
+              max(16px, env(safe-area-inset-right))
+              max(16px, env(safe-area-inset-bottom))
+              max(16px, env(safe-area-inset-left));
+            border-radius: 24px 24px 0 0;
+            box-shadow: 0 -18px 60px rgba(34, 38, 110, .24);
+          }
+        }
+
+        @media (max-width: 520px) {
+          .hrms-hero {
+            padding: 16px;
+          }
+
+          .hrms-hero h1 {
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .hrms-stats-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-stat-card {
+            min-height: 102px;
+          }
+
+          .hrms-panel,
+          .hrms-form-card {
+            padding: 15px;
+          }
+
+          .hrms-tabs {
+            padding: 9px;
+            border-radius: 18px;
+          }
+
+          .hrms-tab-btn {
+            min-height: 58px;
+            padding: 10px 11px;
+          }
+
+          .hrms-filter-grid {
+            padding: 10px;
+          }
+
+          .hrms-actions,
+          .hrms-row-actions,
+          .hrms-form-actions,
+          .hrms-modal-actions {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .hrms-actions button,
+          .hrms-row-actions button,
+          .hrms-form-actions button,
+          .hrms-modal-actions button,
+          .hrms-refresh-btn {
+            width: 100%;
+          }
+
+          .hrms-table td {
+            padding-left: 13px;
+            padding-top: 30px;
+          }
+
+          .hrms-table td::before {
+            top: 9px;
+            width: calc(100% - 26px);
+          }
+
+          .hrms-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (orientation: landscape) and (max-height: 600px) {
+          .hrms-modal,
+          .hrms-modal.small {
+            max-height: calc(100dvh - 8px);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .hrms-employees-page *,
+          .hrms-employees-page *::before,
+          .hrms-employees-page *::after {
+            animation: none !important;
+            transition: none !important;
+            scroll-behavior: auto !important;
+          }
+        }
+      `}</style>
+        <div
+                className="hrms-alumni-page-shell"
+
+
+                aria-label="Alumni employee details"
+
+              data-alumni-details-workspace="true"
+          data-alumni-page-route="true"
+
+
+              style={{
+                position: 'relative',
+                minHeight: '100vh',
+
+                display: 'flex',
+                alignItems: 'stretch',
+                justifyContent: 'center',
+                overflow: 'auto',
+                padding: 16,
+              }}
+              role="main"
+>
+          <div className="hrms-modal" role="region"
+            aria-label="Alumni employee details"
+            style={{ width: '100%', maxWidth: 1400, maxHeight: 'none', overflowY: 'visible' }}>
+            <div className="hrms-section-heading">
+              <div>
+                <span className="hrms-section-kicker">Alumni Record</span>
+                <h3>{viewingAlumni.name || viewingAlumni.employee_name || 'Former Employee'}</h3>
+                <p>Read-only employee profile and exit details</p>
+                {loadingAlumniDetails ? (
+                  <p role="status">Loading full employee record...</p>
+                ) : null}
+                {alumniDetailsError ? (
+                  <p role="alert" style={{ color: '#b42318' }}>
+                    {alumniDetailsError}
+                  </p>
+                ) : null}
+              </div>
+              <button type="button" className="hrms-secondary-btn"
+                onClick={() => closeAlumniDetails()}>
+                Close
+              </button>
+            </div>
+            {[
+              ['Personal Details', [
+                ['Employee Name', viewingAlumni.name || viewingAlumni.employee_name],
+                ['Employee Code', viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id],
+                ['Email', viewingAlumni.email || viewingAlumni.official_email],
+                ['Phone', viewingAlumni.phone || viewingAlumni.mobile],
+                ['Date of Birth', viewingAlumni.date_of_birth || viewingAlumni.dob],
+                ['Gender', viewingAlumni.gender],
+                ['Address', viewingAlumni.address],
+                ['State', viewingAlumni.state],
+              ]],
+              ['Employment Details', [
+                ['Organisation', viewingAlumni.organisation || viewingAlumni.organization],
+                ['Department', viewingAlumni.department],
+                ['Designation', viewingAlumni.designation],
+                ['Joining Date', viewingAlumni.joining_date || viewingAlumni.date_of_joining],
+                ['Employee Type', viewingAlumni.employee_type],
+                ['Job Type', viewingAlumni.job_type],
+                ['Team Leader', viewingAlumni.team_leader_name],
+                ['Reporting Officer', viewingAlumni.reporting_officer_name],
+              ]],
+              ['Exit Details', [
+                ['Employment Status', viewingAlumni.employment_status || viewingAlumni.status],
+                ['Exit Type', viewingAlumni.exit_type],
+                ['Resignation Date', viewingAlumni.resignation_date],
+                ['Last Working Date', viewingAlumni.last_working_date],
+                ['Resignation Reason', viewingAlumni.resignation_reason],
+              ]],
+            ].map(([heading, fields]) => (
+              <section key={heading} className="hrms-panel"
+                style={{ marginTop: 16, padding: 18 }}>
+                <h4 style={{ margin: '0 0 14px' }}>{heading}</h4>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: 16,
+                }}>
+                  {fields.map(([label, value]) => (
+                    <div key={label} style={{ minWidth: 0 }}>
+                      <small style={{ opacity: 0.7 }}>{label}</small>
+                      <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                        {displayValue(value)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+            <section className="hrms-panel"
+              style={{ marginTop: 16, padding: 18 }}>
+              <h4 style={{ margin: '0 0 14px' }}>Historical Records</h4>
+
+              {alumniHistoryLoading ? (
+                <p role="status">Loading historical records...</p>
+              ) : null}
+
+              {alumniHistoryError ? (
+                <p role="alert" style={{ color: '#b42318' }}>
+                  {alumniHistoryError}
+                </p>
+              ) : null}
+
+              <section
+                style={{
+                  marginTop: 20,
+                  padding: 18,
+                  border: '1px solid rgba(110,120,150,.22)',
+                  borderRadius: 14,
+                }}
+              >
+                <h3 style={{ marginTop: 0 }}>Exit Documents</h3>
+                <p>
+                  Resignation, clearance, handover and final settlement
+                  documents retained with the former employee's record.
+                </p>
+
+                {canUploadAlumniExitDocuments && (
+                  <form
+                    onSubmit={uploadAlumniExitDocument}
+                    style={{
+                      display: 'grid',
+                      gap: 12,
+                      marginTop: 16,
+                      marginBottom: 20,
+                    }}
+                  >
+                    <label>
+                      Document Category
+                      <select
+                        value={exitDocumentCategory}
+                        onChange={(event) =>
+                          setExitDocumentCategory(event.target.value)
+                        }
+                        required
+                      >
+                        <option value="resignation_letter">Resignation Letter</option>
+                        <option value="resignation_acceptance">Resignation Acceptance</option>
+                        <option value="handover">Work Handover</option>
+                        <option value="asset_return">Asset Return</option>
+                        <option value="it_clearance">IT Clearance</option>
+                        <option value="department_clearance">Department Clearance</option>
+                        <option value="no_dues">No Dues Certificate</option>
+                        <option value="full_final_settlement">Full and Final Settlement</option>
+                        <option value="relieving_letter">Relieving Letter</option>
+                        <option value="experience_certificate">Experience Certificate</option>
+                        <option value="exit_interview">Exit Interview</option>
+                        <option value="other_exit_document">Other Exit Document</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Choose Document
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.jpg,.jpeg,.png,.webp"
+                        onChange={(event) =>
+                          setExitDocumentFile(event.target.files?.[0] || null)
+                        }
+                        required
+                        key={exitDocumentFile ? 'selected' : 'empty'}
+                      />
+                    </label>
+
+                    <label>
+                      Description (Optional)
+                      <textarea
+                        value={exitDocumentDescription}
+                        onChange={(event) =>
+                          setExitDocumentDescription(event.target.value)
+                        }
+                        maxLength={500}
+                        rows={2}
+                        placeholder="Add an optional note about this document"
+                      />
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="hrms-primary-btn"
+                      disabled={!exitDocumentFile || exitDocumentSaving}
+                    >
+                      {exitDocumentSaving ? 'Uploading...' : 'Upload Exit Document'}
+                    </button>
+                  </form>
+                )}
+
+                {exitDocumentFeedback ? (
+                  <p role="status">{exitDocumentFeedback}</p>
+                ) : null}
+
+                <h4>
+                  Saved Exit Documents
+                  {' '}({alumniHistory?.totals?.exit_documents ?? 0})
+                </h4>
+
+                {alumniHistoryLoading ? (
+                  <p>Loading documents...</p>
+                ) : (alumniHistory?.records?.exit_documents || []).length === 0 ? (
+                  <p>No exit documents uploaded yet.</p>
+                ) : (
+                  <div className="hrms-table-wrap">
+                    <table className="hrms-table">
+                      <thead>
+                        <tr>
+                          <th>Document</th>
+                          <th>Category</th>
+                          <th>Uploaded</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(alumniHistory?.records?.exit_documents || []).map(
+                          (exitDoc) => (
+                            <tr key={exitDoc._id}>
+                              <td>{exitDoc.original_filename || 'Document'}</td>
+                              <td>
+                                {String(exitDoc.category || '')
+                                  .replaceAll('_', ' ')}
+                              </td>
+                              <td>{exitDoc.uploaded_at || '?'}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="hrms-secondary-btn"
+                                  disabled={exitDocumentDownloading === exitDoc._id}
+                                  onClick={() =>
+                                    downloadAlumniExitDocument(exitDoc)
+                                  }
+                                >
+                                  {exitDocumentDownloading === exitDoc._id
+                                    ? 'Downloading...'
+                                    : 'Download'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {alumniHistory && !alumniHistoryLoading ? (
+                <div>
+                  {[
+                    ['Attendance History', 'attendance', [
+                      ['Date', 'date'],
+                      ['Status', 'status'],
+                      ['Mode', 'mode'],
+                      ['Check In', 'check_in'],
+                      ['Check Out', 'check_out'],
+                    ]],
+                    ['Leave Requests', 'leave_requests', [
+                      ['Leave Type', 'leave_type'],
+                      ['From', 'from_date'],
+                      ['To', 'to_date'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Leave Balances', 'leave_balances', [
+                      ['Leave Type', 'leave_type'],
+                      ['Available', 'available'],
+                      ['Used', 'used'],
+                      ['Year', 'year'],
+                    ]],
+                    ['Payslip History', 'payslips', [
+                      ['Period', 'period_key'],
+                      ['Gross Salary', 'gross_salary'],
+                      ['Net Pay', 'net_amount'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Monthly Plans', 'monthly_plans', [
+                      ['Month', 'month'],
+                      ['Plan', 'title'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Weekly Plans', 'weekly_plans', [
+                      ['Week Start', 'week_start'],
+                      ['Week End', 'week_end'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Change Requests', 'change_requests', [
+                      ['Activity', 'title'],
+                      ['Change Type', 'change_type'],
+                      ['Reason', 'reason'],
+                      ['Status', 'status'],
+                    ]],
+                    ['Employee Document Metadata', 'documents', [
+                      ['File Name', 'original_filename'],
+                      ['Type', 'document_type'],
+                      ['Status', 'status'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                    ['Recruitment Document Metadata', 'recruitment_documents', [
+                      ['File Name', 'original_filename'],
+                      ['Type', 'document_type'],
+                      ['Status', 'status'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                    ['Sprint Attachments', 'attachments', [
+                      ['File Name', 'original_filename'],
+                      ['Plan Type', 'plan_type'],
+                      ['Uploaded', 'uploaded_at'],
+                    ]],
+                  ].map(([title, key, columns]) => {
+                    const rows = alumniHistory.records?.[key] || [];
+                    const total = alumniHistory.totals?.[key] ?? 0;
+
+                    return (
+                      <div key={key} style={{ marginTop: 20 }}>
+                        <h4 style={{ marginBottom: 10 }}>
+                          {title} ({total})
+                        </h4>
+
+                        {rows.length ? (
+                          <div className="hrms-table-wrap">
+                            <table className="hrms-table">
+                              <thead>
+                                <tr>
+                                  {columns.map(([label]) => (
+                                    <th key={label}>{label}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((record, index) => (
+                                  <tr key={record._id || index}>
+                                    {columns.map(([label, field]) => (
+                                      <td key={field} data-label={label}>
+                                        {displayValue(record[field])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p>No historical records available.</p>
+                        )}
+
+                        {total > rows.length ? (
+                          <small>
+                            Showing {rows.length} of {total} records.
+                          </small>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="hrms-employees-page">
@@ -4333,368 +6288,7 @@ export default function Employees({ user = {}, setPage } = {}) {
         </section>
       ) : null}
 
-      {viewingAlumni ? createPortal(
-        <div
-                className="hrms-modal"
 
-                aria-modal="true"
-                aria-label="Alumni employee details"
-
-              data-alumni-details-workspace="true"
-
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setViewingAlumni(null);
-          }}
-              style={{
-                position: 'fixed',
-                inset: 0,
-                zIndex: 2000,
-                display: 'flex',
-                alignItems: 'stretch',
-                justifyContent: 'center',
-                overflow: 'hidden',
-                padding: 0,
-              }}
-              role="presentation"
->
-          <div className="hrms-modal" role="dialog" aria-modal="true"
-            aria-label="Alumni employee details"
-            style={{ maxWidth: 880, maxHeight: '90vh', overflowY: 'auto' }}>
-            <div className="hrms-section-heading">
-              <div>
-                <span className="hrms-section-kicker">Alumni Record</span>
-                <h3>{viewingAlumni.name || viewingAlumni.employee_name || 'Former Employee'}</h3>
-                <p>Read-only employee profile and exit details</p>
-                {loadingAlumniDetails ? (
-                  <p role="status">Loading full employee record...</p>
-                ) : null}
-                {alumniDetailsError ? (
-                  <p role="alert" style={{ color: '#b42318' }}>
-                    {alumniDetailsError}
-                  </p>
-                ) : null}
-              </div>
-              <button type="button" className="hrms-secondary-btn"
-                onClick={() => setViewingAlumni(null)}>
-                Close
-              </button>
-            </div>
-            {[
-              ['Personal Details', [
-                ['Employee Name', viewingAlumni.name || viewingAlumni.employee_name],
-                ['Employee Code', viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id],
-                ['Email', viewingAlumni.email || viewingAlumni.official_email],
-                ['Phone', viewingAlumni.phone || viewingAlumni.mobile],
-                ['Date of Birth', viewingAlumni.date_of_birth || viewingAlumni.dob],
-                ['Gender', viewingAlumni.gender],
-                ['Address', viewingAlumni.address],
-                ['State', viewingAlumni.state],
-              ]],
-              ['Employment Details', [
-                ['Organisation', viewingAlumni.organisation || viewingAlumni.organization],
-                ['Department', viewingAlumni.department],
-                ['Designation', viewingAlumni.designation],
-                ['Joining Date', viewingAlumni.joining_date || viewingAlumni.date_of_joining],
-                ['Employee Type', viewingAlumni.employee_type],
-                ['Job Type', viewingAlumni.job_type],
-                ['Team Leader', viewingAlumni.team_leader_name],
-                ['Reporting Officer', viewingAlumni.reporting_officer_name],
-              ]],
-              ['Exit Details', [
-                ['Employment Status', viewingAlumni.employment_status || viewingAlumni.status],
-                ['Exit Type', viewingAlumni.exit_type],
-                ['Resignation Date', viewingAlumni.resignation_date],
-                ['Last Working Date', viewingAlumni.last_working_date],
-                ['Resignation Reason', viewingAlumni.resignation_reason],
-              ]],
-            ].map(([heading, fields]) => (
-              <section key={heading} className="hrms-panel"
-                style={{ marginTop: 16, padding: 18 }}>
-                <h4 style={{ margin: '0 0 14px' }}>{heading}</h4>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                  gap: 16,
-                }}>
-                  {fields.map(([label, value]) => (
-                    <div key={label} style={{ minWidth: 0 }}>
-                      <small style={{ opacity: 0.7 }}>{label}</small>
-                      <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-                        {displayValue(value)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ))}
-            <section className="hrms-panel"
-              style={{ marginTop: 16, padding: 18 }}>
-              <h4 style={{ margin: '0 0 14px' }}>Historical Records</h4>
-
-              {alumniHistoryLoading ? (
-                <p role="status">Loading historical records...</p>
-              ) : null}
-
-              {alumniHistoryError ? (
-                <p role="alert" style={{ color: '#b42318' }}>
-                  {alumniHistoryError}
-                </p>
-              ) : null}
-
-              <section
-                style={{
-                  marginTop: 20,
-                  padding: 18,
-                  border: '1px solid rgba(110,120,150,.22)',
-                  borderRadius: 14,
-                }}
-              >
-                <h3 style={{ marginTop: 0 }}>Exit Documents</h3>
-                <p>
-                  Resignation, clearance, handover and final settlement
-                  documents retained with the former employee's record.
-                </p>
-
-                {canUploadAlumniExitDocuments && (
-                  <form
-                    onSubmit={uploadAlumniExitDocument}
-                    style={{
-                      display: 'grid',
-                      gap: 12,
-                      marginTop: 16,
-                      marginBottom: 20,
-                    }}
-                  >
-                    <label>
-                      Document Category
-                      <select
-                        value={exitDocumentCategory}
-                        onChange={(event) =>
-                          setExitDocumentCategory(event.target.value)
-                        }
-                        required
-                      >
-                        <option value="resignation_letter">Resignation Letter</option>
-                        <option value="resignation_acceptance">Resignation Acceptance</option>
-                        <option value="handover">Work Handover</option>
-                        <option value="asset_return">Asset Return</option>
-                        <option value="it_clearance">IT Clearance</option>
-                        <option value="department_clearance">Department Clearance</option>
-                        <option value="no_dues">No Dues Certificate</option>
-                        <option value="full_final_settlement">Full and Final Settlement</option>
-                        <option value="relieving_letter">Relieving Letter</option>
-                        <option value="experience_certificate">Experience Certificate</option>
-                        <option value="exit_interview">Exit Interview</option>
-                        <option value="other_exit_document">Other Exit Document</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      Choose Document
-                      <input
-                        type="file"
-                        accept=".pdf,.docx,.jpg,.jpeg,.png,.webp"
-                        onChange={(event) =>
-                          setExitDocumentFile(event.target.files?.[0] || null)
-                        }
-                        required
-                        key={exitDocumentFile ? 'selected' : 'empty'}
-                      />
-                    </label>
-
-                    <label>
-                      Description (Optional)
-                      <textarea
-                        value={exitDocumentDescription}
-                        onChange={(event) =>
-                          setExitDocumentDescription(event.target.value)
-                        }
-                        maxLength={500}
-                        rows={2}
-                        placeholder="Add an optional note about this document"
-                      />
-                    </label>
-
-                    <button
-                      type="submit"
-                      className="hrms-primary-btn"
-                      disabled={!exitDocumentFile || exitDocumentSaving}
-                    >
-                      {exitDocumentSaving ? 'Uploading...' : 'Upload Exit Document'}
-                    </button>
-                  </form>
-                )}
-
-                {exitDocumentFeedback ? (
-                  <p role="status">{exitDocumentFeedback}</p>
-                ) : null}
-
-                <h4>
-                  Saved Exit Documents
-                  {' '}({alumniHistory?.totals?.exit_documents ?? 0})
-                </h4>
-
-                {alumniHistoryLoading ? (
-                  <p>Loading documents...</p>
-                ) : (alumniHistory?.records?.exit_documents || []).length === 0 ? (
-                  <p>No exit documents uploaded yet.</p>
-                ) : (
-                  <div className="hrms-table-wrap">
-                    <table className="hrms-table">
-                      <thead>
-                        <tr>
-                          <th>Document</th>
-                          <th>Category</th>
-                          <th>Uploaded</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(alumniHistory?.records?.exit_documents || []).map(
-                          (exitDoc) => (
-                            <tr key={exitDoc._id}>
-                              <td>{exitDoc.original_filename || 'Document'}</td>
-                              <td>
-                                {String(exitDoc.category || '')
-                                  .replaceAll('_', ' ')}
-                              </td>
-                              <td>{exitDoc.uploaded_at || '?'}</td>
-                              <td>
-                                <button
-                                  type="button"
-                                  className="hrms-secondary-btn"
-                                  disabled={exitDocumentDownloading === exitDoc._id}
-                                  onClick={() =>
-                                    downloadAlumniExitDocument(exitDoc)
-                                  }
-                                >
-                                  {exitDocumentDownloading === exitDoc._id
-                                    ? 'Downloading...'
-                                    : 'Download'}
-                                </button>
-                              </td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-
-              {alumniHistory && !alumniHistoryLoading ? (
-                <div>
-                  {[
-                    ['Attendance History', 'attendance', [
-                      ['Date', 'date'],
-                      ['Status', 'status'],
-                      ['Mode', 'mode'],
-                      ['Check In', 'check_in'],
-                      ['Check Out', 'check_out'],
-                    ]],
-                    ['Leave Requests', 'leave_requests', [
-                      ['Leave Type', 'leave_type'],
-                      ['From', 'from_date'],
-                      ['To', 'to_date'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Leave Balances', 'leave_balances', [
-                      ['Leave Type', 'leave_type'],
-                      ['Available', 'available'],
-                      ['Used', 'used'],
-                      ['Year', 'year'],
-                    ]],
-                    ['Payslip History', 'payslips', [
-                      ['Period', 'period_key'],
-                      ['Gross Salary', 'gross_salary'],
-                      ['Net Pay', 'net_amount'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Monthly Plans', 'monthly_plans', [
-                      ['Month', 'month'],
-                      ['Plan', 'title'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Weekly Plans', 'weekly_plans', [
-                      ['Week Start', 'week_start'],
-                      ['Week End', 'week_end'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Change Requests', 'change_requests', [
-                      ['Activity', 'title'],
-                      ['Change Type', 'change_type'],
-                      ['Reason', 'reason'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Employee Document Metadata', 'documents', [
-                      ['File Name', 'original_filename'],
-                      ['Type', 'document_type'],
-                      ['Status', 'status'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                    ['Recruitment Document Metadata', 'recruitment_documents', [
-                      ['File Name', 'original_filename'],
-                      ['Type', 'document_type'],
-                      ['Status', 'status'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                    ['Sprint Attachments', 'attachments', [
-                      ['File Name', 'original_filename'],
-                      ['Plan Type', 'plan_type'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                  ].map(([title, key, columns]) => {
-                    const rows = alumniHistory.records?.[key] || [];
-                    const total = alumniHistory.totals?.[key] ?? 0;
-
-                    return (
-                      <div key={key} style={{ marginTop: 20 }}>
-                        <h4 style={{ marginBottom: 10 }}>
-                          {title} ({total})
-                        </h4>
-
-                        {rows.length ? (
-                          <div className="hrms-table-wrap">
-                            <table className="hrms-table">
-                              <thead>
-                                <tr>
-                                  {columns.map(([label]) => (
-                                    <th key={label}>{label}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {rows.map((record, index) => (
-                                  <tr key={record._id || index}>
-                                    {columns.map(([label, field]) => (
-                                      <td key={field} data-label={label}>
-                                        {displayValue(record[field])}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <p>No historical records available.</p>
-                        )}
-
-                        {total > rows.length ? (
-                          <small>
-                            Showing {rows.length} of {total} records.
-                          </small>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </section>
-          </div>
-        </div>,
-        document.body
-      ) : null}
 
       {editingEmployee
         ? createPortal(
@@ -4776,11 +6370,26 @@ export default function Employees({ user = {}, setPage } = {}) {
               >
                 <h3 id="hrms-resign-dialog-title">Mark Employee as Resigned</h3>
                 <p>
-                  This will move{' '}
-                  <strong>{resignEmployee.name || resignEmployee.employee_name}</strong>{' '}
-                  from Employee Master to Alumni and deactivate the employee login.
+                  {noticeFeatureEnabled && resignForm.exit_mode === 'notice'
+                    ? 'The employee remains active during notice. Approved leave on eligible working days will count as LWP. The automatic exit must be configured separately.'
+                    : <>This will move <strong>{resignEmployee.name || resignEmployee.employee_name}</strong> from Employee Master to Alumni and deactivate the employee login.</>}
                 </p>
+                {noticeFeatureEnabled ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <label htmlFor="hrms-exit-mode" style={{ display: 'block', marginBottom: 6 }}>Exit process</label>
+                    <select id="hrms-exit-mode" name="exit_mode" value={resignForm.exit_mode} onChange={handleResignChange} style={{ width: '100%', padding: 10 }}>
+                      <option value="immediate">Resign immediately</option>
+                      <option value="notice">Serve notice period</option>
+                    </select>
+                  </div>
+                ) : null}
                 <div className="hrms-modal-grid">
+                  {noticeFeatureEnabled && resignForm.exit_mode === 'notice' ? (
+                    <>
+                      <TextInput label="Resignation Date" name="resignation_date" value={resignForm.resignation_date} onChange={handleResignChange} type="date" required />
+                      <TextInput label="Notice Period Start" name="notice_start_date" value={resignForm.notice_start_date} onChange={handleResignChange} type="date" required />
+                    </>
+                  ) : null}
                   <TextInput
                     label="Last Working Date"
                     name="last_working_date"
@@ -4823,7 +6432,7 @@ export default function Employees({ user = {}, setPage } = {}) {
                         Updating...
                       </>
                     ) : (
-                      'Confirm Resignation'
+                      noticeFeatureEnabled && resignForm.exit_mode === 'notice' ? 'Schedule Notice Period' : 'Confirm Resignation'
                     )}
                   </button>
 

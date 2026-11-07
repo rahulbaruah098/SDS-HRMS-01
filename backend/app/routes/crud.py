@@ -1220,7 +1220,13 @@ def build_user_sync_payload(employee_doc, existing_user=None):
     is_active = not (
         status.lower() in {"inactive", "disabled", "deleted", "resigned", "resign", "left", "terminated", "retired", "alumni", "ex-employee", "ex_employee"}
         or truthy(employee_doc.get("is_alumni"))
-        or bool(normalize_text(employee_doc.get("last_working_date")))
+        or (
+            bool(normalize_text(employee_doc.get("last_working_date")))
+            and not (
+                normalize_text(employee_doc.get("notice_start_date"))
+                and normalize_text(employee_doc.get("notice_status")).lower() in {"scheduled", "serving"}
+            )
+        )
         or normalize_text(employee_doc.get("employment_status")).lower() in {"inactive", "resigned", "resign", "left", "terminated", "retired", "alumni", "ex-employee", "ex_employee"}
         or truthy(employee_doc.get("is_deleted"))
     )
@@ -2175,7 +2181,10 @@ def employee_alumni_query():
             {"status": ALUMNI_STATUS_REGEX},
             {"employment_status": ALUMNI_STATUS_REGEX},
             {"employee_status": ALUMNI_STATUS_REGEX},
-            {"last_working_date": {"$exists": True, "$nin": [None, ""]}},
+            {"$and": [
+                {"last_working_date": {"$exists": True, "$nin": [None, ""]}},
+                {"notice_start_date": {"$in": [None, ""]}},
+            ]},
         ]
     }
 
@@ -2212,6 +2221,10 @@ def employee_is_alumni_payload(payload):
     if employment_status in alumni_statuses:
         return True
 
+    # A future notice schedule is NOT a completed resignation. Legacy immediate
+    # resignations without notice_start_date retain their original behavior.
+    if normalize_text(payload.get("notice_start_date")) and normalize_text(payload.get("notice_status")).lower() in {"scheduled", "serving"}:
+        return False
     return bool(normalize_text(payload.get("last_working_date")))
 
 def build_search_query(collection, search_text):

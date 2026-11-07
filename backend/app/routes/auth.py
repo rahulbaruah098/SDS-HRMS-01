@@ -272,7 +272,7 @@ def sanitize_user_for_response(user):
     safe_user.pop("password_hash", None)
 
     safe_user["roles"] = normalize_roles(safe_user.get("roles"))
-    safe_user["tenant_id"] = safe_user.get("tenant_id") or default_tenant_id()
+    safe_user["tenant_id"] = safe_user.get("tenant_id")
 
     apply_profile_photo_aliases(safe_user)
 
@@ -386,6 +386,13 @@ def employee_login_is_alumni(employee):
 
     if enabled(employee.get("is_alumni")):
         return True
+
+    # Overdue notice employees must not retain access while the
+    # scheduled Alumni reconciliation has not yet executed.
+    if current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        from app.services.notice_period_service import notice_exit_due
+        if notice_exit_due(employee):
+            return True
 
     blocked_statuses = {
         "resigned",
@@ -501,10 +508,6 @@ def find_employee_for_user(db, user):
 
 def sync_user_login_defaults(db, user):
     update_data = {}
-
-    if not user.get("tenant_id"):
-        update_data["tenant_id"] = default_tenant_id()
-        user["tenant_id"] = update_data["tenant_id"]
 
     roles = normalize_roles(user.get("roles"))
 
@@ -829,10 +832,7 @@ def create_auth_session(db, user, login_data=None):
 
     db.auth_sessions.insert_one({
             "user_id": str(user["_id"]),
-            "tenant_id": (
-                user.get("tenant_id")
-                or default_tenant_id()
-            ),
+            "tenant_id": user["tenant_id"],
             "refresh_token_hash": refresh_token_hash,
             "device_id": normalize_text(
                 login_data.get("device_id")
@@ -878,6 +878,12 @@ def login():
     if not check_password_hash(user.get("password_hash", ""), password):
         return jsonify({"message": "Invalid email or password"}), 401
 
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return jsonify({
+            "message": "Account company assignment is missing. Contact your administrator."
+        }), 403
+
     user = sync_user_login_defaults(db, user)
 
     raw_employee = find_employee_for_user(db, user)
@@ -915,7 +921,7 @@ def login():
     )
 
     g.current_user = user
-    g.tenant_id = user.get("tenant_id") or default_tenant_id()
+    g.tenant_id = user["tenant_id"]
 
     audit("login", "users", user["_id"], {"email": email})
 
@@ -1028,6 +1034,12 @@ def refresh_access_token():
             },
         )
         return jsonify({"message": "User account is unavailable"}), 401
+
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return jsonify({
+            "message": "Account company assignment is missing. Contact your administrator."
+        }), 403
 
     user = sync_user_login_defaults(db, user)
     raw_employee = find_employee_for_user(db, user)

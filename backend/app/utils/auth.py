@@ -91,6 +91,13 @@ def employee_login_is_alumni(employee):
     if enabled(employee.get("is_alumni")):
         return True
 
+    # Overdue notice employees must not retain access while the
+    # scheduled Alumni reconciliation has not yet executed.
+    if current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        from app.services.notice_period_service import notice_exit_due
+        if notice_exit_due(employee):
+            return True
+
     blocked_statuses = {
         "resigned",
         "resign",
@@ -118,7 +125,9 @@ def find_employee_for_user(db, user):
     if not user:
         return None
 
-    tenant_id = user.get("tenant_id") or default_tenant_id()
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return None
 
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
@@ -236,7 +245,9 @@ def issue_access_token(user):
     Creates the short-lived JWT access token used for normal API requests.
     """
     roles = normalize_roles(user.get("roles", []))
-    tenant_id = user.get("tenant_id") or default_tenant_id()
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("Cannot issue access token without an assigned tenant")
     current_time = datetime.now(timezone.utc)
 
     payload = {
@@ -350,7 +361,11 @@ def current_user_required(fn):
         if not user:
             return jsonify({"message": "User not found"}), 401
 
-        tenant_id = user.get("tenant_id") or payload.get("tenant_id") or default_tenant_id()
+        tenant_id = user.get("tenant_id")
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            return jsonify({
+                "message": "Account company assignment is missing. Contact your administrator."
+            }), 403
 
         user["tenant_id"] = tenant_id
 

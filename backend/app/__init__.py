@@ -1,3 +1,4 @@
+from .routes.notice_period import notice_period_bp
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
@@ -324,6 +325,7 @@ def create_app():
     # legacy attendance_mode_requests, holiday_work_requests, compoff_credits,
     # notifications fallback, etc.
     app.register_blueprint(crud_bp, url_prefix="/api/v1")
+    app.register_blueprint(notice_period_bp, url_prefix="/api/v1/notice-period")
 
     # Report APIs:
     # attendance, field attendance, holiday work approvals, holidays,
