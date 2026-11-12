@@ -38,7 +38,7 @@ def _matched(result):
 
 def apply_reviewed_historic_notice_refunds(
     *, db, employee, proposed_notice, leaves_with_working_dates, expected_fingerprint,
-    reviewer_id, enable_writes=False, now=None,
+    reviewer_id, enable_writes=False, now=None, schedule_notice=None,
 ):
     """All-or-nothing refund + per-leave accounting ledger for one employee.
 
@@ -52,6 +52,8 @@ def apply_reviewed_historic_notice_refunds(
     - Revalidates matching records inside the Mongo transaction.
     - Uses deterministic audit ``_id`` (Mongo's built-in unique index).
     - A DB exception or optimistic-concurrency mismatch aborts the whole batch.
+    - With schedule_notice, schedule and refunds commit together; no HTTP caller
+      is connected yet, and live calendar evidence remains a future prerequisite.
     """
     if enable_writes is not True:
         raise NoticeRefundNotAuthorized("Refund executor is locked; no route integration")
@@ -72,7 +74,23 @@ def apply_reviewed_historic_notice_refunds(
     if preview["review_fingerprint"] != expected_fingerprint:
         raise NoticeRefundConflict("Review fingerprint changed")
     adjustments = preview["adjustments"]
-    if not adjustments:
+    if schedule_notice is not None:
+        from app.services.notice_period_service import validate_schedule
+        if not isinstance(schedule_notice, dict):
+            raise NoticeRefundConflict("Invalid schedule transaction input")
+        try:
+            validated = validate_schedule(
+                schedule_notice.get("resignation_date"),
+                schedule_notice.get("notice_start_date"),
+                schedule_notice.get("last_working_day"),
+            )
+        except (ValueError, TypeError) as exc:
+            raise NoticeRefundConflict("Invalid proposed schedule") from exc
+        if any(proposed_notice.get(k) != v for k, v in validated.items()):
+            raise NoticeRefundConflict("Review schedule does not match requested schedule")
+        if not adjustments:
+            raise NoticeRefundConflict("No historical refunds in reviewed plan")
+    elif not adjustments:
         raise NoticeRefundConflict("No historical refunds in reviewed plan")
     tenant = str(employee["tenant_id"])
     employee_id = str(employee["_id"])
@@ -88,6 +106,30 @@ def apply_reviewed_historic_notice_refunds(
             )
             if actual_employee is None:
                 raise NoticeRefundConflict("Employee changed or missing")
+            if schedule_notice is not None:
+                if (actual_employee.get("is_alumni") is True or
+                    actual_employee.get("skip_login") is True or
+                    str(actual_employee.get("status") or "").lower() in
+                    {"resigned", "alumni", "inactive", "terminated", "left"} or
+                    str(actual_employee.get("employment_status") or "").lower() in
+                    {"resigned", "alumni", "inactive", "terminated", "left"} or
+                    str(actual_employee.get("notice_status") or "").lower() == "completed"):
+                    raise NoticeRefundConflict("Employee is no longer eligible for notice")
+                # Fail closed on unreviewed final-approved leave overlapping the
+                # proposed notice. The caller must supply all such records.
+                overlapping = list(db.leave_requests.find({
+                    "tenant_id": tenant, "employee_id": employee_id,
+                    "status": "approved", "approval_stage": "approved",
+                    "is_deleted": {"$ne": True},
+                    "from_date": {"$lte": validated["last_working_day"]},
+                    "to_date": {"$gte": validated["notice_start_date"]},
+                }, {"_id": 1}, session=session))
+                reviewed_ids = {str(row["_id"]) for row in overlapping}
+                provided_ids = {str(doc["_id"]) for doc, _ in entries
+                                if str(doc.get("from_date") or "")[:10] <= validated["last_working_day"]
+                                and str(doc.get("to_date") or "")[:10] >= validated["notice_start_date"]}
+                if reviewed_ids != provided_ids:
+                    raise NoticeRefundConflict("Unreviewed approved leave overlaps notice")
             # Notice dates/status cannot change between HR review and execution.
             # The *future* caller must schedule notice within this transaction.
             for field in ("notice_status", "notice_start_date", "last_working_day",
@@ -167,5 +209,38 @@ def apply_reviewed_historic_notice_refunds(
                 if not _matched(changed_leave):
                     raise NoticeRefundConflict("Leave modified concurrently")
                 audit_ids.append(audit_id)
+            if schedule_notice is not None:
+                from app.services.notice_period_service import status_for_day, local_today
+                new_status = status_for_day({
+                    **validated, "notice_status": "scheduled"
+                }, local_today())
+                employee_filter = {
+                    "_id": employee["_id"], "tenant_id": tenant,
+                    "is_deleted": {"$ne": True}, "is_alumni": {"$ne": True},
+                    "skip_login": {"$ne": True},
+                    "notice_status": actual_employee.get("notice_status"),
+                    "notice_updated_at": actual_employee.get("notice_updated_at"),
+                }
+                changed_employee = db.employees.update_one(employee_filter, {
+                    "$set": {
+                        **validated, "notice_status": new_status,
+                        "notice_policy": "leave_during_notice_is_lwp",
+                        "notice_updated_at": clock,
+                        "notice_updated_by": reviewer_id,
+                    }
+                }, session=session)
+                if not _matched(changed_employee):
+                    raise NoticeRefundConflict("Notice scheduling changed concurrently")
+                db.notice_period_events.update_one(
+                    {"tenant_id": tenant, "employee_id": employee_id,
+                     "event": "schedule_updated"},
+                    {"$setOnInsert": {"created_at": clock},
+                     "$push": {"revisions": {
+                         "actor_user_id": reviewer_id, "at": clock,
+                         "dates": validated, "review_fingerprint": expected_fingerprint,
+                         "refund_audit_ids": audit_ids,
+                     }}}, upsert=True, session=session,
+                )
     return {"refund_count": len(audit_ids), "audit_ids": audit_ids,
-            "review_fingerprint": expected_fingerprint}
+            "review_fingerprint": expected_fingerprint,
+            "notice_scheduled": schedule_notice is not None}

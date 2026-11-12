@@ -126,9 +126,35 @@ def run():
                     if employee.get('user_id') and str(user['_id']) != str(employee['user_id']):
                         raise RuntimeError('Employee-user linkage mismatch')
 
-                    # First revoke access. On failure, notice remains due and is retried.
-                    deactivate_employee_login_user(db, employee)
+                    # Claim the terminal employee state BEFORE disabling access.
+                    # A concurrent HR cancellation wins by changing the CAS fields;
+                    # in that case no linked user or session is touched. Once the
+                    # CAS succeeds, authentication guards reject this Alumni record
+                    # while user/session cleanup is retried if interrupted.
                     now = datetime.now(timezone.utc)
+                    if employee['notice_status'] != 'completed':
+                        exact = {
+                            '_id': employee_id, 'tenant_id': tenant,
+                            'is_deleted': {'$ne': True},
+                            'notice_status': employee['notice_status'],
+                            'last_working_day': employee['last_working_day'],
+                            'notice_start_date': employee.get('notice_start_date'),
+                            'resignation_date': employee.get('resignation_date'),
+                            'is_alumni': {'$ne': True},
+                        }
+                        final = terminal_update(now)
+                        final['last_working_date'] = employee['last_working_day']
+                        result = db.employees.update_one(exact, {'$set': final})
+                        if result.modified_count != 1:
+                            raise RuntimeError('Employee state changed during finalization')
+                        transitioned += 1
+                    else:
+                        retried += 1
+
+                    # Cleanup may fail after finalization: completed employees
+                    # without a completion event remain retry candidates. The
+                    # auth guard rejects completed/Alumni users immediately.
+                    deactivate_employee_login_user(db, employee)
                     user_id = str(user['_id'])
                     db.auth_sessions.update_many(
                         {'user_id': user_id, 'is_revoked': {'$ne': True}},
@@ -145,22 +171,6 @@ def run():
                     })
                     if remaining:
                         raise RuntimeError('Unrevoked login sessions remain')
-
-                    if employee['notice_status'] != 'completed':
-                        exact = {
-                            '_id': employee_id, 'tenant_id': tenant,
-                            'notice_status': employee['notice_status'],
-                            'last_working_day': employee['last_working_day'],
-                            'is_alumni': {'$ne': True},
-                        }
-                        final = terminal_update(now)
-                        final['last_working_date'] = employee['last_working_day']
-                        result = db.employees.update_one(exact, {'$set': final})
-                        if result.modified_count != 1:
-                            raise RuntimeError('Employee state changed during finalization')
-                        transitioned += 1
-                    else:
-                        retried += 1
 
                     # Audit event occurs last; completed records without an event
                     # remain candidates on the next run if cleanup/audit fails.

@@ -725,15 +725,16 @@ export default function UserControl() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [approvalFeedback, setApprovalFeedback] = useState('');
 
+  const [tenants, setTenants] = useState([]);
+  const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
+  const [q, setQ] = useState('');
+  const [tenant, setTenant] = useState('');
+
   useEffect(() => {
     setApprovalPreview(null);
     setApprovalSelection([]);
     setApprovalFeedback('');
   }, [succession.predecessor_user_id, succession.successor_user_id, tenant]);
-  const [tenants, setTenants] = useState([]);
-  const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
-  const [q, setQ] = useState('');
-  const [tenant, setTenant] = useState('');
   const [designationFilter, setDesignationFilter] = useState('');
   const [edit, setEdit] = useState(null);
   const [employeeOptions, setEmployeeOptions] = useState([]);

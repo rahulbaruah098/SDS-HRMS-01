@@ -1117,7 +1117,7 @@ function handleTableMouseDragStart(event) {
   window.addEventListener('mouseup', handleMouseUp);
 }
 
-function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
+function EmployeeMasterTable({ rows, loading, onEdit, onResign, onManageNotice, noticeFeatureEnabled }) {
   if (loading) return <div className="hrms-empty-state">Loading employees...</div>;
   if (!rows.length) return <div className="hrms-empty-state">No active employees found.</div>;
 
@@ -1177,6 +1177,11 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign }) {
                     <button type="button" className="hrms-secondary-btn compact" onClick={() => onEdit(employee)} disabled={!id}>
                       Edit
                     </button>
+                    {noticeFeatureEnabled ? (
+                      <button type="button" className="hrms-secondary-btn compact" onClick={() => onManageNotice(employee)} disabled={!id}>
+                        Manage Notice Period
+                      </button>
+                    ) : null}
                     <button type="button" className="hrms-danger-soft-btn compact" onClick={() => onResign(employee)} disabled={!id}>
                       Mark Resigned
                     </button>
@@ -1433,6 +1438,8 @@ export default function Employees({ user = {}, setPage } = {}) {
   const [alumniHistory, setAlumniHistory] = useState(null);
   const [alumniHistoryLoading, setAlumniHistoryLoading] = useState(false);
   const [alumniHistoryError, setAlumniHistoryError] = useState('');
+  const [alumniDetailTab, setAlumniDetailTab] = useState('overview');
+  const [alumniUploadOpen, setAlumniUploadOpen] = useState(false);
   const [exitDocumentFile, setExitDocumentFile] = useState(null);
   const [exitDocumentCategory, setExitDocumentCategory] = useState('handover');
   const [exitDocumentDescription, setExitDocumentDescription] = useState('');
@@ -1570,6 +1577,12 @@ export default function Employees({ user = {}, setPage } = {}) {
   const [alumniFilters, setAlumniFilters] = useState({ q: '', department: '', designation: '', state: '', employment_status: '' });
   const [resignEmployee, setResignEmployee] = useState(null);
   const [resignForm, setResignForm] = useState(EMPTY_RESIGN_FORM);
+  const [noticeEmployee, setNoticeEmployee] = useState(null);
+  const [noticeForm, setNoticeForm] = useState({ resignation_date: '', notice_start_date: '', last_working_day: '' });
+  const [noticePreview, setNoticePreview] = useState(null);
+  const [noticeBusy, setNoticeBusy] = useState(false);
+  const [noticeError, setNoticeError] = useState('');
+  const [noticeConfirm, setNoticeConfirm] = useState(false);
 
   const employeeDepartments = useMemo(() => uniqueOptions(employees, 'department'), [employees]);
   const employeeDesignations = useMemo(() => uniqueOptions(employees, 'designation'), [employees]);
@@ -2168,6 +2181,8 @@ export default function Employees({ user = {}, setPage } = {}) {
     setAlumniDetailsError('');
     setAlumniHistory(null);
     setAlumniHistoryError('');
+    setAlumniDetailTab('overview');
+    setAlumniUploadOpen(false);
     setLoadingAlumniDetails(true);
     setAlumniHistoryLoading(true);
 
@@ -2179,11 +2194,15 @@ export default function Employees({ user = {}, setPage } = {}) {
       .finally(() => setAlumniHistoryLoading(false));
 
     try {
-      const response = await api(`/employees/${encodeURIComponent(id)}`);
+      const response = await api(`/employees/${encodeURIComponent(id)}?employee_scope=alumni`);
       if (!response?.item) {
         throw new Error('Employee record was not found.');
       }
-      setViewingAlumni(response.item);
+      setViewingAlumni((previous) => ({
+        ...previous,
+        ...response.item,
+        photo_url: response.item.photo_url || previous?.photo_url || '',
+      }));
     } catch (error) {
       setAlumniDetailsError(
         error?.message || 'Unable to load the complete employee record.'
@@ -2238,6 +2257,100 @@ export default function Employees({ user = {}, setPage } = {}) {
   }, []);
 
   const noticeFeatureEnabled = import.meta.env.VITE_NOTICE_PERIOD_ENABLED === 'true';
+
+  // Standalone HR notice workflow. Feature-flagged; distinct from immediate resignation.
+  const openNoticeModal = (employee) => {
+    if (!noticeFeatureEnabled) return;
+    const today = new Date().toISOString().slice(0, 10);
+    setNoticeEmployee(employee);
+    setNoticeForm({
+      resignation_date: String(employee.resignation_date || today).slice(0, 10),
+      notice_start_date: String(employee.notice_start_date || today).slice(0, 10),
+      last_working_day: String(employee.last_working_day || employee.last_working_date || '').slice(0, 10),
+    });
+    setNoticePreview(null);
+    setNoticeConfirm(false);
+    setNoticeError('');
+  };
+
+  const closeNoticeModal = () => {
+    if (noticeBusy) return;
+    setNoticeEmployee(null);
+    setNoticePreview(null);
+    setNoticeConfirm(false);
+    setNoticeError('');
+  };
+
+  const updateNoticeForm = (event) => {
+    const { name, value } = event.target;
+    setNoticeForm((previous) => ({ ...previous, [name]: value }));
+    setNoticePreview(null);
+    setNoticeConfirm(false);
+    setNoticeError('');
+  };
+
+  const reviewNoticeSchedule = async (event) => {
+    event.preventDefault();
+    if (!noticeFeatureEnabled || !noticeEmployee || noticeBusy) return;
+    const id = employeeRowId(noticeEmployee);
+    if (!id) { setNoticeError('Employee identifier is missing.'); return; }
+    if (!noticeForm.resignation_date || !noticeForm.notice_start_date || !noticeForm.last_working_day ||
+        noticeForm.notice_start_date < noticeForm.resignation_date ||
+        noticeForm.last_working_day < noticeForm.notice_start_date) {
+      setNoticeError('Check the resignation, notice start and last working dates.');
+      return;
+    }
+    setNoticeBusy(true);
+    setNoticeError('');
+    setNoticePreview(null);
+    setNoticeConfirm(false);
+    try {
+      const result = await api(`/notice-period/${encodeURIComponent(id)}/reconciliation-preview`, {
+        method: 'POST', body: JSON.stringify(noticeForm),
+      });
+      if (!result?.review || result.authorization_granted !== false || result.writes_performed !== false) {
+        throw new Error('Unexpected review response. Scheduling was not authorized.');
+      }
+      setNoticePreview(result);
+    } catch (error) {
+      setNoticeError(error?.message || 'Unable to review this notice schedule.');
+    } finally {
+      setNoticeBusy(false);
+    }
+  };
+
+  const submitReviewedNoticeSchedule = async () => {
+    if (!noticeFeatureEnabled || !noticeEmployee || !noticePreview || !noticeConfirm || noticeBusy) return;
+    const id = employeeRowId(noticeEmployee);
+    if (!id) return;
+    setNoticeBusy(true);
+    setNoticeError('');
+    try {
+      const adjustments = noticePreview.review?.adjustments;
+      if (!Array.isArray(adjustments)) throw new Error('Review is incomplete. Preview again.');
+      const hasRefund = adjustments.length > 0;
+      const fingerprint = noticePreview.review?.review_fingerprint;
+      if (hasRefund && !/^[a-f0-9]{64}$/.test(String(fingerprint || ''))) {
+        throw new Error('Review fingerprint missing. Preview again.');
+      }
+      await api(`/notice-period/${encodeURIComponent(id)}${hasRefund ? '/reconciliation-apply' : ''}`, {
+        method: hasRefund ? 'POST' : 'PUT',
+        body: JSON.stringify(hasRefund ? { ...noticeForm, review_fingerprint: fingerprint } : noticeForm),
+      });
+      setNoticeEmployee(null);
+      setNoticePreview(null);
+      setNoticeConfirm(false);
+      await reloadAll();
+      showMessage('success', 'Notice period saved. The employee stays active through the last working day.',
+        'Notice Period Updated', { scope: 'master-actions' });
+    } catch (error) {
+      setNoticeError(error?.message || 'Notice schedule could not be saved.');
+      setNoticePreview(null); // A failed write requires a fresh server-side review.
+      setNoticeConfirm(false);
+    } finally {
+      setNoticeBusy(false);
+    }
+  };
 
   const openResignModal = (employee) => {
     setResignEmployee(employee);
@@ -3843,6 +3956,40 @@ export default function Employees({ user = {}, setPage } = {}) {
           }
         }
       `}</style>
+        <style>{`
+          .yc-alumni-profile-strip { display:flex; align-items:center; gap:14px; background:linear-gradient(105deg,#f4f7ff,#f8fbff); border:1px solid #e1e7f5; border-radius:16px; padding:16px 18px; margin:12px 0 18px; }
+          .yc-alumni-avatar { display:grid;place-items:center; flex-shrink:0; width:48px;height:48px;border-radius:15px;background:#e4eafe;color:#3e49a6;font-weight:800;font-size:21px; }
+          .yc-alumni-avatar .hrms-employee-avatar { width:100%; height:100%; object-fit:cover; border-radius:inherit; display:block; }
+          .yc-alumni-profile-identity { display:flex; flex:1; flex-direction:column; gap:4px;min-width:0; }
+          .yc-alumni-profile-identity strong { font-size:17px; color:#111c39; }
+          .yc-alumni-profile-identity span { color:#607092;font-size:13px; }
+          .yc-alumni-status { font-size:12px;font-weight:700;padding:7px 12px;border-radius:99px;background:#e9ecfa;color:#4653a6; }
+          .yc-alumni-tabbar { display:flex;gap:7px;overflow-x:auto;white-space:nowrap;border-bottom:1px solid #e4e8f1;padding-bottom:10px;margin-bottom:18px; }
+          .yc-alumni-tab { border:1px solid transparent;background:transparent;color:#566481;font-weight:700;padding:10px 13px;border-radius:10px;cursor:pointer;font-size:13px; }
+          .yc-alumni-tab:hover { background:#f2f4ff; }
+          .yc-alumni-tab.is-active {background:#eceeff;color:#383f9d;border-color:#d4d9ff;}
+          .yc-alumni-tab:focus-visible { outline:2px solid #5650dd;outline-offset:2px; }
+          .yc-alumni-overview-panels {display:grid;gap:12px;}
+          .yc-alumni-detail-card { background:#fff;border:1px solid #e3e7f0;border-radius:16px;padding:20px;box-shadow:0 4px 18px rgba(30,47,96,.035); }
+          .yc-alumni-detail-card h4 {font-size:16px;margin:0 0 16px;color:#172245;}
+          .yc-alumni-detail-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:17px 20px;}
+          .yc-alumni-detail-grid small {display:block;color:#6b7791;font-size:12px;margin-bottom:5px;}
+          .yc-alumni-detail-grid div div {font-size:14px;font-weight:600;overflow-wrap:anywhere;color:#233053;}
+          .yc-alumni-history-panel {min-height:200px;}
+          .yc-alumni-history-header p,.yc-alumni-document-heading p {margin:4px 0 0;color:#66738e;font-size:13px;}
+          .yc-alumni-document-panel {padding:15px;background:#f8faff;border:1px solid #e7eaf3;border-radius:13px;margin-bottom:18px;}
+          .yc-alumni-document-heading {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:15px;}
+          .yc-alumni-upload-form {display:grid;gap:12px;margin:15px 0;border-top:1px solid #dfe4f1;padding-top:15px;}
+          .yc-alumni-upload-form label {display:grid;gap:6px;font-size:13px;font-weight:600;}
+          .yc-alumni-record-section {border-top:1px solid #eaedf4;padding-top:15px;margin-top:16px;}
+          .yc-alumni-record-heading {display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+          .yc-alumni-record-heading h5 {margin:0;font-size:14px;color:#253453;}
+          .yc-alumni-record-heading span {font-size:12px;color:#64718c;background:#f0f3fa;border-radius:99px;padding:4px 9px;}
+          .yc-alumni-empty,.yc-alumni-info-note {margin:0;padding:15px 16px;color:#66738a;background:#f8f9fd;border-radius:11px;font-size:13px;}
+          .yc-alumni-info-note {margin-top:4px;}
+          .yc-alumni-history-error {background:#fff3f1;border:1px solid #f1c7c2;color:#9c2a23;padding:13px 15px;border-radius:10px;font-size:13px;}
+          @media(max-width:640px){.yc-alumni-profile-strip{flex-wrap:wrap}.yc-alumni-status{margin-left:62px}.yc-alumni-detail-card{padding:15px}.yc-alumni-tab{padding:9px 11px}}
+        `}</style>
         <div
                 className="hrms-alumni-page-shell"
 
@@ -3887,318 +4034,176 @@ export default function Employees({ user = {}, setPage } = {}) {
                 Close
               </button>
             </div>
-            {[
-              ['Personal Details', [
-                ['Employee Name', viewingAlumni.name || viewingAlumni.employee_name],
-                ['Employee Code', viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id],
-                ['Email', viewingAlumni.email || viewingAlumni.official_email],
-                ['Phone', viewingAlumni.phone || viewingAlumni.mobile],
-                ['Date of Birth', viewingAlumni.date_of_birth || viewingAlumni.dob],
-                ['Gender', viewingAlumni.gender],
-                ['Address', viewingAlumni.address],
-                ['State', viewingAlumni.state],
-              ]],
-              ['Employment Details', [
-                ['Organisation', viewingAlumni.organisation || viewingAlumni.organization],
-                ['Department', viewingAlumni.department],
-                ['Designation', viewingAlumni.designation],
-                ['Joining Date', viewingAlumni.joining_date || viewingAlumni.date_of_joining],
-                ['Employee Type', viewingAlumni.employee_type],
-                ['Job Type', viewingAlumni.job_type],
-                ['Team Leader', viewingAlumni.team_leader_name],
-                ['Reporting Officer', viewingAlumni.reporting_officer_name],
-              ]],
-              ['Exit Details', [
-                ['Employment Status', viewingAlumni.employment_status || viewingAlumni.status],
-                ['Exit Type', viewingAlumni.exit_type],
-                ['Resignation Date', viewingAlumni.resignation_date],
-                ['Last Working Date', viewingAlumni.last_working_date],
-                ['Resignation Reason', viewingAlumni.resignation_reason],
-              ]],
-            ].map(([heading, fields]) => (
-              <section key={heading} className="hrms-panel"
-                style={{ marginTop: 16, padding: 18 }}>
-                <h4 style={{ margin: '0 0 14px' }}>{heading}</h4>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                  gap: 16,
-                }}>
-                  {fields.map(([label, value]) => (
-                    <div key={label} style={{ minWidth: 0 }}>
-                      <small style={{ opacity: 0.7 }}>{label}</small>
-                      <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-                        {displayValue(value)}
-                      </div>
+            <div className="yc-alumni-profile-strip" aria-label="Former employee overview">
+              <div className="yc-alumni-avatar">
+                <EmployeeAvatar employee={viewingAlumni} />
+              </div>
+              <div className="yc-alumni-profile-identity">
+                <strong>{viewingAlumni.name || viewingAlumni.employee_name || 'Former Employee'}</strong>
+                <span>{displayValue(viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id)} Â· {displayValue(viewingAlumni.department)} Â· {displayValue(viewingAlumni.designation)}</span>
+              </div>
+              <span className="yc-alumni-status">Former employee</span>
+            </div>
+            <div className="yc-alumni-tabbar" role="tablist" aria-label="Alumni record sections">
+              {[
+                ['overview', 'Overview'],
+                ['attendance', 'Attendance'],
+                ['leave', 'Leave'],
+                ['payroll', 'Payroll'],
+                ['work', 'Work history'],
+                ['documents', 'Documents'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={alumniDetailTab === key}
+                  className={alumniDetailTab === key ? 'yc-alumni-tab is-active' : 'yc-alumni-tab'}
+                  onClick={() => setAlumniDetailTab(key)}
+                >{label}</button>
+              ))}
+            </div>
+            {alumniDetailTab === 'overview' ? (
+              <div role="tabpanel" className="yc-alumni-overview-panels">
+                {[
+                  ['Personal details', [
+                    ['Employee Name', viewingAlumni.name || viewingAlumni.employee_name],
+                    ['Employee Code', viewingAlumni.employee_code || viewingAlumni.emp_code || viewingAlumni.employee_id],
+                    ['Email', viewingAlumni.email || viewingAlumni.official_email],
+                    ['Phone', viewingAlumni.phone || viewingAlumni.mobile],
+                    ['Date of Birth', viewingAlumni.date_of_birth || viewingAlumni.dob],
+                    ['Gender', viewingAlumni.gender],
+                    ['Address', viewingAlumni.address],
+                    ['State', viewingAlumni.state],
+                  ]],
+                  ['Employment details', [
+                    ['Organisation', viewingAlumni.organisation || viewingAlumni.organization],
+                    ['Department', viewingAlumni.department],
+                    ['Designation', viewingAlumni.designation],
+                    ['Joining Date', viewingAlumni.joining_date || viewingAlumni.date_of_joining],
+                    ['Employee Type', viewingAlumni.employee_type],
+                    ['Job Type', viewingAlumni.job_type],
+                    ['Team Leader', viewingAlumni.team_leader_name],
+                    ['Reporting Officer', viewingAlumni.reporting_officer_name],
+                  ]],
+                  ['Exit details', [
+                    ['Employment Status', viewingAlumni.employment_status || viewingAlumni.status],
+                    ['Exit Type', viewingAlumni.exit_type],
+                    ['Resignation Date', viewingAlumni.resignation_date],
+                    ['Last Working Date', viewingAlumni.last_working_date || viewingAlumni.last_working_day],
+                    ['Resignation Reason', viewingAlumni.resignation_reason],
+                  ]],
+                ].map(([heading, fields]) => (
+                  <section key={heading} className="yc-alumni-detail-card">
+                    <h4>{heading}</h4>
+                    <div className="yc-alumni-detail-grid">
+                      {fields.map(([label, value]) => (
+                        <div key={label}>
+                          <small>{label}</small>
+                          <div>{displayValue(value)}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </section>
+                ))}
+                <p className="yc-alumni-info-note">Historical records are available under the separate tabs above. Employee identity and exit information are read-only.</p>
+              </div>
+            ) : (
+              <section role="tabpanel" className="yc-alumni-detail-card yc-alumni-history-panel">
+                <div className="yc-alumni-history-header">
+                  <div>
+                    <h4>{({ attendance: 'Attendance history', leave: 'Leave history', payroll: 'Payroll and payslips', work: 'Work and planning history', documents: 'Documents and exit records' })[alumniDetailTab]}</h4>
+                    <p>Preserved records for this former employee Â· Read-only history</p>
+                  </div>
                 </div>
-              </section>
-            ))}
-            <section className="hrms-panel"
-              style={{ marginTop: 16, padding: 18 }}>
-              <h4 style={{ margin: '0 0 14px' }}>Historical Records</h4>
-
-              {alumniHistoryLoading ? (
-                <p role="status">Loading historical records...</p>
-              ) : null}
-
-              {alumniHistoryError ? (
-                <p role="alert" style={{ color: '#b42318' }}>
-                  {alumniHistoryError}
-                </p>
-              ) : null}
-
-              <section
-                style={{
-                  marginTop: 20,
-                  padding: 18,
-                  border: '1px solid rgba(110,120,150,.22)',
-                  borderRadius: 14,
-                }}
-              >
-                <h3 style={{ marginTop: 0 }}>Exit Documents</h3>
-                <p>
-                  Resignation, clearance, handover and final settlement
-                  documents retained with the former employee's record.
-                </p>
-
-                {canUploadAlumniExitDocuments && (
-                  <form
-                    onSubmit={uploadAlumniExitDocument}
-                    style={{
-                      display: 'grid',
-                      gap: 12,
-                      marginTop: 16,
-                      marginBottom: 20,
-                    }}
-                  >
-                    <label>
-                      Document Category
-                      <select
-                        value={exitDocumentCategory}
-                        onChange={(event) =>
-                          setExitDocumentCategory(event.target.value)
-                        }
-                        required
-                      >
-                        <option value="resignation_letter">Resignation Letter</option>
-                        <option value="resignation_acceptance">Resignation Acceptance</option>
-                        <option value="handover">Work Handover</option>
-                        <option value="asset_return">Asset Return</option>
-                        <option value="it_clearance">IT Clearance</option>
-                        <option value="department_clearance">Department Clearance</option>
-                        <option value="no_dues">No Dues Certificate</option>
-                        <option value="full_final_settlement">Full and Final Settlement</option>
-                        <option value="relieving_letter">Relieving Letter</option>
-                        <option value="experience_certificate">Experience Certificate</option>
-                        <option value="exit_interview">Exit Interview</option>
-                        <option value="other_exit_document">Other Exit Document</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      Choose Document
-                      <input
-                        type="file"
-                        accept=".pdf,.docx,.jpg,.jpeg,.png,.webp"
-                        onChange={(event) =>
-                          setExitDocumentFile(event.target.files?.[0] || null)
-                        }
-                        required
-                        key={exitDocumentFile ? 'selected' : 'empty'}
-                      />
-                    </label>
-
-                    <label>
-                      Description (Optional)
-                      <textarea
-                        value={exitDocumentDescription}
-                        onChange={(event) =>
-                          setExitDocumentDescription(event.target.value)
-                        }
-                        maxLength={500}
-                        rows={2}
-                        placeholder="Add an optional note about this document"
-                      />
-                    </label>
-
-                    <button
-                      type="submit"
-                      className="hrms-primary-btn"
-                      disabled={!exitDocumentFile || exitDocumentSaving}
-                    >
-                      {exitDocumentSaving ? 'Uploading...' : 'Upload Exit Document'}
-                    </button>
-                  </form>
-                )}
-
-                {exitDocumentFeedback ? (
-                  <p role="status">{exitDocumentFeedback}</p>
-                ) : null}
-
-                <h4>
-                  Saved Exit Documents
-                  {' '}({alumniHistory?.totals?.exit_documents ?? 0})
-                </h4>
-
-                {alumniHistoryLoading ? (
-                  <p>Loading documents...</p>
-                ) : (alumniHistory?.records?.exit_documents || []).length === 0 ? (
-                  <p>No exit documents uploaded yet.</p>
-                ) : (
-                  <div className="hrms-table-wrap">
-                    <table className="hrms-table">
-                      <thead>
-                        <tr>
-                          <th>Document</th>
-                          <th>Category</th>
-                          <th>Uploaded</th>
-                          <th>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(alumniHistory?.records?.exit_documents || []).map(
-                          (exitDoc) => (
-                            <tr key={exitDoc._id}>
-                              <td>{exitDoc.original_filename || 'Document'}</td>
-                              <td>
-                                {String(exitDoc.category || '')
-                                  .replaceAll('_', ' ')}
-                              </td>
-                              <td>{exitDoc.uploaded_at || '?'}</td>
-                              <td>
-                                <button
-                                  type="button"
-                                  className="hrms-secondary-btn"
-                                  disabled={exitDocumentDownloading === exitDoc._id}
-                                  onClick={() =>
-                                    downloadAlumniExitDocument(exitDoc)
-                                  }
-                                >
-                                  {exitDocumentDownloading === exitDoc._id
-                                    ? 'Downloading...'
-                                    : 'Download'}
-                                </button>
-                              </td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                    </table>
+                {alumniHistoryLoading && <p role="status" className="yc-alumni-info-note">Loading historical records...</p>}
+                {alumniHistoryError && (
+                  <div role="alert" className="yc-alumni-history-error">
+                    Historical records could not be loaded: {alumniHistoryError}. Counts are unavailable until the request succeeds.
                   </div>
                 )}
-              </section>
-
-              {alumniHistory && !alumniHistoryLoading ? (
-                <div>
-                  {[
-                    ['Attendance History', 'attendance', [
-                      ['Date', 'date'],
-                      ['Status', 'status'],
-                      ['Mode', 'mode'],
-                      ['Check In', 'check_in'],
-                      ['Check Out', 'check_out'],
-                    ]],
-                    ['Leave Requests', 'leave_requests', [
-                      ['Leave Type', 'leave_type'],
-                      ['From', 'from_date'],
-                      ['To', 'to_date'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Leave Balances', 'leave_balances', [
-                      ['Leave Type', 'leave_type'],
-                      ['Available', 'available'],
-                      ['Used', 'used'],
-                      ['Year', 'year'],
-                    ]],
-                    ['Payslip History', 'payslips', [
-                      ['Period', 'period_key'],
-                      ['Gross Salary', 'gross_salary'],
-                      ['Net Pay', 'net_amount'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Monthly Plans', 'monthly_plans', [
-                      ['Month', 'month'],
-                      ['Plan', 'title'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Weekly Plans', 'weekly_plans', [
-                      ['Week Start', 'week_start'],
-                      ['Week End', 'week_end'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Change Requests', 'change_requests', [
-                      ['Activity', 'title'],
-                      ['Change Type', 'change_type'],
-                      ['Reason', 'reason'],
-                      ['Status', 'status'],
-                    ]],
-                    ['Employee Document Metadata', 'documents', [
-                      ['File Name', 'original_filename'],
-                      ['Type', 'document_type'],
-                      ['Status', 'status'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                    ['Recruitment Document Metadata', 'recruitment_documents', [
-                      ['File Name', 'original_filename'],
-                      ['Type', 'document_type'],
-                      ['Status', 'status'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                    ['Sprint Attachments', 'attachments', [
-                      ['File Name', 'original_filename'],
-                      ['Plan Type', 'plan_type'],
-                      ['Uploaded', 'uploaded_at'],
-                    ]],
-                  ].map(([title, key, columns]) => {
-                    const rows = alumniHistory.records?.[key] || [];
-                    const total = alumniHistory.totals?.[key] ?? 0;
-
-                    return (
-                      <div key={key} style={{ marginTop: 20 }}>
-                        <h4 style={{ marginBottom: 10 }}>
-                          {title} ({total})
-                        </h4>
-
-                        {rows.length ? (
-                          <div className="hrms-table-wrap">
-                            <table className="hrms-table">
-                              <thead>
-                                <tr>
-                                  {columns.map(([label]) => (
-                                    <th key={label}>{label}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {rows.map((record, index) => (
-                                  <tr key={record._id || index}>
-                                    {columns.map(([label, field]) => (
-                                      <td key={field} data-label={label}>
-                                        {displayValue(record[field])}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                {!alumniHistoryLoading && !alumniHistoryError && alumniHistory && (
+                  <>
+                    {alumniDetailTab === 'documents' && (
+                      <div className="yc-alumni-document-panel">
+                        <div className="yc-alumni-document-heading">
+                          <div>
+                            <strong>Exit documents ({alumniHistory.totals?.exit_documents ?? 0})</strong>
+                            <p>Resignation, clearance, handover and settlement records.</p>
                           </div>
-                        ) : (
-                          <p>No historical records available.</p>
+                          {canUploadAlumniExitDocuments && (
+                            <button type="button" className="hrms-secondary-btn" aria-expanded={alumniUploadOpen} onClick={() => setAlumniUploadOpen((open) => !open)}>
+                              {alumniUploadOpen ? 'Close upload' : 'Upload document'}
+                            </button>
+                          )}
+                        </div>
+                        {canUploadAlumniExitDocuments && alumniUploadOpen && (
+                          <form className="yc-alumni-upload-form" onSubmit={uploadAlumniExitDocument}>
+                            <label>Document category
+                              <select value={exitDocumentCategory} onChange={(event) => setExitDocumentCategory(event.target.value)} required>
+                                <option value="resignation_letter">Resignation Letter</option>
+                                <option value="resignation_acceptance">Resignation Acceptance</option>
+                                <option value="handover">Work Handover</option>
+                                <option value="asset_return">Asset Return</option>
+                                <option value="it_clearance">IT Clearance</option>
+                                <option value="department_clearance">Department Clearance</option>
+                                <option value="no_dues">No Dues Certificate</option>
+                                <option value="full_final_settlement">Full and Final Settlement</option>
+                                <option value="relieving_letter">Relieving Letter</option>
+                                <option value="experience_certificate">Experience Certificate</option>
+                                <option value="exit_interview">Exit Interview</option>
+                                <option value="other_exit_document">Other Exit Document</option>
+                              </select>
+                            </label>
+                            <label>Choose document
+                              <input type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,.webp" onChange={(event) => setExitDocumentFile(event.target.files?.[0] || null)} required key={exitDocumentFile ? 'selected' : 'empty'}/>
+                            </label>
+                            <label>Description (optional)
+                              <textarea value={exitDocumentDescription} onChange={(event) => setExitDocumentDescription(event.target.value)} maxLength={500} rows={2} placeholder="Add an optional note" />
+                            </label>
+                            <button type="submit" className="hrms-primary-btn" disabled={!exitDocumentFile || exitDocumentSaving}>{exitDocumentSaving ? 'Uploading...' : 'Upload exit document'}</button>
+                          </form>
                         )}
-
-                        {total > rows.length ? (
-                          <small>
-                            Showing {rows.length} of {total} records.
-                          </small>
-                        ) : null}
+                        {exitDocumentFeedback && <p role="status">{exitDocumentFeedback}</p>}
+                        {(alumniHistory.records?.exit_documents || []).length ? (
+                          <div className="hrms-table-wrap"><table className="hrms-table"><thead><tr><th>Document</th><th>Category</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>
+                            {(alumniHistory.records?.exit_documents || []).map((exitDoc) => (
+                              <tr key={exitDoc._id}><td>{exitDoc.original_filename || 'Document'}</td><td>{String(exitDoc.category || '').replaceAll('_', ' ')}</td><td>{displayValue(exitDoc.uploaded_at)}</td><td>
+                                <button type="button" className="hrms-secondary-btn" disabled={exitDocumentDownloading === exitDoc._id} onClick={() => downloadAlumniExitDocument(exitDoc)}>
+                                  {exitDocumentDownloading === exitDoc._id ? 'Downloading...' : 'Download'}
+                                </button>
+                              </td></tr>
+                            ))}
+                          </tbody></table></div>
+                        ) : <p className="yc-alumni-empty">No exit documents have been uploaded.</p>}
                       </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </section>
+                    )}
+                    {[
+                      ['attendance', 'Attendance history', 'attendance', [['Date','date'], ['Status','status'], ['Mode','mode'], ['Check in','check_in'], ['Check out','check_out']]],
+                      ['leave', 'Leave requests', 'leave_requests', [['Type','leave_type'], ['From','from_date'], ['To','to_date'], ['Status','status']]],
+                      ['leave', 'Leave balances', 'leave_balances', [['Type','leave_type'], ['Available','available'], ['Used','used'], ['Year','year']]],
+                      ['payroll', 'Payslip history', 'payslips', [['Period','period_key'], ['Gross salary','gross_salary'], ['Net pay','net_amount'], ['Status','status']]],
+                      ['work', 'Monthly plans', 'monthly_plans', [['Month','month'], ['Plan','title'], ['Status','status']]],
+                      ['work', 'Weekly plans', 'weekly_plans', [['Week start','week_start'], ['Week end','week_end'], ['Status','status']]],
+                      ['work', 'Change requests', 'change_requests', [['Activity','title'], ['Change type','change_type'], ['Reason','reason'], ['Status','status']]],
+                      ['documents', 'Employee document metadata', 'documents', [['File name','original_filename'], ['Type','document_type'], ['Status','status'], ['Uploaded','uploaded_at']]],
+                      ['documents', 'Recruitment document metadata', 'recruitment_documents', [['File name','original_filename'], ['Type','document_type'], ['Status','status'], ['Uploaded','uploaded_at']]],
+                      ['documents', 'Sprint attachments', 'attachments', [['File name','original_filename'], ['Plan type','plan_type'], ['Uploaded','uploaded_at']]],
+                    ].filter(([tab]) => tab === alumniDetailTab).map(([, title, key, columns]) => {
+                      const rows = alumniHistory.records?.[key] || [];
+                      const total = alumniHistory.totals?.[key] ?? rows.length;
+                      return <div className="yc-alumni-record-section" key={key}>
+                        <div className="yc-alumni-record-heading"><h5>{title}</h5><span>{total} record{total === 1 ? '' : 's'}</span></div>
+                        {rows.length ? <div className="hrms-table-wrap"><table className="hrms-table"><thead><tr>{columns.map(([label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>
+                          {rows.map((record, index) => <tr key={record._id || index}>{columns.map(([label, field]) => <td data-label={label} key={field}>{displayValue(record[field])}</td>)}</tr>)}
+                        </tbody></table></div> : <p className="yc-alumni-empty">No {title.toLowerCase()} found for this employee.</p>}
+                        {total > rows.length && <small>Showing {rows.length} of {total} records. Additional records may require a dedicated history view.</small>}
+                      </div>;
+                    })}
+                  </>
+                )}
+              </section>
+            )}
           </div>
         </div>
       </section>
@@ -6065,6 +6070,8 @@ export default function Employees({ user = {}, setPage } = {}) {
             loading={loadingEmployees}
             onEdit={openEditModal}
             onResign={openResignModal}
+            onManageNotice={openNoticeModal}
+            noticeFeatureEnabled={noticeFeatureEnabled}
           />
         </section>
       ) : null}
@@ -6347,6 +6354,57 @@ export default function Employees({ user = {}, setPage } = {}) {
           )
         : null}
 
+      {noticeFeatureEnabled && noticeEmployee
+        ? createPortal(
+            <div className="hrms-modal-backdrop" role="presentation" onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeNoticeModal();
+            }}>
+              <form className="hrms-modal small" onSubmit={reviewNoticeSchedule}
+                role="dialog" aria-modal="true" aria-labelledby="hrms-notice-dialog-title">
+                <h3 id="hrms-notice-dialog-title">Manage Notice Period</h3>
+                <p><strong>{noticeEmployee.name || noticeEmployee.employee_name}</strong> remains active through the approved last working day. Review affected approved leave before scheduling.</p>
+                <div className="hrms-modal-grid">
+                  <TextInput label="Resignation Date" name="resignation_date" type="date"
+                    value={noticeForm.resignation_date} onChange={updateNoticeForm} required />
+                  <TextInput label="Notice Start Date" name="notice_start_date" type="date"
+                    value={noticeForm.notice_start_date} onChange={updateNoticeForm} required />
+                  <TextInput label="Last Working Day" name="last_working_day" type="date"
+                    value={noticeForm.last_working_day} onChange={updateNoticeForm} required />
+                </div>
+                {noticePreview ? (
+                  <div className="hrms-form-note" style={{ marginTop: 12, padding: 12, border: '1px solid currentColor', borderRadius: 8 }}>
+                    <strong>HR reconciliation preview — no changes made</strong>
+                    <p>Approved leave adjustments requiring a balance refund: {noticePreview.review.adjustments.length}</p>
+                    {noticePreview.review.adjustments.length ? (
+                      <p>Historical leave refunds and the notice schedule must be committed in one transaction. Execution is independently disabled until backend acceptance is complete.</p>
+                    ) : (
+                      <p>No historical paid-leave refund is proposed. The normal notice scheduling route will be used.</p>
+                    )}
+                    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12 }}>
+                      <input type="checkbox" checked={noticeConfirm} onChange={(event) => setNoticeConfirm(event.target.checked)} />
+                      I have reviewed the dates and understand the notice schedule and any approved-leave corrections.
+                    </label>
+                  </div>
+                ) : null}
+                {noticeError ? <p role="alert" style={{ color: '#b91c1c' }}>{noticeError}</p> : null}
+                <div className="hrms-modal-actions">
+                  <button type="button" className="hrms-secondary-btn" disabled={noticeBusy} onClick={closeNoticeModal}>Cancel</button>
+                  <button type="submit" className="hrms-secondary-btn" disabled={noticeBusy}>
+                    {noticeBusy ? 'Reviewing...' : 'Preview Notice & Leave'}
+                  </button>
+                  {noticePreview ? (
+                    <button type="button" className="hrms-primary-btn" disabled={noticeBusy || !noticeConfirm}
+                      onClick={submitReviewedNoticeSchedule}>
+                      {noticeBusy ? 'Saving...' : 'Confirm Notice Schedule'}
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            </div>,
+            document.body,
+          )
+        : null}
+
       {resignEmployee
         ? createPortal(
             <div
@@ -6374,15 +6432,7 @@ export default function Employees({ user = {}, setPage } = {}) {
                     ? 'The employee remains active during notice. Approved leave on eligible working days will count as LWP. The automatic exit must be configured separately.'
                     : <>This will move <strong>{resignEmployee.name || resignEmployee.employee_name}</strong> from Employee Master to Alumni and deactivate the employee login.</>}
                 </p>
-                {noticeFeatureEnabled ? (
-                  <div style={{ marginBottom: 12 }}>
-                    <label htmlFor="hrms-exit-mode" style={{ display: 'block', marginBottom: 6 }}>Exit process</label>
-                    <select id="hrms-exit-mode" name="exit_mode" value={resignForm.exit_mode} onChange={handleResignChange} style={{ width: '100%', padding: 10 }}>
-                      <option value="immediate">Resign immediately</option>
-                      <option value="notice">Serve notice period</option>
-                    </select>
-                  </div>
-                ) : null}
+                {noticeFeatureEnabled ? <p className="hrms-form-note">For scheduled exits, use Manage Notice Period in Employee Master instead.</p> : null}
                 <div className="hrms-modal-grid">
                   {noticeFeatureEnabled && resignForm.exit_mode === 'notice' ? (
                     <>

@@ -21,18 +21,29 @@ def active_employee_fields():
         "status": {"$not": ALUMNI_STATUS_REGEX},
         "employment_status": {"$not": ALUMNI_STATUS_REGEX},
         "employee_status": {"$not": ALUMNI_STATUS_REGEX},
-        "$or": [
-            {"last_working_date": {"$in": [None, ""]}},
-            {
-                "notice_status": {"$in": ["scheduled", "serving"]},
-                "notice_start_date": {"$exists": True, "$nin": [None, ""]},
-                "last_working_day": {
+        "$and": [
+            {"$or": [
+                {"last_working_date": {"$in": [None, ""]}},
+                {
+                    "notice_status": {"$in": ["scheduled", "serving"]},
+                    "notice_start_date": {"$exists": True, "$nin": [None, ""]},
+                    "last_working_day": {
+                        "$gte": __import__(
+                            "app.services.notice_period_service",
+                            fromlist=["local_today"],
+                        ).local_today().isoformat()
+                    },
+                },
+            ]},
+            {"$or": [
+                {"notice_status": {"$nin": ["scheduled", "serving", "due_for_alumni"]}},
+                {"last_working_day": {
                     "$gte": __import__(
                         "app.services.notice_period_service",
                         fromlist=["local_today"],
-                    ).local_today().isoformat()
-                },
-            },
+                    ).local_today().isoformat(),
+                }},
+            ]},
         ],
     }
 
@@ -46,6 +57,9 @@ def employee_is_active(employee):
     if employee.get('is_active') is False or employee.get('active') is False:
         return False
     if str(employee.get('last_working_date') or '').strip():
+        return False
+    from app.services.notice_period_service import notice_exit_due
+    if notice_exit_due(employee):
         return False
     return not any(
         ALUMNI_STATUS_REGEX.fullmatch(str(employee.get(field) or '').strip())

@@ -654,6 +654,11 @@ def leave_summary_for_employee(
             paid_by_date = {key: value for key, value in paid_by_date.items() if value > 0}
             warnings.append("Approved leave during notice period classified as LWP for payroll.")
 
+    # Keep date ledgers aligned with their non-zero weights. Zero-weight
+    # entries would otherwise mark paid leave as LWP in attendance consumers.
+    paid_by_date = {key: weight for key, weight in paid_by_date.items() if weight > 0}
+    lwp_by_date = {key: weight for key, weight in lwp_by_date.items() if weight > 0}
+
     paid_leave_days = sum(paid_by_date.values(), Decimal("0"))
     lwp_days = sum(lwp_by_date.values(), Decimal("0"))
 

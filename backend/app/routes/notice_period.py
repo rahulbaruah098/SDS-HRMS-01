@@ -116,3 +116,177 @@ def lwp_preview(employee_id):
     except ValueError as exc:
         return jsonify({'message': str(exc)}), 400
     return jsonify({'candidate_lwp_dates': dates, 'working_day_filter_applied': False, 'payroll_applied': False, 'message': 'Preview only. Working-day and leave-approval policies must be integrated before payroll deduction.'})
+
+
+@notice_period_bp.route('/<employee_id>/reconciliation-preview', methods=['POST'])
+@current_user_required
+def reconciliation_preview(employee_id):
+    """Read-only, server-calendar-grounded HR review of historical leave.
+
+    No client-provided working dates, refund amounts or fingerprints are trusted.
+    The existing PUT route remains unchanged and blocks approved overlaps.
+    """
+    denial = _guard()
+    if denial:
+        return denial
+    oid = _emp_id(employee_id)
+    if oid is None:
+        return jsonify({'message': 'Invalid employee ID'}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'message': 'JSON object required'}), 400
+    try:
+        dates = validate_schedule(
+            payload.get('resignation_date'), payload.get('notice_start_date'),
+            payload.get('last_working_day'),
+        )
+    except (ValueError, TypeError) as exc:
+        return jsonify({'message': str(exc)}), 400
+
+    tenant = g.current_user['tenant_id']
+    db = get_db()
+    employee = db.employees.find_one({
+        '_id': oid, 'tenant_id': tenant, 'is_deleted': {'$ne': True},
+        'is_alumni': {'$ne': True}, 'notice_status': {'$nin': ['completed']},
+    })
+    if not employee:
+        return jsonify({'message': 'Active employee not found'}), 404
+    if (employee.get('skip_login') is True or
+        str(employee.get('status') or '').strip().lower() in
+            {'resigned', 'alumni', 'inactive', 'terminated', 'left'} or
+        str(employee.get('employment_status') or '').strip().lower() in
+            {'resigned', 'alumni', 'inactive', 'terminated', 'left'}):
+        return jsonify({'message': 'Employee is not eligible for notice scheduling'}), 409
+    try:
+        from app.services.notice_leave_review_context import build_trusted_notice_review
+        review = build_trusted_notice_review(db, employee, dates)
+    except ValueError as exc:
+        return jsonify({'message': str(exc), 'requires_manual_review': True}), 409
+    # The review is informational, not an execution token.
+    return jsonify({
+        'message': 'Preview only; no schedule or refund was executed',
+        'notice': dates, 'review': review,
+        'working_day_filter_applied': True,
+        'authorization_granted': False, 'writes_performed': False,
+    })
+
+
+@notice_period_bp.route('/<employee_id>/reconciliation-apply', methods=['POST'])
+@current_user_required
+def reconciliation_apply(employee_id):
+    """HR-reviewed atomic notice scheduling and historic paid-leave reconciliation.
+
+    This route is doubly gated. Neither the review endpoint nor the normal PUT
+    notice endpoint can enable refund writes. The browser supplies dates and a
+    previously reviewed fingerprint, never leave records or working-day inputs.
+    """
+    denial = _guard()
+    if denial:
+        return denial
+    if not current_app.config.get('NOTICE_PERIOD_REFUND_EXECUTION_ENABLED', False):
+        return jsonify({'message': 'Historical leave execution is not enabled'}), 503
+
+    oid = _emp_id(employee_id)
+    if oid is None:
+        return jsonify({'message': 'Invalid employee ID'}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'message': 'JSON object required'}), 400
+    try:
+        dates = validate_schedule(
+            payload.get('resignation_date'), payload.get('notice_start_date'),
+            payload.get('last_working_day'),
+        )
+    except (ValueError, TypeError) as exc:
+        return jsonify({'message': str(exc)}), 400
+    fingerprint = payload.get('review_fingerprint')
+    if not isinstance(fingerprint, str) or len(fingerprint) != 64 or any(
+        ch not in '0123456789abcdef' for ch in fingerprint
+    ):
+        return jsonify({'message': 'Valid HR review fingerprint required'}), 400
+    reviewer_id = str((g.current_user or {}).get('_id') or '')
+    if not reviewer_id:
+        return jsonify({'message': 'Authenticated HR reviewer required'}), 403
+
+    tenant = g.current_user['tenant_id']
+    db = get_db()
+    employee = db.employees.find_one({
+        '_id': oid, 'tenant_id': tenant, 'is_deleted': {'$ne': True},
+        'is_alumni': {'$ne': True}, 'notice_status': {'$nin': ['completed']},
+    })
+    if employee is None:
+        return jsonify({'message': 'Active employee not found'}), 404
+    if (employee.get('skip_login') is True or
+        str(employee.get('status') or '').strip().lower() in
+            {'resigned', 'alumni', 'inactive', 'terminated', 'left'} or
+        str(employee.get('employment_status') or '').strip().lower() in
+            {'resigned', 'alumni', 'inactive', 'terminated', 'left'}):
+        return jsonify({'message': 'Employee is no longer eligible'}), 409
+
+    try:
+        from app.services.notice_leave_review_context import (
+            build_trusted_notice_review, _approved_overlap, _day,
+            MAX_DAYS_PER_LEAVE, MAX_TOTAL_CALENDAR_DAYS,
+        )
+        from app.routes.attendance import is_working_day_for_employee
+        from app.services.notice_leave_refund_transaction import (
+            apply_reviewed_historic_notice_refunds,
+            NoticeRefundConflict,
+            NoticeRefundNotAuthorized,
+        )
+        from datetime import timedelta
+
+        # Recalculate the full preview from trusted DB rows and the server's
+        # working-day policy. Client-supplied leave rows and dates are ignored.
+        review = build_trusted_notice_review(db, employee, dates)
+        if review['review_fingerprint'] != fingerprint:
+            return jsonify({'message': 'HR review has changed; preview again'}), 409
+        if not review.get('adjustments'):
+            return jsonify({'message': 'No refundable approved leave; use regular scheduling'}), 409
+
+        leaves = _approved_overlap(db, employee, dates)
+        entries = []
+        total_days = 0
+        for leave in leaves:
+            first, last = _day(leave.get('from_date')), _day(leave.get('to_date'))
+            count = (last - first).days + 1
+            if count <= 0 or count > MAX_DAYS_PER_LEAVE:
+                raise ValueError('Historical leave date range requires manual review')
+            total_days += count
+            if total_days > MAX_TOTAL_CALENDAR_DAYS:
+                raise ValueError('Historical leave volume requires manual review')
+            working = []
+            day = first
+            while day <= last:
+                if is_working_day_for_employee(db, employee, day):
+                    working.append(day.isoformat())
+                day += timedelta(days=1)
+            entries.append((leave, working))
+
+        # Recheck the exact evidence handed to the executor. The transaction
+        # itself verifies the current employee/leave/balance states and ensures
+        # schedule, refund, leave ledgers, and audits commit or abort together.
+        from app.services.notice_leave_adjustment_plan import plan_historic_notice_adjustments
+        again = plan_historic_notice_adjustments(
+            employee=employee, proposed_notice=dates,
+            leaves_with_working_dates=entries,
+        )
+        if again['review_fingerprint'] != fingerprint:
+            return jsonify({'message': 'HR review changed; preview again'}), 409
+        outcome = apply_reviewed_historic_notice_refunds(
+            db=db, employee=employee, proposed_notice=dates,
+            leaves_with_working_dates=entries,
+            expected_fingerprint=fingerprint, reviewer_id=reviewer_id,
+            schedule_notice=dates, enable_writes=True,
+        )
+    except (ValueError, NoticeRefundConflict, NoticeRefundNotAuthorized) as exc:
+        return jsonify({'message': str(exc), 'requires_manual_review': True}), 409
+    # Database exceptions are deliberately not translated to success or
+    # swallowed: Flask will return a 500 and transaction aborts on exception.
+    return jsonify({
+        'message': 'Notice and historical leave corrections committed',
+        'notice': dates,
+        'refund_count': outcome['refund_count'],
+        'review_fingerprint': outcome['review_fingerprint'],
+        'notice_scheduled': outcome['notice_scheduled'],
+    })
