@@ -2256,7 +2256,7 @@ export default function Employees({ user = {}, setPage } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const noticeFeatureEnabled = import.meta.env.VITE_NOTICE_PERIOD_ENABLED === 'true';
+  const noticeFeatureEnabled = true;
 
   // Standalone HR notice workflow. Feature-flagged; distinct from immediate resignation.
   const openNoticeModal = (employee) => {
