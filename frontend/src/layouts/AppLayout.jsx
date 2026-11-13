@@ -1711,6 +1711,16 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
   ]);
 
   useEffect(() => {
+    const onBrandingUpdated = (event) => {
+      if (event?.detail?.companyName) {
+        setTenantBranding(event.detail);
+      }
+    };
+    window.addEventListener('yourcomate:tenant-branding-updated', onBrandingUpdated);
+    return () => window.removeEventListener('yourcomate:tenant-branding-updated', onBrandingUpdated);
+  }, []);
+
+  useEffect(() => {
     setCompanyLogoFailed(false);
   }, [headerCompanyLogoUrl]);
 

@@ -647,6 +647,8 @@ export default function Settings({ user, setPage }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [localPreview, setLocalPreview] = useState('');
   const [canManageBranding, setCanManageBranding] = useState(false);
+  const [companyNameDraft, setCompanyNameDraft] = useState('');
+  const [companyNameSaving, setCompanyNameSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -1173,7 +1175,9 @@ export default function Settings({ user, setPage }) {
     try {
       const data = await api('/tenant-branding');
 
-      setBranding(getBrandingFromResponse(data));
+      const nextBranding = getBrandingFromResponse(data);
+      setBranding(nextBranding);
+      setCompanyNameDraft(nextBranding.companyName);
       setCanManageBranding(Boolean(data.can_manage_branding));
       if (silent) {
         setMessage('Company branding refreshed successfully.');
@@ -1664,6 +1668,38 @@ export default function Settings({ user, setPage }) {
     setLocalPreview(objectUrl);
   }
 
+  async function saveCompanyName() {
+    const nextName = companyNameDraft.trim().replace(/\s+/g, ' ');
+    if (nextName.length < 2 || nextName.length > 120) {
+      setError('Company name must contain 2 to 120 characters.');
+      return;
+    }
+    if (nextName === branding.companyName) return;
+    setCompanyNameSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await api('/tenant-branding/company-name', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          company_name: nextName,
+          expected_company_name: branding.companyName,
+        }),
+      });
+      const updated = getBrandingFromResponse(data);
+      setBranding(updated);
+      setCompanyNameDraft(updated.companyName);
+      setMessage(data.message || 'Company name saved.');
+      window.dispatchEvent(new CustomEvent('yourcomate:tenant-branding-updated', {
+        detail: updated,
+      }));
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to save company name.');
+    } finally {
+      setCompanyNameSaving(false);
+    }
+  }
+
   async function uploadLogo(event) {
     event.preventDefault();
 
@@ -2128,6 +2164,27 @@ export default function Settings({ user, setPage }) {
           transform: none;
           box-shadow: none;
         }
+
+        .tenant-company-name-editor {
+          display: grid;
+          gap: 10px;
+          padding: 0 0 22px;
+          border-bottom: 1px solid rgba(171, 181, 211, .45);
+          min-width: 0;
+        }
+        .tenant-company-name-editor h2 { display: flex; align-items: center; gap: 10px; margin: 0; }
+        .tenant-company-name-editor p { margin: 0; color: #526487; line-height: 1.55; }
+        .tenant-company-name-editor label { font-weight: 750; }
+        .tenant-company-name-editor input {
+          width: 100%; min-width: 0; min-height: 46px;
+          padding: 10px 14px; border: 1px solid #c8d2e8;
+          border-radius: 13px; background: #fff; color: #17264d;
+          font: inherit;
+        }
+        .tenant-company-name-editor input:focus-visible {
+          outline: 2px solid #4c76dc; outline-offset: 2px;
+        }
+        .tenant-company-name-editor input:disabled { opacity: .7; background: #f6f8fc; }
 
         .platform-branding-layout,
         .payroll-branding-layout,
@@ -4909,6 +4966,33 @@ export default function Settings({ user, setPage }) {
             </div>
 
             <form className="tenant-brand-editor" onSubmit={uploadLogo}>
+              <div className="tenant-company-name-editor">
+                <h2><Building2 size={21} /> Company Name</h2>
+                <p>Change the name shown on this tenant's dashboards. This does not change the tenant ID or previously generated documents.</p>
+                <label htmlFor="tenant-company-name-input">Company name</label>
+                <input
+                  id="tenant-company-name-input"
+                  type="text"
+                  autoComplete="organization"
+                  maxLength={120}
+                  value={companyNameDraft}
+                  onChange={(event) => setCompanyNameDraft(event.target.value)}
+                  disabled={!canManageBranding || companyNameSaving || busy}
+                  placeholder="Enter company name"
+                />
+                {canManageBranding && (
+                  <div className="tenant-brand-actions">
+                    <button type="button" className="tenant-logo-save"
+                      onClick={saveCompanyName}
+                      disabled={busy || companyNameSaving || companyNameDraft.trim() === branding.companyName || companyNameDraft.trim().length < 2}
+                    >
+                      {companyNameSaving ? <LoaderCircle size={17} className="tenant-brand-spin" /> : <Save size={17} />}
+                      {companyNameSaving ? 'Saving Name...' : 'Save Company Name'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <h2>
                 <ImagePlus size={21} /> Company Logo
               </h2>
