@@ -5860,6 +5860,7 @@ export default function Employees({ user = {}, setPage } = {}) {
       ) : null}
 
       <div className="hrms-section-tabs-holder">
+        <button type="button" onClick={() => setPage('employee_handover')} style={{border:'1px solid #bfd1e4',borderRadius:9,background:'#edf5fc',color:'#0a4174',padding:'10px 16px',fontWeight:700,marginBottom:12,cursor:'pointer'}}>Employee Replacement &amp; Work Handover</button>
         <nav className="hrms-tabs" aria-label="Employee management sections">
           <button
             type="button"

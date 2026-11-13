@@ -1121,8 +1121,10 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
           : 'Subscription Renewal Required'
         : page === 'billing'
           ? 'Billing & Subscription'
-          : modules.find((module) => module[0] === page)?.[1] ||
-            'Access Restricted';
+          : page === 'employee_handover'
+            ? 'Employee Work Handover'
+            : modules.find((module) => module[0] === page)?.[1] ||
+              'Access Restricted';
 
   const canOpenTenantBilling =
     safeUser.roles.includes('admin') &&

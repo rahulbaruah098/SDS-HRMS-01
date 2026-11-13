@@ -30,6 +30,7 @@ import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
 import HolidayCalendar from './pages/HolidayCalendar';
 import Employees from './pages/Employees';
+import EmployeeHandover from './pages/EmployeeHandover';
 import EmployeeDirectory from './pages/EmployeeDirectory';
 import Assets from './pages/Assets.jsx';
 import Departments from './pages/Departments';
@@ -811,6 +812,12 @@ function getPageFromHrmsPath(pathname) {
 function moduleAccessKey(page) {
   const normalizedPage = normalizePageKey(page);
 
+  // Employee handover is an HR/Admin subpage of Employee Management.
+  // Preserve the existing Employees module permission and the page's own role check.
+  if (normalizedPage === 'employee_handover') {
+    return 'employees';
+  }
+
   // Existing tenant permissions store this module under the legacy key.
   // The visible page and route use "my_visits".
   if (normalizedPage === 'my_visits') {
@@ -1268,6 +1275,13 @@ if (normalizedPage === 'companies') {
 
   if (normalizedPage === 'users') {
     return <UserControl setPage={setPage} user={safeUser} />;
+  }
+
+  if (normalizedPage === 'employee_handover') {
+    if (!normalizeRoles(safeUser).some(role => ['admin','hr_admin','hr_manager','hr'].includes(role))) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+    return <EmployeeHandover setPage={setPage} />;
   }
 
   if (normalizedPage === 'employees') {

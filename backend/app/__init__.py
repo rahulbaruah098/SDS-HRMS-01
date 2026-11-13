@@ -1,4 +1,7 @@
 from .routes.notice_period import notice_period_bp
+from .routes.employee_handover import employee_handover_bp
+from .routes.employee_handover_execution import handover_execution_bp
+from .routes.employee_handover_advanced import advanced_handover_bp
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
@@ -326,6 +329,9 @@ def create_app():
     # notifications fallback, etc.
     app.register_blueprint(crud_bp, url_prefix="/api/v1")
     app.register_blueprint(notice_period_bp, url_prefix="/api/v1/notice-period")
+    app.register_blueprint(employee_handover_bp, url_prefix="/api/v1/employee-handover")
+    app.register_blueprint(handover_execution_bp, url_prefix="/api/v1/employee-handover")
+    app.register_blueprint(advanced_handover_bp, url_prefix="/api/v1/employee-handover")
 
     # Report APIs:
     # attendance, field attendance, holiday work approvals, holidays,
