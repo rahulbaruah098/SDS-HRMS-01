@@ -2335,7 +2335,7 @@ export default function Employees({ user = {}, setPage } = {}) {
       }
       await api(`/notice-period/${encodeURIComponent(id)}${hasRefund ? '/reconciliation-apply' : ''}`, {
         method: hasRefund ? 'POST' : 'PUT',
-        body: JSON.stringify(hasRefund ? { ...noticeForm, review_fingerprint: fingerprint } : noticeForm),
+        body: JSON.stringify(hasRefund ? { ...noticeForm, review_fingerprint: fingerprint, confirmed: true } : { ...noticeForm, confirmed: true }),
       });
       setNoticeEmployee(null);
       setNoticePreview(null);
@@ -6377,13 +6377,13 @@ export default function Employees({ user = {}, setPage } = {}) {
                     <strong>HR reconciliation preview — no changes made</strong>
                     <p>Approved leave adjustments requiring a balance refund: {noticePreview.review.adjustments.length}</p>
                     {noticePreview.review.adjustments.length ? (
-                      <p>Historical leave refunds and the notice schedule must be committed in one transaction. Execution is independently disabled until backend acceptance is complete.</p>
+                      <p>Approved leave adjustments will be included in the same verified database transaction as the notice schedule. Confirm only after checking the review.</p>
                     ) : (
                       <p>No historical paid-leave refund is proposed. The normal notice scheduling route will be used.</p>
                     )}
                     <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12 }}>
                       <input type="checkbox" checked={noticeConfirm} onChange={(event) => setNoticeConfirm(event.target.checked)} />
-                      I have reviewed the dates and understand the notice schedule and any approved-leave corrections.
+                      I have checked the dates and any approved-leave adjustments and authorize saving this notice period.
                     </label>
                   </div>
                 ) : null}

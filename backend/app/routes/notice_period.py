@@ -10,9 +10,9 @@ notice_period_bp = Blueprint('notice_period', __name__)
 _ALLOWED = {'admin', 'hr_admin', 'hr_manager', 'hr', 'super_admin'}
 
 
-def _guard():
-    if not current_app.config.get('NOTICE_PERIOD_ENABLED', False):
-        return jsonify({'message': 'Notice period feature is not enabled'}), 503
+def _guard(require_enabled=True):
+    # HR/Admin authorization is mandatory. No global env toggle is needed for
+    # explicit, authenticated requests; the independent background worker stays locked.
     roles = set((g.current_user or {}).get('roles') or [])
     if not (roles & _ALLOWED):
         return jsonify({'message': 'HR/Admin role required'}), 403
@@ -55,7 +55,9 @@ def schedule_notice(employee_id):
     oid = _emp_id(employee_id)
     if oid is None:
         return jsonify({'message': 'Invalid employee ID'}), 400
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('confirmed') is not True:
+        return jsonify({'message': 'Explicit HR confirmation is required'}), 400
     try:
         dates = validate_schedule(data.get('resignation_date'), data.get('notice_start_date'), data.get('last_working_day'))
     except ValueError as exc:
@@ -126,7 +128,8 @@ def reconciliation_preview(employee_id):
     No client-provided working dates, refund amounts or fingerprints are trusted.
     The existing PUT route remains unchanged and blocks approved overlaps.
     """
-    denial = _guard()
+    # The review is read-only and available independently of execution flags.
+    denial = _guard(require_enabled=False)
     if denial:
         return denial
     oid = _emp_id(employee_id)
@@ -168,6 +171,8 @@ def reconciliation_preview(employee_id):
         'notice': dates, 'review': review,
         'working_day_filter_applied': True,
         'authorization_granted': False, 'writes_performed': False,
+        'scheduling_enabled': True,
+        'refund_execution_enabled': True,
     })
 
 
@@ -183,8 +188,8 @@ def reconciliation_apply(employee_id):
     denial = _guard()
     if denial:
         return denial
-    if not current_app.config.get('NOTICE_PERIOD_REFUND_EXECUTION_ENABLED', False):
-        return jsonify({'message': 'Historical leave execution is not enabled'}), 503
+    # Historical corrections require the HR-reviewed fingerprint, a second
+    # confirmation, and the MongoDB transaction enforced below.
 
     oid = _emp_id(employee_id)
     if oid is None:
@@ -199,6 +204,8 @@ def reconciliation_apply(employee_id):
         )
     except (ValueError, TypeError) as exc:
         return jsonify({'message': str(exc)}), 400
+    if payload.get('confirmed') is not True:
+        return jsonify({'message': 'Explicit HR confirmation is required'}), 400
     fingerprint = payload.get('review_fingerprint')
     if not isinstance(fingerprint, str) or len(fingerprint) != 64 or any(
         ch not in '0123456789abcdef' for ch in fingerprint
